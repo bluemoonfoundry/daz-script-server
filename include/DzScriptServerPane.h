@@ -37,7 +37,7 @@ public slots:
 	Q_INVOKABLE void stopServer();
 
 	// Called on main thread via BlockingQueuedConnection from httplib handler threads.
-	Q_INVOKABLE QByteArray handleExecuteRequest(const QByteArray& jsonBody);
+	Q_INVOKABLE QByteArray handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP);
 
 private slots:
 	void onStartClicked();
@@ -46,6 +46,7 @@ private slots:
 	void onCopyTokenClicked();
 	void onRegenTokenClicked();
 	void onAuthEnabledChanged(int state);
+	void onClearLogClicked();
 
 private:
 	void   setupRoutes();
@@ -72,6 +73,7 @@ private:
 	QString          m_sHost;
 	QByteArray       m_aHostUtf8;
 	bool             m_bRunning;
+	int              m_nTimeoutSec;
 
 	// Authentication
 	QString          m_sApiToken;
@@ -84,10 +86,12 @@ private:
 	// UI widgets
 	QLineEdit*   m_pHostEdit;
 	QSpinBox*    m_pPortSpin;
+	QSpinBox*    m_pTimeoutSpin;
 	QPushButton* m_pStartBtn;
 	QPushButton* m_pStopBtn;
 	QLabel*      m_pStatusLabel;
 	QTextEdit*   m_pLogView;
+	QPushButton* m_pClearLogBtn;
 
 	// Authentication UI
 	QCheckBox*   m_pAuthEnabledCheck;

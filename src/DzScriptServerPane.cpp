@@ -12,6 +12,8 @@
 #include <QtCore/qfile.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qdir.h>
+#include <QtCore/qtime.h>
+#include <QtCore/qfileinfo.h>
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
@@ -48,6 +50,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_sHost("127.0.0.1")
 	, m_bRunning(false)
 	, m_bCapturingLog(false)
+	, m_nTimeoutSec(30)
 	, m_bAuthEnabled(true)
 {
 	// Load settings and token
@@ -65,6 +68,12 @@ DzScriptServerPane::DzScriptServerPane()
 	m_pPortSpin->setRange(1024, 65535);
 	m_pPortSpin->setValue(m_nPort);
 	formLayout->addRow(tr("Port:"), m_pPortSpin);
+
+	m_pTimeoutSpin = new QSpinBox(this);
+	m_pTimeoutSpin->setRange(5, 300);
+	m_pTimeoutSpin->setSuffix(tr(" sec"));
+	m_pTimeoutSpin->setValue(m_nTimeoutSec);
+	formLayout->addRow(tr("Timeout:"), m_pTimeoutSpin);
 
 	// Authentication section
 	QGroupBox* authGroup = new QGroupBox(tr("Authentication"), this);
@@ -109,6 +118,14 @@ DzScriptServerPane::DzScriptServerPane()
 	btnLayout->addWidget(m_pStartBtn);
 	btnLayout->addWidget(m_pStopBtn);
 
+	QHBoxLayout* logHeaderLayout = new QHBoxLayout();
+	QLabel* logLabel = new QLabel(tr("Request Log:"), this);
+	logHeaderLayout->addWidget(logLabel);
+	logHeaderLayout->addStretch();
+	m_pClearLogBtn = new QPushButton(tr("Clear Log"), this);
+	m_pClearLogBtn->setMaximumWidth(80);
+	logHeaderLayout->addWidget(m_pClearLogBtn);
+
 	m_pLogView = new QTextEdit(this);
 	m_pLogView->setReadOnly(true);
 	m_pLogView->setMaximumHeight(120);
@@ -119,6 +136,7 @@ DzScriptServerPane::DzScriptServerPane()
 	mainLayout->addWidget(authGroup);
 	mainLayout->addWidget(m_pStatusLabel);
 	mainLayout->addLayout(btnLayout);
+	mainLayout->addLayout(logHeaderLayout);
 	mainLayout->addWidget(m_pLogView);
 	mainLayout->addStretch();
 	setLayout(mainLayout);
@@ -128,6 +146,7 @@ DzScriptServerPane::DzScriptServerPane()
 	connect(m_pCopyTokenBtn, SIGNAL(clicked()), this, SLOT(onCopyTokenClicked()));
 	connect(m_pRegenTokenBtn, SIGNAL(clicked()), this, SLOT(onRegenTokenClicked()));
 	connect(m_pAuthEnabledCheck, SIGNAL(stateChanged(int)), this, SLOT(onAuthEnabledChanged(int)));
+	connect(m_pClearLogBtn, SIGNAL(clicked()), this, SLOT(onClearLogClicked()));
 
 	updateUI();
 }
@@ -144,6 +163,7 @@ void DzScriptServerPane::onStartClicked()
 {
 	m_nPort = m_pPortSpin->value();
 	m_sHost = m_pHostEdit->text();
+	m_nTimeoutSec = m_pTimeoutSpin->value();
 	saveSettings();
 	startServer();
 }
@@ -159,7 +179,7 @@ void DzScriptServerPane::startServer()
 		return;
 
 	m_pServer = new httplib::Server();
-	m_pServer->set_read_timeout(30, 0);
+	m_pServer->set_read_timeout(m_nTimeoutSec, 0);
 	setupRoutes();
 
 	m_aHostUtf8 = m_sHost.toUtf8();
@@ -168,11 +188,43 @@ void DzScriptServerPane::startServer()
 		std::string(m_aHostUtf8.constData()),
 		m_nPort,
 		this);
+
+	// Check if port is available before starting
+	if (!m_pServer->is_valid()) {
+		appendLog(QString("[ERROR] Failed to initialize server"));
+		delete m_pServer;
+		m_pServer = nullptr;
+		delete m_pServerThread;
+		m_pServerThread = nullptr;
+		return;
+	}
+
 	m_pServerThread->start();
+
+	// Give thread a moment to bind
+	QThread::msleep(100);
+
+	// Check if server bound successfully
+	if (!m_pServer->is_running()) {
+		appendLog(QString("[ERROR] Failed to bind to %1:%2 - port may be in use")
+			.arg(m_sHost).arg(m_nPort));
+		delete m_pServer;
+		m_pServer = nullptr;
+		if (m_pServerThread) {
+			m_pServerThread->wait(1000);
+			delete m_pServerThread;
+			m_pServerThread = nullptr;
+		}
+		return;
+	}
 
 	m_bRunning = true;
 	updateUI();
-	appendLog(QString("Server started on %1:%2").arg(m_sHost).arg(m_nPort));
+	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
+		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+		.arg(m_sHost)
+		.arg(m_nPort)
+		.arg(m_nTimeoutSec));
 }
 
 void DzScriptServerPane::stopServer()
@@ -208,6 +260,7 @@ void DzScriptServerPane::updateUI()
 		m_pStopBtn->setEnabled(true);
 		m_pHostEdit->setEnabled(false);
 		m_pPortSpin->setEnabled(false);
+		m_pTimeoutSpin->setEnabled(false);
 		m_pAuthEnabledCheck->setEnabled(false);
 		m_pRegenTokenBtn->setEnabled(false);
 	} else {
@@ -216,6 +269,7 @@ void DzScriptServerPane::updateUI()
 		m_pStopBtn->setEnabled(false);
 		m_pHostEdit->setEnabled(true);
 		m_pPortSpin->setEnabled(true);
+		m_pTimeoutSpin->setEnabled(true);
 		m_pAuthEnabledCheck->setEnabled(true);
 		m_pRegenTokenBtn->setEnabled(true);
 	}
@@ -242,6 +296,19 @@ void DzScriptServerPane::setupRoutes()
 	});
 
 	m_pServer->Post("/execute", [this](const httplib::Request& req, httplib::Response& res) {
+		// Get client IP for logging
+		std::string clientIP = req.remote_addr.empty() ? "unknown" : req.remote_addr;
+
+		// Body size validation (10MB max)
+		const size_t MAX_BODY_SIZE = 10 * 1024 * 1024;
+		if (req.body.size() > MAX_BODY_SIZE) {
+			res.status = 413;  // Payload Too Large
+			res.set_content(
+				"{\"success\":false,\"error\":\"Request body too large (max 10MB)\"}",
+				"application/json");
+			return;
+		}
+
 		// Authentication check
 		if (m_bAuthEnabled) {
 			std::string authHeader = req.get_header_value("X-API-Token");
@@ -258,18 +325,26 @@ void DzScriptServerPane::setupRoutes()
 				res.set_content(
 					"{\"success\":false,\"error\":\"Unauthorized: Invalid or missing API token\"}",
 					"application/json");
+				// Log failed auth attempt
+				QString logMsg = QString("[%1] [AUTH FAILED] %2")
+					.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+					.arg(QString::fromStdString(clientIP));
+				QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
+					Q_ARG(QString, logMsg));
 				return;
 			}
 		}
 
 		QByteArray bodyBytes(req.body.c_str(), (int)req.body.size());
+		QByteArray clientIPBytes = QByteArray::fromStdString(clientIP);
 		QByteArray responseBytes;
 
 		QMetaObject::invokeMethod(
 			this, "handleExecuteRequest",
 			Qt::BlockingQueuedConnection,
 			Q_RETURN_ARG(QByteArray, responseBytes),
-			Q_ARG(QByteArray, bodyBytes));
+			Q_ARG(QByteArray, bodyBytes),
+			Q_ARG(QByteArray, clientIPBytes));
 
 		res.set_content(responseBytes.constData(), responseBytes.size(),
 		                "application/json");
@@ -278,22 +353,94 @@ void DzScriptServerPane::setupRoutes()
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
 
-QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody)
+QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP)
 {
+	QTime startTime = QTime::currentTime();
+	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
+
 	// Parse JSON body (QScriptEngine is a QObject — only safe on a Qt-managed thread)
-	QString      bodyStr = QString::fromUtf8(jsonBody.constData(), jsonBody.size());
+	QString bodyStr = QString::fromUtf8(jsonBody.constData(), jsonBody.size());
+
+	// Error handling for malformed JSON
 	QScriptEngine parseEngine;
-	QScriptValue  parsed   = parseEngine.evaluate("(" + bodyStr + ")");
-	QVariantMap   bodyMap  = parsed.toVariant().toMap();
+	QScriptValue parsed = parseEngine.evaluate("(" + bodyStr + ")");
+	if (parseEngine.hasUncaughtException()) {
+		QString errorMsg = QString("Invalid JSON: %1 at line %2")
+			.arg(parseEngine.uncaughtException().toString())
+			.arg(parseEngine.uncaughtExceptionLineNumber());
+		QString resp = buildResponseJson(false, QVariant(), QStringList(),
+		                                 QVariant(errorMsg));
+		appendLog(QString("[%1] [%2] [ERR] [0ms] JSON parse error")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(clientIPStr));
+		return resp.toUtf8();
+	}
 
-	QString     scriptFile = bodyMap.value("scriptFile").toString();
-	QString     scriptText = bodyMap.value("script").toString();
-	QVariantMap argsMap    = bodyMap.value("args").toMap();
+	QVariantMap bodyMap = parsed.toVariant().toMap();
 
+	QString scriptFile = bodyMap.value("scriptFile").toString();
+	QString scriptText = bodyMap.value("script").toString();
+	QVariantMap argsMap = bodyMap.value("args").toMap();
+
+	// Input validation
 	if (scriptFile.isEmpty() && scriptText.isEmpty()) {
 		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(QString("Either scriptFile or script is required")));
+		                                 QVariant(QString("Request must include either 'scriptFile' (path) or 'script' (inline code) field")));
+		appendLog(QString("[%1] [%2] [ERR] [0ms] Missing script/scriptFile")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(clientIPStr));
 		return resp.toUtf8();
+	}
+
+	// Warn if both are provided
+	if (!scriptFile.isEmpty() && !scriptText.isEmpty()) {
+		appendLog(QString("[%1] [%2] [WARN] Both scriptFile and script provided, using scriptFile")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(clientIPStr));
+	}
+
+	// Validate script text length (1MB max)
+	const int MAX_SCRIPT_LENGTH = 1024 * 1024;
+	if (!scriptText.isEmpty() && scriptText.length() > MAX_SCRIPT_LENGTH) {
+		QString resp = buildResponseJson(false, QVariant(), QStringList(),
+		                                 QVariant(QString("Script text too large (max 1MB)")));
+		appendLog(QString("[%1] [%2] [ERR] [0ms] Script too large (%3 bytes)")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(clientIPStr)
+			.arg(scriptText.length()));
+		return resp.toUtf8();
+	}
+
+	// Validate scriptFile path
+	if (!scriptFile.isEmpty()) {
+		QFileInfo fileInfo(scriptFile);
+		if (!fileInfo.exists()) {
+			QString resp = buildResponseJson(false, QVariant(), QStringList(),
+			                                 QVariant(QString("Script file not found: %1").arg(scriptFile)));
+			appendLog(QString("[%1] [%2] [ERR] [0ms] File not found: %3")
+				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+				.arg(clientIPStr)
+				.arg(scriptFile));
+			return resp.toUtf8();
+		}
+		if (!fileInfo.isFile()) {
+			QString resp = buildResponseJson(false, QVariant(), QStringList(),
+			                                 QVariant(QString("Path is not a file: %1").arg(scriptFile)));
+			appendLog(QString("[%1] [%2] [ERR] [0ms] Not a file: %3")
+				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+				.arg(clientIPStr)
+				.arg(scriptFile));
+			return resp.toUtf8();
+		}
+		if (!fileInfo.isAbsolute()) {
+			QString resp = buildResponseJson(false, QVariant(), QStringList(),
+			                                 QVariant(QString("Script file path must be absolute: %1").arg(scriptFile)));
+			appendLog(QString("[%1] [%2] [ERR] [0ms] Path not absolute: %3")
+				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+				.arg(clientIPStr)
+				.arg(scriptFile));
+			return resp.toUtf8();
+		}
 	}
 
 	// Capture dzApp debug output (print() in DazScript)
@@ -348,11 +495,20 @@ QVariant scriptResult;
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
 
-	// Log a summary line in the pane
+	// Calculate execution duration
+	int durationMs = startTime.msecsTo(QTime::currentTime());
+
+	// Log a summary line in the pane with timestamp, IP, status, duration, and script identifier
 	QString logLabel = scriptFile.isEmpty()
-		? scriptText.left(60).replace('\n', ' ')
-		: scriptFile.left(60);
-	appendLog(QString("[%1] %2").arg(success ? "OK" : "ERR").arg(logLabel));
+		? QString("inline: %1").arg(scriptText.left(40).replace('\n', ' '))
+		: QFileInfo(scriptFile).fileName();
+
+	appendLog(QString("[%1] [%2] [%3] [%4ms] %5")
+		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+		.arg(clientIPStr)
+		.arg(success ? "OK" : "ERR")
+		.arg(durationMs)
+		.arg(logLabel));
 
 	QString resp = buildResponseJson(success,
 	                                 success ? scriptResult : QVariant(),
@@ -510,6 +666,7 @@ void DzScriptServerPane::loadSettings()
 	QSettings settings("DAZ 3D", "DazScriptServer");
 	m_sHost = settings.value("host", "127.0.0.1").toString();
 	m_nPort = settings.value("port", 18811).toInt();
+	m_nTimeoutSec = settings.value("timeout", 30).toInt();
 	m_bAuthEnabled = settings.value("authEnabled", true).toBool();
 }
 
@@ -518,6 +675,7 @@ void DzScriptServerPane::saveSettings()
 	QSettings settings("DAZ 3D", "DazScriptServer");
 	settings.setValue("host", m_sHost);
 	settings.setValue("port", m_nPort);
+	settings.setValue("timeout", m_nTimeoutSec);
 	settings.setValue("authEnabled", m_bAuthEnabled);
 }
 
@@ -562,7 +720,14 @@ void DzScriptServerPane::onAuthEnabledChanged(int state)
 	saveSettings();
 
 	if (!m_bAuthEnabled && m_bRunning) {
-		appendLog("Warning: Authentication disabled - anyone can execute scripts!");
+		appendLog("[WARN] Authentication disabled - anyone can execute scripts!");
+	}
+}
+
+void DzScriptServerPane::onClearLogClicked()
+{
+	if (m_pLogView) {
+		m_pLogView->clear();
 	}
 }
 

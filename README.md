@@ -61,7 +61,12 @@ cmake -B build -S . \
 
 ### Starting the Server
 
-After loading the plugin, open the pane via **Window → Panes → Daz Script Server**. Set the host and port (defaults: `127.0.0.1:18811`) and click **Start Server**.
+After loading the plugin, open the pane via **Window → Panes → Daz Script Server**. Configure:
+- **Host**: IP address to bind to (default: `127.0.0.1` for localhost only)
+- **Port**: Port number (default: `18811`)
+- **Timeout**: Request timeout in seconds (default: `30s`, range: `5-300s`)
+
+Click **Start Server** to begin accepting requests. Settings are automatically saved.
 
 ### Authentication
 
@@ -76,6 +81,18 @@ The server uses API token authentication to prevent unauthorized script executio
 - The token file permissions should be restricted to your user account only
 - If the token is compromised, use the "Regenerate" button to create a new one
 - Authentication can be disabled via the checkbox (not recommended unless on a trusted network)
+- Failed authentication attempts are logged in the Request Log with timestamp and client IP
+
+### Request Logging
+
+The plugin displays a real-time log of all requests with:
+- **Timestamp** - When the request was received (HH:mm:ss)
+- **Client IP** - Source IP address of the request
+- **Status** - OK (success), ERR (error), WARN (warning), AUTH FAILED (authentication failure)
+- **Duration** - Script execution time in milliseconds
+- **Script identifier** - Filename for script files, or first 40 characters of inline scripts
+
+Use the "Clear Log" button to clear the log view.
 
 ### API
 
@@ -122,9 +139,16 @@ Or with an inline script:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `scriptFile` | string | one of | Absolute path to a `.dsa` script file |
-| `script` | string | one of | Inline DazScript code |
+| `scriptFile` | string | one of | Absolute path to a `.dsa` script file (must exist and be absolute) |
+| `script` | string | one of | Inline DazScript code (max 1MB) |
 | `args` | object | no | Arguments accessible in the script via `getArguments()[0]` |
+
+**Validation:**
+- Request body size limit: 10MB
+- Script text limit: 1MB
+- Script file must be an absolute path and exist
+- Either `scriptFile` or `script` must be provided (not both)
+- If both are provided, `scriptFile` takes precedence
 
 **Response:**
 

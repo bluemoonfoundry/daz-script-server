@@ -36,6 +36,11 @@ Default install path: `C:\Program Files (x86)\DAZ\Studio4\plugins\`.
 
 There are no unit tests — validation requires loading the plugin in DAZ Studio. A Python example client is provided in `test-simple.py` that demonstrates calling the `/execute` endpoint.
 
+**Configuration settings** (persisted via QSettings):
+- Host and port binding
+- Request timeout (5-300 seconds, default 30)
+- Authentication enabled/disabled state
+
 ## Architecture
 
 ### Threading Model (Critical)
@@ -48,13 +53,19 @@ HTTP handlers run on raw `std::thread`s spawned by cpp-httplib — **not** Qt th
 
 ### Request Flow
 
-`POST /execute` → HTTP handler (HTTP thread) → authentication check → emit signal → `handleExecuteRequest()` (main thread):
-1. Validates API token (if authentication enabled) - returns 401 if invalid
-2. Parses JSON body with `QScriptEngine` to extract `"script"` and `"args"`
-3. Wraps script in an IIFE; injects `args` as a JSON literal accessible inside the script
-4. Captures `dzApp` debug output (print statements) via `onMessagePosted()` during execution
-5. Runs script via `DzScript`
-6. Returns `{ success, result, output[], error }` as JSON
+`POST /execute` → HTTP handler (HTTP thread) → validation & auth → emit signal → `handleExecuteRequest()` (main thread):
+1. **Validates request body size** (max 10MB) - returns 413 if too large
+2. **Validates API token** (if auth enabled) - returns 401 if invalid, logs failed attempts
+3. **Parses JSON** with `QScriptEngine` - returns 400 with parse error if malformed
+4. **Validates input:**
+   - Script text length (max 1MB)
+   - Either `scriptFile` or `script` is present
+   - If `scriptFile`: path is absolute, file exists, is a file (not directory)
+5. Wraps script in an IIFE; injects `args` as a JSON literal accessible inside the script
+6. Captures `dzApp` debug output (print statements) via `onMessagePosted()` during execution
+7. Runs script via `DzScript`, measuring execution duration
+8. Logs request with timestamp, client IP, status, duration, and script identifier
+9. Returns `{ success, result, output[], error }` as JSON
 
 ### Key Classes
 
@@ -99,13 +110,36 @@ Both accept optional `args` object, accessible in the script via `getArguments()
 
 `/MD /U_DEBUG` (MSVC) — forces multi-threaded runtime DLL and disables debug macros regardless of build type. Release builds also use `/O2 /Ob2 /DNDEBUG`.
 
-## Security
+## Security & Reliability
 
 ### API Token Authentication
 
 - **Token generation**: 32 hex characters (128-bit entropy) via `qrand()`
 - **Storage**: `~/.daz3d/dazscriptserver_token.txt` (plaintext)
 - **Validation**: HTTP thread checks `X-API-Token` header or `Authorization: Bearer <token>` before invoking main thread
-- **Settings persistence**: `QSettings` stores host, port, and `authEnabled` flag
+- **Settings persistence**: `QSettings` stores host, port, timeout, and `authEnabled` flag
 - **UI controls**: Token display (password-masked), copy to clipboard, regenerate, enable/disable checkbox
 - **Thread safety**: Token is loaded once at startup and read-only during server operation (safe for HTTP thread to read)
+- **Failed auth logging**: Auth failures logged with timestamp and client IP
+
+### Input Validation
+
+- **Request body size**: 10MB max (HTTP 413 if exceeded)
+- **Script text length**: 1MB max
+- **JSON parsing**: Error handling with line numbers for malformed JSON
+- **Script file validation**: Must be absolute path, must exist, must be a file
+- **Both fields warning**: If both `scriptFile` and `script` provided, warns and uses `scriptFile`
+
+### Port Conflict Detection
+
+- **Bind failure detection**: Checks if `httplib::Server` bound successfully after thread start
+- **User-friendly errors**: Clear error messages suggesting port may be in use
+- **Graceful cleanup**: Properly cleans up server objects on bind failure
+
+### Request Logging
+
+- **Format**: `[HH:mm:ss] [client_ip] [status] [duration_ms] script_identifier`
+- **Status codes**: OK, ERR, WARN, AUTH FAILED
+- **Duration tracking**: Uses `QTime` to measure execution time in milliseconds
+- **Client IP logging**: Logs source IP for security auditing
+- **Clear log button**: UI button to clear log view
