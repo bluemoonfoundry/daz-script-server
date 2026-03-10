@@ -63,6 +63,20 @@ cmake -B build -S . \
 
 After loading the plugin, open the pane via **Window → Panes → Daz Script Server**. Set the host and port (defaults: `127.0.0.1:18811`) and click **Start Server**.
 
+### Authentication
+
+The server uses API token authentication to prevent unauthorized script execution. On first start, a random token is automatically generated and saved to `~/.daz3d/dazscriptserver_token.txt`.
+
+**To use the API:**
+1. Copy the token from the plugin UI (click the "Copy" button)
+2. Include it in your HTTP requests via the `X-API-Token` header
+
+**Security notes:**
+- Keep the token secure - anyone with it can execute arbitrary DazScript code
+- The token file permissions should be restricted to your user account only
+- If the token is compromised, use the "Regenerate" button to create a new one
+- Authentication can be disabled via the checkbox (not recommended unless on a trusted network)
+
 ### API
 
 #### `GET /status`
@@ -76,6 +90,17 @@ Returns server status and version.
 #### `POST /execute`
 
 Executes a DazScript and returns the result.
+
+**Authentication:**
+Include your API token in the request header:
+```
+X-API-Token: your-token-here
+```
+
+Or using the Authorization header:
+```
+Authorization: Bearer your-token-here
+```
 
 **Request body:**
 
@@ -120,6 +145,24 @@ Or with an inline script:
 | `error` | Error message with line number if execution failed, otherwise `null` |
 
 ### Writing Scripts
+
+**Python example with authentication:**
+
+```python
+import requests
+
+# Read token from file
+with open(os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")) as f:
+    token = f.read().strip()
+
+# Make authenticated request
+response = requests.post(
+    "http://127.0.0.1:18811/execute",
+    headers={"X-API-Token": token},
+    json={"script": "return 'Hello';", "args": {}}
+)
+print(response.json())
+```
 
 **Accessing arguments** — use `getArguments()[0]`:
 

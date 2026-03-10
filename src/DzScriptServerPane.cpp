@@ -8,9 +8,16 @@
 #include <dzscript.h>
 
 #include <QtCore/qmetaobject.h>
+#include <QtCore/qsettings.h>
+#include <QtCore/qfile.h>
+#include <QtCore/qdatetime.h>
+#include <QtCore/qdir.h>
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
+#include <QtGui/qclipboard.h>
+#include <QtGui/qapplication.h>
+#include <QtGui/qmessagebox.h>
 #include <QtScript/qscriptengine.h>
 #include <QtScript/qscriptvalue.h>
 
@@ -41,18 +48,56 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_sHost("127.0.0.1")
 	, m_bRunning(false)
 	, m_bCapturingLog(false)
+	, m_bAuthEnabled(true)
 {
+	// Load settings and token
+	loadSettings();
+	loadOrGenerateToken();
+
 	// ── Build UI ─────────────────────────────────────────────────────────────
 	QFormLayout* formLayout = new QFormLayout();
 	formLayout->setContentsMargins(6, 6, 6, 6);
 
-	m_pHostEdit = new QLineEdit("127.0.0.1", this);
+	m_pHostEdit = new QLineEdit(m_sHost, this);
 	formLayout->addRow(tr("Host:"), m_pHostEdit);
 
 	m_pPortSpin = new QSpinBox(this);
 	m_pPortSpin->setRange(1024, 65535);
 	m_pPortSpin->setValue(m_nPort);
 	formLayout->addRow(tr("Port:"), m_pPortSpin);
+
+	// Authentication section
+	QGroupBox* authGroup = new QGroupBox(tr("Authentication"), this);
+	QVBoxLayout* authLayout = new QVBoxLayout(authGroup);
+
+	m_pAuthEnabledCheck = new QCheckBox(tr("Enable API Token Authentication"), this);
+	m_pAuthEnabledCheck->setChecked(m_bAuthEnabled);
+	authLayout->addWidget(m_pAuthEnabledCheck);
+
+	QHBoxLayout* tokenLayout = new QHBoxLayout();
+	QLabel* tokenLabel = new QLabel(tr("API Token:"), this);
+	tokenLayout->addWidget(tokenLabel);
+
+	m_pTokenEdit = new QLineEdit(this);
+	m_pTokenEdit->setText(m_sApiToken);
+	m_pTokenEdit->setReadOnly(true);
+	m_pTokenEdit->setEchoMode(QLineEdit::Password);
+	tokenLayout->addWidget(m_pTokenEdit);
+
+	m_pCopyTokenBtn = new QPushButton(tr("Copy"), this);
+	m_pCopyTokenBtn->setMaximumWidth(60);
+	tokenLayout->addWidget(m_pCopyTokenBtn);
+
+	m_pRegenTokenBtn = new QPushButton(tr("Regenerate"), this);
+	m_pRegenTokenBtn->setMaximumWidth(90);
+	tokenLayout->addWidget(m_pRegenTokenBtn);
+
+	authLayout->addLayout(tokenLayout);
+
+	QLabel* authHint = new QLabel(
+		tr("Clients must send token via 'X-API-Token' header"), this);
+	authHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	authLayout->addWidget(authHint);
 
 	m_pStatusLabel = new QLabel(tr("Stopped"), this);
 
@@ -71,6 +116,7 @@ DzScriptServerPane::DzScriptServerPane()
 	QVBoxLayout* mainLayout = new QVBoxLayout(this);
 	mainLayout->setContentsMargins(4, 4, 4, 4);
 	mainLayout->addLayout(formLayout);
+	mainLayout->addWidget(authGroup);
 	mainLayout->addWidget(m_pStatusLabel);
 	mainLayout->addLayout(btnLayout);
 	mainLayout->addWidget(m_pLogView);
@@ -79,11 +125,17 @@ DzScriptServerPane::DzScriptServerPane()
 
 	connect(m_pStartBtn, SIGNAL(clicked()), this, SLOT(onStartClicked()));
 	connect(m_pStopBtn,  SIGNAL(clicked()), this, SLOT(onStopClicked()));
+	connect(m_pCopyTokenBtn, SIGNAL(clicked()), this, SLOT(onCopyTokenClicked()));
+	connect(m_pRegenTokenBtn, SIGNAL(clicked()), this, SLOT(onRegenTokenClicked()));
+	connect(m_pAuthEnabledCheck, SIGNAL(stateChanged(int)), this, SLOT(onAuthEnabledChanged(int)));
+
+	updateUI();
 }
 
 DzScriptServerPane::~DzScriptServerPane()
 {
 	stopServer();
+	saveSettings();
 }
 
 // ─── Start / Stop ─────────────────────────────────────────────────────────────
@@ -92,6 +144,7 @@ void DzScriptServerPane::onStartClicked()
 {
 	m_nPort = m_pPortSpin->value();
 	m_sHost = m_pHostEdit->text();
+	saveSettings();
 	startServer();
 }
 
@@ -129,10 +182,13 @@ void DzScriptServerPane::stopServer()
 
 	if (m_pServer) {
 		m_pServer->stop();
+		delete m_pServer;  // FIX: Delete server object to prevent memory leak
 		m_pServer = nullptr;
 	}
 	if (m_pServerThread) {
-		m_pServerThread->wait(5000);
+		if (!m_pServerThread->wait(5000)) {
+			appendLog("Warning: Server thread did not stop cleanly");
+		}
 		delete m_pServerThread;
 		m_pServerThread = nullptr;
 	}
@@ -145,17 +201,23 @@ void DzScriptServerPane::stopServer()
 void DzScriptServerPane::updateUI()
 {
 	if (m_bRunning) {
-		m_pStatusLabel->setText(tr("Running on %1:%2").arg(m_sHost).arg(m_nPort));
+		QString authStatus = m_bAuthEnabled ? tr("Protected") : tr("⚠ Unprotected");
+		m_pStatusLabel->setText(tr("Running on %1:%2 (%3)")
+			.arg(m_sHost).arg(m_nPort).arg(authStatus));
 		m_pStartBtn->setEnabled(false);
 		m_pStopBtn->setEnabled(true);
 		m_pHostEdit->setEnabled(false);
 		m_pPortSpin->setEnabled(false);
+		m_pAuthEnabledCheck->setEnabled(false);
+		m_pRegenTokenBtn->setEnabled(false);
 	} else {
 		m_pStatusLabel->setText(tr("Stopped"));
 		m_pStartBtn->setEnabled(true);
 		m_pStopBtn->setEnabled(false);
 		m_pHostEdit->setEnabled(true);
 		m_pPortSpin->setEnabled(true);
+		m_pAuthEnabledCheck->setEnabled(true);
+		m_pRegenTokenBtn->setEnabled(true);
 	}
 }
 
@@ -180,6 +242,26 @@ void DzScriptServerPane::setupRoutes()
 	});
 
 	m_pServer->Post("/execute", [this](const httplib::Request& req, httplib::Response& res) {
+		// Authentication check
+		if (m_bAuthEnabled) {
+			std::string authHeader = req.get_header_value("X-API-Token");
+			if (authHeader.empty()) {
+				// Also check Authorization: Bearer <token>
+				authHeader = req.get_header_value("Authorization");
+				if (authHeader.find("Bearer ") == 0) {
+					authHeader = authHeader.substr(7);  // Remove "Bearer " prefix
+				}
+			}
+
+			if (!validateToken(authHeader)) {
+				res.status = 401;
+				res.set_content(
+					"{\"success\":false,\"error\":\"Unauthorized: Invalid or missing API token\"}",
+					"application/json");
+				return;
+			}
+		}
+
 		QByteArray bodyBytes(req.body.c_str(), (int)req.body.size());
 		QByteArray responseBytes;
 
@@ -352,6 +434,136 @@ QString DzScriptServerPane::buildResponseJson(bool success,
 	json += "\"error\":"    + variantToJson(error);
 	json += "}";
 	return json;
+}
+
+// ─── Authentication ───────────────────────────────────────────────────────────
+
+QString DzScriptServerPane::generateToken()
+{
+	// Generate cryptographically secure random token (32 hex characters = 128 bits)
+	QString token;
+	qsrand(QDateTime::currentDateTime().toTime_t() ^ (quintptr)this);
+
+	// Use Qt's random number generator for a simple token
+	// For better security, could use QCryptographicHash with random seed
+	const char hexChars[] = "0123456789abcdef";
+	for (int i = 0; i < 32; ++i) {
+		token += hexChars[qrand() % 16];
+	}
+
+	return token;
+}
+
+QString getTokenFilePath()
+{
+	QString homeDir = QDir::homePath();
+	QString dazDir = homeDir + "/.daz3d";
+
+	// Create directory if it doesn't exist
+	QDir dir;
+	if (!dir.exists(dazDir)) {
+		dir.mkpath(dazDir);
+	}
+
+	return dazDir + "/dazscriptserver_token.txt";
+}
+
+void DzScriptServerPane::loadOrGenerateToken()
+{
+	QString tokenPath = getTokenFilePath();
+	QFile file(tokenPath);
+
+	if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		QTextStream in(&file);
+		m_sApiToken = in.readLine().trimmed();
+		file.close();
+
+		if (m_sApiToken.isEmpty() || m_sApiToken.length() < 16) {
+			// Invalid token, generate new one
+			m_sApiToken = generateToken();
+			saveToken();
+		}
+	} else {
+		// No token file, generate new one
+		m_sApiToken = generateToken();
+		saveToken();
+		appendLog(QString("Generated new API token: %1").arg(tokenPath));
+	}
+}
+
+void DzScriptServerPane::saveToken()
+{
+	QString tokenPath = getTokenFilePath();
+	QFile file(tokenPath);
+
+	if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		QTextStream out(&file);
+		out << m_sApiToken << "\n";
+		file.close();
+	} else {
+		appendLog(QString("Error: Failed to save token to %1").arg(tokenPath));
+	}
+}
+
+void DzScriptServerPane::loadSettings()
+{
+	QSettings settings("DAZ 3D", "DazScriptServer");
+	m_sHost = settings.value("host", "127.0.0.1").toString();
+	m_nPort = settings.value("port", 18811).toInt();
+	m_bAuthEnabled = settings.value("authEnabled", true).toBool();
+}
+
+void DzScriptServerPane::saveSettings()
+{
+	QSettings settings("DAZ 3D", "DazScriptServer");
+	settings.setValue("host", m_sHost);
+	settings.setValue("port", m_nPort);
+	settings.setValue("authEnabled", m_bAuthEnabled);
+}
+
+bool DzScriptServerPane::validateToken(const std::string& providedToken) const
+{
+	if (providedToken.empty())
+		return false;
+
+	QString providedTokenQt = QString::fromStdString(providedToken).trimmed();
+	return providedTokenQt == m_sApiToken;
+}
+
+void DzScriptServerPane::onCopyTokenClicked()
+{
+	QClipboard* clipboard = QApplication::clipboard();
+	if (clipboard) {
+		clipboard->setText(m_sApiToken);
+		appendLog("API token copied to clipboard");
+	}
+}
+
+void DzScriptServerPane::onRegenTokenClicked()
+{
+	QMessageBox msgBox;
+	msgBox.setWindowTitle(tr("Regenerate Token"));
+	msgBox.setText(tr("This will generate a new API token and invalidate the old one."));
+	msgBox.setInformativeText(tr("All clients will need to be updated with the new token. Continue?"));
+	msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+	msgBox.setDefaultButton(QMessageBox::No);
+
+	if (msgBox.exec() == QMessageBox::Yes) {
+		m_sApiToken = generateToken();
+		m_pTokenEdit->setText(m_sApiToken);
+		saveToken();
+		appendLog("New API token generated");
+	}
+}
+
+void DzScriptServerPane::onAuthEnabledChanged(int state)
+{
+	m_bAuthEnabled = (state == Qt::Checked);
+	saveSettings();
+
+	if (!m_bAuthEnabled && m_bRunning) {
+		appendLog("Warning: Authentication disabled - anyone can execute scripts!");
+	}
 }
 
 #include "moc_DzScriptServerPane.cpp"
