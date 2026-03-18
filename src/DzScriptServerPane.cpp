@@ -14,6 +14,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qtime.h>
 #include <QtCore/qfileinfo.h>
+#include <QtCore/qcryptographichash.h>
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
@@ -180,6 +181,24 @@ void DzScriptServerPane::startServer()
 
 	m_pServer = new httplib::Server();
 	m_pServer->set_read_timeout(m_nTimeoutSec, 0);
+
+	// Limit concurrent connections to prevent resource exhaustion
+	// cpp-httplib spawns a thread per request; limit keep-alive to reduce thread buildup
+	m_pServer->set_keep_alive_max_count(5);  // Max 5 requests per persistent connection
+	m_pServer->set_keep_alive_timeout(5);     // 5 second keep-alive timeout
+
+	// Set socket flags to improve resource handling
+	m_pServer->set_socket_options([](int sock) {
+		// Enable address reuse to prevent "address already in use" errors
+		int yes = 1;
+#ifdef _WIN32
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+#else
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
+		return 0;
+	});
+
 	setupRoutes();
 
 	m_aHostUtf8 = m_sHost.toUtf8();
@@ -277,8 +296,23 @@ void DzScriptServerPane::updateUI()
 
 void DzScriptServerPane::appendLog(const QString& line)
 {
-	if (m_pLogView)
-		m_pLogView->append(line);
+	if (!m_pLogView)
+		return;
+
+	m_pLogView->append(line);
+
+	// Limit log view to prevent unbounded memory growth (max 1000 lines)
+	const int MAX_LOG_LINES = 1000;
+	QTextDocument* doc = m_pLogView->document();
+	if (doc && doc->blockCount() > MAX_LOG_LINES) {
+		// Remove oldest lines
+		QTextCursor cursor(doc);
+		cursor.movePosition(QTextCursor::Start);
+		cursor.movePosition(QTextCursor::Down, QTextCursor::KeepAnchor,
+		                    doc->blockCount() - MAX_LOG_LINES);
+		cursor.removeSelectedText();
+		cursor.deleteChar();  // Remove the newline after selection
+	}
 }
 
 // ─── Route setup ──────────────────────────────────────────────────────────────
@@ -299,12 +333,13 @@ void DzScriptServerPane::setupRoutes()
 		// Get client IP for logging
 		std::string clientIP = req.remote_addr.empty() ? "unknown" : req.remote_addr;
 
-		// Body size validation (10MB max)
-		const size_t MAX_BODY_SIZE = 10 * 1024 * 1024;
+		// Body size validation (5MB max to account for multiple memory copies during processing)
+		// Body is duplicated ~4-5x: raw bytes → QString → QVariant → script text
+		const size_t MAX_BODY_SIZE = 5 * 1024 * 1024;
 		if (req.body.size() > MAX_BODY_SIZE) {
 			res.status = 413;  // Payload Too Large
 			res.set_content(
-				"{\"success\":false,\"error\":\"Request body too large (max 10MB)\"}",
+				"{\"success\":false,\"error\":\"Request body too large (max 5MB)\"}",
 				"application/json");
 			return;
 		}
@@ -519,8 +554,20 @@ QVariant scriptResult;
 
 void DzScriptServerPane::onMessagePosted(const QString& msg)
 {
-	if (m_bCapturingLog)
+	if (!m_bCapturingLog)
+		return;
+
+	// Limit captured output to prevent memory exhaustion from excessive print() calls
+	const int MAX_CAPTURED_LINES = 10000;
+	if (m_aCapturedLogLines.size() < MAX_CAPTURED_LINES) {
 		m_aCapturedLogLines.append(msg);
+	} else if (m_aCapturedLogLines.size() == MAX_CAPTURED_LINES) {
+		// Add a warning message once when limit is reached
+		m_aCapturedLogLines.append(
+			QString("[WARNING] Output truncated: maximum %1 lines captured")
+				.arg(MAX_CAPTURED_LINES));
+	}
+	// Silently discard additional lines beyond limit
 }
 
 // ─── JSON helpers (main thread only) ─────────────────────────────────────────
@@ -596,18 +643,32 @@ QString DzScriptServerPane::buildResponseJson(bool success,
 
 QString DzScriptServerPane::generateToken()
 {
-	// Generate cryptographically secure random token (32 hex characters = 128 bits)
-	QString token;
+	// Generate token using QCryptographicHash with multiple entropy sources
+	// Mix: timestamp (millisecond precision) + pointer address + qrand() values
 	qsrand(QDateTime::currentDateTime().toTime_t() ^ (quintptr)this);
 
-	// Use Qt's random number generator for a simple token
-	// For better security, could use QCryptographicHash with random seed
-	const char hexChars[] = "0123456789abcdef";
-	for (int i = 0; i < 32; ++i) {
-		token += hexChars[qrand() % 16];
+	QByteArray entropyData;
+	// Add high-resolution timestamp
+	qint64 msecs = QDateTime::currentDateTime().toMSecsSinceEpoch();
+	entropyData.append((const char*)&msecs, sizeof(msecs));
+
+	// Add pointer addresses as entropy
+	quintptr ptr1 = (quintptr)this;
+	quintptr ptr2 = (quintptr)&entropyData;
+	entropyData.append((const char*)&ptr1, sizeof(ptr1));
+	entropyData.append((const char*)&ptr2, sizeof(ptr2));
+
+	// Add multiple qrand() outputs (not cryptographically secure, but adds entropy)
+	for (int i = 0; i < 16; ++i) {
+		int randVal = qrand();
+		entropyData.append((const char*)&randVal, sizeof(randVal));
 	}
 
-	return token;
+	// Hash the entropy to produce a uniform token
+	QByteArray hash = QCryptographicHash::hash(entropyData, QCryptographicHash::Sha256);
+
+	// Return first 32 hex characters (128 bits)
+	return QString(hash.toHex().left(32));
 }
 
 QString getTokenFilePath()
