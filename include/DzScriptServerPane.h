@@ -10,6 +10,8 @@
 #include <QtGui/qpushbutton.h>
 #include <QtGui/qlabel.h>
 #include <QtGui/qtextedit.h>
+#include <QtGui/qcheckbox.h>
+#include <QtGui/qgroupbox.h>
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; }
@@ -35,12 +37,16 @@ public slots:
 	Q_INVOKABLE void stopServer();
 
 	// Called on main thread via BlockingQueuedConnection from httplib handler threads.
-	Q_INVOKABLE QByteArray handleExecuteRequest(const QByteArray& jsonBody);
+	Q_INVOKABLE QByteArray handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP);
 
 private slots:
 	void onStartClicked();
 	void onStopClicked();
 	void onMessagePosted(const QString& msg);
+	void onCopyTokenClicked();
+	void onRegenTokenClicked();
+	void onAuthEnabledChanged(int state);
+	void onClearLogClicked();
 
 private:
 	void   setupRoutes();
@@ -52,6 +58,14 @@ private:
 	                          const QStringList& output,
 	                          const QVariant& error);
 
+	// Authentication
+	QString generateToken();
+	void    loadOrGenerateToken();
+	void    saveToken();
+	void    loadSettings();
+	void    saveSettings();
+	bool    validateToken(const std::string& providedToken) const;
+
 	// Server state
 	httplib::Server* m_pServer;
 	QThread*         m_pServerThread;   // actually a ServerListenThread*
@@ -59,6 +73,11 @@ private:
 	QString          m_sHost;
 	QByteArray       m_aHostUtf8;
 	bool             m_bRunning;
+	int              m_nTimeoutSec;
+
+	// Authentication
+	QString          m_sApiToken;
+	bool             m_bAuthEnabled;
 
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
@@ -67,8 +86,16 @@ private:
 	// UI widgets
 	QLineEdit*   m_pHostEdit;
 	QSpinBox*    m_pPortSpin;
+	QSpinBox*    m_pTimeoutSpin;
 	QPushButton* m_pStartBtn;
 	QPushButton* m_pStopBtn;
 	QLabel*      m_pStatusLabel;
 	QTextEdit*   m_pLogView;
+	QPushButton* m_pClearLogBtn;
+
+	// Authentication UI
+	QCheckBox*   m_pAuthEnabledCheck;
+	QLineEdit*   m_pTokenEdit;
+	QPushButton* m_pCopyTokenBtn;
+	QPushButton* m_pRegenTokenBtn;
 };
