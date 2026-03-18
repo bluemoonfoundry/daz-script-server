@@ -13,6 +13,9 @@
 
 set -e
 
+echo "DAZ_SDK_DIR: ${DAZ_SDK_DIR:-<not set>}"
+echo "DAZ_STUDIO_EXE_DIR: ${DAZ_STUDIO_EXE_DIR:-<not set>}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 
@@ -26,15 +29,20 @@ else
     exit 1
 fi
 
-# Configure if no cache exists yet
-if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
-    echo "No build cache found — running CMake configure..."
-    "$CMAKE" -B "$BUILD_DIR" -S "$SCRIPT_DIR"
+# Build up common cmake -D flags from environment variables
+CMAKE_FLAGS=()
+[ -n "$DAZ_SDK_DIR" ] && CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR")
+[ -n "$DAZ_STUDIO_EXE_DIR" ] && CMAKE_FLAGS+=("-DDAZ_STUDIO_EXE_DIR=$DAZ_STUDIO_EXE_DIR")
+
+# Configure if no cache exists yet, or if project files are missing (stale/failed configure)
+if [ ! -f "$BUILD_DIR/CMakeCache.txt" ] || [ ! -f "$BUILD_DIR/ALL_BUILD.vcxproj" ]; then
+    echo "Running CMake configure..."
+    "$CMAKE" -B "$BUILD_DIR" -S "$SCRIPT_DIR" "${CMAKE_FLAGS[@]}"
 fi
 
 if [ "$1" = "--install" ]; then
     echo "Building and installing to DAZ Studio plugins folder..."
-    "$CMAKE" -B "$BUILD_DIR" -S "$SCRIPT_DIR" -DINSTALL_TO_DAZ=ON
+    "$CMAKE" -B "$BUILD_DIR" -S "$SCRIPT_DIR" "${CMAKE_FLAGS[@]}" -DINSTALL_TO_DAZ=ON
     "$CMAKE" --build "$BUILD_DIR" --config Release
 else
     echo "Building..."

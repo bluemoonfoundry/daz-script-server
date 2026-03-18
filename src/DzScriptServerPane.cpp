@@ -12,7 +12,7 @@
 #include <QtCore/qfile.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qdir.h>
-#include <QtCore/qtime.h>
+#include <QtCore/qtextstream.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qcryptographichash.h>
 #include <QtGui/qboxlayout.h>
@@ -33,6 +33,7 @@ public:
 	                   const std::string& host, int port,
 	                   QObject* parent = nullptr)
 		: QThread(parent), m_pServer(pServer), m_sHost(host), m_nPort(port) {}
+	static void msSleep(unsigned long ms) { QThread::msleep(ms); }
 protected:
 	void run() override { m_pServer->listen(m_sHost.c_str(), m_nPort); }
 private:
@@ -221,7 +222,7 @@ void DzScriptServerPane::startServer()
 	m_pServerThread->start();
 
 	// Give thread a moment to bind
-	QThread::msleep(100);
+	ServerListenThread::msSleep(100);
 
 	// Check if server bound successfully
 	if (!m_pServer->is_running()) {
@@ -371,7 +372,7 @@ void DzScriptServerPane::setupRoutes()
 		}
 
 		QByteArray bodyBytes(req.body.c_str(), (int)req.body.size());
-		QByteArray clientIPBytes = QByteArray::fromStdString(clientIP);
+		QByteArray clientIPBytes(clientIP.c_str(), (int)clientIP.size());
 		QByteArray responseBytes;
 
 		QMetaObject::invokeMethod(
@@ -665,7 +666,7 @@ QString DzScriptServerPane::generateToken()
 	}
 
 	// Hash the entropy to produce a uniform token
-	QByteArray hash = QCryptographicHash::hash(entropyData, QCryptographicHash::Sha256);
+	QByteArray hash = QCryptographicHash::hash(entropyData, QCryptographicHash::Sha1);
 
 	// Return first 32 hex characters (128 bits)
 	return QString(hash.toHex().left(32));
