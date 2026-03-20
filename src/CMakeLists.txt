@@ -6,8 +6,12 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../i
 add_library(DazScriptServer SHARED
 	pluginmain.cpp
 	DzScriptServerPane.cpp
+	SecureRandom.cpp
+	JsonBuilder.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
+	../include/SecureRandom.h
+	../include/JsonBuilder.h
 	../include/common_version.h
 	../include/dzscriptserver.h
 )
@@ -28,7 +32,7 @@ target_link_libraries(DazScriptServer
 )
 
 if(WIN32)
-	target_link_libraries(DazScriptServer PRIVATE ws2_32)
+	target_link_libraries(DazScriptServer PRIVATE ws2_32 advapi32)
 endif()
 
 target_compile_definitions(DazScriptServer PRIVATE CPPHTTPLIB_NO_COMPRESS)

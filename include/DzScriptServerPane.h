@@ -5,6 +5,8 @@
 #include <QtCore/qstringlist.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qbytearray.h>
+#include <QtCore/qmutex.h>
+#include <QtCore/qdatetime.h>
 #include <QtGui/qspinbox.h>
 #include <QtGui/qlineedit.h>
 #include <QtGui/qpushbutton.h>
@@ -15,6 +17,16 @@
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; }
+
+// ─── Configuration Constants ──────────────────────────────────────────────────
+
+namespace ServerConfig {
+    const int MAX_CONCURRENT_REQUESTS = 10;     // Max simultaneous requests
+    const size_t MAX_BODY_SIZE = 5 * 1024 * 1024;  // 5MB request body limit
+    const int MAX_SCRIPT_LENGTH = 1024 * 1024;   // 1MB script text limit
+    const int MAX_LOG_LINES = 1000;              // Max UI log lines
+    const int MAX_CAPTURED_LINES = 10000;        // Max captured output lines
+}
 
 class DzScriptServerPane : public DzPane {
 	Q_OBJECT
@@ -56,7 +68,8 @@ private:
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
 	                          const QStringList& output,
-	                          const QVariant& error);
+	                          const QVariant& error,
+	                          const QString& requestId = QString());
 
 	// Authentication
 	QString generateToken();
@@ -65,6 +78,12 @@ private:
 	void    loadSettings();
 	void    saveSettings();
 	bool    validateToken(const std::string& providedToken) const;
+
+	// Metrics and monitoring
+	QString generateRequestId();
+	void    recordRequest(bool success, qint64 durationMs);
+	QString getHealthJson() const;
+	QString getMetricsJson() const;
 
 	// Server state
 	httplib::Server* m_pServer;
@@ -82,6 +101,26 @@ private:
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
 	bool        m_bCapturingLog;
+
+	// Request management and metrics
+	struct RequestMetrics {
+		int         totalRequests;
+		int         successfulRequests;
+		int         failedRequests;
+		int         authFailures;
+		QDateTime   startTime;
+		QMutex      mutex;  // Protects the counters
+
+		RequestMetrics()
+			: totalRequests(0)
+			, successfulRequests(0)
+			, failedRequests(0)
+			, authFailures(0)
+			, startTime(QDateTime::currentDateTime())
+		{}
+	};
+	RequestMetrics   m_metrics;
+	int              m_nActiveRequests;  // Current concurrent requests
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;

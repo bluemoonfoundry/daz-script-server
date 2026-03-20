@@ -70,15 +70,17 @@ Click **Start Server** to begin accepting requests. Settings are automatically s
 
 ### Authentication
 
-The server uses API token authentication to prevent unauthorized script execution. On first start, a random token is automatically generated and saved to `~/.daz3d/dazscriptserver_token.txt`.
+The server uses API token authentication to prevent unauthorized script execution. On first start, a cryptographically secure random token (128-bit) is automatically generated using platform crypto APIs (Windows: CryptoAPI, macOS/Linux: /dev/urandom) and saved to `~/.daz3d/dazscriptserver_token.txt`.
 
 **To use the API:**
 1. Copy the token from the plugin UI (click the "Copy" button)
 2. Include it in your HTTP requests via the `X-API-Token` header
 
 **Security notes:**
+- **Cryptographically secure**: Tokens are generated using OS-provided crypto APIs, not predictable PRNGs
 - Keep the token secure - anyone with it can execute arbitrary DazScript code
-- The token file permissions should be restricted to your user account only
+- The token file permissions are automatically set to owner-only (`chmod 600`) on Unix/macOS
+- On Windows, manually restrict file access to your user account only
 - If the token is compromised, use the "Regenerate" button to create a new one
 - Authentication can be disabled via the checkbox (not recommended unless on a trusted network)
 - Failed authentication attempts are logged in the Request Log with timestamp and client IP
@@ -101,8 +103,43 @@ Use the "Clear Log" button to clear the log view.
 Returns server status and version.
 
 ```json
-{ "running": true, "version": "1.0.0.0" }
+{ "running": true, "version": "1.1.0" }
 ```
+
+#### `GET /health`
+
+Returns detailed server health information (no authentication required).
+
+```json
+{
+  "status": "ok",
+  "version": "1.1.0",
+  "running": true,
+  "auth_enabled": true,
+  "active_requests": 2,
+  "uptime_seconds": 3600
+}
+```
+
+Use for monitoring, health checks, and load balancer probes.
+
+#### `GET /metrics`
+
+Returns request statistics and performance metrics (no authentication required).
+
+```json
+{
+  "total_requests": 1523,
+  "successful_requests": 1489,
+  "failed_requests": 28,
+  "auth_failures": 6,
+  "active_requests": 2,
+  "uptime_seconds": 86400,
+  "success_rate_percent": 97.77
+}
+```
+
+Use for monitoring, alerting, and performance tracking.
 
 #### `POST /execute`
 
@@ -144,11 +181,15 @@ Or with an inline script:
 | `args` | object | no | Arguments accessible in the script via `getArguments()[0]` |
 
 **Validation:**
-- Request body size limit: 10MB
+- Request body size limit: 5MB
 - Script text limit: 1MB
 - Script file must be an absolute path and exist
 - Either `scriptFile` or `script` must be provided (not both)
 - If both are provided, `scriptFile` takes precedence
+
+**Rate Limiting:**
+- Maximum 10 concurrent requests
+- Returns HTTP 429 (Too Many Requests) if limit exceeded
 
 **Response:**
 
@@ -157,7 +198,8 @@ Or with an inline script:
   "success": true,
   "result": "My Node",
   "output": ["line printed by script"],
-  "error": null
+  "error": null,
+  "request_id": "a3f2b891"
 }
 ```
 
@@ -165,8 +207,9 @@ Or with an inline script:
 |---|---|
 | `success` | `true` if the script executed without error |
 | `result` | The script's return value (last evaluated expression) |
-| `output` | Array of strings printed via `print()` during execution |
+| `output` | Array of strings printed via `print()` during execution (max 10,000 lines) |
 | `error` | Error message with line number if execution failed, otherwise `null` |
+| `request_id` | Unique 8-character identifier for debugging and log correlation |
 
 ### Writing Scripts
 

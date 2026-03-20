@@ -3,6 +3,8 @@
 #include "httplib.h"
 
 #include "DzScriptServerPane.h"
+#include "SecureRandom.h"
+#include "JsonBuilder.h"
 
 #include <dzapp.h>
 #include <dzscript.h>
@@ -15,6 +17,8 @@
 #include <QtCore/qtextstream.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qcryptographichash.h>
+#include <QtCore/quuid.h>
+#include <QtCore/qmutexlocker.h>
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
@@ -23,6 +27,11 @@
 #include <QtGui/qmessagebox.h>
 #include <QtScript/qscriptengine.h>
 #include <QtScript/qscriptvalue.h>
+
+// Platform-specific includes for file permissions
+#ifndef _WIN32
+	#include <sys/stat.h>  // chmod, S_IRUSR, S_IWUSR
+#endif
 
 // ─── ServerListenThread ───────────────────────────────────────────────────────
 // Defined here (not in the header) to keep httplib contained in this .cpp.
@@ -54,6 +63,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_bCapturingLog(false)
 	, m_nTimeoutSec(30)
 	, m_bAuthEnabled(true)
+	, m_nActiveRequests(0)
 {
 	// Load settings and token
 	loadSettings();
@@ -180,6 +190,15 @@ void DzScriptServerPane::startServer()
 	if (m_bRunning)
 		return;
 
+	// Verify we have a valid API token before starting
+	if (m_bAuthEnabled && (m_sApiToken.isEmpty() || m_sApiToken.length() < 32)) {
+		appendLog("[ERROR] Cannot start server: No valid API token available");
+		QMessageBox::critical(this, tr("Security Error"),
+			tr("Cannot start server without a valid API token.\n\n"
+			   "Token generation may have failed. Check the log for details."));
+		return;
+	}
+
 	m_pServer = new httplib::Server();
 	m_pServer->set_read_timeout(m_nTimeoutSec, 0);
 
@@ -302,15 +321,14 @@ void DzScriptServerPane::appendLog(const QString& line)
 
 	m_pLogView->append(line);
 
-	// Limit log view to prevent unbounded memory growth (max 1000 lines)
-	const int MAX_LOG_LINES = 1000;
+	// Limit log view to prevent unbounded memory growth
 	QTextDocument* doc = m_pLogView->document();
-	if (doc && doc->blockCount() > MAX_LOG_LINES) {
+	if (doc && doc->blockCount() > ServerConfig::MAX_LOG_LINES) {
 		// Remove oldest lines
 		QTextCursor cursor(doc);
 		cursor.movePosition(QTextCursor::Start);
 		cursor.movePosition(QTextCursor::Down, QTextCursor::KeepAnchor,
-		                    doc->blockCount() - MAX_LOG_LINES);
+		                    doc->blockCount() - ServerConfig::MAX_LOG_LINES);
 		cursor.removeSelectedText();
 		cursor.deleteChar();  // Remove the newline after selection
 	}
@@ -325,19 +343,46 @@ void DzScriptServerPane::appendLog(const QString& line)
 
 void DzScriptServerPane::setupRoutes()
 {
+	// ─── GET /status ──────────────────────────────────────────────────────────
 	m_pServer->Get("/status", [](const httplib::Request&, httplib::Response& res) {
-		res.set_content("{\"running\":true,\"version\":\"1.0.0.0\"}",
+		res.set_content("{\"running\":true,\"version\":\"1.1.0\"}",
 		                "application/json");
 	});
 
+	// ─── GET /health ──────────────────────────────────────────────────────────
+	m_pServer->Get("/health", [this](const httplib::Request&, httplib::Response& res) {
+		QString json = getHealthJson();
+		QByteArray jsonBytes = json.toUtf8();
+		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	});
+
+	// ─── GET /metrics ─────────────────────────────────────────────────────────
+	m_pServer->Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
+		QString json = getMetricsJson();
+		QByteArray jsonBytes = json.toUtf8();
+		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	});
+
+	// ─── POST /execute ────────────────────────────────────────────────────────
 	m_pServer->Post("/execute", [this](const httplib::Request& req, httplib::Response& res) {
+		// Check concurrent request limit (DoS protection)
+		if (m_nActiveRequests >= ServerConfig::MAX_CONCURRENT_REQUESTS) {
+			res.status = 429;  // Too Many Requests
+			res.set_content(
+				"{\"success\":false,\"error\":\"Server busy - too many concurrent requests\"}",
+				"application/json");
+			return;
+		}
+
+		// Increment active request counter
+		m_nActiveRequests++;
+
 		// Get client IP for logging
 		std::string clientIP = req.remote_addr.empty() ? "unknown" : req.remote_addr;
 
-		// Body size validation (5MB max to account for multiple memory copies during processing)
-		// Body is duplicated ~4-5x: raw bytes → QString → QVariant → script text
-		const size_t MAX_BODY_SIZE = 5 * 1024 * 1024;
-		if (req.body.size() > MAX_BODY_SIZE) {
+		// Body size validation
+		if (req.body.size() > ServerConfig::MAX_BODY_SIZE) {
+			m_nActiveRequests--;  // Decrement before returning
 			res.status = 413;  // Payload Too Large
 			res.set_content(
 				"{\"success\":false,\"error\":\"Request body too large (max 5MB)\"}",
@@ -357,10 +402,18 @@ void DzScriptServerPane::setupRoutes()
 			}
 
 			if (!validateToken(authHeader)) {
+				m_nActiveRequests--;  // Decrement before returning
 				res.status = 401;
 				res.set_content(
 					"{\"success\":false,\"error\":\"Unauthorized: Invalid or missing API token\"}",
 					"application/json");
+
+				// Record auth failure
+				{
+					QMutexLocker lock(&m_metrics.mutex);
+					m_metrics.authFailures++;
+				}
+
 				// Log failed auth attempt
 				QString logMsg = QString("[%1] [AUTH FAILED] %2")
 					.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -382,6 +435,9 @@ void DzScriptServerPane::setupRoutes()
 			Q_ARG(QByteArray, bodyBytes),
 			Q_ARG(QByteArray, clientIPBytes));
 
+		// Decrement active request counter
+		m_nActiveRequests--;
+
 		res.set_content(responseBytes.constData(), responseBytes.size(),
 		                "application/json");
 	});
@@ -393,6 +449,7 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 {
 	QTime startTime = QTime::currentTime();
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
+	QString requestId = generateRequestId();
 
 	// Parse JSON body (QScriptEngine is a QObject — only safe on a Qt-managed thread)
 	QString bodyStr = QString::fromUtf8(jsonBody.constData(), jsonBody.size());
@@ -405,10 +462,12 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 			.arg(parseEngine.uncaughtException().toString())
 			.arg(parseEngine.uncaughtExceptionLineNumber());
 		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(errorMsg));
-		appendLog(QString("[%1] [%2] [ERR] [0ms] JSON parse error")
+		                                 QVariant(errorMsg), requestId);
+		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] JSON parse error")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr));
+			.arg(clientIPStr)
+			.arg(requestId));
+		recordRequest(false, 0);
 		return resp.toUtf8();
 	}
 
@@ -421,29 +480,35 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	// Input validation
 	if (scriptFile.isEmpty() && scriptText.isEmpty()) {
 		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(QString("Request must include either 'scriptFile' (path) or 'script' (inline code) field")));
-		appendLog(QString("[%1] [%2] [ERR] [0ms] Missing script/scriptFile")
+		                                 QVariant(QString("Request must include either 'scriptFile' (path) or 'script' (inline code) field")),
+		                                 requestId);
+		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Missing script/scriptFile")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr));
+			.arg(clientIPStr)
+			.arg(requestId));
+		recordRequest(false, 0);
 		return resp.toUtf8();
 	}
 
 	// Warn if both are provided
 	if (!scriptFile.isEmpty() && !scriptText.isEmpty()) {
-		appendLog(QString("[%1] [%2] [WARN] Both scriptFile and script provided, using scriptFile")
-			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr));
-	}
-
-	// Validate script text length (1MB max)
-	const int MAX_SCRIPT_LENGTH = 1024 * 1024;
-	if (!scriptText.isEmpty() && scriptText.length() > MAX_SCRIPT_LENGTH) {
-		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(QString("Script text too large (max 1MB)")));
-		appendLog(QString("[%1] [%2] [ERR] [0ms] Script too large (%3 bytes)")
+		appendLog(QString("[%1] [%2] [WARN] [%3] Both scriptFile and script provided, using scriptFile")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 			.arg(clientIPStr)
+			.arg(requestId));
+	}
+
+	// Validate script text length (use config constant)
+	if (!scriptText.isEmpty() && scriptText.length() > ServerConfig::MAX_SCRIPT_LENGTH) {
+		QString resp = buildResponseJson(false, QVariant(), QStringList(),
+		                                 QVariant(QString("Script text too large (max 1MB)")),
+		                                 requestId);
+		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Script too large (%4 bytes)")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(clientIPStr)
+			.arg(requestId)
 			.arg(scriptText.length()));
+		recordRequest(false, 0);
 		return resp.toUtf8();
 	}
 
@@ -452,29 +517,38 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		QFileInfo fileInfo(scriptFile);
 		if (!fileInfo.exists()) {
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Script file not found: %1").arg(scriptFile)));
-			appendLog(QString("[%1] [%2] [ERR] [0ms] File not found: %3")
+			                                 QVariant(QString("Script file not found: %1").arg(scriptFile)),
+			                                 requestId);
+			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] File not found: %4")
 				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 				.arg(clientIPStr)
+				.arg(requestId)
 				.arg(scriptFile));
+			recordRequest(false, 0);
 			return resp.toUtf8();
 		}
 		if (!fileInfo.isFile()) {
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Path is not a file: %1").arg(scriptFile)));
-			appendLog(QString("[%1] [%2] [ERR] [0ms] Not a file: %3")
+			                                 QVariant(QString("Path is not a file: %1").arg(scriptFile)),
+			                                 requestId);
+			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Not a file: %4")
 				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 				.arg(clientIPStr)
+				.arg(requestId)
 				.arg(scriptFile));
+			recordRequest(false, 0);
 			return resp.toUtf8();
 		}
 		if (!fileInfo.isAbsolute()) {
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Script file path must be absolute: %1").arg(scriptFile)));
-			appendLog(QString("[%1] [%2] [ERR] [0ms] Path not absolute: %3")
+			                                 QVariant(QString("Script file path must be absolute: %1").arg(scriptFile)),
+			                                 requestId);
+			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Path not absolute: %4")
 				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 				.arg(clientIPStr)
+				.arg(requestId)
 				.arg(scriptFile));
+			recordRequest(false, 0);
 			return resp.toUtf8();
 		}
 	}
@@ -497,7 +571,9 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 			           this,  SLOT(onMessagePosted(const QString&)));
 			m_bCapturingLog = false;
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Failed to load scriptFile: %1").arg(scriptFile)));
+			                                 QVariant(QString("Failed to load scriptFile: %1").arg(scriptFile)),
+			                                 requestId);
+			recordRequest(false, 0);
 			return resp.toUtf8();
 		}
 	} else {
@@ -534,22 +610,27 @@ QVariant scriptResult;
 	// Calculate execution duration
 	int durationMs = startTime.msecsTo(QTime::currentTime());
 
-	// Log a summary line in the pane with timestamp, IP, status, duration, and script identifier
+	// Record metrics
+	recordRequest(success, durationMs);
+
+	// Log a summary line in the pane with timestamp, IP, status, duration, request ID, and script identifier
 	QString logLabel = scriptFile.isEmpty()
 		? QString("inline: %1").arg(scriptText.left(40).replace('\n', ' '))
 		: QFileInfo(scriptFile).fileName();
 
-	appendLog(QString("[%1] [%2] [%3] [%4ms] %5")
+	appendLog(QString("[%1] [%2] [%3] [%4ms] [%5] %6")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 		.arg(clientIPStr)
 		.arg(success ? "OK" : "ERR")
 		.arg(durationMs)
+		.arg(requestId)
 		.arg(logLabel));
 
 	QString resp = buildResponseJson(success,
 	                                 success ? scriptResult : QVariant(),
 	                                 m_aCapturedLogLines,
-	                                 errorVar);
+	                                 errorVar,
+	                                 requestId);
 	return resp.toUtf8();
 }
 
@@ -559,14 +640,13 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 		return;
 
 	// Limit captured output to prevent memory exhaustion from excessive print() calls
-	const int MAX_CAPTURED_LINES = 10000;
-	if (m_aCapturedLogLines.size() < MAX_CAPTURED_LINES) {
+	if (m_aCapturedLogLines.size() < ServerConfig::MAX_CAPTURED_LINES) {
 		m_aCapturedLogLines.append(msg);
-	} else if (m_aCapturedLogLines.size() == MAX_CAPTURED_LINES) {
+	} else if (m_aCapturedLogLines.size() == ServerConfig::MAX_CAPTURED_LINES) {
 		// Add a warning message once when limit is reached
 		m_aCapturedLogLines.append(
 			QString("[WARNING] Output truncated: maximum %1 lines captured")
-				.arg(MAX_CAPTURED_LINES));
+				.arg(ServerConfig::MAX_CAPTURED_LINES));
 	}
 	// Silently discard additional lines beyond limit
 }
@@ -624,52 +704,48 @@ QString DzScriptServerPane::variantToJson(const QVariant& v)
 QString DzScriptServerPane::buildResponseJson(bool success,
                                               const QVariant& result,
                                               const QStringList& output,
-                                              const QVariant& error)
+                                              const QVariant& error,
+                                              const QString& requestId)
 {
+	JsonBuilder json;
+	json.startObject();
+
+	json.addMember("success", success);
+	json.addMember("result", result);
+
+	// Build output array
 	QVariantList outputList;
 	foreach (const QString& line, output)
 		outputList.append(QVariant(line));
+	json.addMember("output", QVariant(outputList));
 
-	QString json;
-	json += "{";
-	json += "\"success\":"  + QString(success ? "true" : "false") + ",";
-	json += "\"result\":"   + variantToJson(result)                + ",";
-	json += "\"output\":"   + variantToJson(QVariant(outputList))  + ",";
-	json += "\"error\":"    + variantToJson(error);
-	json += "}";
-	return json;
+	json.addMember("error", error);
+
+	// Add request ID if provided (for debugging/correlation)
+	if (!requestId.isEmpty()) {
+		json.addMember("request_id", requestId);
+	}
+
+	json.finishObject();
+	return json.toString();
 }
 
 // ─── Authentication ───────────────────────────────────────────────────────────
 
 QString DzScriptServerPane::generateToken()
 {
-	// Generate token using QCryptographicHash with multiple entropy sources
-	// Mix: timestamp (millisecond precision) + pointer address + qrand() values
-	qsrand(QDateTime::currentDateTime().toTime_t() ^ (quintptr)this);
+	// Generate cryptographically secure 128-bit token using platform crypto APIs
+	// Windows: CryptoAPI (CryptGenRandom)
+	// Unix/macOS: /dev/urandom
+	QString token = SecureRandom::generateHexToken(16);  // 16 bytes = 128 bits = 32 hex chars
 
-	QByteArray entropyData;
-	// Add high-resolution timestamp
-	qint64 msecs = QDateTime::currentDateTime().toMSecsSinceEpoch();
-	entropyData.append((const char*)&msecs, sizeof(msecs));
-
-	// Add pointer addresses as entropy
-	quintptr ptr1 = (quintptr)this;
-	quintptr ptr2 = (quintptr)&entropyData;
-	entropyData.append((const char*)&ptr1, sizeof(ptr1));
-	entropyData.append((const char*)&ptr2, sizeof(ptr2));
-
-	// Add multiple qrand() outputs (not cryptographically secure, but adds entropy)
-	for (int i = 0; i < 16; ++i) {
-		int randVal = qrand();
-		entropyData.append((const char*)&randVal, sizeof(randVal));
+	if (token.isEmpty()) {
+		// CRITICAL: Crypto API failed - cannot generate secure token
+		appendLog("[ERROR] Failed to generate secure token - crypto API unavailable");
+		return QString();
 	}
 
-	// Hash the entropy to produce a uniform token
-	QByteArray hash = QCryptographicHash::hash(entropyData, QCryptographicHash::Sha1);
-
-	// Return first 32 hex characters (128 bits)
-	return QString(hash.toHex().left(32));
+	return token;
 }
 
 QString getTokenFilePath()
@@ -691,22 +767,55 @@ void DzScriptServerPane::loadOrGenerateToken()
 	QString tokenPath = getTokenFilePath();
 	QFile file(tokenPath);
 
-	if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		QTextStream in(&file);
-		m_sApiToken = in.readLine().trimmed();
-		file.close();
-
-		if (m_sApiToken.isEmpty() || m_sApiToken.length() < 16) {
-			// Invalid token, generate new one
-			m_sApiToken = generateToken();
-			saveToken();
+	if (file.exists()) {
+#ifndef _WIN32
+		// Unix/macOS: Check file permissions for security
+		QFileInfo info(tokenPath);
+		QFile::Permissions perms = info.permissions();
+		if (perms & (QFile::ReadGroup | QFile::WriteGroup |
+		             QFile::ReadOther | QFile::WriteOther)) {
+			appendLog(QString("[WARN] Token file has insecure permissions - "
+			                  "others can read it! File: %1").arg(tokenPath));
+			appendLog(QString("[WARN] Run: chmod 600 %1").arg(tokenPath));
 		}
-	} else {
-		// No token file, generate new one
-		m_sApiToken = generateToken();
-		saveToken();
-		appendLog(QString("Generated new API token: %1").arg(tokenPath));
+#endif
+
+		if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+			QTextStream in(&file);
+			m_sApiToken = in.readLine().trimmed();
+			file.close();
+
+			if (m_sApiToken.isEmpty() || m_sApiToken.length() < 32) {
+				// Invalid token, generate new one
+				appendLog("[INFO] Existing token invalid, generating new one");
+				m_sApiToken = generateToken();
+				if (m_sApiToken.isEmpty()) {
+					// CRITICAL: Cannot generate secure token
+					QMessageBox::critical(this, tr("Security Error"),
+						tr("Failed to generate secure API token.\n\n"
+						   "The cryptographic API is unavailable on this system.\n"
+						   "The plugin cannot start safely without a secure token."));
+					return;
+				}
+				saveToken();
+			}
+			return;  // Successfully loaded or regenerated token
+		}
 	}
+
+	// No token file exists, generate new one
+	appendLog("[INFO] No token file found, generating new secure token");
+	m_sApiToken = generateToken();
+	if (m_sApiToken.isEmpty()) {
+		// CRITICAL: Cannot generate secure token
+		QMessageBox::critical(this, tr("Security Error"),
+			tr("Failed to generate secure API token.\n\n"
+			   "The cryptographic API is unavailable on this system.\n"
+			   "The plugin cannot start safely without a secure token."));
+		return;
+	}
+	saveToken();
+	appendLog(QString("Generated new API token: %1").arg(tokenPath));
 }
 
 void DzScriptServerPane::saveToken()
@@ -718,8 +827,21 @@ void DzScriptServerPane::saveToken()
 		QTextStream out(&file);
 		out << m_sApiToken << "\n";
 		file.close();
+
+#ifndef _WIN32
+		// Unix/macOS: Set restrictive permissions (owner read/write only, 0600)
+		if (chmod(tokenPath.toUtf8().constData(), S_IRUSR | S_IWUSR) != 0) {
+			appendLog(QString("[WARN] Failed to set restrictive permissions on %1")
+				.arg(tokenPath));
+		}
+#else
+		// Windows: Setting proper ACLs requires Windows security APIs
+		// For now, warn the user to manually restrict access
+		appendLog(QString("[INFO] Token saved to %1").arg(tokenPath));
+		appendLog(QString("[WARN] On Windows, manually restrict access to this file to your user account only"));
+#endif
 	} else {
-		appendLog(QString("Error: Failed to save token to %1").arg(tokenPath));
+		appendLog(QString("[ERROR] Failed to save token to %1").arg(tokenPath));
 	}
 }
 
@@ -791,6 +913,76 @@ void DzScriptServerPane::onClearLogClicked()
 	if (m_pLogView) {
 		m_pLogView->clear();
 	}
+}
+
+// ─── Metrics and Monitoring ───────────────────────────────────────────────────
+
+QString DzScriptServerPane::generateRequestId()
+{
+	// Generate unique request ID using UUID (shortened to 8 chars for logs)
+	QUuid uuid = QUuid::createUuid();
+	QString fullId = uuid.toString();
+	// Remove braces and take first 8 characters: "{xxxxxxxx-...}" -> "xxxxxxxx"
+	return fullId.mid(1, 8);
+}
+
+void DzScriptServerPane::recordRequest(bool success, qint64 durationMs)
+{
+	QMutexLocker lock(&m_metrics.mutex);
+	m_metrics.totalRequests++;
+	if (success) {
+		m_metrics.successfulRequests++;
+	} else {
+		m_metrics.failedRequests++;
+	}
+	Q_UNUSED(durationMs);  // Could track duration histogram here
+}
+
+QString DzScriptServerPane::getHealthJson() const
+{
+	QMutexLocker lock(&m_metrics.mutex);
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("status", "ok");
+	json.addMember("version", "1.1.0");
+	json.addMember("running", m_bRunning);
+	json.addMember("auth_enabled", m_bAuthEnabled);
+	json.addMember("active_requests", m_nActiveRequests);
+
+	qint64 uptimeSecs = m_metrics.startTime.secsTo(QDateTime::currentDateTime());
+	json.addMember("uptime_seconds", uptimeSecs);
+
+	json.finishObject();
+	return json.toString();
+}
+
+QString DzScriptServerPane::getMetricsJson() const
+{
+	QMutexLocker lock(&m_metrics.mutex);
+
+	JsonBuilder json;
+	json.startObject();
+
+	json.addMember("total_requests", m_metrics.totalRequests);
+	json.addMember("successful_requests", m_metrics.successfulRequests);
+	json.addMember("failed_requests", m_metrics.failedRequests);
+	json.addMember("auth_failures", m_metrics.authFailures);
+	json.addMember("active_requests", m_nActiveRequests);
+
+	qint64 uptimeSecs = m_metrics.startTime.secsTo(QDateTime::currentDateTime());
+	json.addMember("uptime_seconds", uptimeSecs);
+
+	// Calculate success rate
+	if (m_metrics.totalRequests > 0) {
+		double successRate = (double)m_metrics.successfulRequests / m_metrics.totalRequests * 100.0;
+		json.addMember("success_rate_percent", successRate);
+	} else {
+		json.addMember("success_rate_percent", 0.0);
+	}
+
+	json.finishObject();
+	return json.toString();
 }
 
 #include "moc_DzScriptServerPane.cpp"
