@@ -21,11 +21,17 @@ namespace httplib { class Server; }
 // ─── Configuration Constants ──────────────────────────────────────────────────
 
 namespace ServerConfig {
-    const int MAX_CONCURRENT_REQUESTS = 10;     // Max simultaneous requests
-    const size_t MAX_BODY_SIZE = 5 * 1024 * 1024;  // 5MB request body limit
-    const int MAX_SCRIPT_LENGTH = 1024 * 1024;   // 1MB script text limit
-    const int MAX_LOG_LINES = 1000;              // Max UI log lines
-    const int MAX_CAPTURED_LINES = 10000;        // Max captured output lines
+    // Configurable defaults
+    const int DEFAULT_MAX_CONCURRENT_REQUESTS = 10;
+    const int DEFAULT_MAX_BODY_SIZE_MB = 5;
+    const int DEFAULT_MAX_SCRIPT_LENGTH_KB = 1024;  // 1MB in KB
+    const int DEFAULT_RATE_LIMIT_MAX = 60;
+    const int DEFAULT_RATE_LIMIT_WINDOW = 60;
+
+    // Fixed internal constants
+    const int MAX_LOG_LINES = 1000;
+    const int MAX_CAPTURED_LINES = 10000;
+    const int RATE_LIMIT_CLEANUP_INTERVAL = 100;
 }
 
 class DzScriptServerPane : public DzPane {
@@ -59,6 +65,10 @@ private slots:
 	void onRegenTokenClicked();
 	void onAuthEnabledChanged(int state);
 	void onClearLogClicked();
+	void onIpWhitelistEnabledChanged(int state);
+	void onRateLimitEnabledChanged(int state);
+	void onAutoStartChanged(int state);
+	void updateActiveRequestsLabel();
 
 private:
 	void   setupRoutes();
@@ -85,6 +95,12 @@ private:
 	QString getHealthJson() const;
 	QString getMetricsJson() const;
 
+	// IP Whitelist and Rate Limiting
+	void    parseWhitelistIPs();
+	bool    isIPWhitelisted(const QString& clientIP) const;
+	bool    checkRateLimit(const QString& clientIP);
+	void    cleanupRateLimitMap();
+
 	// Server state
 	httplib::Server* m_pServer;
 	QThread*         m_pServerThread;   // actually a ServerListenThread*
@@ -97,6 +113,12 @@ private:
 	// Authentication
 	QString          m_sApiToken;
 	bool             m_bAuthEnabled;
+	bool             m_bAutoStart;
+
+	// Configurable limits
+	int              m_nMaxConcurrentRequests;
+	int              m_nMaxBodySizeMB;
+	int              m_nMaxScriptLengthKB;
 
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
@@ -122,6 +144,30 @@ private:
 	RequestMetrics   m_metrics;
 	int              m_nActiveRequests;  // Current concurrent requests
 
+	// Rate limit tracking structure
+	struct RateLimitInfo {
+		QList<qint64> timestamps;  // Unix timestamps in seconds
+		RateLimitInfo() {}
+	};
+
+	struct RateLimitState {
+		QMap<QString, RateLimitInfo> ipMap;
+		QMutex mutex;
+		int cleanupCounter;
+		RateLimitState() : cleanupCounter(0) {}
+	};
+
+	// IP Whitelist state (immutable after server start - no mutex needed)
+	bool             m_bIpWhitelistEnabled;
+	QString          m_sIpWhitelist;       // Comma-separated list
+	QStringList      m_aWhitelistIPs;      // Parsed list
+
+	// Rate limiting state (mutex-protected)
+	bool             m_bRateLimitEnabled;
+	int              m_nRateLimitMax;
+	int              m_nRateLimitWindowSec;
+	RateLimitState   m_rateLimitState;
+
 	// UI widgets
 	QLineEdit*   m_pHostEdit;
 	QSpinBox*    m_pPortSpin;
@@ -129,6 +175,7 @@ private:
 	QPushButton* m_pStartBtn;
 	QPushButton* m_pStopBtn;
 	QLabel*      m_pStatusLabel;
+	QLabel*      m_pActiveRequestsLabel;
 	QTextEdit*   m_pLogView;
 	QPushButton* m_pClearLogBtn;
 
@@ -137,4 +184,19 @@ private:
 	QLineEdit*   m_pTokenEdit;
 	QPushButton* m_pCopyTokenBtn;
 	QPushButton* m_pRegenTokenBtn;
+	QCheckBox*   m_pAutoStartCheck;
+
+	// IP Whitelist UI
+	QCheckBox*   m_pIpWhitelistCheck;
+	QLineEdit*   m_pIpWhitelistEdit;
+
+	// Rate Limiting UI
+	QCheckBox*   m_pRateLimitCheck;
+	QSpinBox*    m_pRateLimitMaxSpin;
+	QSpinBox*    m_pRateLimitWindowSpin;
+
+	// Advanced Limits UI
+	QSpinBox*    m_pMaxConcurrentSpin;
+	QSpinBox*    m_pMaxBodySizeSpin;
+	QSpinBox*    m_pMaxScriptLengthSpin;
 };

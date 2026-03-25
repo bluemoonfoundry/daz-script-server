@@ -64,6 +64,15 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_nTimeoutSec(30)
 	, m_bAuthEnabled(true)
 	, m_nActiveRequests(0)
+	, m_bIpWhitelistEnabled(false)
+	, m_sIpWhitelist("127.0.0.1")
+	, m_bRateLimitEnabled(false)
+	, m_nRateLimitMax(ServerConfig::DEFAULT_RATE_LIMIT_MAX)
+	, m_nRateLimitWindowSec(ServerConfig::DEFAULT_RATE_LIMIT_WINDOW)
+	, m_bAutoStart(false)
+	, m_nMaxConcurrentRequests(ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS)
+	, m_nMaxBodySizeMB(ServerConfig::DEFAULT_MAX_BODY_SIZE_MB)
+	, m_nMaxScriptLengthKB(ServerConfig::DEFAULT_MAX_SCRIPT_LENGTH_KB)
 {
 	// Load settings and token
 	loadSettings();
@@ -120,15 +129,103 @@ DzScriptServerPane::DzScriptServerPane()
 	authHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
 	authLayout->addWidget(authHint);
 
+	// ─── IP Whitelist ─────────────────────────────────────────────────────
+	QGroupBox* whitelistGroup = new QGroupBox(tr("IP Whitelist"), this);
+	QVBoxLayout* whitelistLayout = new QVBoxLayout(whitelistGroup);
+
+	m_pIpWhitelistCheck = new QCheckBox(tr("Enable IP Whitelist (comma-separated)"), this);
+	m_pIpWhitelistCheck->setChecked(m_bIpWhitelistEnabled);
+	whitelistLayout->addWidget(m_pIpWhitelistCheck);
+
+	QHBoxLayout* whitelistInputLayout = new QHBoxLayout();
+	QLabel* whitelistLabel = new QLabel(tr("Allowed IPs:"), this);
+	whitelistInputLayout->addWidget(whitelistLabel);
+
+	m_pIpWhitelistEdit = new QLineEdit(this);
+	m_pIpWhitelistEdit->setText(m_sIpWhitelist);
+	m_pIpWhitelistEdit->setPlaceholderText(tr("127.0.0.1, 192.168.1.100"));
+	whitelistInputLayout->addWidget(m_pIpWhitelistEdit);
+	whitelistLayout->addLayout(whitelistInputLayout);
+
+	QLabel* whitelistHint = new QLabel(
+		tr("Only requests from these IPs will be accepted (blocks others before authentication)"),
+		this);
+	whitelistHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	whitelistLayout->addWidget(whitelistHint);
+
+	// ─── Rate Limiting ────────────────────────────────────────────────────
+	QGroupBox* rateLimitGroup = new QGroupBox(tr("Rate Limiting"), this);
+	QVBoxLayout* rateLimitLayout = new QVBoxLayout(rateLimitGroup);
+
+	m_pRateLimitCheck = new QCheckBox(tr("Enable Per-IP Rate Limiting"), this);
+	m_pRateLimitCheck->setChecked(m_bRateLimitEnabled);
+	rateLimitLayout->addWidget(m_pRateLimitCheck);
+
+	QFormLayout* rateLimitFormLayout = new QFormLayout();
+
+	m_pRateLimitMaxSpin = new QSpinBox(this);
+	m_pRateLimitMaxSpin->setRange(10, 1000);
+	m_pRateLimitMaxSpin->setValue(m_nRateLimitMax);
+	m_pRateLimitMaxSpin->setSuffix(tr(" requests"));
+	rateLimitFormLayout->addRow(tr("Max Requests:"), m_pRateLimitMaxSpin);
+
+	m_pRateLimitWindowSpin = new QSpinBox(this);
+	m_pRateLimitWindowSpin->setRange(10, 300);
+	m_pRateLimitWindowSpin->setValue(m_nRateLimitWindowSec);
+	m_pRateLimitWindowSpin->setSuffix(tr(" sec"));
+	rateLimitFormLayout->addRow(tr("Time Window:"), m_pRateLimitWindowSpin);
+
+	rateLimitLayout->addLayout(rateLimitFormLayout);
+
+	QLabel* rateLimitHint = new QLabel(
+		tr("Limits requests per IP to prevent brute force attacks"), this);
+	rateLimitHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	rateLimitLayout->addWidget(rateLimitHint);
+
+	// ─── Advanced Limits ──────────────────────────────────────────────────
+	QGroupBox* limitsGroup = new QGroupBox(tr("Advanced Limits"), this);
+	QFormLayout* limitsFormLayout = new QFormLayout(limitsGroup);
+
+	m_pMaxConcurrentSpin = new QSpinBox(this);
+	m_pMaxConcurrentSpin->setRange(5, 50);
+	m_pMaxConcurrentSpin->setValue(m_nMaxConcurrentRequests);
+	m_pMaxConcurrentSpin->setSuffix(tr(" concurrent"));
+	limitsFormLayout->addRow(tr("Max Concurrent Requests:"), m_pMaxConcurrentSpin);
+
+	m_pMaxBodySizeSpin = new QSpinBox(this);
+	m_pMaxBodySizeSpin->setRange(1, 50);
+	m_pMaxBodySizeSpin->setValue(m_nMaxBodySizeMB);
+	m_pMaxBodySizeSpin->setSuffix(tr(" MB"));
+	limitsFormLayout->addRow(tr("Max Request Body Size:"), m_pMaxBodySizeSpin);
+
+	m_pMaxScriptLengthSpin = new QSpinBox(this);
+	m_pMaxScriptLengthSpin->setRange(100, 10240);
+	m_pMaxScriptLengthSpin->setValue(m_nMaxScriptLengthKB);
+	m_pMaxScriptLengthSpin->setSuffix(tr(" KB"));
+	limitsFormLayout->addRow(tr("Max Script Length:"), m_pMaxScriptLengthSpin);
+
+	QLabel* limitsHint = new QLabel(
+		tr("Resource limits for request processing (restart server to apply)"), this);
+	limitsHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	limitsFormLayout->addRow(limitsHint);
+
 	m_pStatusLabel = new QLabel(tr("Stopped"), this);
+
+	m_pActiveRequestsLabel = new QLabel(tr("Active Requests: 0"), this);
+	m_pActiveRequestsLabel->setStyleSheet("QLabel { color: #0066cc; font-weight: bold; }");
 
 	m_pStartBtn = new QPushButton(tr("Start Server"), this);
 	m_pStopBtn  = new QPushButton(tr("Stop Server"),  this);
 	m_pStopBtn->setEnabled(false);
 
+	m_pAutoStartCheck = new QCheckBox(tr("Start server when pane opens"), this);
+	m_pAutoStartCheck->setChecked(m_bAutoStart);
+
 	QHBoxLayout* btnLayout = new QHBoxLayout();
 	btnLayout->addWidget(m_pStartBtn);
 	btnLayout->addWidget(m_pStopBtn);
+	btnLayout->addStretch();
+	btnLayout->addWidget(m_pAutoStartCheck);
 
 	QHBoxLayout* logHeaderLayout = new QHBoxLayout();
 	QLabel* logLabel = new QLabel(tr("Request Log:"), this);
@@ -146,7 +243,11 @@ DzScriptServerPane::DzScriptServerPane()
 	mainLayout->setContentsMargins(4, 4, 4, 4);
 	mainLayout->addLayout(formLayout);
 	mainLayout->addWidget(authGroup);
+	mainLayout->addWidget(whitelistGroup);
+	mainLayout->addWidget(rateLimitGroup);
+	mainLayout->addWidget(limitsGroup);
 	mainLayout->addWidget(m_pStatusLabel);
+	mainLayout->addWidget(m_pActiveRequestsLabel);
 	mainLayout->addLayout(btnLayout);
 	mainLayout->addLayout(logHeaderLayout);
 	mainLayout->addWidget(m_pLogView);
@@ -159,8 +260,17 @@ DzScriptServerPane::DzScriptServerPane()
 	connect(m_pRegenTokenBtn, SIGNAL(clicked()), this, SLOT(onRegenTokenClicked()));
 	connect(m_pAuthEnabledCheck, SIGNAL(stateChanged(int)), this, SLOT(onAuthEnabledChanged(int)));
 	connect(m_pClearLogBtn, SIGNAL(clicked()), this, SLOT(onClearLogClicked()));
+	connect(m_pIpWhitelistCheck, SIGNAL(stateChanged(int)), this, SLOT(onIpWhitelistEnabledChanged(int)));
+	connect(m_pRateLimitCheck, SIGNAL(stateChanged(int)), this, SLOT(onRateLimitEnabledChanged(int)));
+	connect(m_pAutoStartCheck, SIGNAL(stateChanged(int)), this, SLOT(onAutoStartChanged(int)));
 
 	updateUI();
+
+	// Auto-start server if enabled
+	if (m_bAutoStart) {
+		appendLog("[INFO] Auto-starting server...");
+		startServer();
+	}
 }
 
 DzScriptServerPane::~DzScriptServerPane()
@@ -176,6 +286,22 @@ void DzScriptServerPane::onStartClicked()
 	m_nPort = m_pPortSpin->value();
 	m_sHost = m_pHostEdit->text();
 	m_nTimeoutSec = m_pTimeoutSpin->value();
+
+	// Capture advanced limit settings
+	m_nMaxConcurrentRequests = m_pMaxConcurrentSpin->value();
+	m_nMaxBodySizeMB = m_pMaxBodySizeSpin->value();
+	m_nMaxScriptLengthKB = m_pMaxScriptLengthSpin->value();
+
+	// Capture IP whitelist settings
+	m_sIpWhitelist = m_pIpWhitelistEdit->text();
+	m_bIpWhitelistEnabled = m_pIpWhitelistCheck->isChecked();
+	parseWhitelistIPs();  // Parse comma-separated list
+
+	// Capture rate limit settings
+	m_bRateLimitEnabled = m_pRateLimitCheck->isChecked();
+	m_nRateLimitMax = m_pRateLimitMaxSpin->value();
+	m_nRateLimitWindowSec = m_pRateLimitWindowSpin->value();
+
 	saveSettings();
 	startServer();
 }
@@ -192,10 +318,12 @@ void DzScriptServerPane::startServer()
 
 	// Verify we have a valid API token before starting
 	if (m_bAuthEnabled && (m_sApiToken.isEmpty() || m_sApiToken.length() < 32)) {
-		appendLog("[ERROR] Cannot start server: No valid API token available");
+		appendLog("[ERROR] Cannot start server: No valid API token available. Token generation may have failed.");
 		QMessageBox::critical(this, tr("Security Error"),
 			tr("Cannot start server without a valid API token.\n\n"
-			   "Token generation may have failed. Check the log for details."));
+			   "The cryptographic random number generator failed to create a secure token. "
+			   "This may indicate a system security configuration issue.\n\n"
+			   "Try disabling authentication temporarily, or check system logs for security errors."));
 		return;
 	}
 
@@ -230,7 +358,7 @@ void DzScriptServerPane::startServer()
 
 	// Check if port is available before starting
 	if (!m_pServer->is_valid()) {
-		appendLog(QString("[ERROR] Failed to initialize server"));
+		appendLog(QString("[ERROR] Failed to initialize server: Socket creation failed. Check system resources and network configuration."));
 		delete m_pServer;
 		m_pServer = nullptr;
 		delete m_pServerThread;
@@ -245,7 +373,7 @@ void DzScriptServerPane::startServer()
 
 	// Check if server bound successfully
 	if (!m_pServer->is_running()) {
-		appendLog(QString("[ERROR] Failed to bind to %1:%2 - port may be in use")
+		appendLog(QString("[ERROR] Failed to bind to %1:%2 - Port is already in use by another application. Try a different port or stop the conflicting service.")
 			.arg(m_sHost).arg(m_nPort));
 		delete m_pServer;
 		m_pServer = nullptr;
@@ -284,8 +412,16 @@ void DzScriptServerPane::stopServer()
 		m_pServerThread = nullptr;
 	}
 
+	// Clear rate limit state
+	{
+		QMutexLocker lock(&m_rateLimitState.mutex);
+		m_rateLimitState.ipMap.clear();
+		m_rateLimitState.cleanupCounter = 0;
+	}
+
 	m_bRunning = false;
 	updateUI();
+	updateActiveRequestsLabel();
 	appendLog("Server stopped.");
 }
 
@@ -302,6 +438,14 @@ void DzScriptServerPane::updateUI()
 		m_pTimeoutSpin->setEnabled(false);
 		m_pAuthEnabledCheck->setEnabled(false);
 		m_pRegenTokenBtn->setEnabled(false);
+		m_pIpWhitelistCheck->setEnabled(false);
+		m_pIpWhitelistEdit->setEnabled(false);
+		m_pRateLimitCheck->setEnabled(false);
+		m_pRateLimitMaxSpin->setEnabled(false);
+		m_pRateLimitWindowSpin->setEnabled(false);
+		m_pMaxConcurrentSpin->setEnabled(false);
+		m_pMaxBodySizeSpin->setEnabled(false);
+		m_pMaxScriptLengthSpin->setEnabled(false);
 	} else {
 		m_pStatusLabel->setText(tr("Stopped"));
 		m_pStartBtn->setEnabled(true);
@@ -311,6 +455,14 @@ void DzScriptServerPane::updateUI()
 		m_pTimeoutSpin->setEnabled(true);
 		m_pAuthEnabledCheck->setEnabled(true);
 		m_pRegenTokenBtn->setEnabled(true);
+		m_pIpWhitelistCheck->setEnabled(true);
+		m_pIpWhitelistEdit->setEnabled(true);
+		m_pRateLimitCheck->setEnabled(true);
+		m_pRateLimitMaxSpin->setEnabled(true);
+		m_pRateLimitWindowSpin->setEnabled(true);
+		m_pMaxConcurrentSpin->setEnabled(true);
+		m_pMaxBodySizeSpin->setEnabled(true);
+		m_pMaxScriptLengthSpin->setEnabled(true);
 	}
 }
 
@@ -366,27 +518,68 @@ void DzScriptServerPane::setupRoutes()
 	// ─── POST /execute ────────────────────────────────────────────────────────
 	m_pServer->Post("/execute", [this](const httplib::Request& req, httplib::Response& res) {
 		// Check concurrent request limit (DoS protection)
-		if (m_nActiveRequests >= ServerConfig::MAX_CONCURRENT_REQUESTS) {
+		if (m_nActiveRequests >= m_nMaxConcurrentRequests) {
 			res.status = 429;  // Too Many Requests
-			res.set_content(
-				"{\"success\":false,\"error\":\"Server busy - too many concurrent requests\"}",
-				"application/json");
+			QString errorMsg = QString("{\"success\":false,\"error\":\"Server busy: Maximum concurrent requests limit reached (%1/%2 active). Please wait and retry.\"}")
+				.arg(m_nMaxConcurrentRequests)
+				.arg(m_nMaxConcurrentRequests);
+			res.set_content(errorMsg.toStdString(), "application/json");
 			return;
 		}
 
 		// Increment active request counter
 		m_nActiveRequests++;
+		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
 		// Get client IP for logging
 		std::string clientIP = req.remote_addr.empty() ? "unknown" : req.remote_addr;
+		QString clientIPQt = QString::fromStdString(clientIP);
+
+		// ─── IP Whitelist Check ───────────────────────────────────────────
+		if (!isIPWhitelisted(clientIPQt)) {
+			m_nActiveRequests--;
+			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+			res.status = 403;  // Forbidden
+			res.set_content(
+				"{\"success\":false,\"error\":\"Access denied: Your IP address is not in the whitelist. Contact the server administrator to add your IP to the allowed list.\"}",
+				"application/json");
+
+			// Log blocked IP
+			QString logMsg = QString("[%1] [BLOCKED] %2 - IP not whitelisted")
+				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+				.arg(clientIPQt);
+			QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
+				Q_ARG(QString, logMsg));
+			return;
+		}
+
+		// ─── Rate Limit Check ─────────────────────────────────────────────
+		if (!checkRateLimit(clientIPQt)) {
+			m_nActiveRequests--;
+			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+			res.status = 429;  // Too Many Requests
+			res.set_content(
+				"{\"success\":false,\"error\":\"Rate limit exceeded: Too many requests from your IP address. Please wait before retrying (sliding window applies).\"}",
+				"application/json");
+
+			// Log rate limit violation
+			QString logMsg = QString("[%1] [RATE LIMIT] %2")
+				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+				.arg(clientIPQt);
+			QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
+				Q_ARG(QString, logMsg));
+			return;
+		}
 
 		// Body size validation
-		if (req.body.size() > ServerConfig::MAX_BODY_SIZE) {
+		size_t maxBodySize = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
+		if (req.body.size() > maxBodySize) {
 			m_nActiveRequests--;  // Decrement before returning
+			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			res.status = 413;  // Payload Too Large
-			res.set_content(
-				"{\"success\":false,\"error\":\"Request body too large (max 5MB)\"}",
-				"application/json");
+			QString errorMsg = QString("{\"success\":false,\"error\":\"Request body too large: Size exceeds maximum of %1MB. Reduce script size or use 'scriptFile' instead of inline 'script'.\"}")
+				.arg(m_nMaxBodySizeMB);
+			res.set_content(errorMsg.toStdString(), "application/json");
 			return;
 		}
 
@@ -403,9 +596,10 @@ void DzScriptServerPane::setupRoutes()
 
 			if (!validateToken(authHeader)) {
 				m_nActiveRequests--;  // Decrement before returning
+				QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 				res.status = 401;
 				res.set_content(
-					"{\"success\":false,\"error\":\"Unauthorized: Invalid or missing API token\"}",
+					"{\"success\":false,\"error\":\"Authentication failed: Invalid or missing API token. Include 'X-API-Token' header or 'Authorization: Bearer <token>' with your request. Token can be found in DAZ Studio plugin UI.\"}",
 					"application/json");
 
 				// Record auth failure
@@ -437,6 +631,7 @@ void DzScriptServerPane::setupRoutes()
 
 		// Decrement active request counter
 		m_nActiveRequests--;
+		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
 		res.set_content(responseBytes.constData(), responseBytes.size(),
 		                "application/json");
@@ -498,10 +693,14 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 			.arg(requestId));
 	}
 
-	// Validate script text length (use config constant)
-	if (!scriptText.isEmpty() && scriptText.length() > ServerConfig::MAX_SCRIPT_LENGTH) {
+	// Validate script text length (use configurable limit)
+	int maxScriptLength = m_nMaxScriptLengthKB * 1024;
+	if (!scriptText.isEmpty() && scriptText.length() > maxScriptLength) {
 		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(QString("Script text too large (max 1MB)")),
+		                                 QVariant(QString("Script text too large: %1 bytes exceeds maximum of %2 KB (%3 bytes). Consider using 'scriptFile' instead of inline 'script' for large scripts.")
+		                                          .arg(scriptText.length())
+		                                          .arg(m_nMaxScriptLengthKB)
+		                                          .arg(maxScriptLength)),
 		                                 requestId);
 		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Script too large (%4 bytes)")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -517,7 +716,8 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		QFileInfo fileInfo(scriptFile);
 		if (!fileInfo.exists()) {
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Script file not found: %1").arg(scriptFile)),
+			                                 QVariant(QString("Script file not found: '%1' does not exist. Verify the file path is correct and accessible.")
+			                                          .arg(scriptFile)),
 			                                 requestId);
 			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] File not found: %4")
 				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -529,7 +729,8 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		}
 		if (!fileInfo.isFile()) {
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Path is not a file: %1").arg(scriptFile)),
+			                                 QVariant(QString("Invalid script path: '%1' is a directory, not a file. Provide a path to a .dsa script file.")
+			                                          .arg(scriptFile)),
 			                                 requestId);
 			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Not a file: %4")
 				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -541,7 +742,8 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		}
 		if (!fileInfo.isAbsolute()) {
 			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Script file path must be absolute: %1").arg(scriptFile)),
+			                                 QVariant(QString("Invalid path format: '%1' is a relative path. Provide an absolute path (e.g., 'C:/Scripts/file.dsa' on Windows or '/home/user/scripts/file.dsa' on Unix).")
+			                                          .arg(scriptFile)),
 			                                 requestId);
 			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Path not absolute: %4")
 				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -852,6 +1054,24 @@ void DzScriptServerPane::loadSettings()
 	m_nPort = settings.value("port", 18811).toInt();
 	m_nTimeoutSec = settings.value("timeout", 30).toInt();
 	m_bAuthEnabled = settings.value("authEnabled", true).toBool();
+	m_bAutoStart = settings.value("autoStart", false).toBool();
+
+	// Advanced Limits
+	m_nMaxConcurrentRequests = settings.value("maxConcurrentRequests",
+	                           ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS).toInt();
+	m_nMaxBodySizeMB = settings.value("maxBodySizeMB",
+	                   ServerConfig::DEFAULT_MAX_BODY_SIZE_MB).toInt();
+	m_nMaxScriptLengthKB = settings.value("maxScriptLengthKB",
+	                       ServerConfig::DEFAULT_MAX_SCRIPT_LENGTH_KB).toInt();
+
+	// IP Whitelist
+	m_bIpWhitelistEnabled = settings.value("ipWhitelistEnabled", false).toBool();
+	m_sIpWhitelist = settings.value("ipWhitelist", "127.0.0.1").toString();
+
+	// Rate Limiting
+	m_bRateLimitEnabled = settings.value("rateLimitEnabled", false).toBool();
+	m_nRateLimitMax = settings.value("rateLimitMax", ServerConfig::DEFAULT_RATE_LIMIT_MAX).toInt();
+	m_nRateLimitWindowSec = settings.value("rateLimitWindow", ServerConfig::DEFAULT_RATE_LIMIT_WINDOW).toInt();
 }
 
 void DzScriptServerPane::saveSettings()
@@ -861,6 +1081,21 @@ void DzScriptServerPane::saveSettings()
 	settings.setValue("port", m_nPort);
 	settings.setValue("timeout", m_nTimeoutSec);
 	settings.setValue("authEnabled", m_bAuthEnabled);
+	settings.setValue("autoStart", m_bAutoStart);
+
+	// Advanced Limits
+	settings.setValue("maxConcurrentRequests", m_nMaxConcurrentRequests);
+	settings.setValue("maxBodySizeMB", m_nMaxBodySizeMB);
+	settings.setValue("maxScriptLengthKB", m_nMaxScriptLengthKB);
+
+	// IP Whitelist
+	settings.setValue("ipWhitelistEnabled", m_bIpWhitelistEnabled);
+	settings.setValue("ipWhitelist", m_sIpWhitelist);
+
+	// Rate Limiting
+	settings.setValue("rateLimitEnabled", m_bRateLimitEnabled);
+	settings.setValue("rateLimitMax", m_nRateLimitMax);
+	settings.setValue("rateLimitWindow", m_nRateLimitWindowSec);
 }
 
 bool DzScriptServerPane::validateToken(const std::string& providedToken) const
@@ -870,6 +1105,114 @@ bool DzScriptServerPane::validateToken(const std::string& providedToken) const
 
 	QString providedTokenQt = QString::fromStdString(providedToken).trimmed();
 	return providedTokenQt == m_sApiToken;
+}
+
+// ─── IP Whitelist and Rate Limiting ───────────────────────────────────────────
+
+void DzScriptServerPane::parseWhitelistIPs()
+{
+	m_aWhitelistIPs.clear();
+
+	if (m_sIpWhitelist.isEmpty()) {
+		return;
+	}
+
+	// Split by comma and trim whitespace
+	QStringList rawList = m_sIpWhitelist.split(',', QString::SkipEmptyParts);
+	foreach (const QString& ip, rawList) {
+		QString trimmed = ip.trimmed();
+		if (!trimmed.isEmpty()) {
+			m_aWhitelistIPs.append(trimmed);
+		}
+	}
+}
+
+bool DzScriptServerPane::isIPWhitelisted(const QString& clientIP) const
+{
+	if (!m_bIpWhitelistEnabled) {
+		return true;  // Whitelist disabled, allow all
+	}
+
+	if (m_aWhitelistIPs.isEmpty()) {
+		return false;  // No IPs configured but enabled - block all
+	}
+
+	// Exact match only (future: add wildcard support with QRegExp)
+	return m_aWhitelistIPs.contains(clientIP);
+}
+
+bool DzScriptServerPane::checkRateLimit(const QString& clientIP)
+{
+	if (!m_bRateLimitEnabled) {
+		return true;  // Rate limiting disabled
+	}
+
+	QMutexLocker lock(&m_rateLimitState.mutex);
+
+	qint64 now = QDateTime::currentDateTime().toTime_t();  // Unix timestamp
+	qint64 windowStart = now - m_nRateLimitWindowSec;
+
+	// Get or create entry for this IP
+	RateLimitInfo& info = m_rateLimitState.ipMap[clientIP];
+
+	// Remove timestamps outside window (cleanup old requests)
+	QList<qint64>::iterator it = info.timestamps.begin();
+	while (it != info.timestamps.end()) {
+		if (*it < windowStart) {
+			it = info.timestamps.erase(it);
+		} else {
+			++it;  // Keep timestamps within window
+		}
+	}
+
+	// Check if limit exceeded
+	if (info.timestamps.size() >= m_nRateLimitMax) {
+		return false;  // Limit exceeded
+	}
+
+	// Add current timestamp
+	info.timestamps.append(now);
+
+	// Periodic cleanup (every N requests)
+	m_rateLimitState.cleanupCounter++;
+	if (m_rateLimitState.cleanupCounter >= ServerConfig::RATE_LIMIT_CLEANUP_INTERVAL) {
+		m_rateLimitState.cleanupCounter = 0;
+		lock.unlock();  // Release lock before cleanup
+		cleanupRateLimitMap();
+	}
+
+	return true;
+}
+
+void DzScriptServerPane::cleanupRateLimitMap()
+{
+	QMutexLocker lock(&m_rateLimitState.mutex);
+
+	qint64 now = QDateTime::currentDateTime().toTime_t();
+	qint64 windowStart = now - m_nRateLimitWindowSec;
+
+	// Remove IPs with no recent requests
+	QMap<QString, RateLimitInfo>::iterator it = m_rateLimitState.ipMap.begin();
+	while (it != m_rateLimitState.ipMap.end()) {
+		RateLimitInfo& info = it.value();
+
+		// Remove old timestamps
+		QList<qint64>::iterator tsIt = info.timestamps.begin();
+		while (tsIt != info.timestamps.end()) {
+			if (*tsIt < windowStart) {
+				tsIt = info.timestamps.erase(tsIt);
+			} else {
+				++tsIt;
+			}
+		}
+
+		// If no timestamps remain, remove the IP entry
+		if (info.timestamps.isEmpty()) {
+			it = m_rateLimitState.ipMap.erase(it);
+		} else {
+			++it;
+		}
+	}
 }
 
 void DzScriptServerPane::onCopyTokenClicked()
@@ -912,6 +1255,42 @@ void DzScriptServerPane::onClearLogClicked()
 {
 	if (m_pLogView) {
 		m_pLogView->clear();
+	}
+}
+
+void DzScriptServerPane::onIpWhitelistEnabledChanged(int state)
+{
+	m_bIpWhitelistEnabled = (state == Qt::Checked);
+	saveSettings();
+
+	if (m_bIpWhitelistEnabled && m_bRunning) {
+		appendLog("[INFO] IP whitelist enabled - only configured IPs allowed");
+	}
+}
+
+void DzScriptServerPane::onRateLimitEnabledChanged(int state)
+{
+	m_bRateLimitEnabled = (state == Qt::Checked);
+	saveSettings();
+
+	if (m_bRateLimitEnabled && m_bRunning) {
+		appendLog(QString("[INFO] Rate limiting enabled - max %1 requests per %2 seconds")
+			.arg(m_nRateLimitMax).arg(m_nRateLimitWindowSec));
+	}
+}
+
+void DzScriptServerPane::onAutoStartChanged(int state)
+{
+	m_bAutoStart = (state == Qt::Checked);
+	saveSettings();
+}
+
+void DzScriptServerPane::updateActiveRequestsLabel()
+{
+	if (m_pActiveRequestsLabel) {
+		m_pActiveRequestsLabel->setText(tr("Active Requests: %1 / %2")
+			.arg(m_nActiveRequests)
+			.arg(m_nMaxConcurrentRequests));
 	}
 }
 
