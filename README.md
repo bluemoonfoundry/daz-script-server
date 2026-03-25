@@ -892,7 +892,7 @@ This project is provided as-is for use with DAZ Studio.
 - macOS/Linux: `/dev/urandom` for secure random number generation
 
 **Authors:**
-- Original implementation: Vangard Labs
-- Production-ready improvements: Community contributors
+- Original implementation: Blue Moon Foundry
+- Production-ready improvements: BMF and Community contributors
 
 For questions, issues, or feature requests, please open an issue on GitHub.
