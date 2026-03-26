@@ -88,6 +88,11 @@ void JsonBuilder::addMember(const QString& name, const QString& value)
     m_json += "\"" + escapeString(value) + "\"";
 }
 
+void JsonBuilder::addMember(const QString& name, const char* value)
+{
+    addMember(name, QString::fromUtf8(value));
+}
+
 void JsonBuilder::addMemberNull(const QString& name)
 {
     addSeparator();

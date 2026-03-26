@@ -131,7 +131,7 @@ private:
 		int         failedRequests;
 		int         authFailures;
 		QDateTime   startTime;
-		QMutex      mutex;  // Protects the counters
+		mutable QMutex mutex;  // Protects the counters
 
 		RequestMetrics()
 			: totalRequests(0)

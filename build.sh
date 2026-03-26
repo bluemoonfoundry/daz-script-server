@@ -47,5 +47,5 @@ if [ "$1" = "--install" ]; then
 else
     echo "Building..."
     "$CMAKE" --build "$BUILD_DIR" --config Release
-    echo "Output: $BUILD_DIR/lib/Release/DazScriptServer.dll"
+    echo "Output: $BUILD_DIR/lib/Release/DazScriptServer.dll (copy to plugins/DazScriptServer/ in DAZ Studio folder)"
 fi

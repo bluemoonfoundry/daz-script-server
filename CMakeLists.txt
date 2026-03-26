@@ -148,8 +148,8 @@ if(INSTALL_TO_DAZ)
 	if(NOT DAZ_STUDIO_EXE_DIR)
 		message(FATAL_ERROR "INSTALL_TO_DAZ requires DAZ_STUDIO_EXE_DIR to be set")
 	endif()
-	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${DAZ_STUDIO_EXE_DIR}/plugins")
-	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${DAZ_STUDIO_EXE_DIR}/plugins")
+	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${DAZ_STUDIO_EXE_DIR}/plugins/DazScriptServer")
+	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${DAZ_STUDIO_EXE_DIR}/plugins/DazScriptServer")
 endif()
 
 # ─── Subdirectories ───────────────────────────────────────────────────────────

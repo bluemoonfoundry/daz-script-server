@@ -18,13 +18,14 @@
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qcryptographichash.h>
 #include <QtCore/quuid.h>
-#include <QtCore/qmutexlocker.h>
+#include <QtCore/qmutex.h>
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
 #include <QtGui/qclipboard.h>
 #include <QtGui/qapplication.h>
 #include <QtGui/qmessagebox.h>
+#include <QtGui/qscrollarea.h>
 #include <QtScript/qscriptengine.h>
 #include <QtScript/qscriptvalue.h>
 
@@ -239,7 +240,8 @@ DzScriptServerPane::DzScriptServerPane()
 	m_pLogView->setReadOnly(true);
 	m_pLogView->setMaximumHeight(120);
 
-	QVBoxLayout* mainLayout = new QVBoxLayout(this);
+	QWidget* contentWidget = new QWidget(this);
+	QVBoxLayout* mainLayout = new QVBoxLayout(contentWidget);
 	mainLayout->setContentsMargins(4, 4, 4, 4);
 	mainLayout->addLayout(formLayout);
 	mainLayout->addWidget(authGroup);
@@ -252,7 +254,17 @@ DzScriptServerPane::DzScriptServerPane()
 	mainLayout->addLayout(logHeaderLayout);
 	mainLayout->addWidget(m_pLogView);
 	mainLayout->addStretch();
-	setLayout(mainLayout);
+
+	QScrollArea* scrollArea = new QScrollArea(this);
+	scrollArea->setWidget(contentWidget);
+	scrollArea->setWidgetResizable(true);
+	scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	scrollArea->setFrameShape(QFrame::NoFrame);
+
+	QVBoxLayout* outerLayout = new QVBoxLayout(this);
+	outerLayout->setContentsMargins(0, 0, 0, 0);
+	outerLayout->addWidget(scrollArea);
+	setLayout(outerLayout);
 
 	connect(m_pStartBtn, SIGNAL(clicked()), this, SLOT(onStartClicked()));
 	connect(m_pStopBtn,  SIGNAL(clicked()), this, SLOT(onStopClicked()));

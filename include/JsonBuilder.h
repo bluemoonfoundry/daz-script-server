@@ -33,6 +33,7 @@ public:
     void addMember(const QString& name, qint64 value);
     void addMember(const QString& name, double value);
     void addMember(const QString& name, const QString& value);
+    void addMember(const QString& name, const char* value);
     void addMemberNull(const QString& name);
     void addMember(const QString& name, const QVariant& value);
 
