@@ -11,6 +11,11 @@ A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ
 - ✅ Per-IP Rate Limiting - Prevent brute force attacks with sliding window rate limits
 - ✅ Configurable Advanced Limits - Adjust concurrent requests, body size, and script length
 
+**Script Registry:**
+- ✅ Register named scripts once, call by ID — no script retransmission on every request
+- ✅ Session-based in-memory registry with register, list, execute, and delete endpoints
+- ✅ Returns 404 on stale IDs so clients can re-register after DAZ Studio restarts
+
 **Usability Improvements:**
 - ✅ Active Request Counter - Real-time display of concurrent requests (X/max)
 - ✅ Auto-Start Option - Optionally start server when pane opens
@@ -18,8 +23,6 @@ A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ
 - ✅ Additional Client Examples - JavaScript/Node.js and PowerShell examples included
 
 **All Settings Persisted** - Every configuration option (security, limits, monitoring) is saved via QSettings and restored between sessions.
-
-See the full changelog in `IMPROVEMENTS_SUMMARY.md` and `FUTURE_ENHANCEMENTS.md`.
 
 ## Table of Contents
 
@@ -36,6 +39,7 @@ See the full changelog in `IMPROVEMENTS_SUMMARY.md` and `FUTURE_ENHANCEMENTS.md`
   - [Authentication](#authentication)
   - [Request Logging](#request-logging)
   - [API](#api)
+- [Script Registry](#script-registry)
 - [Security Best Practices](#security-best-practices)
 - [Writing Scripts](#writing-scripts)
 - [Troubleshooting](#troubleshooting)
@@ -106,6 +110,12 @@ Once the plugin is loaded and the server started, clients send HTTP requests con
 - **Metrics Endpoint**: `/metrics` with request counts, success rates, and uptime
 - **Real-Time Request Log**: UI displays all requests with timestamps, IPs, status, duration, and request IDs
 - **Active Request Counter**: Live display of current concurrent requests (X/max)
+
+### Script Registry
+- **Named Script Registration**: Register scripts once by name; call them by ID on subsequent requests
+- **Reduced Overhead**: No retransmission of large script bodies on every call
+- **Session-Based Storage**: In-memory registry cleared on DAZ Studio restart; clients re-register on 404
+- **Full CRUD**: Register, list, execute by ID, and delete scripts
 
 ### Usability
 - **Auto-Start Option**: Optionally start server automatically when pane opens
@@ -264,9 +274,11 @@ Use the "Clear Log" button to clear the log view.
 
 ### API
 
+All endpoints except `/status` require the `X-API-Token` header (or `Authorization: Bearer <token>`) when authentication is enabled.
+
 #### `GET /status`
 
-Returns server status and version.
+Returns server status. No authentication required.
 
 ```json
 { "running": true, "version": "1.2.0" }
@@ -274,7 +286,7 @@ Returns server status and version.
 
 #### `GET /health`
 
-Returns detailed server health information (no authentication required).
+Returns runtime health information. No authentication required. Use for monitoring and load balancer probes.
 
 ```json
 {
@@ -287,11 +299,9 @@ Returns detailed server health information (no authentication required).
 }
 ```
 
-Use for monitoring, health checks, and load balancer probes.
-
 #### `GET /metrics`
 
-Returns request statistics and performance metrics (no authentication required).
+Returns cumulative request counters. No authentication required. Counters persist across DAZ Studio restarts (saved to QSettings).
 
 ```json
 {
@@ -305,75 +315,7 @@ Returns request statistics and performance metrics (no authentication required).
 }
 ```
 
-Use for monitoring, alerting, and performance tracking.
-
 #### `POST /execute`
-
-Executes a DazScript and returns the result.
-
-**Authentication:**
-Include your API token in the request header (if authentication is enabled):
-```
-X-API-Token: your-token-here
-```
-
-Or using the Authorization header:
-
-```
-Authorization: Bearer your-token-here
-```
-
----
-
-### `GET /status`
-
-Returns server status. No authentication required.
-
-**Response:**
-```json
-{ "running": true, "version": "1.2.0" }
-```
-
----
-
-### `GET /health`
-
-Returns runtime health information. Useful for monitoring.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "version": "1.2.0",
-  "running": true,
-  "auth_enabled": true,
-  "active_requests": 0,
-  "uptime_seconds": 3600
-}
-```
-
----
-
-### `GET /metrics`
-
-Returns cumulative request counters. Counters persist across DAZ Studio restarts (saved to QSettings).
-
-**Response:**
-```json
-{
-  "total_requests": 142,
-  "successful_requests": 139,
-  "failed_requests": 3,
-  "auth_failures": 1,
-  "active_requests": 0,
-  "uptime_seconds": 3600,
-  "success_rate_percent": 97.89
-}
-```
-
----
-
-### `POST /execute`
 
 Executes a DazScript and returns the result.
 
@@ -395,44 +337,28 @@ Or with a script file:
 }
 ```
 
-**Request Parameters:**
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `scriptFile` | string | one of | Absolute path to a `.dsa` script file (must exist and be absolute) |
+| `scriptFile` | string | one of | Absolute path to a `.dsa` script file (must exist) |
 | `script` | string | one of | Inline DazScript code (configurable max, default 1MB) |
 | `args` | object | no | Arguments accessible in the script via `getArguments()[0]` |
 
-**Request Processing Order:**
-1. Concurrent request limit check
-2. IP whitelist check (if enabled)
-3. Per-IP rate limit check (if enabled)
-4. Request body size validation
-5. Authentication check (if enabled)
-6. JSON parsing and input validation
-7. Script execution
+If both are provided, `scriptFile` takes precedence.
 
-**Validation & Limits:**
-- **Request body size**: Configurable max (default 5MB, adjustable 1-50MB)
-- **Script text length**: Configurable max (default 1MB, adjustable 100KB-10MB)
-- **Concurrent requests**: Configurable max (default 10, adjustable 5-50)
-- **Script file**: Must be an absolute path and exist
-- **Either `scriptFile` or `script`** must be provided (not both)
-- If both are provided, `scriptFile` takes precedence with a warning
+**Request processing order:** concurrent limit → IP whitelist → rate limit → body size → auth → validation → execution.
 
 **HTTP Status Codes:**
 
-| Code | Condition | Description |
-|---|---|---|
-| `200 OK` | Success | Script executed (check `success` field in response body) |
-| `400 Bad Request` | Validation failed | Malformed JSON, missing fields, or invalid parameters |
-| `401 Unauthorized` | Auth failed | Missing or invalid API token (if auth enabled) |
-| `403 Forbidden` | IP blocked | Client IP not in whitelist (if IP whitelist enabled) |
-| `413 Payload Too Large` | Body too large | Request body exceeds configured max size |
-| `429 Too Many Requests` | Rate limit exceeded | Concurrent limit reached or per-IP rate limit exceeded |
-| `500 Internal Server Error` | Server error | Unexpected server-side error |
+| Code | Condition |
+|---|---|
+| `200` | Script executed (check `success` field) |
+| `400` | Malformed JSON, missing fields, or invalid parameters |
+| `401` | Missing or invalid API token |
+| `403` | Client IP not in whitelist |
+| `413` | Request body exceeds configured max size |
+| `429` | Concurrent limit reached or per-IP rate limit exceeded |
 
-**Success Response:**
+**Response:**
 
 ```json
 {
@@ -444,27 +370,94 @@ Or with a script file:
 }
 ```
 
-**Error Response:**
+| Field | Description |
+|---|---|
+| `success` | `true` if the script executed without error |
+| `result` | The script's return value, `null` on error |
+| `output` | Lines printed via `print()` during execution (max 10,000) |
+| `error` | Error message with line number if execution failed, otherwise `null` |
+| `request_id` | Unique 8-character ID for log correlation |
+
+## Script Registry
+
+The registry lets you upload a script once and call it by name on every subsequent request, avoiding re-sending large script bodies and making logs easier to read.
+
+**The registry is session-only** — scripts are stored in memory and cleared when DAZ Studio restarts. Clients should re-register on `404` from `/scripts/:id/execute`.
+
+#### `POST /scripts/register`
+
+Register (or update) a named script.
 
 ```json
 {
-  "success": false,
-  "result": null,
-  "output": [],
-  "error": "Script execution failed at line 5: Undefined variable 'foo'",
-  "request_id": "a3f2b891"
+  "name": "scene-info",
+  "description": "Return figures, cameras, lights, and node count",
+  "script": "(function(){ return { nodes: Scene.getNumNodes() }; })()"
 }
 ```
 
-**Response Fields:**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Script ID: 1–64 chars, `[A-Za-z0-9_-]` only |
+| `script` | string | yes | DazScript source |
+| `description` | string | no | Human-readable description |
 
-| Field | Type | Description |
-|---|---|---|
-| `success` | boolean | `true` if the script executed without error |
-| `result` | any | The script's return value (last evaluated expression), `null` on error |
-| `output` | string[] | Array of strings printed via `print()` during execution (max 10,000 lines) |
-| `error` | string\|null | Error message with line number if execution failed, otherwise `null` |
-| `request_id` | string | Unique 8-character identifier for debugging and log correlation |
+Re-registering an existing name overwrites the script. Response:
+
+```json
+{
+  "success": true,
+  "id": "scene-info",
+  "registered_at": "2026-03-27T10:15:00",
+  "updated": false
+}
+```
+
+#### `GET /scripts`
+
+List all registered scripts.
+
+```json
+{
+  "scripts": [
+    { "id": "scene-info", "description": "...", "registered_at": "2026-03-27T10:15:00" }
+  ],
+  "count": 1
+}
+```
+
+#### `POST /scripts/:id/execute`
+
+Execute a registered script by ID. Only `args` is read from the request body.
+
+```
+POST /scripts/scene-info/execute
+Content-Type: application/json
+
+{ "args": { "label": "FN Ethan" } }
+```
+
+Response is identical to `POST /execute`. Returns `404` if the ID is not registered:
+
+```json
+{ "success": false, "error": "Script not found: 'scene-info'" }
+```
+
+#### `DELETE /scripts/:id`
+
+Remove a script from the registry.
+
+```
+DELETE /scripts/scene-info
+```
+
+```json
+{ "success": true, "id": "scene-info" }
+```
+
+Returns `404` if the ID does not exist.
+
+---
 
 ## Security Best Practices
 
@@ -559,12 +552,36 @@ var args = getArguments()[0];
 return myUtilFunction(args);
 ```
 
-**Raising errors** — throw to populate the `error` field:
+**Python client with script registry** — register once, call many times:
 
-```javascript
-var args = getArguments()[0];
-if (!args.nodeId) throw new Error("nodeId is required");
-return Scene.findNodeById(args.nodeId).name;
+```python
+import requests, os
+
+token_path = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+with open(token_path) as f:
+    token = f.read().strip()
+
+BASE = "http://127.0.0.1:18811"
+HEADERS = {"X-API-Token": token}
+
+def register_scripts():
+    requests.post(f"{BASE}/scripts/register", headers=HEADERS, json={
+        "name": "node-count",
+        "script": "(function(){ return Scene.getNumNodes(); })()"
+    })
+
+def call_script(name, args=None):
+    r = requests.post(f"{BASE}/scripts/{name}/execute",
+                      headers=HEADERS, json={"args": args or {}})
+    if r.status_code == 404:
+        register_scripts()  # DAZ Studio restarted, re-register
+        r = requests.post(f"{BASE}/scripts/{name}/execute",
+                          headers=HEADERS, json={"args": args or {}})
+    r.raise_for_status()
+    return r.json()["result"]
+
+register_scripts()
+print(call_script("node-count"))
 ```
 
 ## Troubleshooting
