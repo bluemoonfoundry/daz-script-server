@@ -56,6 +56,8 @@ public slots:
 
 	// Called on main thread via BlockingQueuedConnection from httplib handler threads.
 	Q_INVOKABLE QByteArray handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP);
+	Q_INVOKABLE QByteArray handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
+	Q_INVOKABLE QByteArray handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
 private slots:
 	void onStartClicked();
@@ -92,6 +94,7 @@ private:
 	// Metrics and monitoring
 	QString generateRequestId();
 	void    recordRequest(bool success, qint64 durationMs);
+	void    saveMetrics();
 	QString getHealthJson() const;
 	QString getMetricsJson() const;
 
@@ -156,6 +159,18 @@ private:
 		int cleanupCounter;
 		RateLimitState() : cleanupCounter(0) {}
 	};
+
+	// Script Registry (session-only, in-memory)
+	struct RegisteredScript {
+		QString   description;
+		QString   script;
+		QDateTime registeredAt;
+	};
+	struct ScriptRegistry {
+		QMap<QString, RegisteredScript> scripts;
+		mutable QMutex mutex;
+	};
+	ScriptRegistry m_scriptRegistry;
 
 	// IP Whitelist state (immutable after server start - no mutex needed)
 	bool             m_bIpWhitelistEnabled;

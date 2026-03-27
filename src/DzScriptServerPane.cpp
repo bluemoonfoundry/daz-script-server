@@ -5,6 +5,7 @@
 #include "DzScriptServerPane.h"
 #include "SecureRandom.h"
 #include "JsonBuilder.h"
+#include "common_version.h"
 
 #include <dzapp.h>
 #include <dzscript.h>
@@ -16,6 +17,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qtextstream.h>
 #include <QtCore/qfileinfo.h>
+#include <QtCore/qregexp.h>
 #include <QtCore/qcryptographichash.h>
 #include <QtCore/quuid.h>
 #include <QtCore/qmutex.h>
@@ -80,6 +82,16 @@ DzScriptServerPane::DzScriptServerPane()
 	loadOrGenerateToken();
 
 	// ── Build UI ─────────────────────────────────────────────────────────────
+	QLabel* titleLabel = new QLabel(
+		QString("DAZ Script Server  v%1").arg(DZSRV_VERSION_STR), this);
+	titleLabel->setStyleSheet(
+		"QLabel { font-size: 11pt; font-weight: bold; padding: 4px 0px; }");
+	titleLabel->setAlignment(Qt::AlignCenter);
+
+	QFrame* titleSep = new QFrame(this);
+	titleSep->setFrameShape(QFrame::HLine);
+	titleSep->setFrameShadow(QFrame::Sunken);
+
 	QFormLayout* formLayout = new QFormLayout();
 	formLayout->setContentsMargins(6, 6, 6, 6);
 
@@ -243,6 +255,8 @@ DzScriptServerPane::DzScriptServerPane()
 	QWidget* contentWidget = new QWidget(this);
 	QVBoxLayout* mainLayout = new QVBoxLayout(contentWidget);
 	mainLayout->setContentsMargins(4, 4, 4, 4);
+	mainLayout->addWidget(titleLabel);
+	mainLayout->addWidget(titleSep);
 	mainLayout->addLayout(formLayout);
 	mainLayout->addWidget(authGroup);
 	mainLayout->addWidget(whitelistGroup);
@@ -432,6 +446,7 @@ void DzScriptServerPane::stopServer()
 	}
 
 	m_bRunning = false;
+	saveMetrics();
 	updateUI();
 	updateActiveRequestsLabel();
 	appendLog("Server stopped.");
@@ -648,6 +663,187 @@ void DzScriptServerPane::setupRoutes()
 		res.set_content(responseBytes.constData(), responseBytes.size(),
 		                "application/json");
 	});
+
+	// Auth check lambda shared by all registry routes (runs on HTTP thread).
+	// Returns true if auth passed or is disabled; sets 401 and returns false otherwise.
+	auto registryAuthCheck = [this](const httplib::Request& req, httplib::Response& res) -> bool {
+		if (!m_bAuthEnabled) return true;
+		std::string token = req.get_header_value("X-API-Token");
+		if (token.empty()) {
+			std::string auth = req.get_header_value("Authorization");
+			if (auth.find("Bearer ") == 0) token = auth.substr(7);
+		}
+		if (!validateToken(token)) {
+			res.status = 401;
+			res.set_content(
+				"{\"success\":false,\"error\":\"Authentication failed: Invalid or missing API token.\"}",
+				"application/json");
+			QMutexLocker lock(&m_metrics.mutex);
+			m_metrics.authFailures++;
+			return false;
+		}
+		return true;
+	};
+
+	// ─── POST /scripts/register ───────────────────────────────────────────────
+	m_pServer->Post("/scripts/register", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
+		if (!registryAuthCheck(req, res)) return;
+
+		QByteArray bodyBytes(req.body.c_str(), (int)req.body.size());
+		QByteArray clientIPBytes(req.remote_addr.c_str(), (int)req.remote_addr.size());
+		QByteArray responseBytes;
+		QMetaObject::invokeMethod(this, "handleRegisterScript",
+			Qt::BlockingQueuedConnection,
+			Q_RETURN_ARG(QByteArray, responseBytes),
+			Q_ARG(QByteArray, bodyBytes),
+			Q_ARG(QByteArray, clientIPBytes));
+		res.set_content(responseBytes.constData(), responseBytes.size(), "application/json");
+	});
+
+	// ─── GET /scripts ─────────────────────────────────────────────────────────
+	m_pServer->Get("/scripts", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
+		if (!registryAuthCheck(req, res)) return;
+
+		QList<QString> ids;
+		QList<RegisteredScript> entries;
+		{
+			QMutexLocker lock(&m_scriptRegistry.mutex);
+			ids = m_scriptRegistry.scripts.keys();
+			for (int i = 0; i < ids.size(); ++i)
+				entries.append(m_scriptRegistry.scripts.value(ids[i]));
+		}
+
+		QVariantList scriptsList;
+		for (int i = 0; i < ids.size(); ++i) {
+			QVariantMap entry;
+			entry["id"]            = ids[i];
+			entry["description"]   = entries[i].description;
+			entry["registered_at"] = entries[i].registeredAt.toString(Qt::ISODate);
+			scriptsList.append(entry);
+		}
+
+		JsonBuilder json;
+		json.startObject();
+		json.addMember("scripts", QVariant(scriptsList));
+		json.addMember("count",   ids.size());
+		json.finishObject();
+
+		QString jsonStr = json.toString();
+		QByteArray jsonBytes = jsonStr.toUtf8();
+		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	});
+
+	// ─── DELETE /scripts/:id ──────────────────────────────────────────────────
+	m_pServer->Delete("/scripts/([^/]+)", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
+		if (!registryAuthCheck(req, res)) return;
+
+		QString scriptId = QString::fromStdString(req.matches[1]);
+		bool removed = false;
+		{
+			QMutexLocker lock(&m_scriptRegistry.mutex);
+			removed = m_scriptRegistry.scripts.remove(scriptId) > 0;
+		}
+
+		if (!removed) {
+			res.status = 404;
+			QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(scriptId);
+			QByteArray errBytes = errJson.toUtf8();
+			res.set_content(errBytes.constData(), errBytes.size(), "application/json");
+			return;
+		}
+
+		QString clientIPStr = QString::fromStdString(req.remote_addr);
+		QString logMsg = QString("[%1] [%2] [REGISTRY] Deleted script: %3")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(clientIPStr)
+			.arg(scriptId);
+		QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, logMsg));
+
+		JsonBuilder json;
+		json.startObject();
+		json.addMember("success", true);
+		json.addMember("id", scriptId);
+		json.finishObject();
+		QString jsonStr = json.toString();
+		QByteArray jsonBytes = jsonStr.toUtf8();
+		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	});
+
+	// ─── POST /scripts/:id/execute ────────────────────────────────────────────
+	m_pServer->Post("/scripts/([^/]+)/execute", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
+		// Concurrent request limit
+		if (m_nActiveRequests >= m_nMaxConcurrentRequests) {
+			res.status = 429;
+			res.set_content("{\"success\":false,\"error\":\"Server busy: concurrent request limit reached. Please retry.\"}",
+			                "application/json");
+			return;
+		}
+		m_nActiveRequests++;
+		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+
+		QString clientIPStr = QString::fromStdString(req.remote_addr);
+
+		// IP whitelist check
+		if (!isIPWhitelisted(clientIPStr)) {
+			m_nActiveRequests--;
+			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+			res.status = 403;
+			res.set_content("{\"success\":false,\"error\":\"Access denied: IP not whitelisted.\"}",
+			                "application/json");
+			return;
+		}
+
+		// Rate limit check
+		if (!checkRateLimit(clientIPStr)) {
+			m_nActiveRequests--;
+			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+			res.status = 429;
+			res.set_content("{\"success\":false,\"error\":\"Rate limit exceeded.\"}",
+			                "application/json");
+			return;
+		}
+
+		if (!registryAuthCheck(req, res)) {
+			m_nActiveRequests--;
+			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+			return;
+		}
+
+		// Resolve the script text from the registry
+		QString scriptId = QString::fromStdString(req.matches[1]);
+		QString scriptText;
+		{
+			QMutexLocker lock(&m_scriptRegistry.mutex);
+			if (!m_scriptRegistry.scripts.contains(scriptId)) {
+				m_nActiveRequests--;
+				QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+				res.status = 404;
+				QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(scriptId);
+				QByteArray errBytes = errJson.toUtf8();
+				res.set_content(errBytes.constData(), errBytes.size(), "application/json");
+				return;
+			}
+			scriptText = m_scriptRegistry.scripts.value(scriptId).script;
+		}
+
+		QByteArray scriptBytes  = scriptText.toUtf8();
+		QByteArray scriptIdBytes = scriptId.toUtf8();
+		QByteArray bodyBytes    = QByteArray(req.body.c_str(), (int)req.body.size());
+		QByteArray clientIPBytes = clientIPStr.toUtf8();
+		QByteArray responseBytes;
+
+		QMetaObject::invokeMethod(this, "handleRegistryExecuteRequest",
+			Qt::BlockingQueuedConnection,
+			Q_RETURN_ARG(QByteArray, responseBytes),
+			Q_ARG(QByteArray, scriptBytes),
+			Q_ARG(QByteArray, scriptIdBytes),
+			Q_ARG(QByteArray, bodyBytes),
+			Q_ARG(QByteArray, clientIPBytes));
+
+		m_nActiveRequests--;
+		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
+		res.set_content(responseBytes.constData(), responseBytes.size(), "application/json");
+	});
 }
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
@@ -846,6 +1042,133 @@ QVariant scriptResult;
 	                                 errorVar,
 	                                 requestId);
 	return resp.toUtf8();
+}
+
+// ─── Script Registry handlers (main thread) ───────────────────────────────────
+
+QByteArray DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP)
+{
+	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
+
+	QScriptEngine parseEngine;
+	QScriptValue  parsed = parseEngine.evaluate("(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+	if (parseEngine.hasUncaughtException()) {
+		return QByteArray("{\"success\":false,\"error\":\"Invalid JSON in request body\"}");
+	}
+
+	QVariantMap body = parsed.toVariant().toMap();
+	QString name        = body.value("name").toString().trimmed();
+	QString description = body.value("description").toString().trimmed();
+	QString script      = body.value("script").toString();
+
+	if (name.isEmpty())
+		return QByteArray("{\"success\":false,\"error\":\"Field 'name' is required\"}");
+
+	QRegExp validName("^[A-Za-z0-9_-]{1,64}$");
+	if (!validName.exactMatch(name))
+		return QByteArray("{\"success\":false,\"error\":\"Field 'name' must be 1-64 characters using only letters, digits, hyphens, and underscores\"}");
+
+	if (script.isEmpty())
+		return QByteArray("{\"success\":false,\"error\":\"Field 'script' is required\"}");
+
+	RegisteredScript entry;
+	entry.description  = description;
+	entry.script       = script;
+	entry.registeredAt = QDateTime::currentDateTime();
+
+	bool isUpdate;
+	{
+		QMutexLocker lock(&m_scriptRegistry.mutex);
+		isUpdate = m_scriptRegistry.scripts.contains(name);
+		m_scriptRegistry.scripts.insert(name, entry);
+	}
+
+	appendLog(QString("[%1] [%2] [REGISTRY] %3 script: %4")
+		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+		.arg(clientIPStr)
+		.arg(isUpdate ? "Updated" : "Registered")
+		.arg(name));
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("success",       true);
+	json.addMember("id",            name);
+	json.addMember("registered_at", entry.registeredAt.toString(Qt::ISODate));
+	json.addMember("updated",       isUpdate);
+	json.finishObject();
+	return json.toString().toUtf8();
+}
+
+QByteArray DzScriptServerPane::handleRegistryExecuteRequest(
+	const QByteArray& scriptText,
+	const QByteArray& scriptId,
+	const QByteArray& requestBody,
+	const QByteArray& clientIP)
+{
+	QTime   startTime   = QTime::currentTime();
+	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
+	QString scriptIdStr = QString::fromUtf8(scriptId.constData(), scriptId.size());
+	QString requestId   = generateRequestId();
+
+	// Extract args from request body (ignore all other fields — script already resolved)
+	QVariantMap argsMap;
+	if (!requestBody.isEmpty()) {
+		QScriptEngine parseEngine;
+		QScriptValue  parsed = parseEngine.evaluate(
+			"(" + QString::fromUtf8(requestBody.constData(), requestBody.size()) + ")");
+		if (!parseEngine.hasUncaughtException())
+			argsMap = parsed.toVariant().toMap().value("args").toMap();
+	}
+
+	// Execute
+	m_aCapturedLogLines.clear();
+	m_bCapturingLog = true;
+	connect(dzApp, SIGNAL(debugMsg(const QString&)),
+	        this,  SLOT(onMessagePosted(const QString&)),
+	        Qt::DirectConnection);
+
+	DzScript* script = new DzScript();
+	script->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
+
+	QVariantList execArgs;
+	execArgs << QVariant(argsMap);
+
+	QVariant scriptResult;
+	QVariant errorVar;
+	bool     success  = true;
+	bool     executed = script->execute(execArgs);
+	if (executed) {
+		scriptResult = script->result();
+	} else {
+		success = false;
+		QString errMsg  = script->errorMessage();
+		int     errLine = script->errorLine();
+		if (errLine > 0)
+			errMsg = QString("Line %1: %2").arg(errLine).arg(errMsg);
+		errorVar = QVariant(errMsg);
+	}
+
+	delete script;
+	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
+	           this,  SLOT(onMessagePosted(const QString&)));
+	m_bCapturingLog = false;
+
+	int durationMs = startTime.msecsTo(QTime::currentTime());
+	recordRequest(success, durationMs);
+
+	appendLog(QString("[%1] [%2] [%3] [%4ms] [%5] registry:%6")
+		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+		.arg(clientIPStr)
+		.arg(success ? "OK" : "ERR")
+		.arg(durationMs)
+		.arg(requestId)
+		.arg(scriptIdStr));
+
+	return buildResponseJson(success,
+	                         success ? scriptResult : QVariant(),
+	                         m_aCapturedLogLines,
+	                         errorVar,
+	                         requestId).toUtf8();
 }
 
 void DzScriptServerPane::onMessagePosted(const QString& msg)
@@ -1084,6 +1407,12 @@ void DzScriptServerPane::loadSettings()
 	m_bRateLimitEnabled = settings.value("rateLimitEnabled", false).toBool();
 	m_nRateLimitMax = settings.value("rateLimitMax", ServerConfig::DEFAULT_RATE_LIMIT_MAX).toInt();
 	m_nRateLimitWindowSec = settings.value("rateLimitWindow", ServerConfig::DEFAULT_RATE_LIMIT_WINDOW).toInt();
+
+	// Persistent metrics — cumulative across restarts
+	m_metrics.totalRequests      = settings.value("metrics/totalRequests",      0).toInt();
+	m_metrics.successfulRequests = settings.value("metrics/successfulRequests", 0).toInt();
+	m_metrics.failedRequests     = settings.value("metrics/failedRequests",     0).toInt();
+	m_metrics.authFailures       = settings.value("metrics/authFailures",       0).toInt();
 }
 
 void DzScriptServerPane::saveSettings()
@@ -1108,6 +1437,26 @@ void DzScriptServerPane::saveSettings()
 	settings.setValue("rateLimitEnabled", m_bRateLimitEnabled);
 	settings.setValue("rateLimitMax", m_nRateLimitMax);
 	settings.setValue("rateLimitWindow", m_nRateLimitWindowSec);
+
+	saveMetrics();
+}
+
+void DzScriptServerPane::saveMetrics()
+{
+	// Read counters under the mutex, then write to QSettings outside it
+	int total, successful, failed, authFail;
+	{
+		QMutexLocker lock(&m_metrics.mutex);
+		total      = m_metrics.totalRequests;
+		successful = m_metrics.successfulRequests;
+		failed     = m_metrics.failedRequests;
+		authFail   = m_metrics.authFailures;
+	}
+	QSettings settings("DAZ 3D", "DazScriptServer");
+	settings.setValue("metrics/totalRequests",      total);
+	settings.setValue("metrics/successfulRequests", successful);
+	settings.setValue("metrics/failedRequests",     failed);
+	settings.setValue("metrics/authFailures",       authFail);
 }
 
 bool DzScriptServerPane::validateToken(const std::string& providedToken) const
@@ -1319,14 +1668,20 @@ QString DzScriptServerPane::generateRequestId()
 
 void DzScriptServerPane::recordRequest(bool success, qint64 durationMs)
 {
-	QMutexLocker lock(&m_metrics.mutex);
-	m_metrics.totalRequests++;
-	if (success) {
-		m_metrics.successfulRequests++;
-	} else {
-		m_metrics.failedRequests++;
+	bool shouldSave;
+	{
+		QMutexLocker lock(&m_metrics.mutex);
+		m_metrics.totalRequests++;
+		if (success) {
+			m_metrics.successfulRequests++;
+		} else {
+			m_metrics.failedRequests++;
+		}
+		Q_UNUSED(durationMs);  // Could track duration histogram here
+		shouldSave = (m_metrics.totalRequests % 10 == 0);
 	}
-	Q_UNUSED(durationMs);  // Could track duration histogram here
+	if (shouldSave)
+		saveMetrics();
 }
 
 QString DzScriptServerPane::getHealthJson() const
@@ -1336,7 +1691,7 @@ QString DzScriptServerPane::getHealthJson() const
 	JsonBuilder json;
 	json.startObject();
 	json.addMember("status", "ok");
-	json.addMember("version", "1.1.0");
+	json.addMember("version", DZSRV_VERSION_STR);
 	json.addMember("running", m_bRunning);
 	json.addMember("auth_enabled", m_bAuthEnabled);
 	json.addMember("active_requests", m_nActiveRequests);

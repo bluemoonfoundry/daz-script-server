@@ -134,10 +134,14 @@ Two GUIDs are registered in `pluginmain.cpp`: one for `DzScriptServerPane`, one 
 
 | Endpoint | Method | Auth Required | Response |
 |---|---|---|---|
-| `/status` | GET | No | `{"running":true,"version":"1.1.0"}` |
-| `/health` | GET | No | `{"status":"ok","version":"1.1.0","uptime_seconds":int,"active_requests":int}` |
+| `/status` | GET | No | `{"running":true,"version":"1.2.0"}` |
+| `/health` | GET | No | `{"status":"ok","version":"1.2.0","uptime_seconds":int,"active_requests":int}` |
 | `/metrics` | GET | No | `{"total_requests":int,"successful":int,"failed":int,"auth_failures":int,"success_rate":float}` |
 | `/execute` | POST | Yes (if enabled) | `{"success":bool,"result":any,"output":[],"error":string\|null,"request_id":string}` |
+| `/scripts/register` | POST | Yes (if enabled) | `{"success":bool,"id":string,"registered_at":string,"updated":bool}` |
+| `/scripts` | GET | Yes (if enabled) | `{"scripts":[{"id","description","registered_at"}],"count":int}` |
+| `/scripts/:id/execute` | POST | Yes (if enabled) | `{"success":bool,"result":any,"output":[],"error":string\|null,"request_id":string}` |
+| `/scripts/:id` | DELETE | Yes (if enabled) | `{"success":bool,"id":string}` |
 
 Default host: `127.0.0.1`, default port: `18811`.
 
@@ -154,6 +158,12 @@ Default host: `127.0.0.1`, default port: `18811`.
 **POST /execute** accepts either:
 - `scriptFile`: Absolute path to a `.dsa` file (required for scripts using `include()` or `getScriptFileName()`)
 - `script`: Inline DazScript code as a string
+
+**Script Registry** (session-only, in-memory — cleared on DAZ Studio restart):
+- `POST /scripts/register` body: `{"name":"id-string","description":"...","script":"..."}` — name is the ID; re-registering the same name overwrites the existing script
+- `POST /scripts/:id/execute` body: `{"args":{...}}` — same response shape as `/execute`; log shows `registry:id`
+- `DELETE /scripts/:id` — returns 404 if the ID is not registered
+- Script names: 1–64 characters, letters/digits/hyphens/underscores only
 
 Both accept optional `args` object, accessible in the script via `getArguments()[0]`.
 
