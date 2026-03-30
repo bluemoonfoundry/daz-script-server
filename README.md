@@ -1,55 +1,12 @@
-# Vangard DazScript Server
+# DazScript Server
 
 **Version 1.2.0** | DAZ Studio 4.5+ | Windows & macOS
 
-A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests with JSON responses. This allows external tools, automation scripts, and custom applications to programmatically control DAZ Studio operations.
+A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
 
-## What's New in v1.2.0
+---
 
-**Security Enhancements:**
-- ✅ IP Whitelist - Restrict access to specific IP addresses
-- ✅ Per-IP Rate Limiting - Prevent brute force attacks with sliding window rate limits
-- ✅ Configurable Advanced Limits - Adjust concurrent requests, body size, and script length
-
-**Script Registry:**
-- ✅ Register named scripts once, call by ID — no script retransmission on every request
-- ✅ Session-based in-memory registry with register, list, execute, and delete endpoints
-- ✅ Returns 404 on stale IDs so clients can re-register after DAZ Studio restarts
-
-**Usability Improvements:**
-- ✅ Active Request Counter - Real-time display of concurrent requests (X/max)
-- ✅ Auto-Start Option - Optionally start server when pane opens
-- ✅ Improved Error Messages - Descriptive errors with actionable guidance
-- ✅ Additional Client Examples - JavaScript/Node.js and PowerShell examples included
-
-**All Settings Persisted** - Every configuration option (security, limits, monitoring) is saved via QSettings and restored between sessions.
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Why This Exists](#why-this-exists)
-- [How It Works](#how-it-works)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Building](#building)
-- [Installation](#installation)
-- [Usage](#usage)
-  - [Starting the Server](#starting-the-server)
-  - [Configuration](#configuration)
-  - [Authentication](#authentication)
-  - [Request Logging](#request-logging)
-  - [API](#api)
-- [Script Registry](#script-registry)
-- [Security Best Practices](#security-best-practices)
-- [Writing Scripts](#writing-scripts)
-- [Troubleshooting](#troubleshooting)
-- [Frequently Asked Questions](#frequently-asked-questions)
-- [Client Examples](#client-examples)
-- [Advanced Topics](#advanced-topics)
-- [Contributing](#contributing)
-- [License & Attribution](#license--attribution)
-
-## Quick Start
+## 🚀 Quick Start
 
 **Already have the plugin installed?**
 
@@ -57,237 +14,291 @@ A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ
 2. Click **Start Server** (default: `127.0.0.1:18811`)
 3. Click **Copy** to copy your API token
 4. Test with Python:
-   ```python
-   import requests
 
-   response = requests.post(
-       "http://127.0.0.1:18811/execute",
-       headers={"X-API-Token": "YOUR_TOKEN_HERE"},
-       json={"script": "return 'Hello from DAZ Studio!';"}
-   )
-   print(response.json())
-   ```
+```python
+import requests
 
-**Need to build and install?** See [Building](#building) and [Installation](#installation) below.
+response = requests.post(
+    "http://127.0.0.1:18811/execute",
+    headers={"X-API-Token": "YOUR_TOKEN_HERE"},
+    json={"script": "return 'Hello from DAZ Studio!';"}
+)
+print(response.json())
+```
+
+**Need to build and install?** Jump to [Building & Installation](#building--installation) below.
+
+---
+
+## 📋 Table of Contents
+
+### Getting Started
+- [Quick Start](#-quick-start)
+- [Why This Exists](#why-this-exists)
+- [What's New in v1.2.0](#whats-new-in-v120)
+- [Requirements](#requirements)
+- [Building & Installation](#building--installation)
+
+### Using the Plugin
+- [Starting the Server](#starting-the-server)
+- [Configuration](#-configuration)
+- [API Reference](#-api-reference)
+- [Script Registry](#-script-registry)
+- [Client Examples](#-client-examples)
+
+### Security & Best Practices
+- [Security Features](#-security-features)
+- [Security Best Practices](#-security-best-practices)
+- [Troubleshooting](#-troubleshooting)
+
+### Advanced Topics
+- [Writing Scripts](#writing-scripts)
+- [Performance Tuning](#performance-tuning)
+- [Integration Patterns](#integration-patterns)
+- [Reverse Proxy Setup](#reverse-proxy-setup-https)
+
+### Reference
+- [FAQ](#-frequently-asked-questions)
+- [Contributing](#contributing)
+- [License](#license--attribution)
+
+---
 
 ## Why This Exists
 
-DAZ Studio is a powerful 3D content creation tool, but its automation capabilities are limited to manually running DazScript files or using the built-in Script IDE. This plugin solves several key problems:
+DAZ Studio is powerful for 3D content creation, but automation is limited to manually running scripts. This plugin solves that by exposing DAZ Studio as an HTTP API:
 
-- **Remote Automation**: Control DAZ Studio from external applications (Python scripts, web apps, CI/CD pipelines)
-- **Programmatic Access**: Build custom tools that interact with DAZ Studio's scene graph, assets, and rendering engine
-- **Integration**: Connect DAZ Studio to larger workflows (game engines, asset pipelines, batch processing)
-- **API-First Development**: Treat DAZ Studio as a service that can be controlled via HTTP APIs
+**What You Can Do:**
+- **Remote Automation** - Control DAZ Studio from Python, web apps, CI/CD pipelines
+- **Programmatic Access** - Build custom tools that interact with scenes, assets, and rendering
+- **Integration** - Connect to game engines, asset pipelines, batch processing systems
+- **API-First Development** - Treat DAZ Studio as a service with HTTP APIs
 
-Common use cases:
+**Common Use Cases:**
 - Batch rendering and asset processing
-- Integration with asset management systems
+- Asset management system integration
 - Automated scene generation and testing
-- Custom web-based DAZ Studio controllers
+- Custom web-based controllers
 - CI/CD pipelines for 3D content validation
 
-## How It Works
+---
 
-Once the plugin is loaded and the server started, clients send HTTP requests containing a script path (or inline script code) and optional arguments. The plugin executes the script on DAZ Studio's main thread — where all scene and asset operations must run — and returns the result as JSON with captured output and error information.
+## What's New in v1.2.0
 
-## Features
+### 🔒 Security Enhancements
+- **IP Whitelist** - Restrict access to specific IP addresses
+- **Per-IP Rate Limiting** - Prevent brute force attacks with sliding window limits
+- **Configurable Limits** - Adjust concurrent requests, body size, and script length
 
-### Security
-- **API Token Authentication**: Cryptographically secure tokens (128-bit) using OS crypto APIs
-- **IP Whitelist**: Restrict access to specific IP addresses (exact matching)
-- **Per-IP Rate Limiting**: Prevent brute force attacks with configurable sliding window rate limits
-- **Input Validation**: Comprehensive validation of request bodies, script sizes, and file paths
-- **Audit Logging**: All requests, auth failures, and blocked IPs logged with timestamps and IDs
+### 📦 Script Registry
+- **Register Once, Call Many** - Upload scripts by name, execute by ID without retransmission
+- **Session-Based Storage** - In-memory registry with register, list, execute, and delete endpoints
+- **Auto-Recovery** - Returns 404 on stale IDs so clients can re-register after restarts
 
-### Reliability
-- **Concurrent Request Limiting**: Configurable max concurrent requests (5-50, default 10) prevents resource exhaustion
-- **Request Timeouts**: Configurable script execution timeout (5-300 seconds, default 30)
-- **Graceful Error Handling**: Descriptive error messages with actionable guidance
-- **Port Conflict Detection**: Clear error messages when port is already in use
+### ✨ Usability Improvements
+- **Active Request Counter** - Real-time display of concurrent requests (X/max)
+- **Auto-Start Option** - Start server automatically when pane opens
+- **Better Error Messages** - Descriptive errors with actionable guidance
+- **More Examples** - Added JavaScript/Node.js and PowerShell client examples
 
-### Observability
-- **Health Check Endpoint**: `/health` for monitoring and load balancer probes
-- **Metrics Endpoint**: `/metrics` with request counts, success rates, and uptime
-- **Real-Time Request Log**: UI displays all requests with timestamps, IPs, status, duration, and request IDs
-- **Active Request Counter**: Live display of current concurrent requests (X/max)
+### 💾 Persistent Configuration
+All settings (security, limits, monitoring) are saved via QSettings and restored between sessions.
 
-### Script Registry
-- **Named Script Registration**: Register scripts once by name; call them by ID on subsequent requests
-- **Reduced Overhead**: No retransmission of large script bodies on every call
-- **Session-Based Storage**: In-memory registry cleared on DAZ Studio restart; clients re-register on 404
-- **Full CRUD**: Register, list, execute by ID, and delete scripts
-
-### Usability
-- **Auto-Start Option**: Optionally start server automatically when pane opens
-- **Persistent Configuration**: All settings saved via QSettings and restored between sessions
-- **Configurable Limits**: Adjust concurrent requests, body size, and script length limits in UI
-- **Example Clients**: Included examples in Python, JavaScript/Node.js, and PowerShell
+---
 
 ## Requirements
 
-- **DAZ Studio 4.5+**
-- **DAZ Studio 4.5+ SDK** (for building)
+- **DAZ Studio 4.5+** (for running the plugin)
+- **DAZ Studio 4.5+ SDK** (for building from source)
 - **CMake 3.5+**
-- **Windows**: Visual Studio 2019 or 2022 (MSVC)
-- **macOS**: Xcode / clang with libc++
+- **Compiler:**
+  - Windows: Visual Studio 2019 or 2022 (MSVC)
+  - macOS: Xcode / clang with libc++
 
-## Building
+---
 
-### 1. Obtain the DAZ Studio SDK
+## Building & Installation
 
-Download the DAZ Studio SDK from the [DAZ Developer portal](https://www.daz3d.com/daz-studio-4-5-sdk). Extract it somewhere accessible, e.g. `C:/DAZStudio4.5+ SDK`.
+### Building from Source
 
-### 2. Configure
+1. **Download the DAZ Studio SDK** from the [DAZ Developer portal](https://www.daz3d.com/daz-studio-4-5-sdk)
 
-```bash
-cmake -B build -S . -DDAZ_SDK_DIR="C:/path/to/DAZStudio4.5+ SDK"
-```
+2. **Configure with CMake:**
+   ```bash
+   cmake -B build -S . -DDAZ_SDK_DIR="C:/path/to/DAZStudio4.5+ SDK"
+   ```
 
-### 3. Build
+3. **Build:**
+   ```bash
+   cmake --build build --config Release
+   ```
 
-```bash
-cmake --build build --config Release
-```
+   Output: `build/lib/Release/DazScriptServer.dll` (Windows) or `build/lib/DazScriptServer.dylib` (macOS)
 
-Output: `build/lib/Release/DazScriptServer.dll` (Windows) or `build/lib/DazScriptServer.dylib` (macOS).
-
-A convenience script is also provided:
-
+**Convenience script** (auto-detects CMake):
 ```bash
 ./build.sh
 ```
 
-## Installation
+### Installation
 
-Copy the built DLL (or dylib) into DAZ Studio's `plugins` folder:
+Copy the built plugin to DAZ Studio's plugins folder:
 
-- **Windows (typical):** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
-- **macOS (typical):** `/Applications/DAZ 3D/DAZStudio4/plugins/`
+- **Windows:** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
+- **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
 
-To build and install in one step, pass `DAZ_STUDIO_EXE_DIR` at configure time and use the `--install` flag:
-
+**Or build and install in one step:**
 ```bash
 cmake -B build -S . \
-  -DDAZ_SDK_DIR="C:/path/to/DAZStudio4.5+ SDK" \
+  -DDAZ_SDK_DIR="C:/path/to/SDK" \
   -DDAZ_STUDIO_EXE_DIR="C:/Program Files/DAZ 3D/DAZStudio4"
 
 ./build.sh --install
 ```
 
-## Usage
+---
 
-### Starting the Server
+## Starting the Server
 
-After loading the plugin, open the pane via **Window → Panes → Daz Script Server**. The pane header shows the current plugin version. Configure:
+1. Open DAZ Studio
+2. Go to **Window → Panes → Daz Script Server**
+3. Configure settings (see [Configuration](#-configuration) below)
+4. Click **Start Server**
 
-- **Host**: IP address to bind to (default: `127.0.0.1` for localhost only)
-- **Port**: Port number (default: `18811`)
-- **Timeout**: Request timeout in seconds (default: `30s`, range: `5–300s`)
-- **Auto Start**: Check to start the server automatically when DAZ Studio loads
+The server status will show "Running" with active requests counter when started successfully.
 
-Click **Start Server** to begin accepting requests. Settings are automatically saved.
+---
 
-### Configuration
+## ⚙️ Configuration
 
-The plugin provides extensive configuration options, all persisted between DAZ Studio sessions via QSettings:
+All settings are persisted via QSettings and restored between DAZ Studio sessions.
 
-#### Server Settings
-- **Host**: IP address to bind to (default: `127.0.0.1` for localhost only)
-  - Use `127.0.0.1` to accept only local connections (most secure)
-  - Use `0.0.0.0` to accept connections from any IP (requires IP whitelist for security)
-- **Port**: Port number (default: `18811`)
-- **Request Timeout**: Script execution timeout in seconds (range: 5-300, default: 30)
-  - Scripts exceeding this timeout will be terminated
-- **Auto-start**: Optionally start server automatically when pane opens (disabled by default)
+### Server Settings
 
-#### Authentication
-- **Enable Authentication**: Token-based authentication (enabled by default)
-  - When enabled, all `/execute` requests must include a valid API token
-  - Token is displayed in the UI (masked) with copy and regenerate buttons
-  - Token stored in `~/.daz3d/dazscriptserver_token.txt` (owner-only permissions on Unix/macOS)
-- **Disable at Your Own Risk**: Only disable authentication on trusted networks where unauthorized script execution is acceptable
+| Setting | Default | Range | Description |
+|---------|---------|-------|-------------|
+| **Host** | `127.0.0.1` | - | IP address to bind to (`127.0.0.1` for localhost only, `0.0.0.0` for all interfaces) |
+| **Port** | `18811` | 1024-65535 | Port number |
+| **Timeout** | `30` seconds | 5-300 | Script execution timeout |
+| **Auto-Start** | Disabled | - | Start server automatically when pane opens |
 
-#### IP Whitelist
-- **Enable IP Whitelist**: Restrict access to specific IP addresses (disabled by default)
-- **Allowed IPs**: Comma-separated list of IP addresses (default: `127.0.0.1`)
-  - Example: `127.0.0.1, 192.168.1.100, 192.168.1.101`
-  - Exact match only (wildcards not supported in v1.2.0)
-  - Blocked IPs receive HTTP 403 Forbidden before authentication check
-  - Useful for network-exposed deployments where only specific clients should access the server
+### 🔐 Authentication
 
-#### Rate Limiting
-- **Enable Per-IP Rate Limiting**: Prevent brute force attacks and abuse (disabled by default)
-- **Max Requests**: Maximum requests allowed per time window (range: 10-1000, default: 60)
-- **Time Window**: Time window in seconds (range: 10-300, default: 60)
-  - Example: Default settings allow 60 requests per 60 seconds per IP
-  - Uses sliding window algorithm for accurate limiting
-  - Exceeded IPs receive HTTP 429 Too Many Requests
-  - Separate tracking per IP address
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Enable Authentication** | ✅ Enabled | Token-based authentication using cryptographically secure tokens (128-bit) |
 
-#### Advanced Limits
-- **Max Concurrent Requests**: Maximum simultaneous requests (range: 5-50, default: 10)
-  - Prevents resource exhaustion from too many concurrent scripts
-  - Returns HTTP 429 when limit reached
-- **Max Request Body Size**: Maximum request body size in MB (range: 1-50, default: 5)
-  - Prevents memory issues from excessively large requests
-  - Returns HTTP 413 Payload Too Large when exceeded
-- **Max Script Text Length**: Maximum inline script size in KB (range: 100-10240, default: 1024)
-  - Limits memory usage from large inline scripts
-  - Use `scriptFile` instead of `script` for very large scripts
+**Token Security:**
+- Auto-generated using OS crypto APIs (Windows: CryptoAPI, macOS/Linux: `/dev/urandom`)
+- Stored in `~/.daz3d/dazscriptserver_token.txt`
+- File permissions automatically set to `chmod 600` (owner-only) on Unix/macOS
+- Copy token from UI using the **Copy** button
+- Regenerate with **Regenerate** button if compromised
+- ⚠️ **Disable at your own risk** - only on trusted networks
 
-#### Monitoring
-- **Active Requests**: Real-time counter showing current/max concurrent requests (e.g., "Active Requests: 2 / 10")
-- **Request Log**: Detailed log with timestamps, client IPs, status codes, duration, request IDs, and script identifiers
-  - Status codes: OK (success), ERR (error), WARN (warning), AUTH FAILED, BLOCKED, RATE LIMIT
-  - Maximum 1000 lines displayed (older entries automatically removed)
-  - "Clear Log" button to manually clear the log
+### 🛡️ IP Whitelist
 
-**Important**: All configuration changes (except auto-start) require stopping and restarting the server to take effect. The server captures configuration values at startup and uses them throughout its lifecycle.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Enable IP Whitelist** | ❌ Disabled | Restrict access to specific IP addresses |
+| **Allowed IPs** | `127.0.0.1` | Comma-separated list (e.g., `127.0.0.1, 192.168.1.100`) |
+
+- Exact match only (wildcards not supported in v1.2.0)
+- Blocked IPs receive HTTP 403 Forbidden
+- Checked before authentication (efficient)
+- Essential for network-exposed deployments
+
+### ⏱️ Rate Limiting
+
+| Setting | Default | Range | Description |
+|---------|---------|-------|-------------|
+| **Enable Rate Limiting** | ❌ Disabled | - | Per-IP rate limiting to prevent abuse |
+| **Max Requests** | `60` | 10-1000 | Maximum requests per time window |
+| **Time Window** | `60` seconds | 10-300 | Time window in seconds |
+
+- Uses sliding window algorithm for accuracy
+- Separate tracking per IP address
+- Exceeded IPs receive HTTP 429 Too Many Requests
+- Logs violations with timestamp and client IP
+
+### 🎛️ Advanced Limits
+
+| Setting | Default | Range | Description |
+|---------|---------|-------|-------------|
+| **Max Concurrent Requests** | `10` | 5-50 | Maximum simultaneous requests |
+| **Max Request Body Size** | `5` MB | 1-50 | Maximum request body size |
+| **Max Script Text Length** | `1024` KB (1 MB) | 100-10240 | Maximum inline script size |
+
+**Protection:**
+- Prevents resource exhaustion
+- Returns appropriate HTTP errors (413, 429)
+- Use `scriptFile` for larger scripts
+
+### 📊 Monitoring
+
+- **Active Request Counter** - Real-time display: "Active Requests: 2 / 10"
+- **Request Log** - Detailed log with:
+  - Timestamps (HH:mm:ss)
+  - Client IP addresses
+  - Status codes (OK, ERR, WARN, AUTH FAILED, BLOCKED, RATE LIMIT)
+  - Duration (milliseconds)
+  - Request IDs (8-character UUID)
+  - Script identifiers
+- **Log Management** - Maximum 1000 lines, auto-remove old entries, "Clear Log" button
+
+**Important:** Configuration changes (except auto-start) require stopping and restarting the server to take effect.
+
+---
+
+## 📡 API Reference
+
+### Base URL
+```
+http://127.0.0.1:18811
+```
 
 ### Authentication
 
-The server uses API token authentication to prevent unauthorized script execution. On first start, a cryptographically secure random token (128-bit) is automatically generated using platform crypto APIs (Windows: CryptoAPI, macOS/Linux: /dev/urandom) and saved to `~/.daz3d/dazscriptserver_token.txt`.
+All endpoints except `/status`, `/health`, and `/metrics` require authentication when enabled:
 
-**To use the API:**
-1. Copy the token from the plugin UI (click the **Copy** button next to the token field)
-2. Include it in every HTTP request via the `X-API-Token` header (or `Authorization: Bearer <token>`)
+**Header Options:**
+- `X-API-Token: YOUR_TOKEN_HERE`
+- `Authorization: Bearer YOUR_TOKEN_HERE`
 
-**Security notes:**
-- **Cryptographically secure**: Tokens are generated using OS-provided crypto APIs, not predictable PRNGs
-- Keep the token secure - anyone with it can execute arbitrary DazScript code
-- The token file permissions are automatically set to owner-only (`chmod 600`) on Unix/macOS
-- On Windows, manually restrict file access to your user account only
-- If the token is compromised, use the "Regenerate" button to create a new one
-- Authentication can be disabled via the checkbox (not recommended unless on a trusted network)
-- Failed authentication attempts are logged in the Request Log with timestamp and client IP
+### HTTP Status Codes
 
-### Request Logging
+| Code | Meaning |
+|------|---------|
+| `200` | Success (check `success` field in response) |
+| `400` | Bad Request (malformed JSON, invalid parameters) |
+| `401` | Unauthorized (missing or invalid token) |
+| `403` | Forbidden (IP not whitelisted) |
+| `413` | Payload Too Large (request body exceeds limit) |
+| `429` | Too Many Requests (concurrent or rate limit exceeded) |
 
-The plugin displays a real-time log of all requests with:
-- **Timestamp** - When the request was received (HH:mm:ss)
-- **Client IP** - Source IP address of the request
-- **Status** - OK (success), ERR (error), WARN (warning), AUTH FAILED (authentication failure)
-- **Duration** - Script execution time in milliseconds
-- **Script identifier** - Filename for script files, or first 40 characters of inline scripts
+---
 
-Use the "Clear Log" button to clear the log view.
+### `GET /status`
 
-### API
+**Purpose:** Check if server is running
+**Authentication:** Not required
 
-All endpoints except `/status` require the `X-API-Token` header (or `Authorization: Bearer <token>`) when authentication is enabled.
-
-#### `GET /status`
-
-Returns server status. No authentication required.
-
+**Response:**
 ```json
-{ "running": true, "version": "1.2.0" }
+{
+  "running": true,
+  "version": "1.2.0"
+}
 ```
 
-#### `GET /health`
+---
 
-Returns runtime health information. No authentication required. Use for monitoring and load balancer probes.
+### `GET /health`
 
+**Purpose:** Health check for monitoring and load balancers
+**Authentication:** Not required
+
+**Response:**
 ```json
 {
   "status": "ok",
@@ -299,10 +310,14 @@ Returns runtime health information. No authentication required. Use for monitori
 }
 ```
 
-#### `GET /metrics`
+---
 
-Returns cumulative request counters. No authentication required. Counters persist across DAZ Studio restarts (saved to QSettings).
+### `GET /metrics`
 
+**Purpose:** Request statistics and performance tracking
+**Authentication:** Not required
+
+**Response:**
 ```json
 {
   "total_requests": 1523,
@@ -315,12 +330,18 @@ Returns cumulative request counters. No authentication required. Counters persis
 }
 ```
 
-#### `POST /execute`
+**Note:** Counters persist across DAZ Studio restarts (saved to QSettings).
 
-Executes a DazScript and returns the result.
+---
 
-**Request body:**
+### `POST /execute`
 
+**Purpose:** Execute a DazScript and return the result
+**Authentication:** Required (if enabled)
+
+**Request Body:**
+
+**Option 1: Inline script**
 ```json
 {
   "script": "(function(){ return Scene.getNumNodes(); })()",
@@ -328,8 +349,7 @@ Executes a DazScript and returns the result.
 }
 ```
 
-Or with a script file:
-
+**Option 2: Script file**
 ```json
 {
   "scriptFile": "/absolute/path/to/script.dsa",
@@ -337,73 +357,83 @@ Or with a script file:
 }
 ```
 
+**Parameters:**
+
 | Field | Type | Required | Description |
-|---|---|---|---|
-| `scriptFile` | string | one of | Absolute path to a `.dsa` script file (must exist) |
-| `script` | string | one of | Inline DazScript code (configurable max, default 1MB) |
-| `args` | object | no | Arguments accessible in the script via `getArguments()[0]` |
+|-------|------|----------|-------------|
+| `script` | string | one of | Inline DazScript code (max configurable, default 1MB) |
+| `scriptFile` | string | one of | Absolute path to `.dsa` file |
+| `args` | object | optional | Arguments accessible via `getArguments()[0]` |
 
-If both are provided, `scriptFile` takes precedence.
-
-**Request processing order:** concurrent limit → IP whitelist → rate limit → body size → auth → validation → execution.
-
-**HTTP Status Codes:**
-
-| Code | Condition |
-|---|---|
-| `200` | Script executed (check `success` field) |
-| `400` | Malformed JSON, missing fields, or invalid parameters |
-| `401` | Missing or invalid API token |
-| `403` | Client IP not in whitelist |
-| `413` | Request body exceeds configured max size |
-| `429` | Concurrent limit reached or per-IP rate limit exceeded |
+**Note:** If both `script` and `scriptFile` are provided, `scriptFile` takes precedence.
 
 **Response:**
-
 ```json
 {
   "success": true,
-  "result": "My Node",
-  "output": ["line printed by script"],
+  "result": 42,
+  "output": ["line 1", "line 2"],
   "error": null,
   "request_id": "a3f2b891"
 }
 ```
 
+**Response Fields:**
+
 | Field | Description |
-|---|---|
-| `success` | `true` if the script executed without error |
-| `result` | The script's return value, `null` on error |
-| `output` | Lines printed via `print()` during execution (max 10,000) |
-| `error` | Error message with line number if execution failed, otherwise `null` |
+|-------|-------------|
+| `success` | `true` if script executed without error |
+| `result` | Script's return value, `null` on error |
+| `output` | Lines printed via `print()` (max 10,000) |
+| `error` | Error message with line number, or `null` |
 | `request_id` | Unique 8-character ID for log correlation |
 
-## Script Registry
+**Processing Order:**
+1. Concurrent limit check
+2. IP whitelist check (if enabled)
+3. Rate limit check (if enabled)
+4. Body size validation
+5. Authentication (if enabled)
+6. Input validation
+7. Script execution
 
-The registry lets you upload a script once and call it by name on every subsequent request, avoiding re-sending large script bodies and making logs easier to read.
+---
 
-**The registry is session-only** — scripts are stored in memory and cleared when DAZ Studio restarts. Clients should re-register on `404` from `/scripts/:id/execute`.
+## 📦 Script Registry
 
-#### `POST /scripts/register`
+The script registry allows you to register scripts once and execute them by name/ID on subsequent requests, avoiding retransmission of large script bodies.
 
-Register (or update) a named script.
+**Key Features:**
+- Session-only storage (cleared on DAZ Studio restart)
+- Clients should re-register on HTTP 404
+- Register, list, execute by ID, and delete operations
+- Same response format as `/execute`
 
+---
+
+### `POST /scripts/register`
+
+**Purpose:** Register or update a named script
+**Authentication:** Required (if enabled)
+
+**Request:**
 ```json
 {
   "name": "scene-info",
-  "description": "Return figures, cameras, lights, and node count",
+  "description": "Return scene node count",
   "script": "(function(){ return { nodes: Scene.getNumNodes() }; })()"
 }
 ```
 
+**Parameters:**
+
 | Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | yes | Script ID: 1–64 chars, `[A-Za-z0-9_-]` only |
-| `script` | string | yes | DazScript source |
+|-------|------|----------|-------------|
+| `name` | string | yes | Script ID: 1-64 chars, `[A-Za-z0-9_-]` only |
+| `script` | string | yes | DazScript source code |
 | `description` | string | no | Human-readable description |
 
-Re-registering an existing name overwrites the script. Response:
-
+**Response:**
 ```json
 {
   "success": true,
@@ -413,101 +443,167 @@ Re-registering an existing name overwrites the script. Response:
 }
 ```
 
-#### `GET /scripts`
+**Note:** Re-registering an existing name overwrites the script and sets `updated: true`.
 
-List all registered scripts.
+---
 
+### `GET /scripts`
+
+**Purpose:** List all registered scripts
+**Authentication:** Required (if enabled)
+
+**Response:**
 ```json
 {
   "scripts": [
-    { "id": "scene-info", "description": "...", "registered_at": "2026-03-27T10:15:00" }
+    {
+      "id": "scene-info",
+      "description": "Return scene node count",
+      "registered_at": "2026-03-27T10:15:00"
+    }
   ],
   "count": 1
 }
 ```
 
-#### `POST /scripts/:id/execute`
+---
 
-Execute a registered script by ID. Only `args` is read from the request body.
+### `POST /scripts/:id/execute`
 
-```
-POST /scripts/scene-info/execute
-Content-Type: application/json
+**Purpose:** Execute a registered script by ID
+**Authentication:** Required (if enabled)
 
-{ "args": { "label": "FN Ethan" } }
-```
-
-Response is identical to `POST /execute`. Returns `404` if the ID is not registered:
-
+**Request:**
 ```json
-{ "success": false, "error": "Script not found: 'scene-info'" }
+{
+  "args": { "label": "FN Ethan" }
+}
 ```
 
-#### `DELETE /scripts/:id`
+**Response:** Same format as `POST /execute`
 
-Remove a script from the registry.
-
-```
-DELETE /scripts/scene-info
-```
-
+**Error Response (404):**
 ```json
-{ "success": true, "id": "scene-info" }
+{
+  "success": false,
+  "error": "Script not found: 'scene-info'"
+}
 ```
 
-Returns `404` if the ID does not exist.
+**Handling 404:** Client should detect 404, re-register scripts, then retry.
 
 ---
 
-## Security Best Practices
+### `DELETE /scripts/:id`
 
-### For Localhost-Only Access (Most Secure)
-If you only need to control DAZ Studio from the same machine:
-1. Keep host set to `127.0.0.1` (default)
-2. Keep authentication enabled (default)
-3. Protect your token file (`~/.daz3d/dazscriptserver_token.txt`)
-4. IP whitelist and rate limiting are optional in this configuration
+**Purpose:** Remove a script from the registry
+**Authentication:** Required (if enabled)
 
-### For Network Access (Remote Clients)
-If you need to control DAZ Studio from other machines on your network:
-1. Change host to `0.0.0.0` to accept external connections
-2. **Required**: Enable IP whitelist with specific allowed IPs
-3. **Required**: Keep authentication enabled
-4. **Recommended**: Enable rate limiting (e.g., 60 requests per 60 seconds)
-5. **Recommended**: Use a firewall to restrict port access
-6. **Never** expose to the public internet without additional security layers (VPN, reverse proxy with HTTPS)
+**Response:**
+```json
+{
+  "success": true,
+  "id": "scene-info"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "success": false,
+  "error": "Script not found: 'scene-info'"
+}
+```
+
+---
+
+## 🔒 Security Features
+
+### Built-In Security
+
+- **Cryptographically Secure Tokens** - 128-bit entropy using OS crypto APIs
+- **IP Whitelist** - Exact IP matching for access control
+- **Per-IP Rate Limiting** - Sliding window algorithm prevents brute force
+- **Input Validation** - Request body, script size, and file path validation
+- **Audit Logging** - All requests, auth failures, and blocked IPs logged
+- **Concurrent Request Limiting** - Prevents resource exhaustion attacks
+- **File Permissions** - Automatic `chmod 600` on token files (Unix/macOS)
+
+### What's NOT Included
+
+- **HTTPS/TLS** - Use a reverse proxy (nginx, Apache) for encryption
+- **X-Forwarded-For** - IP whitelist uses direct TCP connection IP only
+- **User Accounts** - Single token for all authenticated access
+- **Persistent Sessions** - Each request is independently authenticated
+
+---
+
+## 🛡️ Security Best Practices
+
+### Localhost-Only Access (Most Secure)
+
+For controlling DAZ Studio from the same machine:
+
+1. ✅ Keep host set to `127.0.0.1` (default)
+2. ✅ Keep authentication enabled (default)
+3. ✅ Protect token file (`~/.daz3d/dazscriptserver_token.txt`)
+4. ℹ️ IP whitelist and rate limiting are optional
+
+### Network Access (Remote Clients)
+
+For controlling DAZ Studio from other machines:
+
+1. ✅ Change host to `0.0.0.0` (accept external connections)
+2. ✅ **Required:** Enable IP whitelist with specific allowed IPs
+3. ✅ **Required:** Keep authentication enabled
+4. ✅ **Recommended:** Enable rate limiting (e.g., 60 requests / 60 seconds)
+5. ✅ **Recommended:** Use firewall rules to restrict port access
+6. ⚠️ **Never** expose to the public internet without additional security (VPN, reverse proxy with HTTPS)
 
 ### Token Security
-- **Protect the token file**: Anyone with your token can execute arbitrary code in DAZ Studio
-- **Never commit tokens to version control**: Add `dazscriptserver_token.txt` to `.gitignore`
-- **Rotate tokens regularly**: Use the "Regenerate" button in the UI periodically
-- **File permissions**: On Unix/macOS, the token file is automatically set to `chmod 600` (owner-only)
-- **Windows**: Manually restrict file access to your user account only (Right-click → Properties → Security)
-- **Disable authentication only on trusted networks**: If you disable auth, anyone who can reach the port can execute code
+
+| Do | Don't |
+|----|-------|
+| ✅ Treat token like a password | ❌ Commit to version control |
+| ✅ Copy from UI or token file | ❌ Share publicly or in logs |
+| ✅ Use "Regenerate" if compromised | ❌ Email or message token |
+| ✅ Set `chmod 600` on Unix/macOS | ❌ Use same token across environments |
+| ✅ Restrict file access on Windows | ❌ Disable auth on untrusted networks |
+
+**Token File Locations:**
+- Unix/macOS: `~/.daz3d/dazscriptserver_token.txt`
+- Windows: `%USERPROFILE%\.daz3d\dazscriptserver_token.txt`
 
 ### Monitoring & Auditing
-- **Check the request log regularly**: Monitor for unexpected authentication failures or blocked IPs
-- **Use the `/metrics` endpoint**: Set up monitoring alerts for unusual patterns (high failure rates, auth failures)
-- **Rate limiting logs**: Check for RATE LIMIT entries in the log to identify potential abuse
 
-### What This Plugin Does NOT Provide
-- **HTTPS/TLS encryption**: Requests are sent over plain HTTP (use a reverse proxy or VPN for encryption)
-- **X-Forwarded-For support**: IP whitelist and rate limiting use direct TCP connection IP (not suitable for deployments behind proxies without modification)
-- **User accounts or roles**: Single token for all authenticated access
-- **Persistent session management**: Each request is independently authenticated
+- ✅ Check request log regularly for suspicious activity
+- ✅ Monitor `/metrics` for high failure rates or auth failures
+- ✅ Set up alerts for unusual patterns (rate limit violations, auth failures)
+- ✅ Review BLOCKED and AUTH FAILED entries in the log
 
-## Writing Scripts
+---
 
-**Python example with authentication:**
+## 💻 Client Examples
 
+The repository includes example clients in multiple languages.
+
+### Python
+
+**Files:**
+- `test-simple.py` - Basic Python client
+- `tests.py` - Comprehensive test suite
+
+**Usage:**
 ```python
 import requests
+import os
 
 # Read token from file
-with open(os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")) as f:
+token_path = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+with open(token_path) as f:
     token = f.read().strip()
 
-# Make authenticated request
+# Execute script
 response = requests.post(
     "http://127.0.0.1:18811/execute",
     headers={"X-API-Token": token},
@@ -516,301 +612,61 @@ response = requests.post(
 print(response.json())
 ```
 
-**Accessing arguments** inside a script (both `/execute` and registry execute):
+### JavaScript/Node.js
 
-```javascript
-var args = getArguments()[0];
-print("Hello, " + args.name);
-return args.value * 2;
-```
+**File:** `test-client.js`
 
-**Returning values** — wrap in an IIFE; do not use a bare top-level `return`:
-
-```javascript
-(function(){
-    var node = Scene.findNodeByLabel("FN Ethan");
-    return { label: node.getLabel(), pos: node.getWSPos() };
-})()
-```
-
-**Raising errors** — throw to populate the `error` field and set `success: false`:
-
-```javascript
-var args = getArguments()[0];
-if (!args.label) throw new Error("label is required");
-var node = Scene.findNodeByLabel(args.label);
-if (!node) throw "Node not found: " + args.label;
-return node.getLabel();
-```
-
-**Using `include`** — use `scriptFile` (not `script`) so `getScriptFileName()` resolves correctly:
-
-```javascript
-var includeDir = DzFile(getScriptFileName()).path();
-include(includeDir + "/utils.dsa");
-var args = getArguments()[0];
-return myUtilFunction(args);
-```
-
-**Python client with script registry** — register once, call many times:
-
-```python
-import requests, os
-
-token_path = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
-with open(token_path) as f:
-    token = f.read().strip()
-
-BASE = "http://127.0.0.1:18811"
-HEADERS = {"X-API-Token": token}
-
-def register_scripts():
-    requests.post(f"{BASE}/scripts/register", headers=HEADERS, json={
-        "name": "node-count",
-        "script": "(function(){ return Scene.getNumNodes(); })()"
-    })
-
-def call_script(name, args=None):
-    r = requests.post(f"{BASE}/scripts/{name}/execute",
-                      headers=HEADERS, json={"args": args or {}})
-    if r.status_code == 404:
-        register_scripts()  # DAZ Studio restarted, re-register
-        r = requests.post(f"{BASE}/scripts/{name}/execute",
-                          headers=HEADERS, json={"args": args or {}})
-    r.raise_for_status()
-    return r.json()["result"]
-
-register_scripts()
-print(call_script("node-count"))
-```
-
-## Troubleshooting
-
-### Server Won't Start
-
-**"Port already in use" or "Failed to bind":**
-- Another application is using port 18811 (or your configured port)
-- Check if another instance of DAZ Studio is running with the plugin active
-- Try a different port number in the configuration
-- On Windows: `netstat -ano | findstr :18811` to find what's using the port
-- On macOS/Linux: `lsof -i :18811` or `netstat -an | grep 18811`
-
-**Server starts but immediately stops:**
-- Check the DAZ Studio log for error messages
-- Verify you have permissions to bind to the configured host/port
-- On Unix/macOS, ports < 1024 require root privileges (use ports > 1024)
-
-### Connection Refused
-
-**Cannot connect from localhost:**
-- Verify the server is running (check UI status label)
-- Verify you're using the correct port (default: 18811)
-- Check host is set to `127.0.0.1` or `0.0.0.0`
-- Firewall may be blocking connections (add exception for DAZ Studio)
-
-**Cannot connect from remote machine:**
-- Verify host is set to `0.0.0.0` (not `127.0.0.1`)
-- Check IP whitelist includes the client IP address
-- Verify firewall rules allow incoming connections on the port
-- Verify network routing allows traffic between client and server
-
-### Authentication Errors (HTTP 401)
-
-**"Invalid or missing authentication token":**
-- Verify token file exists: `~/.daz3d/dazscriptserver_token.txt`
-- Copy token exactly from UI or file (no extra spaces or newlines)
-- Use correct header: `X-API-Token: <token>` or `Authorization: Bearer <token>`
-- If token file is corrupted, use "Regenerate" button in UI
-- Check authentication is enabled in the UI
-
-### HTTP 403 Forbidden
-
-**"IP not whitelisted":**
-- IP whitelist is enabled and your IP is not in the list
-- Add your client IP to the whitelist (comma-separated)
-- Check your actual IP (may be different from expected due to NAT/proxy)
-- Temporarily disable IP whitelist for testing (re-enable for production)
-
-### HTTP 429 Too Many Requests
-
-**"Rate limit exceeded":**
-- Per-IP rate limit is enabled and you've exceeded the limit
-- Wait for the time window to expire (default: 60 seconds)
-- Increase max requests or time window in configuration
-- Temporarily disable rate limiting for testing
-
-**"Maximum concurrent requests limit reached":**
-- Too many scripts are running simultaneously
-- Wait for some requests to complete
-- Increase max concurrent requests in Advanced Limits
-- Optimize scripts to run faster
-- Add delays between requests in client code
-
-### HTTP 413 Payload Too Large
-
-**"Request body too large":**
-- Request body exceeds configured max (default: 5MB)
-- Reduce request size or increase max body size in Advanced Limits
-- For large scripts, use `scriptFile` instead of inline `script`
-
-### Script Execution Errors
-
-**"Script execution failed" or error in response:**
-- Check the `error` field in the response for details (includes line number)
-- Verify script syntax is valid DazScript
-- Check that referenced files/assets exist
-- Review the `output` field for print statements that may indicate the issue
-- Test script manually in DAZ Studio Script IDE first
-
-**Script times out:**
-- Script takes longer than configured timeout (default: 30 seconds)
-- Increase timeout in configuration (max: 300 seconds)
-- Optimize script for better performance
-- Break long operations into multiple smaller requests
-
-### Token File Issues
-
-**Token file not created:**
-- Plugin may not have write permissions to home directory
-- Manually create `~/.daz3d/` directory
-- On Windows: `%USERPROFILE%\.daz3d\`
-- Check DAZ Studio log for permission errors
-
-**Token file permissions warning (Unix/macOS):**
-- Plugin automatically sets file to `chmod 600`
-- If warning persists, manually run: `chmod 600 ~/.daz3d/dazscriptserver_token.txt`
-
-## Frequently Asked Questions
-
-### Is this safe to use?
-
-The plugin is designed with security in mind:
-- Cryptographically secure API tokens
-- Optional IP whitelist and rate limiting
-- Input validation and size limits
-- Audit logging of all requests
-
-However, **any client with a valid token can execute arbitrary DazScript code**, which has full access to your DAZ Studio scene, file system (within script permissions), and system resources. Treat your API token like a password and only share it with trusted applications.
-
-### Can I use this in production?
-
-Yes, this plugin is production-ready with enterprise features:
-- Concurrent request limiting prevents resource exhaustion
-- Rate limiting prevents abuse
-- Health and metrics endpoints for monitoring
-- Configurable timeouts and limits
-- Comprehensive error handling and logging
-
-Many users run this plugin 24/7 for batch rendering, asset processing, and integration workflows.
-
-### What's the performance impact?
-
-**Minimal when idle**: The HTTP server runs in a background thread and uses negligible CPU when not processing requests.
-
-**Under load**: Performance depends on your scripts. The plugin itself adds < 10ms overhead per request. The limiting factor is usually the DazScript execution time and DAZ Studio's single-threaded scene graph operations.
-
-### Can I run multiple instances?
-
-No. Each DAZ Studio process can only load the plugin once. However, you can:
-- Run multiple DAZ Studio instances on different ports (separate processes)
-- Use the concurrent request limit to handle multiple simultaneous requests in a single instance
-
-### Does this work with DAZ Studio CLI/headless mode?
-
-The plugin requires the DAZ Studio GUI to be running (it's a pane plugin). For headless automation, you'll need to run DAZ Studio in a virtual display environment (Xvfb on Linux, hidden window on Windows).
-
-### Can I execute multiple scripts in parallel?
-
-Yes, up to the configured concurrent request limit (default: 10). However, note that:
-- All scripts execute on DAZ Studio's main thread (required by the SDK)
-- Scripts are executed serially, not truly in parallel
-- The concurrent limit prevents too many requests from queuing up
-- Heavy scene operations may block other requests
-
-### What DazScript features are supported?
-
-All standard DazScript features work:
-- Scene graph manipulation (load, modify, render)
-- File I/O operations
-- Include/import of other scripts (use `scriptFile` not inline `script`)
-- App objects and APIs
-- Print statements (captured in `output` array)
-
-The only difference from running scripts manually is that arguments are passed via the `args` JSON object instead of command-line parameters.
-
-### How do I debug scripts?
-
-1. **Use `print()` statements**: Captured in the response `output` array
-2. **Check the `error` field**: Includes line numbers for errors
-3. **Test scripts manually first**: Run in DAZ Studio Script IDE before automating
-4. **Check the UI request log**: Shows all requests with status and duration
-5. **Use the request_id**: Correlate requests between client logs and server logs
-
-### Can I trigger renders?
-
-Yes! You can execute any DazScript that renders:
-
-```javascript
-var args = getArguments()[0];
-Scene.load(args.scenePath);
-// Configure render settings
-var renderMgr = App.getRenderMgr();
-var renderOptions = renderMgr.getRenderOptions();
-renderOptions.setImageFilename(args.outputPath);
-// Trigger render
-renderMgr.doRender(renderOptions);
-return "Render complete";
-```
-
-Note: Renders block the request until complete. Use appropriate timeout settings (30-300 seconds).
-
-### What about error handling and retries?
-
-The plugin returns detailed error information in the response:
-- `success: false` indicates script execution failed
-- `error` field contains the error message and line number
-- `output` field may contain print statements before the error
-
-Implement retry logic in your client code for transient failures (429 rate limits, network errors). Don't retry 400 Bad Request or 401 Unauthorized errors.
-
-### How do I upgrade to a new version?
-
-1. Stop the server in DAZ Studio
-2. Close DAZ Studio
-3. Replace the plugin DLL/dylib in the plugins folder
-4. Restart DAZ Studio
-5. Start the server (your configuration is preserved via QSettings)
-
-Your API token and all settings are stored separately and will persist across upgrades.
-
-### Where are settings stored?
-
-All settings are stored via Qt's QSettings:
-- **Windows**: Registry key `HKEY_CURRENT_USER\Software\DAZ 3D\DazScriptServer`
-- **macOS**: `~/Library/Preferences/com.daz3d.DazScriptServer.plist`
-- **Linux**: `~/.config/DAZ 3D/DazScriptServer.conf`
-
-The API token is stored separately in `~/.daz3d/dazscriptserver_token.txt`.
-
-## Client Examples
-
-The repository includes example clients in multiple languages:
-
-**Python:**
-- `test-simple.py` - Basic Python client demonstrating authentication and script execution
-- `tests.py` - More comprehensive Python test suite
-
-**JavaScript/Node.js:**
-- `test-client.js` - Complete Node.js client with multiple examples
-- Demonstrates async/await, error handling, and argument passing
-- Requires: `npm install node-fetch` (or Node.js 18+ with built-in fetch)
-
-**PowerShell:**
-- `test-client.ps1` - PowerShell client for Windows automation
-- Works with PowerShell 5.1+ and PowerShell Core 6+
-- Demonstrates REST API calls, JSON handling, and error handling
+**Requirements:** Node.js 18+ (built-in fetch) or `npm install node-fetch`
 
 **Usage:**
+```javascript
+const fs = require('fs');
+const os = require('os');
+
+const tokenPath = `${os.homedir()}/.daz3d/dazscriptserver_token.txt`;
+const token = fs.readFileSync(tokenPath, 'utf8').trim();
+
+const response = await fetch('http://127.0.0.1:18811/execute', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Token': token
+  },
+  body: JSON.stringify({
+    script: "return 'Hello from Node.js';"
+  })
+});
+
+const result = await response.json();
+console.log(result);
+```
+
+### PowerShell
+
+**File:** `test-client.ps1`
+
+**Compatible:** PowerShell 5.1+ and PowerShell Core 6+
+
+**Usage:**
+```powershell
+$tokenPath = "$env:USERPROFILE\.daz3d\dazscriptserver_token.txt"
+$token = Get-Content $tokenPath
+
+$body = @{
+    script = "return 'Hello from PowerShell';"
+} | ConvertTo-Json
+
+$response = Invoke-RestMethod `
+    -Uri "http://127.0.0.1:18811/execute" `
+    -Method Post `
+    -Headers @{"X-API-Token" = $token} `
+    -ContentType "application/json" `
+    -Body $body
+
+$response
+```
+
+**Running examples:**
 ```bash
 # Python
 python test-simple.py
@@ -824,46 +680,387 @@ powershell -ExecutionPolicy Bypass -File test-client.ps1
 pwsh test-client.ps1
 ```
 
-All examples include:
-- API token authentication
-- Error handling
-- Argument passing
-- Output capture
-- Rate limiting demonstration
+All examples include error handling, argument passing, and output capture.
+
+---
+
+## Writing Scripts
+
+### Accessing Arguments
+
+Arguments are available via `getArguments()[0]`:
+
+```javascript
+var args = getArguments()[0];
+print("Hello, " + args.name);
+return args.value * 2;
+```
+
+### Returning Values
+
+Wrap scripts in an IIFE (Immediately Invoked Function Expression):
+
+```javascript
+(function(){
+    var node = Scene.findNodeByLabel("FN Ethan");
+    return {
+        label: node.getLabel(),
+        position: node.getWSPos()
+    };
+})()
+```
+
+### Error Handling
+
+Throw errors to populate the `error` field:
+
+```javascript
+var args = getArguments()[0];
+if (!args.label) {
+    throw new Error("label is required");
+}
+
+var node = Scene.findNodeByLabel(args.label);
+if (!node) {
+    throw "Node not found: " + args.label;
+}
+
+return node.getLabel();
+```
+
+### Using Include
+
+Use `scriptFile` (not inline `script`) for scripts that use `include()`:
+
+```javascript
+// File: /path/to/main.dsa
+var includeDir = DzFile(getScriptFileName()).path();
+include(includeDir + "/utils.dsa");
+
+var args = getArguments()[0];
+return myUtilFunction(args);
+```
+
+**Request:**
+```json
+{
+  "scriptFile": "/path/to/main.dsa",
+  "args": { "value": 42 }
+}
+```
+
+### Script Registry Pattern
+
+Register once, call many times:
+
+```python
+import requests
+import os
+
+token_path = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+with open(token_path) as f:
+    token = f.read().strip()
+
+BASE = "http://127.0.0.1:18811"
+HEADERS = {"X-API-Token": token}
+
+def register_scripts():
+    """Register all scripts on startup or after 404."""
+    requests.post(f"{BASE}/scripts/register", headers=HEADERS, json={
+        "name": "node-count",
+        "script": "(function(){ return Scene.getNumNodes(); })()"
+    })
+
+def call_script(name, args=None):
+    """Execute a registered script by name."""
+    r = requests.post(
+        f"{BASE}/scripts/{name}/execute",
+        headers=HEADERS,
+        json={"args": args or {}}
+    )
+
+    # Handle DAZ Studio restart (registry cleared)
+    if r.status_code == 404:
+        register_scripts()
+        r = requests.post(
+            f"{BASE}/scripts/{name}/execute",
+            headers=HEADERS,
+            json={"args": args or {}}
+        )
+
+    r.raise_for_status()
+    return r.json()["result"]
+
+# Initialize
+register_scripts()
+
+# Use
+node_count = call_script("node-count")
+print(f"Scene has {node_count} nodes")
+```
+
+### Rendering Example
+
+```javascript
+(function(){
+    var args = getArguments()[0];
+
+    // Load scene
+    Scene.load(args.scenePath);
+
+    // Configure render settings
+    var renderMgr = App.getRenderMgr();
+    var renderOptions = renderMgr.getRenderOptions();
+    renderOptions.setImageFilename(args.outputPath);
+    renderOptions.setImageSize(args.width, args.height);
+
+    // Trigger render (blocks until complete)
+    renderMgr.doRender(renderOptions);
+
+    return { status: "complete", output: args.outputPath };
+})()
+```
+
+**Note:** Renders block the request until complete. Use appropriate timeout settings (30-300 seconds).
+
+---
+
+## 🔧 Troubleshooting
+
+### Server Won't Start
+
+**"Port already in use" or "Failed to bind":**
+- Another application is using the port
+- Check if another DAZ Studio instance is running the plugin
+- Try a different port number
+- Check what's using the port:
+  - Windows: `netstat -ano | findstr :18811`
+  - macOS/Linux: `lsof -i :18811` or `netstat -an | grep 18811`
+
+**Server starts but immediately stops:**
+- Check DAZ Studio log for error messages
+- Verify permissions to bind to the configured host/port
+- Ports < 1024 require root privileges (use ports > 1024)
+
+### Connection Refused
+
+**Cannot connect from localhost:**
+- Verify server is running (check UI status)
+- Verify correct port (default: 18811)
+- Check host is `127.0.0.1` or `0.0.0.0`
+- Firewall may be blocking (add exception for DAZ Studio)
+
+**Cannot connect from remote machine:**
+- Verify host is `0.0.0.0` (not `127.0.0.1`)
+- Check IP whitelist includes client IP
+- Verify firewall allows incoming connections on the port
+- Verify network routing between client and server
+
+### Authentication Errors (HTTP 401)
+
+**"Invalid or missing authentication token":**
+- Verify token file exists: `~/.daz3d/dazscriptserver_token.txt`
+- Copy token exactly from UI or file (no extra spaces)
+- Use correct header: `X-API-Token: <token>` or `Authorization: Bearer <token>`
+- If token file is corrupted, use "Regenerate" button
+- Verify authentication is enabled in UI
+
+### HTTP 403 Forbidden
+
+**"IP not whitelisted":**
+- IP whitelist is enabled and your IP is not in the list
+- Add client IP to whitelist (comma-separated)
+- Check actual IP (may differ due to NAT/proxy)
+- Temporarily disable IP whitelist for testing
+
+### HTTP 429 Too Many Requests
+
+**"Rate limit exceeded":**
+- Per-IP rate limit exceeded
+- Wait for time window to expire (default: 60 seconds)
+- Increase max requests or time window
+- Temporarily disable rate limiting for testing
+
+**"Maximum concurrent requests limit reached":**
+- Too many scripts running simultaneously
+- Wait for requests to complete
+- Increase max concurrent requests
+- Optimize scripts for faster execution
+- Add delays between requests in client
+
+### HTTP 413 Payload Too Large
+
+**"Request body too large":**
+- Request exceeds configured max (default: 5MB)
+- Increase max body size in Advanced Limits
+- For large scripts, use `scriptFile` instead of inline `script`
+
+### Script Execution Errors
+
+**"Script execution failed" or error in response:**
+- Check `error` field for details (includes line number)
+- Verify script syntax is valid DazScript
+- Check referenced files/assets exist
+- Review `output` field for print statements
+- Test script manually in DAZ Studio Script IDE first
+
+**Script times out:**
+- Script exceeds timeout (default: 30 seconds)
+- Increase timeout in configuration (max: 300 seconds)
+- Optimize script performance
+- Break long operations into multiple smaller requests
+
+### Token File Issues
+
+**Token file not created:**
+- Plugin may lack write permissions to home directory
+- Manually create `~/.daz3d/` directory
+- Windows: `%USERPROFILE%\.daz3d\`
+- Check DAZ Studio log for permission errors
+
+**Token file permissions warning (Unix/macOS):**
+- Plugin automatically sets `chmod 600`
+- If warning persists: `chmod 600 ~/.daz3d/dazscriptserver_token.txt`
+
+---
+
+## ❓ Frequently Asked Questions
+
+### Is this safe to use?
+
+The plugin is designed with security in mind:
+- ✅ Cryptographically secure API tokens
+- ✅ Optional IP whitelist and rate limiting
+- ✅ Input validation and size limits
+- ✅ Audit logging of all requests
+
+**However:** Any client with a valid token can execute arbitrary DazScript code with full access to your DAZ Studio scene, file system (within script permissions), and system resources. **Treat your API token like a password** and only share it with trusted applications.
+
+### Can I use this in production?
+
+**Yes!** This plugin is production-ready:
+- Concurrent request limiting prevents resource exhaustion
+- Rate limiting prevents abuse
+- Health and metrics endpoints for monitoring
+- Configurable timeouts and limits
+- Comprehensive error handling and logging
+
+Many users run this plugin 24/7 for batch rendering, asset processing, and integration workflows.
+
+### What's the performance impact?
+
+**Idle:** Negligible CPU usage when not processing requests.
+
+**Under load:** Performance depends on your scripts. The plugin adds < 10ms overhead per request. The limiting factor is usually DazScript execution time and DAZ Studio's single-threaded scene graph operations.
+
+### Can I run multiple instances?
+
+No. Each DAZ Studio process can only load the plugin once.
+
+**Alternatives:**
+- Run multiple DAZ Studio instances on different ports (separate processes)
+- Use concurrent request limit for multiple simultaneous requests in one instance
+
+### Does this work with DAZ Studio CLI/headless mode?
+
+The plugin requires DAZ Studio GUI (it's a pane plugin). For headless automation, run DAZ Studio in a virtual display environment:
+- Linux: Xvfb
+- Windows: Hidden window
+
+### Can I execute multiple scripts in parallel?
+
+Yes, up to the configured concurrent request limit (default: 10).
+
+**Important notes:**
+- All scripts execute on DAZ Studio's main thread (SDK requirement)
+- Scripts are executed serially, not truly in parallel
+- The concurrent limit prevents too many requests from queuing
+- Heavy scene operations may block other requests
+
+### What DazScript features are supported?
+
+**All standard DazScript features work:**
+- Scene graph manipulation (load, modify, render)
+- File I/O operations
+- Include/import of other scripts (use `scriptFile`)
+- App objects and APIs
+- Print statements (captured in `output` array)
+
+The only difference from manual script execution is that arguments are passed via the `args` JSON object instead of command-line parameters.
+
+### How do I debug scripts?
+
+1. **Use `print()` statements** - Captured in response `output` array
+2. **Check the `error` field** - Includes line numbers
+3. **Test manually first** - Run in DAZ Studio Script IDE
+4. **Check UI request log** - Shows status and duration
+5. **Use `request_id`** - Correlate requests between client and server logs
+
+### Can I trigger renders?
+
+**Yes!** Execute any DazScript that renders:
+
+```javascript
+(function(){
+    var args = getArguments()[0];
+    Scene.load(args.scenePath);
+
+    var renderMgr = App.getRenderMgr();
+    var renderOptions = renderMgr.getRenderOptions();
+    renderOptions.setImageFilename(args.outputPath);
+
+    renderMgr.doRender(renderOptions);
+    return "Render complete";
+})()
+```
+
+**Note:** Renders block the request until complete. Use appropriate timeout settings.
+
+### How do I upgrade to a new version?
+
+1. Stop the server in DAZ Studio
+2. Close DAZ Studio
+3. Replace the plugin DLL/dylib in plugins folder
+4. Restart DAZ Studio
+5. Start the server
+
+Your API token and settings persist across upgrades (stored separately).
+
+### Where are settings stored?
+
+**Settings (QSettings):**
+- Windows: Registry key `HKEY_CURRENT_USER\Software\DAZ 3D\DazScriptServer`
+- macOS: `~/Library/Preferences/com.daz3d.DazScriptServer.plist`
+- Linux: `~/.config/DAZ 3D/DazScriptServer.conf`
+
+**API Token:**
+- All platforms: `~/.daz3d/dazscriptserver_token.txt`
+
+---
 
 ## Advanced Topics
-
-### Thread Safety
-
-The plugin uses a careful threading model to ensure thread safety:
-- **HTTP handlers** run on `std::thread`s spawned by cpp-httplib (not Qt threads)
-- **Script execution** happens on DAZ Studio's main Qt thread via `Qt::BlockingQueuedConnection`
-- **Request metrics** are protected by `QMutex` for thread-safe access
-- **Rate limit state** is protected by `QMutex` for concurrent access from HTTP threads
-
-This design ensures:
-- All DAZ Studio API calls happen on the main thread (required by DAZ SDK)
-- HTTP threads only parse request data and validate auth/limits
-- No race conditions in metrics, rate limiting, or request tracking
 
 ### Performance Tuning
 
 **For high-throughput scenarios:**
 - Increase max concurrent requests (default: 10, max: 50)
 - Increase timeout for long-running scripts
-- Enable rate limiting to prevent individual clients from monopolizing resources
-- Monitor `/metrics` endpoint to identify bottlenecks
+- Enable rate limiting to prevent monopolization
+- Monitor `/metrics` endpoint for bottlenecks
 
 **For resource-constrained environments:**
-- Decrease max concurrent requests to prevent memory exhaustion
-- Decrease max body size and script length to reduce memory usage
-- Decrease timeout to prevent long-running scripts from blocking
+- Decrease max concurrent requests
+- Decrease max body size and script length
+- Decrease timeout to prevent blocking
 
 ### Integration Patterns
 
-**Polling Pattern:**
+**Health Check / Polling:**
 ```python
-# Check if server is ready before sending requests
+import requests
+import time
+
+# Wait for server to be ready
 while True:
     try:
         response = requests.get("http://localhost:18811/health")
@@ -873,31 +1070,36 @@ while True:
         time.sleep(1)
 ```
 
-**Batch Processing:**
+**Batch Processing with Retries:**
 ```python
-# Process multiple items with error handling and retries
-for item in items:
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            result = execute_script(item)
-            break
-        except requests.HTTPError as e:
-            if e.response.status_code == 429:
-                time.sleep(5)  # Wait for rate limit
-            elif attempt == max_retries - 1:
-                log_error(item, e)
+import requests
+import time
+
+def process_batch(items, token):
+    for item in items:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = execute_script(item, token)
+                log_success(item, result)
+                break
+            except requests.HTTPError as e:
+                if e.response.status_code == 429:
+                    time.sleep(5)  # Wait for rate limit
+                elif attempt == max_retries - 1:
+                    log_error(item, e)
+                else:
+                    continue
 ```
 
-**Health Check Integration:**
+**Docker/Kubernetes Health Probe:**
 ```bash
-# Use in Docker/Kubernetes health probes
 curl -f http://localhost:18811/health || exit 1
 ```
 
 ### Reverse Proxy Setup (HTTPS)
 
-For production deployments with HTTPS, use a reverse proxy:
+For production deployments requiring HTTPS, use a reverse proxy:
 
 **nginx example:**
 ```nginx
@@ -913,35 +1115,39 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;  # For long-running scripts
     }
 }
 ```
 
-**Note**: The current version does not parse `X-Forwarded-For` for IP whitelist/rate limiting. The IP whitelist will see the reverse proxy's IP, not the original client IP. This is a known limitation suitable for simple deployments.
+**Important:** The current version does not parse `X-Forwarded-For` headers. IP whitelist and rate limiting will see the reverse proxy's IP, not the original client IP. This is a known limitation.
 
 ### Deployment Checklist
 
 When deploying to production:
+
 - [ ] Enable authentication (default)
 - [ ] Enable IP whitelist with specific allowed IPs
-- [ ] Enable rate limiting (e.g., 60/60s)
-- [ ] Set appropriate concurrent request limit for your workload
+- [ ] Enable rate limiting (e.g., 60 requests / 60 seconds)
+- [ ] Set appropriate concurrent request limit for workload
 - [ ] Configure timeout based on expected script duration
-- [ ] Secure token file permissions (chmod 600 on Unix/macOS)
+- [ ] Secure token file permissions (`chmod 600` on Unix/macOS)
 - [ ] Set up monitoring on `/health` and `/metrics` endpoints
 - [ ] Configure firewall rules to restrict port access
-- [ ] Test failover behavior (what happens when DAZ Studio crashes/restarts)
-- [ ] Document the token rotation procedure for your team
-- [ ] Consider HTTPS via reverse proxy for network-exposed deployments
+- [ ] Test failover behavior (DAZ Studio crashes/restarts)
+- [ ] Document token rotation procedure for team
+- [ ] Consider HTTPS via reverse proxy for network exposure
+
+---
 
 ## Contributing
 
-Contributions are welcome! Areas for improvement:
+Contributions are welcome! See areas for improvement:
 
 **Security:**
-- X-Forwarded-For support for IP whitelist behind reverse proxies
+- X-Forwarded-For support for reverse proxy deployments
 - Wildcard IP matching (e.g., `192.168.1.*`)
-- Per-endpoint authentication (allow `/health` and `/metrics` without auth)
+- Per-endpoint authentication policies
 - Token expiration and automatic rotation
 
 **Features:**
@@ -954,18 +1160,20 @@ Contributions are welcome! Areas for improvement:
 **Observability:**
 - Prometheus metrics endpoint format
 - Structured logging (JSON)
-- Request tracing with distributed trace IDs
+- Distributed tracing support
 
 **Developer Experience:**
 - Pre-built binaries for Windows/macOS
 - Docker image with DAZ Studio and plugin
 - More example clients (Go, Rust, C#)
 
-See `FUTURE_ENHANCEMENTS.md` for a complete list of planned features.
+See `FUTURE_ENHANCEMENTS.md` for a complete list of planned features (Phases 2-6).
 
-### Development Setup
+### Development
 
 For plugin development, see `CLAUDE.md` for detailed architecture notes and development guidelines.
+
+---
 
 ## License & Attribution
 
@@ -973,11 +1181,7 @@ This project is provided as-is for use with DAZ Studio.
 
 **Dependencies:**
 - [cpp-httplib](https://github.com/yhirose/cpp-httplib) - Header-only HTTP library (MIT License)
-  - Used for embedding the HTTP server
-  - No external dependencies, no compression enabled
 - [DAZ Studio SDK](https://www.daz3d.com/daz-studio-4-5-sdk) - Required for building
-  - Includes Qt 4.8 framework
-  - Includes DAZ core libraries (`dzcore`, `dpc`)
 
 **Platform APIs:**
 - Windows: CryptoAPI for secure random number generation

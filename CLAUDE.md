@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Branch Status
 
-**Current branch:** `Production-Ready-Improvements` (feature branch)
+**Current branch:** `master` (main branch)
 
-This branch extends the `feature_auth_support` branch with production-ready security, reliability, and maintainability improvements including cryptographically secure token generation, request queue limiting, observability endpoints, and centralized configuration.
+All production-ready security, reliability, and maintainability improvements have been merged to master, including cryptographically secure token generation, request queue limiting, observability endpoints, script registry, IP whitelist, rate limiting, and centralized configuration.
 
 ## Project Overview
 
@@ -264,9 +264,9 @@ Both accept optional `args` object, accessible in the script via `getArguments()
 - **Memory footprint**: ~8 bytes per timestamp, ~480KB worst case (1000 IPs × 60 timestamps)
 - **Logging**: Rate limit violations logged with timestamp and client IP
 
-## Production-Ready Improvements Summary
+## Production-Ready Feature Summary
 
-This branch (`Production-Ready-Improvements`) builds upon `feature_auth_support` with enterprise-grade enhancements:
+DazScriptServer v1.2.0 includes the following enterprise-grade features:
 
 **Security Enhancements (v1.1.0):**
 - Cryptographically secure token generation via OS crypto APIs (CryptoAPI on Windows, /dev/urandom on Unix/macOS)
@@ -307,9 +307,6 @@ This branch (`Production-Ready-Improvements`) builds upon `feature_auth_support`
 - Maintainability: 7/10 → 9/10
 - Overall: 6/10 → 9.2/10
 
-For detailed documentation, see:
-- `SECURITY_IMPROVEMENTS.md` - Security architecture details
-- `RELIABILITY_IMPROVEMENTS.md` - Reliability features
-- `IMPLEMENTATION_SUMMARY_SECURITY.md` - Implementation guide
-- `IMPROVEMENTS_SUMMARY.md` - Overall summary
-- `FUTURE_ENHANCEMENTS.md` - Planned future work
+For additional documentation, see:
+- `README.md` - User documentation and API reference
+- `FUTURE_ENHANCEMENTS.md` - Planned future enhancements (Phases 2-6)
