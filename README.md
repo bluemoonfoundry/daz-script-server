@@ -20,8 +20,9 @@ import requests
 
 response = requests.post(
     "http://127.0.0.1:18811/execute",
-    headers={"X-API-Token": "YOUR_TOKEN_HERE"},
-    json={"script": "return 'Hello from DAZ Studio!';"}
+    json = {
+        "script": "(function(){ return 'Hello there from Daz Studio!'; })()"
+    }    
 )
 print(response.json())
 ```
