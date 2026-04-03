@@ -654,7 +654,7 @@ $tokenPath = "$env:USERPROFILE\.daz3d\dazscriptserver_token.txt"
 $token = Get-Content $tokenPath
 
 $body = @{
-    script = ""(function(){ return 'Hello there from PowerShell!'; })()"
+    script = "(function(){ return 'Hello there from PowerShell!'; })()"
 } | ConvertTo-Json
 
 $response = Invoke-RestMethod `
