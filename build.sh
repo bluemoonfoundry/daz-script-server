@@ -11,6 +11,8 @@
 # Optional:
 #   DAZ_STUDIO_EXE_DIR  Path to DAZ Studio executable folder (needed for --install)
 
+. .env
+
 set -e
 
 echo "DAZ_SDK_DIR: ${DAZ_SDK_DIR:-<not set>}"

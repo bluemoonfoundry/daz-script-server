@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 1.2.0** | DAZ Studio 4.5+ | Windows & macOS
+**Version 1.3.0** | DAZ Studio 4.5+ | Windows & macOS
 
 A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
 
@@ -35,6 +35,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v1.3.0](#whats-new-in-v130)
 - [What's New in v1.2.0](#whats-new-in-v120)
 - [Requirements](#requirements)
 - [Building & Installation](#building--installation)
@@ -44,6 +45,7 @@ print(response.json())
 - [Configuration](#-configuration)
 - [API Reference](#-api-reference)
 - [Script Registry](#-script-registry)
+- [Async Operations](#-async-operations)
 - [Client Examples](#-client-examples)
 
 ### Security & Best Practices
@@ -80,6 +82,25 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v1.3.0
+
+### ⚡ Async Script Execution
+
+Long-running operations (renders, exports, batch jobs) no longer need to block the HTTP connection:
+
+- **`POST /execute/async`** — Submit any inline script asynchronously; returns a `request_id` immediately
+- **`POST /scripts/:id/async`** — Submit a registered script asynchronously
+- **`GET /requests/:id/status`** — Poll for progress (`queued`, `running`, `completed`, `failed`, `cancelled`)
+- **`GET /requests/:id/result`** — Fetch the final result; supports `?wait=true` to long-poll until complete
+- **`DELETE /requests/:id`** — Cancel a queued or running request
+- **`GET /requests`** — List all active and recently completed requests
+
+**Cancellation:** Queued requests are cancelled immediately. Running requests set a cancel flag and call `killRender()` — DAZ Studio honours the flag when the script returns.
+
+**TTL:** Completed, failed, and cancelled requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
 
 ---
 
@@ -287,7 +308,7 @@ All endpoints except `/status`, `/health`, and `/metrics` require authentication
 ```json
 {
   "running": true,
-  "version": "1.2.0"
+  "version": "1.3.0"
 }
 ```
 
@@ -302,7 +323,7 @@ All endpoints except `/status`, `/health`, and `/metrics` require authentication
 ```json
 {
   "status": "ok",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "running": true,
   "auth_enabled": true,
   "active_requests": 2,
@@ -514,6 +535,172 @@ The script registry allows you to register scripts once and execute them by name
   "error": "Script not found: 'scene-info'"
 }
 ```
+
+---
+
+## ⚡ Async Operations
+
+For long-running scripts (renders, exports, batch jobs), use the async endpoints to avoid blocking the HTTP connection. Scripts still execute serially on DAZ Studio's main thread — async means the HTTP response is returned immediately while execution is queued.
+
+**Typical async workflow:**
+
+```python
+import requests, time
+
+BASE = "http://127.0.0.1:18811"
+HEADERS = {"X-API-Token": token}
+
+# 1. Submit asynchronously
+r = requests.post(f"{BASE}/execute/async", headers=HEADERS,
+                  json={"script": "App.getRenderMgr().doRender(); return 'done';"})
+req_id = r.json()["request_id"]
+
+# 2. Poll until complete
+while True:
+    status = requests.get(f"{BASE}/requests/{req_id}/status", headers=HEADERS).json()
+    if status["status"] in ("completed", "failed", "cancelled"):
+        break
+    time.sleep(2)
+
+# 3. Fetch result
+result = requests.get(f"{BASE}/requests/{req_id}/result", headers=HEADERS).json()
+print(result["result"])
+```
+
+**Or use `?wait=true` to long-poll in one step:**
+
+```python
+result = requests.get(f"{BASE}/requests/{req_id}/result?wait=true&timeout=300",
+                      headers=HEADERS).json()
+```
+
+---
+
+### `POST /execute/async`
+
+**Purpose:** Submit an inline script for asynchronous execution
+**Authentication:** Required (if enabled)
+
+**Request Body:** Same as `POST /execute`
+
+**Response (immediate):**
+```json
+{
+  "request_id": "a3f2b891",
+  "status": "queued",
+  "submitted_at": "2026-04-09T10:15:00"
+}
+```
+
+---
+
+### `POST /scripts/:id/async`
+
+**Purpose:** Submit a registered script for asynchronous execution
+**Authentication:** Required (if enabled)
+
+**Request Body:** Same as `POST /scripts/:id/execute`
+
+**Response (immediate):** Same shape as `POST /execute/async`
+
+---
+
+### `GET /requests/:id/status`
+
+**Purpose:** Poll the status of an async request
+**Authentication:** Required (if enabled)
+
+**Response:**
+```json
+{
+  "request_id": "a3f2b891",
+  "status": "running",
+  "progress": 0.0,
+  "elapsed_ms": 1240,
+  "queue_position": 0
+}
+```
+
+**Status values:** `queued`, `running`, `completed`, `failed`, `cancelled`
+
+`queue_position` is only meaningful when `status` is `queued`.
+
+---
+
+### `GET /requests/:id/result`
+
+**Purpose:** Fetch the final result of an async request
+**Authentication:** Required (if enabled)
+
+**Query Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `wait` | `false` | Block until the request completes |
+| `timeout` | `300` | Max seconds to wait when `wait=true` |
+
+**Response (completed):**
+```json
+{
+  "success": true,
+  "result": "done",
+  "output": [],
+  "error": null,
+  "request_id": "a3f2b891",
+  "duration_ms": 45230,
+  "completed_at": "2026-04-09T10:15:47",
+  "status": "completed"
+}
+```
+
+Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
+
+---
+
+### `DELETE /requests/:id`
+
+**Purpose:** Cancel a queued or running async request
+**Authentication:** Required (if enabled)
+
+**Cancellation behaviour:**
+- `queued` → removed from queue immediately
+- `running` → cancel flag set + `killRender()` called; DAZ Studio honours the flag when the script returns
+
+**Response:**
+```json
+{
+  "request_id": "a3f2b891",
+  "status": "cancelled",
+  "cancelled_at": "2026-04-09T10:15:05"
+}
+```
+
+---
+
+### `GET /requests`
+
+**Purpose:** List all active and recently completed async requests
+**Authentication:** Required (if enabled)
+
+**Response:**
+```json
+{
+  "requests": [
+    {
+      "request_id": "a3f2b891",
+      "status": "running",
+      "submitted_at": "2026-04-09T10:15:00",
+      "elapsed_ms": 1240
+    }
+  ],
+  "total": 1,
+  "queued": 0,
+  "running": 1,
+  "completed": 0
+}
+```
+
+**Note:** Completed, failed, and cancelled requests are automatically purged after 1 hour.
 
 ---
 
