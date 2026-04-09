@@ -20,8 +20,9 @@ import requests
 
 response = requests.post(
     "http://127.0.0.1:18811/execute",
-    headers={"X-API-Token": "YOUR_TOKEN_HERE"},
-    json={"script": "return 'Hello from DAZ Studio!';"}
+    json = {
+        "script": "(function(){ return 'Hello there from Daz Studio!'; })()"
+    }    
 )
 print(response.json())
 ```
@@ -794,7 +795,7 @@ with open(token_path) as f:
 response = requests.post(
     "http://127.0.0.1:18811/execute",
     headers={"X-API-Token": token},
-    json={"script": "return 'Hello';", "args": {}}
+    json={"script": "(function(){ return 'Hello!'; })()", "args": {}}
 )
 print(response.json())
 ```
@@ -820,7 +821,7 @@ const response = await fetch('http://127.0.0.1:18811/execute', {
     'X-API-Token': token
   },
   body: JSON.stringify({
-    script: "return 'Hello from Node.js';"
+    script: "(function(){ return 'Hello from Node.js!'; })()"
   })
 });
 
@@ -840,7 +841,7 @@ $tokenPath = "$env:USERPROFILE\.daz3d\dazscriptserver_token.txt"
 $token = Get-Content $tokenPath
 
 $body = @{
-    script = "return 'Hello from PowerShell';"
+    script = "(function(){ return 'Hello there from PowerShell!'; })()"
 } | ConvertTo-Json
 
 $response = Invoke-RestMethod `
