@@ -555,8 +555,9 @@ void DzScriptServerPane::setupRoutes()
 {
 	// ─── GET /status ──────────────────────────────────────────────────────────
 	m_pServer->Get("/status", [](const httplib::Request&, httplib::Response& res) {
-		res.set_content("{\"running\":true,\"version\":\"1.1.0\"}",
-		                "application/json");
+		res.set_content(
+			std::string("{\"running\":true,\"version\":\"") + DZSRV_VERSION_STR + "\"}",
+			"application/json");
 	});
 
 	// ─── GET /health ──────────────────────────────────────────────────────────
