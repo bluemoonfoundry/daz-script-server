@@ -23,6 +23,7 @@ Options:
   --verbose          Pass --verbose to the CMake build step
   --title <title>    Release title (release command only; defaults to <tag>)
   --notes <text>     Release notes text (release command only)
+  --update           Update an existing release instead of creating a new one (release command only)
   --help             Show this help message and exit
 
 Examples:
@@ -62,6 +63,7 @@ OPT_CLEAN=0
 OPT_RECONFIGURE=0
 OPT_DEBUG=0
 OPT_VERBOSE=0
+OPT_UPDATE=0
 OPT_TITLE=""
 OPT_NOTES=""
 
@@ -71,6 +73,7 @@ while [[ $# -gt 0 ]]; do
         --reconfigure) OPT_RECONFIGURE=1;                                shift ;;
         --debug)       OPT_DEBUG=1;                                      shift ;;
         --verbose)     OPT_VERBOSE=1;                                    shift ;;
+        --update)      OPT_UPDATE=1;                                     shift ;;
         --title)       OPT_TITLE="${2:?'--title requires a value'}";     shift 2 ;;
         --notes)       OPT_NOTES="${2:?'--notes requires a value'}";     shift 2 ;;
         --help|-h)     usage; exit 0 ;;
@@ -205,11 +208,14 @@ if [ "$COMMAND" = "release" ]; then
         exit 1
     fi
 
-    RELEASE_TITLE="${OPT_TITLE:-$RELEASE_TAG}"
-
-    GH_ARGS=("release" "create" "$RELEASE_TAG" "$ARTIFACT" "--title" "$RELEASE_TITLE")
-    [ -n "$OPT_NOTES" ] && GH_ARGS+=("--notes" "$OPT_NOTES")
-
-    echo "Creating GitHub release $RELEASE_TAG and attaching $ARTIFACT..."
+    if [ "$OPT_UPDATE" = 1 ]; then
+        GH_ARGS=("release" "upload" "$RELEASE_TAG" "$ARTIFACT" "--clobber")
+        echo "Updating GitHub release $RELEASE_TAG with $ARTIFACT..."
+    else
+        RELEASE_TITLE="${OPT_TITLE:-$RELEASE_TAG}"
+        GH_ARGS=("release" "create" "$RELEASE_TAG" "$ARTIFACT" "--title" "$RELEASE_TITLE")
+        [ -n "$OPT_NOTES" ] && GH_ARGS+=("--notes" "$OPT_NOTES")
+        echo "Creating GitHub release $RELEASE_TAG and attaching $ARTIFACT..."
+    fi
     gh "${GH_ARGS[@]}"
 fi
