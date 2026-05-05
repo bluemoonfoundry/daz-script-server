@@ -22,21 +22,36 @@ cmake -B build -S . -DDAZ_SDK_DIR="C:/path/to/DAZStudio4.5+ SDK"
 
 # Build Release
 cmake --build build --config Release
-
-# Or use the convenience script (auto-detects cmake):
-./build.sh
 ```
 
 Output: `build/lib/Release/DazScriptServer.dll` (Windows) or `build/lib/DazScriptServer.dylib` (macOS).
 
-To install directly into DAZ Studio's plugins folder:
-```bash
-cmake -B build -S . -DDAZ_SDK_DIR="..." -DINSTALL_TO_DAZ=ON -DDAZ_STUDIO_EXE_DIR="C:/Program Files/DAZ/Studio4"
-cmake --build build --config Release --target install
+### build.sh convenience script
 
-# Or with build.sh:
-./build.sh --install
+`build.sh` auto-detects CMake, loads environment variables from `.env`, and supports the following options:
+
+| Option | Description |
+|---|---|
+| *(none)* | Configure (if needed) and build Release |
+| `--install` | Build and copy plugin to DAZ Studio plugins folder; errors if DAZ Studio is running |
+| `--clean` | Delete the build directory, reconfigure, and build |
+| `--clean-only` | Delete the build directory and exit (no build) |
+| `--reconfigure` | Force CMake configure even if a cache already exists |
+| `--debug` | Build Debug config instead of Release |
+| `--verbose` | Pass `--verbose` to the CMake build step |
+| `--help` | Show usage and exit |
+
+Options can be combined: `./build.sh --clean --install`, `./build.sh --reconfigure --debug --verbose`
+
+```bash
+# Simple build
+./build.sh
+
+# Clean build and install to DAZ Studio (DAZ Studio must not be running)
+./build.sh --clean --install
 ```
+
+To install directly into DAZ Studio's plugins folder, set `DAZ_STUDIO_EXE_DIR` in `.env` (or the environment) before running `--install`. The script will detect if DAZ Studio is running and exit with a clear error rather than failing at link time.
 
 Default install path: `C:\Program Files (x86)\DAZ\Studio4\plugins\`.
 
