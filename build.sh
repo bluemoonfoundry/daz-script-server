@@ -11,18 +11,22 @@ usage() {
 Usage: ./build.sh [options]
 
 Options:
-  (none)           Configure (if needed) and build Release
-  --install        Build Release and install DLL to DAZ Studio plugins folder
-  --clean          Delete the build directory, reconfigure, and build
-  --clean-only     Delete the build directory and exit (no build)
-  --reconfigure    Force CMake configure even if a cache already exists
-  --debug          Build Debug config instead of Release
-  --verbose        Pass --verbose to the CMake build step
-  --help           Show this help message and exit
+  (none)                   Configure (if needed) and build Release
+  --install                Build Release and install plugin to DAZ Studio plugins folder
+  --clean                  Delete the build directory, reconfigure, and build
+  --clean-only             Delete the build directory and exit (no build)
+  --reconfigure            Force CMake configure even if a cache already exists
+  --debug                  Build Debug config instead of Release
+  --verbose                Pass --verbose to the CMake build step
+  --release <tag>          Build, then create a GitHub release and attach the plugin
+  --release-title <title>  Title for the GitHub release (defaults to <tag>)
+  --release-notes <notes>  Notes text for the GitHub release
+  --help                   Show this help message and exit
 
 Options can be combined, e.g.:
   ./build.sh --clean --install
   ./build.sh --reconfigure --debug --verbose
+  ./build.sh --release v1.3.0 --release-title "v1.3.0" --release-notes "Bug fixes"
 
 Required environment variables (loaded from .env if present):
   DAZ_SDK_DIR          Path to the DAZStudio4.5+ SDK
@@ -39,18 +43,24 @@ OPT_CLEAN_ONLY=0
 OPT_RECONFIGURE=0
 OPT_DEBUG=0
 OPT_VERBOSE=0
+OPT_RELEASE=""
+OPT_RELEASE_TITLE=""
+OPT_RELEASE_NOTES=""
 
-for arg in "$@"; do
-    case "$arg" in
-        --install)     OPT_INSTALL=1 ;;
-        --clean)       OPT_CLEAN=1 ;;
-        --clean-only)  OPT_CLEAN_ONLY=1 ;;
-        --reconfigure) OPT_RECONFIGURE=1 ;;
-        --debug)       OPT_DEBUG=1 ;;
-        --verbose)     OPT_VERBOSE=1 ;;
-        --help|-h)     usage; exit 0 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --install)        OPT_INSTALL=1;               shift ;;
+        --clean)          OPT_CLEAN=1;                 shift ;;
+        --clean-only)     OPT_CLEAN_ONLY=1;            shift ;;
+        --reconfigure)    OPT_RECONFIGURE=1;           shift ;;
+        --debug)          OPT_DEBUG=1;                 shift ;;
+        --verbose)        OPT_VERBOSE=1;               shift ;;
+        --release)        OPT_RELEASE="${2:?'--release requires a tag argument'}";        shift 2 ;;
+        --release-title)  OPT_RELEASE_TITLE="${2:?'--release-title requires a value'}";  shift 2 ;;
+        --release-notes)  OPT_RELEASE_NOTES="${2:?'--release-notes requires a value'}";  shift 2 ;;
+        --help|-h)        usage; exit 0 ;;
         *)
-            echo "Error: unknown option '$arg'" >&2
+            echo "Error: unknown option '$1'" >&2
             echo "Run './build.sh --help' for usage." >&2
             exit 1
             ;;
@@ -153,4 +163,31 @@ else
     else
         echo "Output: $BUILD_DIR/lib/DazScriptServer.dylib (copy to plugins/DazScriptServer/ in DAZ Studio folder)"
     fi
+fi
+
+# ── GitHub Release ────────────────────────────────────────────────────────────
+if [ -n "$OPT_RELEASE" ]; then
+    if ! command -v gh &>/dev/null; then
+        echo "Error: 'gh' CLI not found. Install it from https://cli.github.com" >&2
+        exit 1
+    fi
+
+    if [ "$PLATFORM" = "win" ]; then
+        ARTIFACT="$BUILD_DIR/lib/$BUILD_CONFIG/DazScriptServer.dll"
+    else
+        ARTIFACT="$BUILD_DIR/lib/DazScriptServer.dylib"
+    fi
+
+    if [ ! -f "$ARTIFACT" ]; then
+        echo "Error: build artifact not found: $ARTIFACT" >&2
+        exit 1
+    fi
+
+    RELEASE_TITLE="${OPT_RELEASE_TITLE:-$OPT_RELEASE}"
+
+    GH_ARGS=("release" "create" "$OPT_RELEASE" "$ARTIFACT" "--title" "$RELEASE_TITLE")
+    [ -n "$OPT_RELEASE_NOTES" ] && GH_ARGS+=("--notes" "$OPT_RELEASE_NOTES")
+
+    echo "Creating GitHub release $OPT_RELEASE and attaching $ARTIFACT..."
+    gh "${GH_ARGS[@]}"
 fi
