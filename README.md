@@ -159,20 +159,38 @@ All settings (security, limits, monitoring) are saved via QSettings and restored
 
 ### build.sh convenience script
 
-`build.sh` auto-detects CMake and loads environment variables from `.env`. All options can be combined.
+`build.sh` auto-detects CMake and loads environment variables from `.env`.
+
+**Commands** (first positional argument; defaults to `build`):
+
+| Command | Description |
+|---|---|
+| `build` | Configure (if needed) and build (default) |
+| `install` | Build and copy plugin to DAZ Studio plugins folder |
+| `clean` | Delete the build directory and exit |
+| `release <tag>` | Build, then create a GitHub release and attach the plugin |
+
+**Options** (flags, combinable with any command):
 
 | Option | Description |
 |---|---|
-| *(none)* | Configure (if needed) and build Release |
-| `--install` | Build and copy plugin to DAZ Studio plugins folder |
-| `--clean` | Delete the build directory, reconfigure, and build |
-| `--clean-only` | Delete the build directory and exit (no build) |
+| `--clean` | Wipe the build directory before building |
 | `--reconfigure` | Force CMake configure even if a cache already exists |
 | `--debug` | Build Debug config instead of Release |
 | `--verbose` | Pass `--verbose` to the CMake build step |
+| `--title <title>` | Release title (`release` only; defaults to tag) |
+| `--notes <text>` | Release notes text (`release` only) |
+| `--update` | Update an existing release instead of creating a new one (`release` only) |
 | `--help` | Show usage and exit |
 
-> **Note:** `--install` requires DAZ Studio to be closed. The script detects if it is running and exits with a clear error rather than failing at link time.
+```bash
+./build.sh                                             # build
+./build.sh build --clean --debug
+./build.sh install --clean                             # DAZ Studio must not be running
+./build.sh clean
+./build.sh release v1.3.0 --title "v1.3.0" --notes "Bug fixes"
+./build.sh release v1.3.0 --update                    # replace asset on existing release
+```
 
 ### Installation
 
@@ -183,11 +201,13 @@ Copy the built plugin to DAZ Studio's plugins folder:
 
 **Or build and install in one step** (set `DAZ_STUDIO_EXE_DIR` in `.env` first):
 ```bash
-./build.sh --install
+./build.sh install
 
 # Clean build + install
-./build.sh --clean --install
+./build.sh install --clean
 ```
+
+> **Note:** `install` requires DAZ Studio to be closed. The script detects if it is running and exits with a clear error rather than failing at link time.
 
 ---
 
