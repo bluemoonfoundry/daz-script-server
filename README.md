@@ -157,10 +157,22 @@ All settings (security, limits, monitoring) are saved via QSettings and restored
 
    Output: `build/lib/Release/DazScriptServer.dll` (Windows) or `build/lib/DazScriptServer.dylib` (macOS)
 
-**Convenience script** (auto-detects CMake):
-```bash
-./build.sh
-```
+### build.sh convenience script
+
+`build.sh` auto-detects CMake and loads environment variables from `.env`. All options can be combined.
+
+| Option | Description |
+|---|---|
+| *(none)* | Configure (if needed) and build Release |
+| `--install` | Build and copy plugin to DAZ Studio plugins folder |
+| `--clean` | Delete the build directory, reconfigure, and build |
+| `--clean-only` | Delete the build directory and exit (no build) |
+| `--reconfigure` | Force CMake configure even if a cache already exists |
+| `--debug` | Build Debug config instead of Release |
+| `--verbose` | Pass `--verbose` to the CMake build step |
+| `--help` | Show usage and exit |
+
+> **Note:** `--install` requires DAZ Studio to be closed. The script detects if it is running and exits with a clear error rather than failing at link time.
 
 ### Installation
 
@@ -169,13 +181,12 @@ Copy the built plugin to DAZ Studio's plugins folder:
 - **Windows:** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
 - **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
 
-**Or build and install in one step:**
+**Or build and install in one step** (set `DAZ_STUDIO_EXE_DIR` in `.env` first):
 ```bash
-cmake -B build -S . \
-  -DDAZ_SDK_DIR="C:/path/to/SDK" \
-  -DDAZ_STUDIO_EXE_DIR="C:/Program Files/DAZ 3D/DAZStudio4"
-
 ./build.sh --install
+
+# Clean build + install
+./build.sh --clean --install
 ```
 
 ---
