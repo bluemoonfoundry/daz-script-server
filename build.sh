@@ -8,57 +8,72 @@ BUILD_DIR="$SCRIPT_DIR/build"
 
 usage() {
     cat <<EOF
-Usage: ./build.sh [options]
+Usage: ./build.sh [command] [options]
+
+Commands:
+  build              Configure (if needed) and build (default)
+  install            Build and copy plugin to DAZ Studio plugins folder
+  clean              Delete the build directory and exit
+  release <tag>      Build, then create a GitHub release and attach the plugin
 
 Options:
-  (none)                   Configure (if needed) and build Release
-  --install                Build Release and install plugin to DAZ Studio plugins folder
-  --clean                  Delete the build directory, reconfigure, and build
-  --clean-only             Delete the build directory and exit (no build)
-  --reconfigure            Force CMake configure even if a cache already exists
-  --debug                  Build Debug config instead of Release
-  --verbose                Pass --verbose to the CMake build step
-  --release <tag>          Build, then create a GitHub release and attach the plugin
-  --release-title <title>  Title for the GitHub release (defaults to <tag>)
-  --release-notes <notes>  Notes text for the GitHub release
-  --help                   Show this help message and exit
+  --clean            Wipe the build directory before building
+  --reconfigure      Force CMake configure even if a cache already exists
+  --debug            Build Debug config instead of Release
+  --verbose          Pass --verbose to the CMake build step
+  --title <title>    Release title (release command only; defaults to <tag>)
+  --notes <text>     Release notes text (release command only)
+  --help             Show this help message and exit
 
-Options can be combined, e.g.:
-  ./build.sh --clean --install
-  ./build.sh --reconfigure --debug --verbose
-  ./build.sh --release v1.3.0 --release-title "v1.3.0" --release-notes "Bug fixes"
+Examples:
+  ./build.sh
+  ./build.sh build --clean --debug
+  ./build.sh install --clean
+  ./build.sh clean
+  ./build.sh release v1.3.0 --title "v1.3.0" --notes "Bug fixes"
 
 Required environment variables (loaded from .env if present):
   DAZ_SDK_DIR          Path to the DAZStudio4.5+ SDK
 
 Optional environment variables:
-  DAZ_STUDIO_EXE_DIR   Path to DAZ Studio executable folder (required for --install)
+  DAZ_STUDIO_EXE_DIR   Path to DAZ Studio executable folder (required for install)
 EOF
 }
 
-# Parse flags
-OPT_INSTALL=0
+# ── Parse command ─────────────────────────────────────────────────────────────
+COMMAND="build"
+RELEASE_TAG=""
+
+if [[ $# -gt 0 && "$1" != --* && "$1" != "-h" ]]; then
+    COMMAND="$1"
+    shift
+    if [ "$COMMAND" = "release" ]; then
+        if [[ $# -eq 0 || "$1" == --* ]]; then
+            echo "Error: 'release' requires a tag argument, e.g.: ./build.sh release v1.3.0" >&2
+            exit 1
+        fi
+        RELEASE_TAG="$1"
+        shift
+    fi
+fi
+
+# ── Parse options ─────────────────────────────────────────────────────────────
 OPT_CLEAN=0
-OPT_CLEAN_ONLY=0
 OPT_RECONFIGURE=0
 OPT_DEBUG=0
 OPT_VERBOSE=0
-OPT_RELEASE=""
-OPT_RELEASE_TITLE=""
-OPT_RELEASE_NOTES=""
+OPT_TITLE=""
+OPT_NOTES=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --install)        OPT_INSTALL=1;               shift ;;
-        --clean)          OPT_CLEAN=1;                 shift ;;
-        --clean-only)     OPT_CLEAN_ONLY=1;            shift ;;
-        --reconfigure)    OPT_RECONFIGURE=1;           shift ;;
-        --debug)          OPT_DEBUG=1;                 shift ;;
-        --verbose)        OPT_VERBOSE=1;               shift ;;
-        --release)        OPT_RELEASE="${2:?'--release requires a tag argument'}";        shift 2 ;;
-        --release-title)  OPT_RELEASE_TITLE="${2:?'--release-title requires a value'}";  shift 2 ;;
-        --release-notes)  OPT_RELEASE_NOTES="${2:?'--release-notes requires a value'}";  shift 2 ;;
-        --help|-h)        usage; exit 0 ;;
+        --clean)       OPT_CLEAN=1;                                      shift ;;
+        --reconfigure) OPT_RECONFIGURE=1;                                shift ;;
+        --debug)       OPT_DEBUG=1;                                      shift ;;
+        --verbose)     OPT_VERBOSE=1;                                    shift ;;
+        --title)       OPT_TITLE="${2:?'--title requires a value'}";     shift 2 ;;
+        --notes)       OPT_NOTES="${2:?'--notes requires a value'}";     shift 2 ;;
+        --help|-h)     usage; exit 0 ;;
         *)
             echo "Error: unknown option '$1'" >&2
             echo "Run './build.sh --help' for usage." >&2
@@ -67,7 +82,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Load .env if present
+# Validate command
+case "$COMMAND" in
+    build|install|clean|release) ;;
+    *)
+        echo "Error: unknown command '$COMMAND'" >&2
+        echo "Run './build.sh --help' for usage." >&2
+        exit 1
+        ;;
+esac
+
+# ── Environment ───────────────────────────────────────────────────────────────
 if [ -f "$SCRIPT_DIR/.env" ]; then
     . "$SCRIPT_DIR/.env"
 fi
@@ -91,65 +116,72 @@ else
     exit 1
 fi
 
-# --clean-only: wipe build dir and exit
-if [ "$OPT_CLEAN_ONLY" = 1 ]; then
+# Artifact path (used by build output message and release command)
+if [ "$PLATFORM" = "win" ]; then
+    BUILD_CONFIG="Release"
+    [ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
+    ARTIFACT="$BUILD_DIR/lib/$BUILD_CONFIG/DazScriptServer.dll"
+else
+    BUILD_CONFIG="Release"
+    [ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
+    ARTIFACT="$BUILD_DIR/lib/DazScriptServer.dylib"
+fi
+
+# ── clean command ─────────────────────────────────────────────────────────────
+if [ "$COMMAND" = "clean" ]; then
     echo "Removing build directory: $BUILD_DIR"
     rm -rf "$BUILD_DIR"
     echo "Done."
     exit 0
 fi
 
-# --clean: wipe build dir before proceeding
+# ── Wipe before build (--clean option) ───────────────────────────────────────
 if [ "$OPT_CLEAN" = 1 ]; then
     echo "Removing build directory: $BUILD_DIR"
     rm -rf "$BUILD_DIR"
 fi
 
-# Build up common cmake -D flags from environment variables
+# ── CMake configure ───────────────────────────────────────────────────────────
 CMAKE_FLAGS=()
-[ -n "$DAZ_SDK_DIR" ] && CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR")
+[ -n "$DAZ_SDK_DIR" ]        && CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR")
 [ -n "$DAZ_STUDIO_EXE_DIR" ] && CMAKE_FLAGS+=("-DDAZ_STUDIO_EXE_DIR=$DAZ_STUDIO_EXE_DIR")
-[ "$OPT_INSTALL" = 1 ] && CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=ON")
+[ "$COMMAND" = "install" ]   && CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=ON")
 
-# Determine build config
-BUILD_CONFIG="Release"
-[ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
-
-# Configure if needed: no cache, missing project files, --reconfigure, or --clean just wiped it
-NEEDS_CONFIGURE=0
 if [ "$PLATFORM" = "win" ]; then
     STALE_CHECK="$BUILD_DIR/ALL_BUILD.vcxproj"
 else
     STALE_CHECK="$BUILD_DIR/Makefile"
 fi
+
+NEEDS_CONFIGURE=0
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ] || [ ! -f "$STALE_CHECK" ]; then
     NEEDS_CONFIGURE=1
 fi
-# --install changes the output directory at configure time, so always reconfigure
-[ "$OPT_RECONFIGURE" = 1 ] && NEEDS_CONFIGURE=1
-[ "$OPT_INSTALL" = 1 ] && NEEDS_CONFIGURE=1
+# install changes the output directory at configure time, so always reconfigure
+[ "$OPT_RECONFIGURE" = 1 ]   && NEEDS_CONFIGURE=1
+[ "$COMMAND" = "install" ]   && NEEDS_CONFIGURE=1
 
 if [ "$NEEDS_CONFIGURE" = 1 ]; then
     echo "Running CMake configure..."
     "$CMAKE" -B "$BUILD_DIR" -S "$SCRIPT_DIR" "${CMAKE_FLAGS[@]}"
 fi
 
-# Build
+# ── Build ─────────────────────────────────────────────────────────────────────
 BUILD_ARGS=("--build" "$BUILD_DIR" "--config" "$BUILD_CONFIG")
 [ "$OPT_VERBOSE" = 1 ] && BUILD_ARGS+=("--verbose")
 
-if [ "$OPT_INSTALL" = 1 ]; then
+if [ "$COMMAND" = "install" ]; then
     # DAZ Studio locks the plugin while running — catch this before the linker does
     if [ "$PLATFORM" = "win" ]; then
         if tasklist //FI "IMAGENAME eq DAZStudio4.exe" 2>/dev/null | grep -qi "DAZStudio4.exe"; then
             echo "Error: DAZ Studio is currently running." >&2
-            echo "Close DAZ Studio before installing, then re-run: ./build.sh --install" >&2
+            echo "Close DAZ Studio before installing, then re-run: ./build.sh install" >&2
             exit 1
         fi
     else
         if pgrep -qx "DAZ Studio" 2>/dev/null; then
             echo "Error: DAZ Studio is currently running." >&2
-            echo "Close DAZ Studio before installing, then re-run: ./build.sh --install" >&2
+            echo "Close DAZ Studio before installing, then re-run: ./build.sh install" >&2
             exit 1
         fi
     fi
@@ -158,24 +190,14 @@ if [ "$OPT_INSTALL" = 1 ]; then
 else
     echo "Building ($BUILD_CONFIG)..."
     "$CMAKE" "${BUILD_ARGS[@]}"
-    if [ "$PLATFORM" = "win" ]; then
-        echo "Output: $BUILD_DIR/lib/$BUILD_CONFIG/DazScriptServer.dll (copy to plugins/DazScriptServer/ in DAZ Studio folder)"
-    else
-        echo "Output: $BUILD_DIR/lib/DazScriptServer.dylib (copy to plugins/DazScriptServer/ in DAZ Studio folder)"
-    fi
+    echo "Output: $ARTIFACT"
 fi
 
-# ── GitHub Release ────────────────────────────────────────────────────────────
-if [ -n "$OPT_RELEASE" ]; then
+# ── release command ───────────────────────────────────────────────────────────
+if [ "$COMMAND" = "release" ]; then
     if ! command -v gh &>/dev/null; then
         echo "Error: 'gh' CLI not found. Install it from https://cli.github.com" >&2
         exit 1
-    fi
-
-    if [ "$PLATFORM" = "win" ]; then
-        ARTIFACT="$BUILD_DIR/lib/$BUILD_CONFIG/DazScriptServer.dll"
-    else
-        ARTIFACT="$BUILD_DIR/lib/DazScriptServer.dylib"
     fi
 
     if [ ! -f "$ARTIFACT" ]; then
@@ -183,11 +205,11 @@ if [ -n "$OPT_RELEASE" ]; then
         exit 1
     fi
 
-    RELEASE_TITLE="${OPT_RELEASE_TITLE:-$OPT_RELEASE}"
+    RELEASE_TITLE="${OPT_TITLE:-$RELEASE_TAG}"
 
-    GH_ARGS=("release" "create" "$OPT_RELEASE" "$ARTIFACT" "--title" "$RELEASE_TITLE")
-    [ -n "$OPT_RELEASE_NOTES" ] && GH_ARGS+=("--notes" "$OPT_RELEASE_NOTES")
+    GH_ARGS=("release" "create" "$RELEASE_TAG" "$ARTIFACT" "--title" "$RELEASE_TITLE")
+    [ -n "$OPT_NOTES" ] && GH_ARGS+=("--notes" "$OPT_NOTES")
 
-    echo "Creating GitHub release $OPT_RELEASE and attaching $ARTIFACT..."
+    echo "Creating GitHub release $RELEASE_TAG and attaching $ARTIFACT..."
     gh "${GH_ARGS[@]}"
 fi
