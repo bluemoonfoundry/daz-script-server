@@ -27,7 +27,7 @@ response = requests.post(
 print(response.json())
 ```
 
-**Need to build and install?** Jump to [Building & Installation](#building--installation) below.
+**Need to get the plugin?** Jump to [Getting the Plugin](#building--installation) below.
 
 ---
 
@@ -39,7 +39,7 @@ print(response.json())
 - [What's New in v1.3.0](#whats-new-in-v130)
 - [What's New in v1.2.0](#whats-new-in-v120)
 - [Requirements](#requirements)
-- [Building & Installation](#building--installation)
+- [Getting the Plugin](#building--installation)
 
 ### Using the Plugin
 - [Starting the Server](#starting-the-server)
@@ -139,9 +139,11 @@ All settings (security, limits, monitoring) are saved via QSettings and restored
 
 ---
 
-## Building & Installation
+## Getting the Plugin
 
-### Download a pre-build release
+There are two options for getting the plugin. For most users, Option A, downloading a pre-built release, is the easiest route. 
+
+### A. Download a pre-built release
 
 1. Browse to tha latest stable release page: https://github.com/bluemoonfoundry/daz-script-server/releases/latest
 2. Scroll down to the Assets section and download the DazScriptServer.dll file to your local hard drive
@@ -150,7 +152,7 @@ All settings (security, limits, monitoring) are saved via QSettings and restored
     - **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
     - Unsure where you DAZ Studio is installed? Right-click on its icon and select 'Properties', the click on 'Open File Location'
 
-### Building from Source
+### B. Building it yourself from source
 
 1. **Download the DAZ Studio SDK** from the [DAZ Developer portal](https://www.daz3d.com/daz-studio-4-5-sdk)
 
