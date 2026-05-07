@@ -141,6 +141,15 @@ All settings (security, limits, monitoring) are saved via QSettings and restored
 
 ## Building & Installation
 
+### Download a pre-build release
+
+1. Browse to tha latest stable release page: https://github.com/bluemoonfoundry/daz-script-server/releases/latest
+2. Scroll down to the Assets section and download the DazScriptServer.dll file to your local hard drive
+3. Copy the .dll file from the downloaded location to the plugins/ folder in your DAZ Studio folder. For example:
+    - **Windows:** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
+    - **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
+    - Unsure where you DAZ Studio is installed? Right-click on its icon and select 'Properties', the click on 'Open File Location'
+
 ### Building from Source
 
 1. **Download the DAZ Studio SDK** from the [DAZ Developer portal](https://www.daz3d.com/daz-studio-4-5-sdk)
