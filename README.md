@@ -150,7 +150,7 @@ There are two options for getting the plugin. For most users, Option A, download
 3. Copy the .dll file from the downloaded location to the plugins/ folder in your DAZ Studio folder. For example:
     - **Windows:** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
     - **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
-    - Unsure where you DAZ Studio is installed? Right-click on its icon and select 'Properties', the click on 'Open File Location'
+    - Unsure where you DAZ Studio is installed? Right-click on its icon and select 'Properties', then click on 'Open File Location'
 
 ### B. Building it yourself from source
 
