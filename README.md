@@ -27,7 +27,7 @@ response = requests.post(
 print(response.json())
 ```
 
-**Need to get the plugin?** Jump to [Getting the Plugin](#building--installation) below.
+**Need to get the plugin?** Jump to [Getting the Plugin](#getting-the-plugin) below.
 
 ---
 
@@ -39,7 +39,7 @@ print(response.json())
 - [What's New in v1.3.0](#whats-new-in-v130)
 - [What's New in v1.2.0](#whats-new-in-v120)
 - [Requirements](#requirements)
-- [Getting the Plugin](#building--installation)
+- [Getting the Plugin](#getting-the-plugin)
 
 ### Using the Plugin
 - [Starting the Server](#starting-the-server)
