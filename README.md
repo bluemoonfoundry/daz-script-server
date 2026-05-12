@@ -1407,10 +1407,10 @@ For plugin development, see `CLAUDE.md` for detailed architecture notes and deve
 
 ## License & Attribution
 
-This project is provided as-is for use with DAZ Studio.
+This project is provided under the terms of the AGPL v3 license for use with DAZ Studio.
 
 **Dependencies:**
-- [cpp-httplib](https://github.com/yhirose/cpp-httplib) - Header-only HTTP library (MIT License)
+- [cpp-httplib](https://github.com/yhirose/cpp-httplib) - Header-only HTTP library (AGPL v3 License)
 - [DAZ Studio SDK](https://www.daz3d.com/daz-studio-4-5-sdk) - Required for building
 
 **Platform APIs:**
