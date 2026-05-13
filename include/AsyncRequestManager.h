@@ -1,5 +1,5 @@
 #pragma once
-#include <QtCore/qobject.h>
+#include <QObject>
 #include <QtCore/qstring.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qqueue.h>

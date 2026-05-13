@@ -3,6 +3,13 @@
 #include "JsonBuilder.h"
 #include <QtCore/qthread.h>
 
+// QThread::msleep is protected — access it via a minimal subclass.
+namespace {
+struct SleepThread : public QThread {
+    static void msleep(unsigned long ms) { QThread::msleep(ms); }
+};
+}
+
 AsyncRequestManager::AsyncRequestManager(QObject* parent)
     : QObject(parent)
     , m_maxQueueDepth(DEFAULT_MAX_QUEUE_DEPTH)
@@ -98,7 +105,7 @@ QPair<int, QString> AsyncRequestManager::getResultJson(
             }
             if (s == REQUEST_COMPLETED || s == REQUEST_FAILED || s == REQUEST_CANCELLED)
                 break;
-            QThread::msleep(500);
+            SleepThread::msleep(500);
         }
     }
 
