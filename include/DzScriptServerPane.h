@@ -18,6 +18,11 @@
 #include <QtGui/qcheckbox.h>
 #include <QtGui/qgroupbox.h>
 
+#include "AuthenticationService.h"
+#include "RateLimiterService.h"
+#include "IPWhitelistService.h"
+#include "MetricsCollector.h"
+
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; }
 
@@ -90,26 +95,12 @@ private:
 	                          const QVariant& error,
 	                          const QString& requestId = QString());
 
-	// Authentication
-	QString generateToken();
-	void    loadOrGenerateToken();
-	void    saveToken();
 	void    loadSettings();
 	void    saveSettings();
-	bool    validateToken(const std::string& providedToken) const;
 
-	// Metrics and monitoring
-	QString generateRequestId();
-	void    recordRequest(bool success, qint64 durationMs);
-	void    saveMetrics();
+	// Metrics / monitoring JSON builders (use m_metrics service for data)
 	QString getHealthJson() const;
 	QString getMetricsJson() const;
-
-	// IP Whitelist and Rate Limiting
-	void    parseWhitelistIPs();
-	bool    isIPWhitelisted(const QString& clientIP) const;
-	bool    checkRateLimit(const QString& clientIP);
-	void    cleanupRateLimitMap();
 
 	// Server state
 	httplib::Server* m_pServer;
@@ -119,10 +110,6 @@ private:
 	QByteArray       m_aHostUtf8;
 	bool             m_bRunning;
 	int              m_nTimeoutSec;
-
-	// Authentication
-	QString          m_sApiToken;
-	bool             m_bAuthEnabled;
 	bool             m_bAutoStart;
 
 	// Configurable limits
@@ -134,38 +121,13 @@ private:
 	QStringList m_aCapturedLogLines;
 	bool        m_bCapturingLog;
 
-	// Request management and metrics
-	struct RequestMetrics {
-		int         totalRequests;
-		int         successfulRequests;
-		int         failedRequests;
-		int         authFailures;
-		QDateTime   startTime;
-		mutable QMutex mutex;  // Protects the counters
+	// ── Service objects ───────────────────────────────────────────────────────
+	AuthenticationService m_auth;
+	RateLimiterService    m_rateLimiter;
+	IPWhitelistService    m_ipWhitelist;
+	MetricsCollector      m_metrics;
 
-		RequestMetrics()
-			: totalRequests(0)
-			, successfulRequests(0)
-			, failedRequests(0)
-			, authFailures(0)
-			, startTime(QDateTime::currentDateTime())
-		{}
-	};
-	RequestMetrics   m_metrics;
 	QAtomicInt       m_nActiveRequests;  // Current concurrent requests (atomic: written from HTTP threads)
-
-	// Rate limit tracking structure
-	struct RateLimitInfo {
-		QList<qint64> timestamps;  // Unix timestamps in seconds
-		RateLimitInfo() {}
-	};
-
-	struct RateLimitState {
-		QMap<QString, RateLimitInfo> ipMap;
-		QMutex mutex;
-		int cleanupCounter;
-		RateLimitState() : cleanupCounter(0) {}
-	};
 
 	// Script Registry (session-only, in-memory)
 	struct RegisteredScript {
@@ -240,20 +202,7 @@ private:
 	AsyncState  m_async;
 	QTimer*     m_pCleanupTimer;  // Fires every 5 min to purge TTL-expired requests
 
-	// Private helper methods for async
-	QString     generateAsyncId(const QString& type) const;
 	std::string requestStatusToString(RequestStatus status) const;
-
-	// IP Whitelist state (immutable after server start - no mutex needed)
-	bool             m_bIpWhitelistEnabled;
-	QString          m_sIpWhitelist;       // Comma-separated list
-	QStringList      m_aWhitelistIPs;      // Parsed list
-
-	// Rate limiting state (mutex-protected)
-	bool             m_bRateLimitEnabled;
-	int              m_nRateLimitMax;
-	int              m_nRateLimitWindowSec;
-	RateLimitState   m_rateLimitState;
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;
