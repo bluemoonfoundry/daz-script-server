@@ -12,6 +12,7 @@ add_library(DazScriptServer SHARED
 	MetricsCollector.cpp
 	SecureRandom.cpp
 	JsonBuilder.cpp
+	RequestHandlers.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AuthenticationService.h
@@ -20,6 +21,7 @@ add_library(DazScriptServer SHARED
 	../include/MetricsCollector.h
 	../include/SecureRandom.h
 	../include/JsonBuilder.h
+	../include/RequestHandler.h
 	../include/common_version.h
 	../include/dzscriptserver.h
 )

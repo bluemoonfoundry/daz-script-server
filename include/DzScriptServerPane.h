@@ -1,6 +1,8 @@
 #pragma once
+#include <memory>
 #include <string>
 #include <dzpane.h>
+#include <QtCore/qpair.h>
 #include <QtCore/qthread.h>
 #include <QtCore/qstringlist.h>
 #include <QtCore/qvariant.h>
@@ -22,6 +24,7 @@
 #include "RateLimiterService.h"
 #include "IPWhitelistService.h"
 #include "MetricsCollector.h"
+#include "RequestHandler.h"
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; }
@@ -67,6 +70,27 @@ public slots:
 	Q_INVOKABLE QByteArray handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
 	Q_INVOKABLE QByteArray handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
+	void appendLog(const QString& line);
+	void updateActiveRequestsLabel();
+
+public:
+	// Observability — called from HTTP threads (thread-safe via internal mutexes/atomics)
+	QString getHealthJson() const;
+	QString getMetricsJson() const;
+
+	// Script Registry operations — called from HTTP threads (mutex-protected)
+	QString              listScriptsJson() const;
+	QPair<int, QString>  deleteRegistryScriptJson(const QString& id, const QString& clientIP);
+	bool                 lookupRegistryScript(const QString& id, QString& outScript) const;
+
+	// Async request management — called from HTTP threads (mutex-protected)
+	QString              enqueueAsyncRequest(const QString& scriptText, const QVariantMap& args,
+	                                         const QString& idPrefix, qint64& outSubmittedAt);
+	QPair<int, QString>  getAsyncStatusJson(const QString& requestId) const;
+	QPair<int, QString>  getAsyncResultJson(const QString& requestId, bool doWait, int timeoutSec);
+	QPair<int, QString>  cancelAsyncRequestJson(const QString& requestId, const QString& clientIP);
+	QString              listAsyncRequestsJson(const QString& statusFilter) const;
+
 private slots:
 	void onStartClicked();
 	void onStopClicked();
@@ -78,7 +102,6 @@ private slots:
 	void onIpWhitelistEnabledChanged(int state);
 	void onRateLimitEnabledChanged(int state);
 	void onAutoStartChanged(int state);
-	void updateActiveRequestsLabel();
 
 	// Async execution (runs on main thread via Qt event loop)
 	void processNextAsyncRequest();
@@ -87,7 +110,6 @@ private slots:
 private:
 	void   setupRoutes();
 	void   updateUI();
-	void   appendLog(const QString& line);
 	QString variantToJson(const QVariant& v);
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
@@ -97,10 +119,6 @@ private:
 
 	void    loadSettings();
 	void    saveSettings();
-
-	// Metrics / monitoring JSON builders (use m_metrics service for data)
-	QString getHealthJson() const;
-	QString getMetricsJson() const;
 
 	// Server state
 	httplib::Server* m_pServer;
@@ -203,6 +221,27 @@ private:
 	QTimer*     m_pCleanupTimer;  // Fires every 5 min to purge TTL-expired requests
 
 	std::string requestStatusToString(RequestStatus status) const;
+
+	// ── Middleware chains (created in setupRoutes) ────────────────────────────
+	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only
+	std::unique_ptr<MiddlewareChain> m_pExecuteSyncChain;  // IP + rate + body_size + auth
+	std::unique_ptr<MiddlewareChain> m_pBaseExecuteChain;  // IP + rate + auth
+
+	// ── Request handlers (created in setupRoutes) ─────────────────────────────
+	std::unique_ptr<StatusHandler>        m_pStatusHandler;
+	std::unique_ptr<HealthHandler>        m_pHealthHandler;
+	std::unique_ptr<MetricsHandler>       m_pMetricsHandler;
+	std::unique_ptr<ExecuteScriptHandler> m_pExecuteHandler;
+	std::unique_ptr<ScriptRegisterHandler> m_pRegisterHandler;
+	std::unique_ptr<ScriptListHandler>    m_pScriptListHandler;
+	std::unique_ptr<ScriptDeleteHandler>  m_pScriptDeleteHandler;
+	std::unique_ptr<ScriptExecuteHandler> m_pScriptExecHandler;
+	std::unique_ptr<AsyncExecuteHandler>  m_pAsyncExecHandler;
+	std::unique_ptr<AsyncScriptHandler>   m_pAsyncScriptHandler;
+	std::unique_ptr<AsyncStatusHandler>   m_pAsyncStatusHandler;
+	std::unique_ptr<AsyncResultHandler>   m_pAsyncResultHandler;
+	std::unique_ptr<AsyncCancelHandler>   m_pAsyncCancelHandler;
+	std::unique_ptr<AsyncListHandler>     m_pAsyncListHandler;
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;

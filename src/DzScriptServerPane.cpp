@@ -529,768 +529,487 @@ void DzScriptServerPane::appendLog(const QString& line)
 	}
 }
 
+// ─── Route setup helpers ─────────────────────────────────────────────────────
+
+// RAII guard for the concurrent-request counter.
+// Increments on construction; decrements automatically on destruction.
+// operator bool() returns false if the limit was already reached (counter not held).
+struct ActiveRequestSlot {
+	QAtomicInt& counter;
+	bool        held;
+
+	ActiveRequestSlot(QAtomicInt& c, int limit) : counter(c), held(false) {
+		held = (c.fetchAndAddOrdered(1) < limit);
+		if (!held) c.deref();
+	}
+	~ActiveRequestSlot() { if (held) counter.deref(); }
+	operator bool() const { return held; }
+
+private:
+	ActiveRequestSlot(const ActiveRequestSlot&);
+	ActiveRequestSlot& operator=(const ActiveRequestSlot&);
+};
+
+static HttpContext toContext(const httplib::Request& req)
+{
+	HttpContext ctx;
+	ctx.body       = req.body;
+	ctx.remoteAddr = req.remote_addr.empty() ? "unknown" : req.remote_addr;
+	if (req.matches.size() > 1)
+		ctx.urlMatch = req.matches[1].str();
+	ctx.headers["x-api-token"]  = req.get_header_value("X-API-Token");
+	ctx.headers["authorization"] = req.get_header_value("Authorization");
+	for (httplib::Params::const_iterator it = req.params.begin();
+	     it != req.params.end(); ++it)
+		ctx.queryParams[it->first] = it->second;
+	return ctx;
+}
+
+static void applyContext(const HttpContext& ctx, httplib::Response& res)
+{
+	res.status = ctx.responseStatus;
+	if (!ctx.responseBody.empty())
+		res.set_content(ctx.responseBody, "application/json");
+}
+
 // ─── Route setup ──────────────────────────────────────────────────────────────
 //
 // THREADING RULE: httplib invokes these handlers on raw std::threads (not QThreads).
-// Handlers must do NO Qt work beyond constructing/copying QByteArray.
-// All Qt work happens in handleExecuteRequest() on the main thread via
-// Qt::BlockingQueuedConnection.
+// Handlers must do NO Qt work beyond calling handler/middleware methods that are
+// themselves designed for HTTP-thread use (mutex-protected data, QueuedConnection logs).
+// All DzScript execution happens on the main thread via Qt::BlockingQueuedConnection.
 
 void DzScriptServerPane::setupRoutes()
 {
-	// ─── GET /status ──────────────────────────────────────────────────────────
-	m_pServer->Get("/status", [](const httplib::Request&, httplib::Response& res) {
-		res.set_content(
-			std::string("{\"running\":true,\"version\":\"") + DZSRV_VERSION_STR + "\"}",
-			"application/json");
+	// ── Middleware chains ─────────────────────────────────────────────────────
+	m_pAuthChain.reset(new MiddlewareChain());
+	m_pAuthChain->add(new AuthMiddleware(m_auth, m_metrics, this));
+
+	m_pExecuteSyncChain.reset(new MiddlewareChain());
+	m_pExecuteSyncChain->add(new IPWhitelistMiddleware(m_ipWhitelist, this));
+	m_pExecuteSyncChain->add(new RateLimitMiddleware(m_rateLimiter, this));
+	m_pExecuteSyncChain->add(new BodySizeMiddleware(m_nMaxBodySizeMB));
+	m_pExecuteSyncChain->add(new AuthMiddleware(m_auth, m_metrics, this));
+
+	m_pBaseExecuteChain.reset(new MiddlewareChain());
+	m_pBaseExecuteChain->add(new IPWhitelistMiddleware(m_ipWhitelist, this));
+	m_pBaseExecuteChain->add(new RateLimitMiddleware(m_rateLimiter, this));
+	m_pBaseExecuteChain->add(new AuthMiddleware(m_auth, m_metrics, this));
+
+	// ── Request handlers ──────────────────────────────────────────────────────
+	m_pStatusHandler.reset(new StatusHandler(DZSRV_VERSION_STR));
+	m_pHealthHandler.reset(new HealthHandler(this));
+	m_pMetricsHandler.reset(new MetricsHandler(this));
+	m_pExecuteHandler.reset(new ExecuteScriptHandler(this));
+	m_pRegisterHandler.reset(new ScriptRegisterHandler(this));
+	m_pScriptListHandler.reset(new ScriptListHandler(this));
+	m_pScriptDeleteHandler.reset(new ScriptDeleteHandler(this));
+	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this));
+	m_pAsyncExecHandler.reset(new AsyncExecuteHandler(this));
+	m_pAsyncScriptHandler.reset(new AsyncScriptHandler(this));
+	m_pAsyncStatusHandler.reset(new AsyncStatusHandler(this));
+	m_pAsyncResultHandler.reset(new AsyncResultHandler(this));
+	m_pAsyncCancelHandler.reset(new AsyncCancelHandler(this));
+	m_pAsyncListHandler.reset(new AsyncListHandler(this));
+
+	// ── Routes ───────────────────────────────────────────────────────────────
+
+	m_pServer->Get("/status", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		m_pStatusHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── GET /health ──────────────────────────────────────────────────────────
-	m_pServer->Get("/health", [this](const httplib::Request&, httplib::Response& res) {
-		QString json = getHealthJson();
-		QByteArray jsonBytes = json.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	m_pServer->Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		m_pHealthHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── GET /metrics ─────────────────────────────────────────────────────────
-	m_pServer->Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
-		QString json = getMetricsJson();
-		QByteArray jsonBytes = json.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	m_pServer->Get("/metrics", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		m_pMetricsHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── POST /execute ────────────────────────────────────────────────────────
 	m_pServer->Post("/execute", [this](const httplib::Request& req, httplib::Response& res) {
-		// Atomically increment; roll back and reject if limit was already reached.
-		// fetchAndAddOrdered returns the value BEFORE the add, so old >= max means we're over limit.
-		if (m_nActiveRequests.fetchAndAddOrdered(1) >= m_nMaxConcurrentRequests) {
-			m_nActiveRequests.deref();
-			res.status = 429;  // Too Many Requests
-			QString errorMsg = QString("{\"success\":false,\"error\":\"Server busy: Maximum concurrent requests limit reached (%1/%2 active). Please wait and retry.\"}")
-				.arg(m_nMaxConcurrentRequests)
-				.arg(m_nMaxConcurrentRequests);
-			res.set_content(errorMsg.toStdString(), "application/json");
+		ActiveRequestSlot slot(m_nActiveRequests, m_nMaxConcurrentRequests);
+		if (!slot) {
+			res.status = 429;
+			res.set_content("{\"success\":false,\"error\":\"Server busy: Maximum concurrent requests limit reached. Please wait and retry.\"}", "application/json");
 			return;
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
-		// Get client IP for logging
-		std::string clientIP = req.remote_addr.empty() ? "unknown" : req.remote_addr;
-		QString clientIPQt = QString::fromStdString(clientIP);
-
-		// ─── IP Whitelist Check ───────────────────────────────────────────
-		if (!m_ipWhitelist.isAllowed(clientIPQt)) {
-			m_nActiveRequests.deref();
-			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-			res.status = 403;  // Forbidden
-			res.set_content(
-				"{\"success\":false,\"error\":\"Access denied: Your IP address is not in the whitelist. Contact the server administrator to add your IP to the allowed list.\"}",
-				"application/json");
-
-			// Log blocked IP
-			QString logMsg = QString("[%1] [BLOCKED] %2 - IP not whitelisted")
-				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-				.arg(clientIPQt);
-			QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
-				Q_ARG(QString, logMsg));
-			return;
-		}
-
-		// ─── Rate Limit Check ─────────────────────────────────────────────
-		if (!m_rateLimiter.checkRequest(clientIPQt)) {
-			m_nActiveRequests.deref();
-			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-			res.status = 429;  // Too Many Requests
-			res.set_content(
-				"{\"success\":false,\"error\":\"Rate limit exceeded: Too many requests from your IP address. Please wait before retrying (sliding window applies).\"}",
-				"application/json");
-
-			// Log rate limit violation
-			QString logMsg = QString("[%1] [RATE LIMIT] %2")
-				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-				.arg(clientIPQt);
-			QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
-				Q_ARG(QString, logMsg));
-			return;
-		}
-
-		// Body size validation
-		size_t maxBodySize = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
-		if (req.body.size() > maxBodySize) {
-			m_nActiveRequests.deref();
-			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-			res.status = 413;  // Payload Too Large
-			QString errorMsg = QString("{\"success\":false,\"error\":\"Request body too large: Size exceeds maximum of %1MB. Reduce script size or use 'scriptFile' instead of inline 'script'.\"}")
-				.arg(m_nMaxBodySizeMB);
-			res.set_content(errorMsg.toStdString(), "application/json");
-			return;
-		}
-
-		// Authentication check
-		if (m_auth.isEnabled()) {
-			std::string authHeader = req.get_header_value("X-API-Token");
-			if (authHeader.empty()) {
-				// Also check Authorization: Bearer <token>
-				authHeader = req.get_header_value("Authorization");
-				if (authHeader.find("Bearer ") == 0) {
-					authHeader = authHeader.substr(7);  // Remove "Bearer " prefix
-				}
-			}
-
-			if (!m_auth.validateToken(authHeader)) {
-				m_nActiveRequests.deref();
-				QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-				res.status = 401;
-				res.set_content(
-					"{\"success\":false,\"error\":\"Authentication failed: Invalid or missing API token. Include 'X-API-Token' header or 'Authorization: Bearer <token>' with your request. Token can be found in DAZ Studio plugin UI.\"}",
-					"application/json");
-
-				m_metrics.recordAuthFailure();
-
-				// Log failed auth attempt
-				QString logMsg = QString("[%1] [AUTH FAILED] %2")
-					.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-					.arg(QString::fromStdString(clientIP));
-				QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
-					Q_ARG(QString, logMsg));
-				return;
-			}
-		}
-
-		QByteArray bodyBytes(req.body.c_str(), (int)req.body.size());
-		QByteArray clientIPBytes(clientIP.c_str(), (int)clientIP.size());
-		QByteArray responseBytes;
-
-		QMetaObject::invokeMethod(
-			this, "handleExecuteRequest",
-			Qt::BlockingQueuedConnection,
-			Q_RETURN_ARG(QByteArray, responseBytes),
-			Q_ARG(QByteArray, bodyBytes),
-			Q_ARG(QByteArray, clientIPBytes));
-
-		m_nActiveRequests.deref();
+		auto ctx = toContext(req);
+		if (m_pExecuteSyncChain->run(ctx)) m_pExecuteHandler->handle(ctx);
+		applyContext(ctx, res);
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-
-		res.set_content(responseBytes.constData(), responseBytes.size(),
-		                "application/json");
 	});
 
-	// Auth check lambda shared by all registry routes (runs on HTTP thread).
-	// Returns true if auth passed or is disabled; sets 401 and returns false otherwise.
-	auto registryAuthCheck = [this](const httplib::Request& req, httplib::Response& res) -> bool {
-		if (!m_auth.isEnabled()) return true;
-		std::string token = req.get_header_value("X-API-Token");
-		if (token.empty()) {
-			std::string auth = req.get_header_value("Authorization");
-			if (auth.find("Bearer ") == 0) token = auth.substr(7);
-		}
-		if (!m_auth.validateToken(token)) {
-			res.status = 401;
-			res.set_content(
-				"{\"success\":false,\"error\":\"Authentication failed: Invalid or missing API token.\"}",
-				"application/json");
-			m_metrics.recordAuthFailure();
-			return false;
-		}
-		return true;
-	};
-
-	// ─── POST /scripts/register ───────────────────────────────────────────────
-	m_pServer->Post("/scripts/register", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
-
-		QByteArray bodyBytes(req.body.c_str(), (int)req.body.size());
-		QByteArray clientIPBytes(req.remote_addr.c_str(), (int)req.remote_addr.size());
-		QByteArray responseBytes;
-		QMetaObject::invokeMethod(this, "handleRegisterScript",
-			Qt::BlockingQueuedConnection,
-			Q_RETURN_ARG(QByteArray, responseBytes),
-			Q_ARG(QByteArray, bodyBytes),
-			Q_ARG(QByteArray, clientIPBytes));
-		res.set_content(responseBytes.constData(), responseBytes.size(), "application/json");
+	m_pServer->Post("/scripts/register", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pRegisterHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── GET /scripts ─────────────────────────────────────────────────────────
-	m_pServer->Get("/scripts", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
-
-		QList<QString> ids;
-		QList<RegisteredScript> entries;
-		{
-			QMutexLocker lock(&m_scriptRegistry.mutex);
-			ids = m_scriptRegistry.scripts.keys();
-			for (int i = 0; i < ids.size(); ++i)
-				entries.append(m_scriptRegistry.scripts.value(ids[i]));
-		}
-
-		QVariantList scriptsList;
-		for (int i = 0; i < ids.size(); ++i) {
-			QVariantMap entry;
-			entry["id"]            = ids[i];
-			entry["description"]   = entries[i].description;
-			entry["registered_at"] = entries[i].registeredAt.toString(Qt::ISODate);
-			scriptsList.append(entry);
-		}
-
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("scripts", QVariant(scriptsList));
-		json.addMember("count",   ids.size());
-		json.finishObject();
-
-		QString jsonStr = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	m_pServer->Get("/scripts", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pScriptListHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── DELETE /scripts/:id ──────────────────────────────────────────────────
-	m_pServer->Delete("/scripts/([^/]+)", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
-
-		QString scriptId = QString::fromStdString(req.matches[1]);
-		bool removed = false;
-		{
-			QMutexLocker lock(&m_scriptRegistry.mutex);
-			removed = m_scriptRegistry.scripts.remove(scriptId) > 0;
-		}
-
-		if (!removed) {
-			res.status = 404;
-			QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(scriptId);
-			QByteArray errBytes = errJson.toUtf8();
-			res.set_content(errBytes.constData(), errBytes.size(), "application/json");
-			return;
-		}
-
-		QString clientIPStr = QString::fromStdString(req.remote_addr);
-		QString logMsg = QString("[%1] [%2] [REGISTRY] Deleted script: %3")
-			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr)
-			.arg(scriptId);
-		QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, logMsg));
-
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("success", true);
-		json.addMember("id", scriptId);
-		json.finishObject();
-		QString jsonStr = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	m_pServer->Delete("/scripts/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pScriptDeleteHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── POST /scripts/:id/execute ────────────────────────────────────────────
-	m_pServer->Post("/scripts/([^/]+)/execute", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		// Concurrent request limit — atomically increment, roll back if exceeded
-		if (m_nActiveRequests.fetchAndAddOrdered(1) >= m_nMaxConcurrentRequests) {
-			m_nActiveRequests.deref();
+	m_pServer->Post("/scripts/([^/]+)/execute", [this](const httplib::Request& req, httplib::Response& res) {
+		ActiveRequestSlot slot(m_nActiveRequests, m_nMaxConcurrentRequests);
+		if (!slot) {
 			res.status = 429;
-			res.set_content("{\"success\":false,\"error\":\"Server busy: concurrent request limit reached. Please retry.\"}",
-			                "application/json");
+			res.set_content("{\"success\":false,\"error\":\"Server busy: concurrent request limit reached. Please retry.\"}", "application/json");
 			return;
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-
-		QString clientIPStr = QString::fromStdString(req.remote_addr);
-
-		// IP whitelist check
-		if (!m_ipWhitelist.isAllowed(clientIPStr)) {
-			m_nActiveRequests.deref();
-			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-			res.status = 403;
-			res.set_content("{\"success\":false,\"error\":\"Access denied: IP not whitelisted.\"}",
-			                "application/json");
-			return;
-		}
-
-		// Rate limit check
-		if (!m_rateLimiter.checkRequest(clientIPStr)) {
-			m_nActiveRequests.deref();
-			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-			res.status = 429;
-			res.set_content("{\"success\":false,\"error\":\"Rate limit exceeded.\"}",
-			                "application/json");
-			return;
-		}
-
-		if (!registryAuthCheck(req, res)) {
-			m_nActiveRequests.deref();
-			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-			return;
-		}
-
-		// Resolve the script text from the registry
-		QString scriptId = QString::fromStdString(req.matches[1]);
-		QString scriptText;
-		{
-			QMutexLocker lock(&m_scriptRegistry.mutex);
-			if (!m_scriptRegistry.scripts.contains(scriptId)) {
-				m_nActiveRequests.deref();
-				QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-				res.status = 404;
-				QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(scriptId);
-				QByteArray errBytes = errJson.toUtf8();
-				res.set_content(errBytes.constData(), errBytes.size(), "application/json");
-				return;
-			}
-			scriptText = m_scriptRegistry.scripts.value(scriptId).script;
-		}
-
-		QByteArray scriptBytes  = scriptText.toUtf8();
-		QByteArray scriptIdBytes = scriptId.toUtf8();
-		QByteArray bodyBytes    = QByteArray(req.body.c_str(), (int)req.body.size());
-		QByteArray clientIPBytes = clientIPStr.toUtf8();
-		QByteArray responseBytes;
-
-		QMetaObject::invokeMethod(this, "handleRegistryExecuteRequest",
-			Qt::BlockingQueuedConnection,
-			Q_RETURN_ARG(QByteArray, responseBytes),
-			Q_ARG(QByteArray, scriptBytes),
-			Q_ARG(QByteArray, scriptIdBytes),
-			Q_ARG(QByteArray, bodyBytes),
-			Q_ARG(QByteArray, clientIPBytes));
-
-		m_nActiveRequests.deref();
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pScriptExecHandler->handle(ctx);
+		applyContext(ctx, res);
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-		res.set_content(responseBytes.constData(), responseBytes.size(), "application/json");
 	});
 
-	// ═══════════════════════════════════════════════════════════════════════════
-	// ASYNC ENDPOINTS
-	//
-	// These endpoints return immediately with a request_id.  The actual script
-	// execution happens on the main thread via processNextAsyncRequest() which
-	// is triggered through Qt::QueuedConnection (non-blocking from HTTP threads).
-	//
-	// Status/result queries read directly from the mutex-protected m_async map —
-	// no main-thread dispatch needed, so polling is always fast even during long
-	// renders.
-	// ═══════════════════════════════════════════════════════════════════════════
+	// ── Async endpoints ──────────────────────────────────────────────────────
 
-	// ─── POST /execute/async ──────────────────────────────────────────────────
-	// Queues an inline script for async execution.
-	// Body: {"script": "...", "args": {...}}
-	// Returns: {"request_id": "execute-XXXXXXXX", "status": "queued", "submitted_at": "..."}
-	m_pServer->Post("/execute/async", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		QString clientIPStr = QString::fromStdString(req.remote_addr);
-
-		if (!m_ipWhitelist.isAllowed(clientIPStr)) {
-			res.status = 403;
-			res.set_content("{\"success\":false,\"error\":\"Access denied: IP not whitelisted.\"}", "application/json");
-			return;
-		}
-		if (!m_rateLimiter.checkRequest(clientIPStr)) {
-			res.status = 429;
-			res.set_content("{\"success\":false,\"error\":\"Rate limit exceeded.\"}", "application/json");
-			return;
-		}
-		if (!registryAuthCheck(req, res)) return;
-
-		// Parse body
-		QScriptEngine parseEngine;
-		QScriptValue  parsed = parseEngine.evaluate(
-			"(" + QString::fromUtf8(req.body.c_str(), (int)req.body.size()) + ")");
-		if (parseEngine.hasUncaughtException()) {
-			res.status = 400;
-			res.set_content("{\"success\":false,\"error\":\"Invalid JSON in request body\"}", "application/json");
-			return;
-		}
-		QVariantMap body = parsed.toVariant().toMap();
-		QString scriptText = body.value("script").toString();
-		if (scriptText.isEmpty()) {
-			res.status = 400;
-			res.set_content("{\"success\":false,\"error\":\"Field 'script' is required\"}", "application/json");
-			return;
-		}
-
-		AsyncRequest asyncReq;
-		asyncReq.id          = MetricsCollector::generateAsyncId("execute");
-		asyncReq.scriptText  = scriptText;
-		asyncReq.args        = body.value("args").toMap();
-		asyncReq.submittedAt = QDateTime::currentMSecsSinceEpoch();
-
-		{
-			QMutexLocker locker(&m_async.mutex);
-			m_async.requests.insert(asyncReq.id, asyncReq);
-			m_async.queue.enqueue(asyncReq.id);
-		}
-
-		// Schedule main-thread processing (non-blocking — returns immediately)
-		QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
-
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("request_id",   asyncReq.id);
-		json.addMember("status",       "queued");
-		json.addMember("submitted_at", QDateTime::currentDateTime().toString(Qt::ISODate));
-		json.finishObject();
-		QString jsonStr    = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
+	m_pServer->Post("/execute/async", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pAsyncExecHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── POST /scripts/:id/async ──────────────────────────────────────────────
-	// Queues a registered script for async execution.
-	// Body: {"args": {...}}
-	// Returns: {"request_id": "script-XXXXXXXX", "status": "queued", "submitted_at": "..."}
-	m_pServer->Post("/scripts/([^/]+)/async", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		QString clientIPStr = QString::fromStdString(req.remote_addr);
-
-		if (!m_ipWhitelist.isAllowed(clientIPStr)) {
-			res.status = 403;
-			res.set_content("{\"success\":false,\"error\":\"Access denied: IP not whitelisted.\"}", "application/json");
-			return;
-		}
-		if (!m_rateLimiter.checkRequest(clientIPStr)) {
-			res.status = 429;
-			res.set_content("{\"success\":false,\"error\":\"Rate limit exceeded.\"}", "application/json");
-			return;
-		}
-		if (!registryAuthCheck(req, res)) return;
-
-		// Resolve script from registry at enqueue time (not at execution time)
-		// to avoid races if the registry is cleared while queued.
-		QString scriptId = QString::fromStdString(req.matches[1]);
-		QString scriptText;
-		{
-			QMutexLocker lock(&m_scriptRegistry.mutex);
-			if (!m_scriptRegistry.scripts.contains(scriptId)) {
-				res.status = 404;
-				QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(scriptId);
-				QByteArray errBytes = errJson.toUtf8();
-				res.set_content(errBytes.constData(), errBytes.size(), "application/json");
-				return;
-			}
-			scriptText = m_scriptRegistry.scripts.value(scriptId).script;
-		}
-
-		// Parse args from body
-		QVariantMap argsMap;
-		if (!req.body.empty()) {
-			QScriptEngine parseEngine;
-			QScriptValue  parsed = parseEngine.evaluate(
-				"(" + QString::fromUtf8(req.body.c_str(), (int)req.body.size()) + ")");
-			if (!parseEngine.hasUncaughtException())
-				argsMap = parsed.toVariant().toMap().value("args").toMap();
-		}
-
-		AsyncRequest asyncReq;
-		asyncReq.id          = MetricsCollector::generateAsyncId("script");
-		asyncReq.scriptText  = scriptText;
-		asyncReq.args        = argsMap;
-		asyncReq.submittedAt = QDateTime::currentMSecsSinceEpoch();
-
-		{
-			QMutexLocker locker(&m_async.mutex);
-			m_async.requests.insert(asyncReq.id, asyncReq);
-			m_async.queue.enqueue(asyncReq.id);
-		}
-
-		QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
-
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("request_id",   asyncReq.id);
-		json.addMember("status",       "queued");
-		json.addMember("submitted_at", QDateTime::currentDateTime().toString(Qt::ISODate));
-		json.finishObject();
-		QString jsonStr    = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
-
-		QString logMsg = QString("[%1] [%2] [ASYNC QUEUED] script:%3 -> %4")
-			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr).arg(scriptId).arg(asyncReq.id);
-		QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
-			Q_ARG(QString, logMsg));
+	m_pServer->Post("/scripts/([^/]+)/async", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pAsyncScriptHandler->handle(ctx);
+		applyContext(ctx, res);
 	});
 
-	// ─── GET /requests/:id/status ─────────────────────────────────────────────
-	// Lightweight poll — reads directly from the mutex-protected map.
-	// Never dispatches to the main thread, so it always returns promptly.
-	m_pServer->Get("/requests/([^/]+)/status", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
+	m_pServer->Get("/requests/([^/]+)/status", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pAsyncStatusHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
 
-		QString requestId = QString::fromStdString(req.matches[1]);
+	m_pServer->Get("/requests/([^/]+)/result", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pAsyncResultHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
 
+	m_pServer->Delete("/requests/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pAsyncCancelHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	m_pServer->Get("/requests", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pAsyncListHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+}
+
+// ─── Script Registry public API (called from HTTP threads) ───────────────────
+
+QString DzScriptServerPane::listScriptsJson() const
+{
+	QList<QString> ids;
+	QList<RegisteredScript> entries;
+	{
+		QMutexLocker lock(&m_scriptRegistry.mutex);
+		ids = m_scriptRegistry.scripts.keys();
+		for (int i = 0; i < ids.size(); ++i)
+			entries.append(m_scriptRegistry.scripts.value(ids[i]));
+	}
+
+	QVariantList scriptsList;
+	for (int i = 0; i < ids.size(); ++i) {
+		QVariantMap entry;
+		entry["id"]            = ids[i];
+		entry["description"]   = entries[i].description;
+		entry["registered_at"] = entries[i].registeredAt.toString(Qt::ISODate);
+		scriptsList.append(entry);
+	}
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("scripts", QVariant(scriptsList));
+	json.addMember("count",   ids.size());
+	json.finishObject();
+	return json.toString();
+}
+
+QPair<int, QString> DzScriptServerPane::deleteRegistryScriptJson(const QString& id,
+                                                                  const QString& clientIP)
+{
+	bool removed = false;
+	{
+		QMutexLocker lock(&m_scriptRegistry.mutex);
+		removed = m_scriptRegistry.scripts.remove(id) > 0;
+	}
+
+	if (!removed) {
+		QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(id);
+		return QPair<int, QString>(404, errJson);
+	}
+
+	QString logMsg = QString("[%1] [%2] [REGISTRY] Deleted script: %3")
+		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+		.arg(clientIP)
+		.arg(id);
+	QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, logMsg));
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("success", true);
+	json.addMember("id", id);
+	json.finishObject();
+	return QPair<int, QString>(200, json.toString());
+}
+
+bool DzScriptServerPane::lookupRegistryScript(const QString& id, QString& outScript) const
+{
+	QMutexLocker lock(&m_scriptRegistry.mutex);
+	if (!m_scriptRegistry.scripts.contains(id))
+		return false;
+	outScript = m_scriptRegistry.scripts.value(id).script;
+	return true;
+}
+
+// ─── Async Request public API (called from HTTP threads) ──────────────────────
+
+QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
+                                                const QVariantMap& args,
+                                                const QString& idPrefix,
+                                                qint64& outSubmittedAt)
+{
+	AsyncRequest asyncReq;
+	asyncReq.id          = MetricsCollector::generateAsyncId(idPrefix);
+	asyncReq.scriptText  = scriptText;
+	asyncReq.args        = args;
+	asyncReq.submittedAt = QDateTime::currentMSecsSinceEpoch();
+	outSubmittedAt       = asyncReq.submittedAt;
+
+	{
 		QMutexLocker locker(&m_async.mutex);
-		if (!m_async.requests.contains(requestId)) {
-			locker.unlock();
-			res.status = 404;
-			res.set_content("{\"success\":false,\"error\":\"Request not found\"}", "application/json");
-			return;
+		m_async.requests.insert(asyncReq.id, asyncReq);
+		m_async.queue.enqueue(asyncReq.id);
+	}
+
+	QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
+	return asyncReq.id;
+}
+
+QPair<int, QString> DzScriptServerPane::getAsyncStatusJson(const QString& requestId) const
+{
+	QMutexLocker locker(&m_async.mutex);
+	if (!m_async.requests.contains(requestId))
+		return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
+
+	const AsyncRequest& asyncReq = m_async.requests.value(requestId);
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("request_id", asyncReq.id);
+	json.addMember("status",     requestStatusToString(asyncReq.status).c_str());
+	json.addMember("progress",   asyncReq.progress);
+
+	if (asyncReq.status == REQUEST_RUNNING && asyncReq.startedAt > 0) {
+		qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - asyncReq.startedAt;
+		json.addMember("elapsed_ms", elapsed);
+	}
+	if (asyncReq.status == REQUEST_QUEUED) {
+		int pos = 1;
+		QQueue<QString> queueCopy = m_async.queue;
+		while (!queueCopy.isEmpty()) {
+			if (queueCopy.dequeue() == requestId) break;
+			pos++;
 		}
-		const AsyncRequest& asyncReq = m_async.requests.value(requestId);
+		json.addMember("queue_position", pos);
+	}
+	json.finishObject();
+	return QPair<int, QString>(200, json.toString());
+}
 
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("request_id", asyncReq.id);
-		json.addMember("status",     requestStatusToString(asyncReq.status).c_str());
-		json.addMember("progress",   asyncReq.progress);
+QPair<int, QString> DzScriptServerPane::getAsyncResultJson(const QString& requestId,
+                                                           bool doWait, int timeoutSec)
+{
+	if (doWait) {
+		qint64 deadline = QDateTime::currentMSecsSinceEpoch() + (qint64)timeoutSec * 1000;
+		while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+			RequestStatus currentStatus;
+			{
+				QMutexLocker locker(&m_async.mutex);
+				if (!m_async.requests.contains(requestId))
+					return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
+				currentStatus = m_async.requests.value(requestId).status;
+			}
+			if (currentStatus == REQUEST_COMPLETED ||
+			    currentStatus == REQUEST_FAILED    ||
+			    currentStatus == REQUEST_CANCELLED) {
+				break;
+			}
+			ServerListenThread::msSleep(500);
+		}
+	}
 
-		if (asyncReq.status == REQUEST_RUNNING && asyncReq.startedAt > 0) {
+	QMutexLocker locker(&m_async.mutex);
+	if (!m_async.requests.contains(requestId))
+		return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
+
+	const AsyncRequest& asyncReq = m_async.requests.value(requestId);
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("request_id", asyncReq.id);
+	json.addMember("status",     requestStatusToString(asyncReq.status).c_str());
+
+	if (asyncReq.status == REQUEST_COMPLETED) {
+		json.addMember("success", true);
+		json.addMember("result",  asyncReq.scriptResult);
+		QVariantList outList;
+		foreach (const QString& line, asyncReq.outputLines)
+			outList << QVariant(line);
+		json.addMember("output", QVariant(outList));
+		json.addMemberNull("error");
+	} else if (asyncReq.status == REQUEST_FAILED) {
+		json.addMember("success", false);
+		json.addMemberNull("result");
+		json.addMember("output", QVariant(QVariantList()));
+		json.addMember("error", asyncReq.error);
+	} else if (asyncReq.status == REQUEST_CANCELLED) {
+		json.addMember("success", false);
+		json.addMemberNull("result");
+		json.addMember("output", QVariant(QVariantList()));
+		json.addMember("error", QString("Cancelled"));
+	} else {
+		json.addMember("progress", asyncReq.progress);
+		if (asyncReq.startedAt > 0) {
 			qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - asyncReq.startedAt;
 			json.addMember("elapsed_ms", elapsed);
 		}
-		if (asyncReq.status == REQUEST_QUEUED) {
-			// Count queue position
-			int pos = 1;
-			QQueue<QString> queueCopy = m_async.queue;
-			while (!queueCopy.isEmpty()) {
-				if (queueCopy.dequeue() == requestId) break;
-				pos++;
-			}
-			json.addMember("queue_position", pos);
-		}
-		json.finishObject();
+	}
 
-		QString jsonStr    = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
-	});
+	if (asyncReq.completedAt > 0 && asyncReq.startedAt > 0) {
+		json.addMember("duration_ms",  asyncReq.completedAt - asyncReq.startedAt);
+		json.addMember("completed_at",
+			QDateTime::fromMSecsSinceEpoch(asyncReq.completedAt).toString(Qt::ISODate));
+	}
+	json.finishObject();
+	return QPair<int, QString>(200, json.toString());
+}
 
-	// ─── GET /requests/:id/result ─────────────────────────────────────────────
-	// Returns the result of a completed request.
-	// Query params: ?wait=true&timeout=300 (blocks HTTP thread until complete)
-	// Response shape matches the sync /execute response, plus async metadata.
-	m_pServer->Get("/requests/([^/]+)/result", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
-
-		QString requestId = QString::fromStdString(req.matches[1]);
-		bool    doWait    = req.has_param("wait") && req.get_param_value("wait") == "true";
-		int     timeoutSec = 300;
-		if (req.has_param("timeout")) {
-			bool ok = false;
-			int t = QString::fromStdString(req.get_param_value("timeout")).toInt(&ok);
-			if (ok && t > 0) timeoutSec = t;
-		}
-
-		// Validate request exists
-		{
-			QMutexLocker locker(&m_async.mutex);
-			if (!m_async.requests.contains(requestId)) {
-				locker.unlock();
-				res.status = 404;
-				res.set_content("{\"success\":false,\"error\":\"Request not found\"}", "application/json");
-				return;
-			}
-		}
-
-		// Optionally wait for completion (polling the map from the HTTP thread)
-		if (doWait) {
-			qint64 deadline = QDateTime::currentMSecsSinceEpoch() + (qint64)timeoutSec * 1000;
-			while (QDateTime::currentMSecsSinceEpoch() < deadline) {
-				RequestStatus currentStatus;
-				{
-					QMutexLocker locker(&m_async.mutex);
-					if (!m_async.requests.contains(requestId)) {
-						res.status = 404;
-						res.set_content("{\"success\":false,\"error\":\"Request not found\"}", "application/json");
-						return;
-					}
-					currentStatus = m_async.requests.value(requestId).status;
-				}
-				if (currentStatus == REQUEST_COMPLETED ||
-				    currentStatus == REQUEST_FAILED    ||
-				    currentStatus == REQUEST_CANCELLED) {
-					break;
-				}
-				ServerListenThread::msSleep(500);
-			}
-		}
-
-		// Build response from current state
+QPair<int, QString> DzScriptServerPane::cancelAsyncRequestJson(const QString& requestId,
+                                                               const QString& clientIP)
+{
+	RequestStatus statusBefore = REQUEST_QUEUED;
+	{
 		QMutexLocker locker(&m_async.mutex);
-		if (!m_async.requests.contains(requestId)) {
-			locker.unlock();
-			res.status = 404;
-			res.set_content("{\"success\":false,\"error\":\"Request not found\"}", "application/json");
-			return;
-		}
-		const AsyncRequest& asyncReq = m_async.requests.value(requestId);
+		if (!m_async.requests.contains(requestId))
+			return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
 
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("request_id", asyncReq.id);
-		json.addMember("status",     requestStatusToString(asyncReq.status).c_str());
+		AsyncRequest& asyncReq = m_async.requests[requestId];
+		statusBefore = asyncReq.status;
 
-		if (asyncReq.status == REQUEST_COMPLETED) {
-			json.addMember("success", true);
-			json.addMember("result", asyncReq.scriptResult);
-			QVariantList outList;
-			foreach (const QString& line, asyncReq.outputLines)
-				outList << QVariant(line);
-			json.addMember("output", QVariant(outList));
-			json.addMemberNull("error");
-		} else if (asyncReq.status == REQUEST_FAILED) {
-			json.addMember("success", false);
-			json.addMemberNull("result");
-			json.addMember("output", QVariant(QVariantList()));
-			json.addMember("error", asyncReq.error);
-		} else if (asyncReq.status == REQUEST_CANCELLED) {
-			json.addMember("success", false);
-			json.addMemberNull("result");
-			json.addMember("output", QVariant(QVariantList()));
-			json.addMember("error", QString("Cancelled"));
-		} else {
-			// Still queued or running — return current status without result
-			json.addMember("progress", asyncReq.progress);
-			if (asyncReq.startedAt > 0) {
-				qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - asyncReq.startedAt;
-				json.addMember("elapsed_ms", elapsed);
-			}
+		if (statusBefore == REQUEST_COMPLETED ||
+		    statusBefore == REQUEST_FAILED    ||
+		    statusBefore == REQUEST_CANCELLED) {
+			return QPair<int, QString>(400, "{\"success\":false,\"error\":\"Request already finished\"}");
 		}
 
-		if (asyncReq.completedAt > 0 && asyncReq.startedAt > 0) {
-			json.addMember("duration_ms", asyncReq.completedAt - asyncReq.startedAt);
-			json.addMember("completed_at",
-				QDateTime::fromMSecsSinceEpoch(asyncReq.completedAt).toString(Qt::ISODate));
+		asyncReq.cancelRequested = 1;
+
+		if (statusBefore == REQUEST_QUEUED) {
+			QQueue<QString> newQueue;
+			while (!m_async.queue.isEmpty()) {
+				QString id = m_async.queue.dequeue();
+				if (id != requestId) newQueue.enqueue(id);
+			}
+			m_async.queue = newQueue;
+			asyncReq.status      = REQUEST_CANCELLED;
+			asyncReq.error       = "Cancelled by client";
+			asyncReq.completedAt = QDateTime::currentMSecsSinceEpoch();
 		}
-		json.finishObject();
+	}
 
-		QString jsonStr    = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
-	});
-
-	// ─── DELETE /requests/:id ─────────────────────────────────────────────────
-	// Cancels a queued or running request.
-	// For QUEUED requests: cancellation is immediate (removed from queue).
-	// For RUNNING requests: sets cancel flag and attempts killRender() — the
-	// main thread will honour the flag when the current script execution returns.
-	m_pServer->Delete("/requests/([^/]+)", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
-
-		QString requestId = QString::fromStdString(req.matches[1]);
-
-		RequestStatus statusBefore = REQUEST_QUEUED;
-		{
-			QMutexLocker locker(&m_async.mutex);
-			if (!m_async.requests.contains(requestId)) {
-				locker.unlock();
-				res.status = 404;
-				res.set_content("{\"success\":false,\"error\":\"Request not found\"}", "application/json");
-				return;
-			}
-			AsyncRequest& asyncReq = m_async.requests[requestId];
-			statusBefore = asyncReq.status;
-
-			if (statusBefore == REQUEST_COMPLETED ||
-			    statusBefore == REQUEST_FAILED    ||
-			    statusBefore == REQUEST_CANCELLED) {
-				locker.unlock();
-				res.status = 400;
-				res.set_content("{\"success\":false,\"error\":\"Request already finished\"}", "application/json");
-				return;
-			}
-
-			// Signal cancellation (mutex is held, so this is thread-safe)
-			asyncReq.cancelRequested = 1;
-
-			if (statusBefore == REQUEST_QUEUED) {
-				// Remove from queue immediately and mark cancelled
-				QQueue<QString> newQueue;
-				while (!m_async.queue.isEmpty()) {
-					QString id = m_async.queue.dequeue();
-					if (id != requestId) newQueue.enqueue(id);
-				}
-				m_async.queue = newQueue;
-				asyncReq.status     = REQUEST_CANCELLED;
-				asyncReq.error      = "Cancelled by client";
-				asyncReq.completedAt = QDateTime::currentMSecsSinceEpoch();
-			}
-			// If RUNNING: leave status as RUNNING — main thread sets CANCELLED
-			// after the script returns (or killRender() causes it to return).
+	if (statusBefore == REQUEST_RUNNING) {
+		DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
+		if (renderMgr && renderMgr->isRendering()) {
+			DzRenderer* renderer = renderMgr->getActiveRenderer();
+			if (renderer) renderer->killRender();
 		}
+	}
 
-		// For running renders: attempt killRender() directly on this HTTP thread.
-		// DAZ's killRender() is designed to be callable to interrupt an in-flight
-		// render; we call it without dispatching to the main thread so that the
-		// cancellation takes effect immediately rather than waiting in the event queue.
-		// If the call is not thread-safe on a given DAZ build, the cancel flag
-		// (checked after script returns) still guarantees eventual cancellation.
-		if (statusBefore == REQUEST_RUNNING) {
-			DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
-			if (renderMgr && renderMgr->isRendering()) {
-				DzRenderer* renderer = renderMgr->getActiveRenderer();
-				if (renderer) renderer->killRender();
-			}
+	QString logMsg = QString("[%1] [ASYNC CANCEL] %2 (was %3)")
+		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+		.arg(requestId)
+		.arg(statusBefore == REQUEST_QUEUED ? "queued" : "running");
+	QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, logMsg));
+
+	(void)clientIP;
+
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("request_id",   requestId);
+	json.addMember("status",       "cancelled");
+	json.addMember("message",      "Cancellation requested");
+	json.addMember("cancelled_at", QDateTime::currentDateTime().toString(Qt::ISODate));
+	json.finishObject();
+	return QPair<int, QString>(200, json.toString());
+}
+
+QString DzScriptServerPane::listAsyncRequestsJson(const QString& statusFilter) const
+{
+	QMutexLocker locker(&m_async.mutex);
+
+	QVariantList requestsList;
+	int nQueued = 0, nRunning = 0, nCompleted = 0, nFailed = 0, nCancelled = 0;
+
+	for (QMap<QString, AsyncRequest>::const_iterator it = m_async.requests.constBegin();
+	     it != m_async.requests.constEnd(); ++it) {
+		const AsyncRequest& asyncReq = it.value();
+		std::string statusStr = requestStatusToString(asyncReq.status);
+
+		if (!statusFilter.isEmpty() && statusStr != statusFilter.toStdString())
+			continue;
+
+		QVariantMap entry;
+		entry["request_id"]   = asyncReq.id;
+		entry["status"]       = QString::fromStdString(statusStr);
+		entry["progress"]     = asyncReq.progress;
+		entry["submitted_at"] = QDateTime::fromMSecsSinceEpoch(asyncReq.submittedAt)
+		                        .toString(Qt::ISODate);
+		requestsList.append(entry);
+
+		switch (asyncReq.status) {
+			case REQUEST_QUEUED:    nQueued++;    break;
+			case REQUEST_RUNNING:   nRunning++;   break;
+			case REQUEST_COMPLETED: nCompleted++; break;
+			case REQUEST_FAILED:    nFailed++;    break;
+			case REQUEST_CANCELLED: nCancelled++; break;
 		}
+	}
 
-		QString logMsg = QString("[%1] [ASYNC CANCEL] %2 (was %3)")
-			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(requestId)
-			.arg(statusBefore == REQUEST_QUEUED ? "queued" : "running");
-		QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection,
-			Q_ARG(QString, logMsg));
-
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("request_id",   requestId);
-		json.addMember("status",       "cancelled");
-		json.addMember("message",      "Cancellation requested");
-		json.addMember("cancelled_at", QDateTime::currentDateTime().toString(Qt::ISODate));
-		json.finishObject();
-		QString jsonStr    = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
-	});
-
-	// ─── GET /requests ────────────────────────────────────────────────────────
-	// Lists all tracked async requests.
-	// Query param: ?status=queued|running|completed|failed|cancelled
-	m_pServer->Get("/requests", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		if (!registryAuthCheck(req, res)) return;
-
-		QString statusFilter;
-		if (req.has_param("status"))
-			statusFilter = QString::fromStdString(req.get_param_value("status"));
-
-		QMutexLocker locker(&m_async.mutex);
-
-		QVariantList requestsList;
-		int nQueued = 0, nRunning = 0, nCompleted = 0, nFailed = 0, nCancelled = 0;
-
-		for (QMap<QString, AsyncRequest>::const_iterator it = m_async.requests.constBegin();
-		     it != m_async.requests.constEnd(); ++it) {
-			const AsyncRequest& asyncReq = it.value();
-			std::string statusStr = requestStatusToString(asyncReq.status);
-
-			if (!statusFilter.isEmpty() && statusStr != statusFilter.toStdString())
-				continue;
-
-			QVariantMap entry;
-			entry["request_id"]   = asyncReq.id;
-			entry["status"]       = QString::fromStdString(statusStr);
-			entry["progress"]     = asyncReq.progress;
-			entry["submitted_at"] = QDateTime::fromMSecsSinceEpoch(asyncReq.submittedAt)
-			                        .toString(Qt::ISODate);
-			requestsList.append(entry);
-
-			switch (asyncReq.status) {
-				case REQUEST_QUEUED:    nQueued++;    break;
-				case REQUEST_RUNNING:   nRunning++;   break;
-				case REQUEST_COMPLETED: nCompleted++; break;
-				case REQUEST_FAILED:    nFailed++;    break;
-				case REQUEST_CANCELLED: nCancelled++; break;
-			}
-		}
-
-		JsonBuilder json;
-		json.startObject();
-		json.addMember("requests",  QVariant(requestsList));
-		json.addMember("total",     (int)m_async.requests.size());
-		json.addMember("queued",    nQueued);
-		json.addMember("running",   nRunning);
-		json.addMember("completed", nCompleted);
-		json.addMember("failed",    nFailed);
-		json.addMember("cancelled", nCancelled);
-		json.finishObject();
-
-		QString jsonStr    = json.toString();
-		QByteArray jsonBytes = jsonStr.toUtf8();
-		res.set_content(jsonBytes.constData(), jsonBytes.size(), "application/json");
-	});
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("requests",  QVariant(requestsList));
+	json.addMember("total",     (int)m_async.requests.size());
+	json.addMember("queued",    nQueued);
+	json.addMember("running",   nRunning);
+	json.addMember("completed", nCompleted);
+	json.addMember("failed",    nFailed);
+	json.addMember("cancelled", nCancelled);
+	json.finishObject();
+	return json.toString();
 }
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
