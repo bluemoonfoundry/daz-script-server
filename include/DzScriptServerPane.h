@@ -5,6 +5,7 @@
 #include <QtCore/qstringlist.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qbytearray.h>
+#include <QtCore/qatomic.h>
 #include <QtCore/qmutex.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qtimer.h>
@@ -151,7 +152,7 @@ private:
 		{}
 	};
 	RequestMetrics   m_metrics;
-	int              m_nActiveRequests;  // Current concurrent requests
+	QAtomicInt       m_nActiveRequests;  // Current concurrent requests (atomic: written from HTTP threads)
 
 	// Rate limit tracking structure
 	struct RateLimitInfo {

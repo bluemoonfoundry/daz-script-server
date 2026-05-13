@@ -23,6 +23,7 @@
 #include <QtCore/qcryptographichash.h>
 #include <QtCore/quuid.h>
 #include <QtCore/qmutex.h>
+#include <QtCore/qscopedpointer.h>
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
@@ -576,8 +577,10 @@ void DzScriptServerPane::setupRoutes()
 
 	// ─── POST /execute ────────────────────────────────────────────────────────
 	m_pServer->Post("/execute", [this](const httplib::Request& req, httplib::Response& res) {
-		// Check concurrent request limit (DoS protection)
-		if (m_nActiveRequests >= m_nMaxConcurrentRequests) {
+		// Atomically increment; roll back and reject if limit was already reached.
+		// fetchAndAddOrdered returns the value BEFORE the add, so old >= max means we're over limit.
+		if (m_nActiveRequests.fetchAndAddOrdered(1) >= m_nMaxConcurrentRequests) {
+			m_nActiveRequests.deref();
 			res.status = 429;  // Too Many Requests
 			QString errorMsg = QString("{\"success\":false,\"error\":\"Server busy: Maximum concurrent requests limit reached (%1/%2 active). Please wait and retry.\"}")
 				.arg(m_nMaxConcurrentRequests)
@@ -585,9 +588,6 @@ void DzScriptServerPane::setupRoutes()
 			res.set_content(errorMsg.toStdString(), "application/json");
 			return;
 		}
-
-		// Increment active request counter
-		m_nActiveRequests++;
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
 		// Get client IP for logging
@@ -596,7 +596,7 @@ void DzScriptServerPane::setupRoutes()
 
 		// ─── IP Whitelist Check ───────────────────────────────────────────
 		if (!isIPWhitelisted(clientIPQt)) {
-			m_nActiveRequests--;
+			m_nActiveRequests.deref();
 			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			res.status = 403;  // Forbidden
 			res.set_content(
@@ -614,7 +614,7 @@ void DzScriptServerPane::setupRoutes()
 
 		// ─── Rate Limit Check ─────────────────────────────────────────────
 		if (!checkRateLimit(clientIPQt)) {
-			m_nActiveRequests--;
+			m_nActiveRequests.deref();
 			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			res.status = 429;  // Too Many Requests
 			res.set_content(
@@ -633,7 +633,7 @@ void DzScriptServerPane::setupRoutes()
 		// Body size validation
 		size_t maxBodySize = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
 		if (req.body.size() > maxBodySize) {
-			m_nActiveRequests--;  // Decrement before returning
+			m_nActiveRequests.deref();
 			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			res.status = 413;  // Payload Too Large
 			QString errorMsg = QString("{\"success\":false,\"error\":\"Request body too large: Size exceeds maximum of %1MB. Reduce script size or use 'scriptFile' instead of inline 'script'.\"}")
@@ -654,7 +654,7 @@ void DzScriptServerPane::setupRoutes()
 			}
 
 			if (!validateToken(authHeader)) {
-				m_nActiveRequests--;  // Decrement before returning
+				m_nActiveRequests.deref();
 				QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 				res.status = 401;
 				res.set_content(
@@ -688,8 +688,7 @@ void DzScriptServerPane::setupRoutes()
 			Q_ARG(QByteArray, bodyBytes),
 			Q_ARG(QByteArray, clientIPBytes));
 
-		// Decrement active request counter
-		m_nActiveRequests--;
+		m_nActiveRequests.deref();
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
 		res.set_content(responseBytes.constData(), responseBytes.size(),
@@ -803,21 +802,21 @@ void DzScriptServerPane::setupRoutes()
 
 	// ─── POST /scripts/:id/execute ────────────────────────────────────────────
 	m_pServer->Post("/scripts/([^/]+)/execute", [this, registryAuthCheck](const httplib::Request& req, httplib::Response& res) {
-		// Concurrent request limit
-		if (m_nActiveRequests >= m_nMaxConcurrentRequests) {
+		// Concurrent request limit — atomically increment, roll back if exceeded
+		if (m_nActiveRequests.fetchAndAddOrdered(1) >= m_nMaxConcurrentRequests) {
+			m_nActiveRequests.deref();
 			res.status = 429;
 			res.set_content("{\"success\":false,\"error\":\"Server busy: concurrent request limit reached. Please retry.\"}",
 			                "application/json");
 			return;
 		}
-		m_nActiveRequests++;
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
 		QString clientIPStr = QString::fromStdString(req.remote_addr);
 
 		// IP whitelist check
 		if (!isIPWhitelisted(clientIPStr)) {
-			m_nActiveRequests--;
+			m_nActiveRequests.deref();
 			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			res.status = 403;
 			res.set_content("{\"success\":false,\"error\":\"Access denied: IP not whitelisted.\"}",
@@ -827,7 +826,7 @@ void DzScriptServerPane::setupRoutes()
 
 		// Rate limit check
 		if (!checkRateLimit(clientIPStr)) {
-			m_nActiveRequests--;
+			m_nActiveRequests.deref();
 			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			res.status = 429;
 			res.set_content("{\"success\":false,\"error\":\"Rate limit exceeded.\"}",
@@ -836,7 +835,7 @@ void DzScriptServerPane::setupRoutes()
 		}
 
 		if (!registryAuthCheck(req, res)) {
-			m_nActiveRequests--;
+			m_nActiveRequests.deref();
 			QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 			return;
 		}
@@ -847,7 +846,7 @@ void DzScriptServerPane::setupRoutes()
 		{
 			QMutexLocker lock(&m_scriptRegistry.mutex);
 			if (!m_scriptRegistry.scripts.contains(scriptId)) {
-				m_nActiveRequests--;
+				m_nActiveRequests.deref();
 				QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 				res.status = 404;
 				QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(scriptId);
@@ -872,7 +871,7 @@ void DzScriptServerPane::setupRoutes()
 			Q_ARG(QByteArray, bodyBytes),
 			Q_ARG(QByteArray, clientIPBytes));
 
-		m_nActiveRequests--;
+		m_nActiveRequests.deref();
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 		res.set_content(responseBytes.constData(), responseBytes.size(), "application/json");
 	});
@@ -1439,13 +1438,13 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
 
-	DzScript* script = new DzScript();
+	QScopedPointer<DzScript> script(new DzScript());
 
 	if (!scriptFile.isEmpty()) {
 		// loadFromFile sets the filename so getScriptFileName() and relative
 		// include() calls work correctly inside the script.
 		if (!script->loadFromFile(scriptFile)) {
-			delete script;
+			// QScopedPointer auto-deletes script on return
 			disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
 			           this,  SLOT(onMessagePosted(const QString&)));
 			m_bCapturingLog = false;
@@ -1464,7 +1463,7 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	QVariantList execArgs;
 	execArgs << QVariant(argsMap);
 
-QVariant scriptResult;
+	QVariant scriptResult;
 	QVariant errorVar;
 	bool     success = true;
 
@@ -1480,7 +1479,7 @@ QVariant scriptResult;
 		errorVar = QVariant(errMsg);
 	}
 
-	delete script;
+	script.reset();  // Destroy script before disconnecting the signal
 
 	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
 	           this,  SLOT(onMessagePosted(const QString&)));
@@ -1596,7 +1595,7 @@ QByteArray DzScriptServerPane::handleRegistryExecuteRequest(
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
 
-	DzScript* script = new DzScript();
+	QScopedPointer<DzScript> script(new DzScript());
 	script->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
 
 	QVariantList execArgs;
@@ -1617,7 +1616,7 @@ QByteArray DzScriptServerPane::handleRegistryExecuteRequest(
 		errorVar = QVariant(errMsg);
 	}
 
-	delete script;
+	script.reset();  // Destroy script before disconnecting the signal
 	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
@@ -2119,7 +2118,7 @@ void DzScriptServerPane::updateActiveRequestsLabel()
 {
 	if (m_pActiveRequestsLabel) {
 		m_pActiveRequestsLabel->setText(tr("Active Requests: %1 / %2")
-			.arg(m_nActiveRequests)
+			.arg((int)m_nActiveRequests)
 			.arg(m_nMaxConcurrentRequests));
 	}
 }
@@ -2163,7 +2162,7 @@ QString DzScriptServerPane::getHealthJson() const
 	json.addMember("version", DZSRV_VERSION_STR);
 	json.addMember("running", m_bRunning);
 	json.addMember("auth_enabled", m_bAuthEnabled);
-	json.addMember("active_requests", m_nActiveRequests);
+	json.addMember("active_requests", (int)m_nActiveRequests);
 
 	qint64 uptimeSecs = m_metrics.startTime.secsTo(QDateTime::currentDateTime());
 	json.addMember("uptime_seconds", uptimeSecs);
@@ -2183,7 +2182,7 @@ QString DzScriptServerPane::getMetricsJson() const
 	json.addMember("successful_requests", m_metrics.successfulRequests);
 	json.addMember("failed_requests", m_metrics.failedRequests);
 	json.addMember("auth_failures", m_metrics.authFailures);
-	json.addMember("active_requests", m_nActiveRequests);
+	json.addMember("active_requests", (int)m_nActiveRequests);
 
 	qint64 uptimeSecs = m_metrics.startTime.secsTo(QDateTime::currentDateTime());
 	json.addMember("uptime_seconds", uptimeSecs);
@@ -2254,7 +2253,7 @@ void DzScriptServerPane::processNextAsyncRequest()
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
 
-	DzScript* script = new DzScript();
+	QScopedPointer<DzScript> script(new DzScript());
 	script->setCode(scriptText);
 
 	QVariantList execArgs;
@@ -2273,7 +2272,7 @@ void DzScriptServerPane::processNextAsyncRequest()
 	}
 	QStringList capturedOutput = m_aCapturedLogLines;
 
-	delete script;
+	script.reset();  // Destroy script before disconnecting the signal
 	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
