@@ -63,6 +63,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_nMaxBodySizeMB(ServerConfig::DEFAULT_MAX_BODY_SIZE_MB)
 	, m_nMaxScriptLengthKB(ServerConfig::DEFAULT_MAX_SCRIPT_LENGTH_KB)
 	, m_rateLimiter(ServerConfig::DEFAULT_RATE_LIMIT_MAX, ServerConfig::DEFAULT_RATE_LIMIT_WINDOW)
+	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
 {
 	// Load settings and token
@@ -74,6 +75,13 @@ DzScriptServerPane::DzScriptServerPane()
 	}
 	foreach (const QString& msg, tokenMsgs)
 		appendLog(msg);
+
+	// ── Async request manager ─────────────────────────────────────────────────
+	m_pAsyncMgr = new AsyncRequestManager(this);
+	connect(m_pAsyncMgr, SIGNAL(requestEnqueued()),
+	        this, SLOT(processNextAsyncRequest()), Qt::QueuedConnection);
+	connect(m_pAsyncMgr, SIGNAL(killRenderRequested()),
+	        this, SLOT(killRenderOnMainThread()), Qt::QueuedConnection);
 
 	// ── Async cleanup timer ───────────────────────────────────────────────────
 	// Created here so it lives on the main thread (correct for QTimer).
@@ -445,21 +453,9 @@ void DzScriptServerPane::stopServer()
 	// Clear rate limit state
 	m_rateLimiter.reset();
 
-	// Mark any queued/running async requests as cancelled and clear queue
-	{
-		QMutexLocker lock(&m_async.mutex);
-		for (QMap<QString, AsyncRequest>::iterator it = m_async.requests.begin();
-		     it != m_async.requests.end(); ++it) {
-			AsyncRequest& req = it.value();
-			if (req.status == REQUEST_QUEUED || req.status == REQUEST_RUNNING) {
-				req.status    = REQUEST_CANCELLED;
-				req.error     = "Server stopped";
-				req.completedAt = QDateTime::currentMSecsSinceEpoch();
-			}
-		}
-		m_async.queue.clear();
-		m_async.currentId.clear();
-	}
+	// Mark any queued/running async requests as cancelled, then stop the cleanup timer.
+	m_pAsyncMgr->cancelAllPending("Server stopped");
+	m_pCleanupTimer->stop();
 
 	m_bRunning = false;
 	m_metrics.saveToSettings();
@@ -790,226 +786,46 @@ bool DzScriptServerPane::lookupRegistryScript(const QString& id, QString& outScr
 QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
                                                 const QVariantMap& args,
                                                 const QString& idPrefix,
-                                                qint64& outSubmittedAt)
+                                                qint64& outSubmittedAt,
+                                                QString& outError)
 {
-	AsyncRequest asyncReq;
-	asyncReq.id          = MetricsCollector::generateAsyncId(idPrefix);
-	asyncReq.scriptText  = scriptText;
-	asyncReq.args        = args;
-	asyncReq.submittedAt = QDateTime::currentMSecsSinceEpoch();
-	outSubmittedAt       = asyncReq.submittedAt;
-
-	{
-		QMutexLocker locker(&m_async.mutex);
-		m_async.requests.insert(asyncReq.id, asyncReq);
-		m_async.queue.enqueue(asyncReq.id);
+	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(scriptText, args, idPrefix);
+	outSubmittedAt = r.submittedAt;
+	outError       = r.error;
+	if (!r.accepted) {
+		QString msg = QString("[WARN] Async queue rejected: %1").arg(r.error);
+		QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, msg));
 	}
-
-	QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
-	return asyncReq.id;
+	return r.id;
 }
 
 QPair<int, QString> DzScriptServerPane::getAsyncStatusJson(const QString& requestId) const
 {
-	QMutexLocker locker(&m_async.mutex);
-	if (!m_async.requests.contains(requestId))
-		return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
-
-	const AsyncRequest& asyncReq = m_async.requests.value(requestId);
-
-	JsonBuilder json;
-	json.startObject();
-	json.addMember("request_id", asyncReq.id);
-	json.addMember("status",     requestStatusToString(asyncReq.status).c_str());
-	json.addMember("progress",   asyncReq.progress);
-
-	if (asyncReq.status == REQUEST_RUNNING && asyncReq.startedAt > 0) {
-		qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - asyncReq.startedAt;
-		json.addMember("elapsed_ms", elapsed);
-	}
-	if (asyncReq.status == REQUEST_QUEUED) {
-		int pos = 1;
-		QQueue<QString> queueCopy = m_async.queue;
-		while (!queueCopy.isEmpty()) {
-			if (queueCopy.dequeue() == requestId) break;
-			pos++;
-		}
-		json.addMember("queue_position", pos);
-	}
-	json.finishObject();
-	return QPair<int, QString>(200, json.toString());
+	return m_pAsyncMgr->getStatusJson(requestId);
 }
 
 QPair<int, QString> DzScriptServerPane::getAsyncResultJson(const QString& requestId,
                                                            bool doWait, int timeoutSec)
 {
-	if (doWait) {
-		qint64 deadline = QDateTime::currentMSecsSinceEpoch() + (qint64)timeoutSec * 1000;
-		while (QDateTime::currentMSecsSinceEpoch() < deadline) {
-			RequestStatus currentStatus;
-			{
-				QMutexLocker locker(&m_async.mutex);
-				if (!m_async.requests.contains(requestId))
-					return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
-				currentStatus = m_async.requests.value(requestId).status;
-			}
-			if (currentStatus == REQUEST_COMPLETED ||
-			    currentStatus == REQUEST_FAILED    ||
-			    currentStatus == REQUEST_CANCELLED) {
-				break;
-			}
-			ServerListenThread::msSleep(500);
-		}
-	}
-
-	QMutexLocker locker(&m_async.mutex);
-	if (!m_async.requests.contains(requestId))
-		return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
-
-	const AsyncRequest& asyncReq = m_async.requests.value(requestId);
-
-	JsonBuilder json;
-	json.startObject();
-	json.addMember("request_id", asyncReq.id);
-	json.addMember("status",     requestStatusToString(asyncReq.status).c_str());
-
-	if (asyncReq.status == REQUEST_COMPLETED) {
-		json.addMember("success", true);
-		json.addMember("result",  asyncReq.scriptResult);
-		QVariantList outList;
-		foreach (const QString& line, asyncReq.outputLines)
-			outList << QVariant(line);
-		json.addMember("output", QVariant(outList));
-		json.addMemberNull("error");
-	} else if (asyncReq.status == REQUEST_FAILED) {
-		json.addMember("success", false);
-		json.addMemberNull("result");
-		json.addMember("output", QVariant(QVariantList()));
-		json.addMember("error", asyncReq.error);
-	} else if (asyncReq.status == REQUEST_CANCELLED) {
-		json.addMember("success", false);
-		json.addMemberNull("result");
-		json.addMember("output", QVariant(QVariantList()));
-		json.addMember("error", QString("Cancelled"));
-	} else {
-		json.addMember("progress", asyncReq.progress);
-		if (asyncReq.startedAt > 0) {
-			qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - asyncReq.startedAt;
-			json.addMember("elapsed_ms", elapsed);
-		}
-	}
-
-	if (asyncReq.completedAt > 0 && asyncReq.startedAt > 0) {
-		json.addMember("duration_ms",  asyncReq.completedAt - asyncReq.startedAt);
-		json.addMember("completed_at",
-			QDateTime::fromMSecsSinceEpoch(asyncReq.completedAt).toString(Qt::ISODate));
-	}
-	json.finishObject();
-	return QPair<int, QString>(200, json.toString());
+	return m_pAsyncMgr->getResultJson(requestId, doWait, timeoutSec);
 }
 
 QPair<int, QString> DzScriptServerPane::cancelAsyncRequestJson(const QString& requestId,
                                                                const QString& clientIP)
 {
-	RequestStatus statusBefore = REQUEST_QUEUED;
-	{
-		QMutexLocker locker(&m_async.mutex);
-		if (!m_async.requests.contains(requestId))
-			return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
-
-		AsyncRequest& asyncReq = m_async.requests[requestId];
-		statusBefore = asyncReq.status;
-
-		if (statusBefore == REQUEST_COMPLETED ||
-		    statusBefore == REQUEST_FAILED    ||
-		    statusBefore == REQUEST_CANCELLED) {
-			return QPair<int, QString>(400, "{\"success\":false,\"error\":\"Request already finished\"}");
-		}
-
-		asyncReq.cancelRequested = 1;
-
-		if (statusBefore == REQUEST_QUEUED) {
-			QQueue<QString> newQueue;
-			while (!m_async.queue.isEmpty()) {
-				QString id = m_async.queue.dequeue();
-				if (id != requestId) newQueue.enqueue(id);
-			}
-			m_async.queue = newQueue;
-			asyncReq.status      = REQUEST_CANCELLED;
-			asyncReq.error       = "Cancelled by client";
-			asyncReq.completedAt = QDateTime::currentMSecsSinceEpoch();
-		}
+	QPair<int, QString> result = m_pAsyncMgr->cancelJson(requestId, clientIP);
+	if (result.first == 200) {
+		QString logMsg = QString("[%1] [ASYNC CANCEL] %2")
+			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+			.arg(requestId);
+		QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, logMsg));
 	}
-
-	if (statusBefore == REQUEST_RUNNING) {
-		DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
-		if (renderMgr && renderMgr->isRendering()) {
-			DzRenderer* renderer = renderMgr->getActiveRenderer();
-			if (renderer) renderer->killRender();
-		}
-	}
-
-	QString logMsg = QString("[%1] [ASYNC CANCEL] %2 (was %3)")
-		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-		.arg(requestId)
-		.arg(statusBefore == REQUEST_QUEUED ? "queued" : "running");
-	QMetaObject::invokeMethod(this, "appendLog", Qt::QueuedConnection, Q_ARG(QString, logMsg));
-
-	(void)clientIP;
-
-	JsonBuilder json;
-	json.startObject();
-	json.addMember("request_id",   requestId);
-	json.addMember("status",       "cancelled");
-	json.addMember("message",      "Cancellation requested");
-	json.addMember("cancelled_at", QDateTime::currentDateTime().toString(Qt::ISODate));
-	json.finishObject();
-	return QPair<int, QString>(200, json.toString());
+	return result;
 }
 
 QString DzScriptServerPane::listAsyncRequestsJson(const QString& statusFilter) const
 {
-	QMutexLocker locker(&m_async.mutex);
-
-	QVariantList requestsList;
-	int nQueued = 0, nRunning = 0, nCompleted = 0, nFailed = 0, nCancelled = 0;
-
-	for (QMap<QString, AsyncRequest>::const_iterator it = m_async.requests.constBegin();
-	     it != m_async.requests.constEnd(); ++it) {
-		const AsyncRequest& asyncReq = it.value();
-		std::string statusStr = requestStatusToString(asyncReq.status);
-
-		if (!statusFilter.isEmpty() && statusStr != statusFilter.toStdString())
-			continue;
-
-		QVariantMap entry;
-		entry["request_id"]   = asyncReq.id;
-		entry["status"]       = QString::fromStdString(statusStr);
-		entry["progress"]     = asyncReq.progress;
-		entry["submitted_at"] = QDateTime::fromMSecsSinceEpoch(asyncReq.submittedAt)
-		                        .toString(Qt::ISODate);
-		requestsList.append(entry);
-
-		switch (asyncReq.status) {
-			case REQUEST_QUEUED:    nQueued++;    break;
-			case REQUEST_RUNNING:   nRunning++;   break;
-			case REQUEST_COMPLETED: nCompleted++; break;
-			case REQUEST_FAILED:    nFailed++;    break;
-			case REQUEST_CANCELLED: nCancelled++; break;
-		}
-	}
-
-	JsonBuilder json;
-	json.startObject();
-	json.addMember("requests",  QVariant(requestsList));
-	json.addMember("total",     (int)m_async.requests.size());
-	json.addMember("queued",    nQueued);
-	json.addMember("running",   nRunning);
-	json.addMember("completed", nCompleted);
-	json.addMember("failed",    nFailed);
-	json.addMember("cancelled", nCancelled);
-	json.finishObject();
-	return json.toString();
+	return m_pAsyncMgr->listJson(statusFilter);
 }
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
@@ -1618,49 +1434,29 @@ QString DzScriptServerPane::getMetricsJson() const
 
 // ─── Async Execution (main thread) ───────────────────────────────────────────
 
-// Called on the main thread via Qt::QueuedConnection from HTTP threads after
-// enqueueing a new request.  Also calls itself recursively (via QueuedConnection)
-// to drain the queue after each execution completes.
+// Called on the main thread via Qt::QueuedConnection (connected to
+// AsyncRequestManager::requestEnqueued signal) and self-reposted after each
+// execution completes to drain the queue.
 //
-// This function blocks the main thread (and Qt event loop) for the full duration
-// of each script execution.  That is intentional — DAZ Studio's DzScript API is
-// not thread-safe.  HTTP threads serving status/result queries operate directly
-// on the mutex-protected m_async map and are unaffected.
+// Blocks the main thread (Qt event loop) for the full duration of each script.
+// That is intentional — DAZ Studio's DzScript API is not thread-safe.  HTTP
+// threads serving status/result queries go directly to AsyncRequestManager's
+// mutex-protected map and are unaffected.
 void DzScriptServerPane::processNextAsyncRequest()
 {
-	// Pick up the next queued request, if we're idle.
-	QString id;
-	QString scriptText;
+	QString id, scriptText;
 	QVariantMap args;
-	{
-		QMutexLocker locker(&m_async.mutex);
-		if (!m_async.currentId.isEmpty()) return; // Already running one
-		if (m_async.queue.isEmpty())       return; // Nothing to do
+	if (!m_pAsyncMgr->dequeueNext(id, scriptText, args)) return;
 
-		id = m_async.queue.dequeue();
-		m_async.currentId = id;
-
-		AsyncRequest& asyncReq = m_async.requests[id];
-
-		// Request may have been cancelled while queued
-		if (asyncReq.cancelRequested) {
-			asyncReq.status      = REQUEST_CANCELLED;
-			asyncReq.error       = "Cancelled before execution started";
-			asyncReq.completedAt = QDateTime::currentMSecsSinceEpoch();
-			m_async.currentId.clear();
-			locker.unlock();
-			QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
-			return;
-		}
-
-		asyncReq.status    = REQUEST_RUNNING;
-		asyncReq.startedAt = QDateTime::currentMSecsSinceEpoch();
-		asyncReq.progress  = 0.0;
-
-		scriptText = asyncReq.scriptText;
-		args       = asyncReq.args;
+	// Request may have been cancelled while queued
+	if (m_pAsyncMgr->isCancelRequested(id)) {
+		m_pAsyncMgr->markCancelled(id, "Cancelled before execution started");
+		m_pAsyncMgr->clearCurrent();
+		QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
+		return;
 	}
 
+	m_pAsyncMgr->markRunning(id);
 	QTime wallClock = QTime::currentTime();
 
 	// Execute the script on the main thread (same path as sync handler)
@@ -1676,14 +1472,14 @@ void DzScriptServerPane::processNextAsyncRequest()
 	QVariantList execArgs;
 	execArgs << QVariant(args);
 
-	bool     executed    = script->execute(execArgs);
+	bool     executed = script->execute(execArgs);
 	QVariant scriptResult;
 	QString  errorMsg;
 	if (executed) {
 		scriptResult = script->result();
 	} else {
-		errorMsg      = script->errorMessage();
-		int errLine   = script->errorLine();
+		errorMsg    = script->errorMessage();
+		int errLine = script->errorLine();
 		if (errLine > 0)
 			errorMsg = QString("Line %1: %2").arg(errLine).arg(errorMsg);
 	}
@@ -1696,39 +1492,19 @@ void DzScriptServerPane::processNextAsyncRequest()
 
 	int durationMs = wallClock.msecsTo(QTime::currentTime());
 
-	// Write result back into the map
-	{
-		QMutexLocker locker(&m_async.mutex);
-		AsyncRequest& asyncReq = m_async.requests[id];
-		asyncReq.completedAt  = QDateTime::currentMSecsSinceEpoch();
-		asyncReq.progress     = 1.0;
-		asyncReq.outputLines  = capturedOutput;
+	bool wasCancelled = false;
+	m_pAsyncMgr->markCompleted(id, executed, scriptResult, capturedOutput, errorMsg, wasCancelled);
+	m_pAsyncMgr->clearCurrent();
 
-		if (asyncReq.cancelRequested) {
-			// Cancellation was requested (e.g. killRender() fired mid-render)
-			asyncReq.status = REQUEST_CANCELLED;
-			asyncReq.error  = "Cancelled by client";
-		} else if (executed) {
-			asyncReq.status       = REQUEST_COMPLETED;
-			asyncReq.scriptResult = scriptResult;
-			asyncReq.scriptExecuted = true;
-		} else {
-			asyncReq.status = REQUEST_FAILED;
-			asyncReq.error  = errorMsg;
-		}
-
-		m_async.currentId.clear();
-	}
-
-	m_metrics.recordRequest(executed);
+	m_metrics.recordRequest(executed && !wasCancelled);
 
 	appendLog(QString("[%1] [ASYNC] [%2] [%3ms] %4")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-		.arg(executed ? "OK" : "ERR")
+		.arg(wasCancelled ? "CANCEL" : (executed ? "OK" : "ERR"))
 		.arg(durationMs)
 		.arg(id));
 
-	// Process the next queued item (if any)
+	// Drain the queue
 	QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
 }
 
@@ -1736,44 +1512,20 @@ void DzScriptServerPane::processNextAsyncRequest()
 // Fired by m_pCleanupTimer every 5 minutes on the main thread.
 void DzScriptServerPane::cleanupExpiredRequests()
 {
-	const qint64 ttlMs = 60LL * 60LL * 1000LL;  // 1 hour
-	qint64 now = QDateTime::currentMSecsSinceEpoch();
-
-	QStringList toRemove;
-	{
-		QMutexLocker locker(&m_async.mutex);
-		for (QMap<QString, AsyncRequest>::const_iterator it = m_async.requests.constBegin();
-		     it != m_async.requests.constEnd(); ++it) {
-			const AsyncRequest& asyncReq = it.value();
-			bool terminal = (asyncReq.status == REQUEST_COMPLETED ||
-			                 asyncReq.status == REQUEST_FAILED    ||
-			                 asyncReq.status == REQUEST_CANCELLED);
-			if (terminal && asyncReq.completedAt > 0 &&
-			    (now - asyncReq.completedAt) > ttlMs) {
-				toRemove.append(it.key());
-			}
-		}
-		foreach (const QString& expired, toRemove)
-			m_async.requests.remove(expired);
-	}
-
-	if (!toRemove.isEmpty()) {
-		appendLog(QString("[INFO] Async cleanup: removed %1 expired request(s)")
-			.arg(toRemove.size()));
+	int removed = m_pAsyncMgr->cleanupExpired();
+	if (removed > 0) {
+		appendLog(QString("[INFO] Async cleanup: removed %1 expired request(s)").arg(removed));
 	}
 }
 
-// ─── Async helpers ────────────────────────────────────────────────────────────
-
-std::string DzScriptServerPane::requestStatusToString(RequestStatus status) const
+// Called on the main thread via killRenderRequested signal from AsyncRequestManager.
+// Keeps the DAZ API call off HTTP threads.
+void DzScriptServerPane::killRenderOnMainThread()
 {
-	switch (status) {
-		case REQUEST_QUEUED:    return "queued";
-		case REQUEST_RUNNING:   return "running";
-		case REQUEST_COMPLETED: return "completed";
-		case REQUEST_FAILED:    return "failed";
-		case REQUEST_CANCELLED: return "cancelled";
-		default:                return "unknown";
+	DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
+	if (renderMgr && renderMgr->isRendering()) {
+		DzRenderer* renderer = renderMgr->getActiveRenderer();
+		if (renderer) renderer->killRender();
 	}
 }
 

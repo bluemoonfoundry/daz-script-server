@@ -11,7 +11,6 @@
 #include <QtCore/qmutex.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qtimer.h>
-#include <QtCore/qqueue.h>
 #include <QtGui/qspinbox.h>
 #include <QtGui/qlineedit.h>
 #include <QtGui/qpushbutton.h>
@@ -25,6 +24,7 @@
 #include "IPWhitelistService.h"
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
+#include "AsyncRequestManager.h"
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; }
@@ -83,9 +83,10 @@ public:
 	QPair<int, QString>  deleteRegistryScriptJson(const QString& id, const QString& clientIP);
 	bool                 lookupRegistryScript(const QString& id, QString& outScript) const;
 
-	// Async request management — called from HTTP threads (mutex-protected)
+	// Async request management — called from HTTP threads (delegated to AsyncRequestManager)
 	QString              enqueueAsyncRequest(const QString& scriptText, const QVariantMap& args,
-	                                         const QString& idPrefix, qint64& outSubmittedAt);
+	                                         const QString& idPrefix, qint64& outSubmittedAt,
+	                                         QString& outError);
 	QPair<int, QString>  getAsyncStatusJson(const QString& requestId) const;
 	QPair<int, QString>  getAsyncResultJson(const QString& requestId, bool doWait, int timeoutSec);
 	QPair<int, QString>  cancelAsyncRequestJson(const QString& requestId, const QString& clientIP);
@@ -106,6 +107,7 @@ private slots:
 	// Async execution (runs on main thread via Qt event loop)
 	void processNextAsyncRequest();
 	void cleanupExpiredRequests();
+	void killRenderOnMainThread();
 
 private:
 	void   setupRoutes();
@@ -162,65 +164,19 @@ private:
 	// ── Async Request Infrastructure ─────────────────────────────────────────
 	//
 	// THREADING MODEL:
-	//   HTTP threads: enqueue requests (under mutex), read status/result (under
-	//                 mutex), set cancelRequested (under mutex).
+	//   HTTP threads: call enqueueAsyncRequest() / getAsyncStatusJson() / etc.,
+	//                 which delegate to AsyncRequestManager (mutex-protected).
 	//   Main thread:  processNextAsyncRequest() dequeues and executes serially.
 	//                 All DzScript execution happens here, same as sync path.
 	//
 	// IMPORTANT: processNextAsyncRequest() blocks the main thread (and thus the
-	// Qt event loop) for the full duration of each script execution.  This is
+	// Qt event loop) for the full duration of each script execution.  That is
 	// intentional — DAZ Studio's API is single-threaded.  Status queries are
-	// served directly from the mutex-protected map without needing the main
-	// thread, so polling always returns promptly even during a long render.
+	// served directly from AsyncRequestManager's mutex-protected map without
+	// needing the main thread, so polling always returns promptly.
 
-	enum RequestStatus {
-		REQUEST_QUEUED,
-		REQUEST_RUNNING,
-		REQUEST_COMPLETED,
-		REQUEST_FAILED,
-		REQUEST_CANCELLED
-	};
-
-	struct AsyncRequest {
-		AsyncRequest()
-			: status(REQUEST_QUEUED)
-			, scriptExecuted(false)
-			, progress(0.0)
-			, submittedAt(0), startedAt(0), completedAt(0)
-			, cancelRequested(0)
-		{}
-
-		QString       id;
-		RequestStatus status;
-		QString       scriptText;     // Resolved script body (inline or from registry)
-		QVariantMap   args;
-
-		// Set after execution completes
-		QVariant      scriptResult;   // From DzScript::result()
-		QStringList   outputLines;    // Captured dzApp debugMsg output
-		QString       error;          // Error string (failed/cancelled)
-		bool          scriptExecuted; // true if DzScript::execute() succeeded
-
-		// Progress and timing (milliseconds since epoch)
-		double  progress;     // 0.0–1.0; -1.0 = unknown
-		qint64  submittedAt;
-		qint64  startedAt;
-		qint64  completedAt;
-
-		// Cancel flag — always read/written while holding AsyncState::mutex
-		int cancelRequested;
-	};
-
-	struct AsyncState {
-		QMap<QString, AsyncRequest> requests;
-		QQueue<QString>             queue;     // IDs of QUEUED requests (FIFO)
-		QString                     currentId; // ID of RUNNING request; empty = idle
-		mutable QMutex              mutex;
-	};
-	AsyncState  m_async;
-	QTimer*     m_pCleanupTimer;  // Fires every 5 min to purge TTL-expired requests
-
-	std::string requestStatusToString(RequestStatus status) const;
+	AsyncRequestManager* m_pAsyncMgr;
+	QTimer*              m_pCleanupTimer; // Fires every 5 min to purge TTL-expired requests
 
 	// ── Middleware chains (created in setupRoutes) ────────────────────────────
 	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only

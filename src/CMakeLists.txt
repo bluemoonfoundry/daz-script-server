@@ -6,6 +6,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../i
 add_library(DazScriptServer SHARED
 	pluginmain.cpp
 	DzScriptServerPane.cpp
+	AsyncRequestManager.cpp
 	AuthenticationService.cpp
 	RateLimiterService.cpp
 	IPWhitelistService.cpp
@@ -15,6 +16,7 @@ add_library(DazScriptServer SHARED
 	RequestHandlers.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
+	../include/AsyncRequestManager.h
 	../include/AuthenticationService.h
 	../include/RateLimiterService.h
 	../include/IPWhitelistService.h

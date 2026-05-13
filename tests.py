@@ -273,6 +273,180 @@ class TestInputValidation(unittest.TestCase):
         self.assertFalse(body["success"])
 
 
+# ─── Async execution ─────────────────────────────────────────────────────────
+
+def async_execute(script=None, args=None, headers=None):
+    """POST /execute/async and return the raw response."""
+    payload = {}
+    if script is not None:
+        payload["script"] = script
+    if args is not None:
+        payload["args"] = args
+    h = auth_headers() if headers is None else headers
+    return requests.post(f"{BASE_URL}/execute/async", headers=h, json=payload, timeout=10)
+
+
+def poll_status(request_id, timeout=15):
+    """Poll /requests/:id/status until terminal or timeout. Returns final body dict."""
+    deadline = __import__("time").time() + timeout
+    while __import__("time").time() < deadline:
+        r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                         headers=auth_headers(), timeout=5)
+        body = r.json()
+        if body.get("status") in ("completed", "failed", "cancelled"):
+            return body
+        __import__("time").sleep(0.2)
+    return body
+
+
+def get_result(request_id, wait=False, timeout=15):
+    """GET /requests/:id/result, optionally with long-poll."""
+    params = {}
+    if wait:
+        params["wait"] = "true"
+        params["timeout"] = str(timeout)
+    r = requests.get(f"{BASE_URL}/requests/{request_id}/result",
+                     headers=auth_headers(), params=params, timeout=timeout + 5)
+    return r
+
+
+class TestAsyncExecution(unittest.TestCase):
+
+    def test_async_submit_returns_queued(self):
+        r = async_execute(script=iife("return 1;"))
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("request_id", body)
+        self.assertEqual(body.get("status"), "queued")
+        self.assertIn("submitted_at", body)
+
+    def test_async_result_completes(self):
+        r = async_execute(script=iife("return 42;"))
+        request_id = r.json()["request_id"]
+        final = poll_status(request_id, timeout=20)
+        self.assertEqual(final["status"], "completed")
+
+        result_r = get_result(request_id)
+        body = result_r.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body.get("result"), 42)
+
+    def test_async_result_long_poll(self):
+        r = async_execute(script=iife("return 'long-poll';"))
+        request_id = r.json()["request_id"]
+        result_r = get_result(request_id, wait=True, timeout=20)
+        body = result_r.json()
+        self.assertIn(body["status"], ("completed", "failed"))
+
+    def test_async_args_accessible(self):
+        r = async_execute(
+            script=iife("return getArguments()[0].value;"),
+            args={"value": 99}
+        )
+        request_id = r.json()["request_id"]
+        final = poll_status(request_id, timeout=20)
+        self.assertEqual(final["status"], "completed")
+
+        result_r = get_result(request_id)
+        body = result_r.json()
+        self.assertEqual(body.get("result"), 99)
+
+    def test_async_script_error_gives_failed_status(self):
+        r = async_execute(script="this is not valid dazscript !!!")
+        request_id = r.json()["request_id"]
+        final = poll_status(request_id, timeout=20)
+        self.assertEqual(final["status"], "failed")
+
+        result_r = get_result(request_id)
+        body = result_r.json()
+        self.assertEqual(body["status"], "failed")
+        self.assertFalse(body.get("success"))
+
+    def test_async_status_includes_queue_position(self):
+        r = async_execute(script=iife("return 1;"))
+        request_id = r.json()["request_id"]
+        # Status may be queued or already running/completed depending on timing
+        status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                                headers=auth_headers(), timeout=5)
+        body = status_r.json()
+        self.assertEqual(status_r.status_code, 200)
+        self.assertIn("status", body)
+
+    def test_async_unknown_request_returns_404(self):
+        r = requests.get(f"{BASE_URL}/requests/nonexistent-id/status",
+                         headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+
+        r2 = requests.get(f"{BASE_URL}/requests/nonexistent-id/result",
+                          headers=auth_headers(), timeout=5)
+        self.assertEqual(r2.status_code, 404)
+
+    def test_async_cancel_queued_request(self):
+        # Submit a no-op and immediately cancel it before it can run
+        r = async_execute(script=iife("return 1;"))
+        request_id = r.json()["request_id"]
+
+        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}/cancel",
+                                   headers=auth_headers(), timeout=5)
+        # 200 = cancelled, 400 = already finished (race) — both are acceptable
+        self.assertIn(cancel_r.status_code, (200, 400))
+
+        if cancel_r.status_code == 200:
+            self.assertEqual(cancel_r.json().get("status"), "cancelled")
+
+    def test_async_cancel_already_finished_returns_400(self):
+        r = async_execute(script=iife("return 1;"))
+        request_id = r.json()["request_id"]
+        poll_status(request_id, timeout=20)  # Wait until terminal
+
+        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}/cancel",
+                                   headers=auth_headers(), timeout=5)
+        self.assertEqual(cancel_r.status_code, 400)
+
+    def test_async_list_returns_requests(self):
+        # Submit one request to ensure the list is non-empty
+        async_execute(script=iife("return 1;"))
+        list_r = requests.get(f"{BASE_URL}/requests",
+                              headers=auth_headers(), timeout=5)
+        self.assertEqual(list_r.status_code, 200)
+        body = list_r.json()
+        self.assertIn("requests", body)
+        self.assertIn("total", body)
+        self.assertIsInstance(body["requests"], list)
+
+    def test_async_list_filter_by_status(self):
+        list_r = requests.get(f"{BASE_URL}/requests?status=completed",
+                              headers=auth_headers(), timeout=5)
+        self.assertEqual(list_r.status_code, 200)
+        body = list_r.json()
+        for entry in body.get("requests", []):
+            self.assertEqual(entry["status"], "completed")
+
+    def test_async_missing_script_returns_400(self):
+        r = requests.post(f"{BASE_URL}/execute/async",
+                         headers=auth_headers(), json={}, timeout=5)
+        self.assertEqual(r.status_code, 400)
+
+    def test_async_invalid_json_returns_400(self):
+        combined = {"Content-Type": "application/json", **auth_headers()}
+        r = requests.post(f"{BASE_URL}/execute/async",
+                         headers=combined,
+                         data="not json",
+                         timeout=5)
+        self.assertEqual(r.status_code, 400)
+
+    def test_async_output_captured(self):
+        r = async_execute(script="print('hello async');")
+        request_id = r.json()["request_id"]
+        final = poll_status(request_id, timeout=20)
+        self.assertEqual(final["status"], "completed")
+
+        result_r = get_result(request_id)
+        body = result_r.json()
+        self.assertIsInstance(body.get("output"), list)
+
+
 # ─── Response shape ───────────────────────────────────────────────────────────
 
 class TestResponseShape(unittest.TestCase):

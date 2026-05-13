@@ -252,8 +252,15 @@ void AsyncExecuteHandler::handle(HttpContext& ctx)
     }
 
     qint64 submittedAt = 0;
+    QString enqueueError;
     QString requestId = m_pPane->enqueueAsyncRequest(
-        scriptText, body.value("args").toMap(), "execute", submittedAt);
+        scriptText, body.value("args").toMap(), "execute", submittedAt, enqueueError);
+
+    if (requestId.isEmpty()) {
+        QString errJson = QString("{\"success\":false,\"error\":\"%1\"}").arg(enqueueError);
+        ctx.respond(503, errJson.toStdString());
+        return;
+    }
 
     JsonBuilder json;
     json.startObject();
@@ -289,7 +296,15 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
     }
 
     qint64 submittedAt = 0;
-    QString requestId = m_pPane->enqueueAsyncRequest(scriptText, argsMap, "script", submittedAt);
+    QString enqueueError;
+    QString requestId = m_pPane->enqueueAsyncRequest(scriptText, argsMap, "script", submittedAt,
+                                                     enqueueError);
+
+    if (requestId.isEmpty()) {
+        QString errJson = QString("{\"success\":false,\"error\":\"%1\"}").arg(enqueueError);
+        ctx.respond(503, errJson.toStdString());
+        return;
+    }
 
     JsonBuilder json;
     json.startObject();
