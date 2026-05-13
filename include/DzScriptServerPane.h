@@ -11,6 +11,7 @@
 #include <QtCore/qmutex.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qtimer.h>
+#include <QtCore/qmetatype.h>
 #include <QtGui/qspinbox.h>
 #include <QtGui/qlineedit.h>
 #include <QtGui/qpushbutton.h>
@@ -25,6 +26,10 @@
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
+
+// Required for BlockingQueuedConnection return from execute/register handlers.
+typedef QPair<int, QByteArray> HttpResult;
+Q_DECLARE_METATYPE(HttpResult)
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; }
@@ -66,9 +71,10 @@ public slots:
 	Q_INVOKABLE void stopServer();
 
 	// Called on main thread via BlockingQueuedConnection from httplib handler threads.
-	Q_INVOKABLE QByteArray handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP);
-	Q_INVOKABLE QByteArray handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
-	Q_INVOKABLE QByteArray handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
+	// Returns HttpResult (status, jsonBody) so handlers can set the correct HTTP status code.
+	Q_INVOKABLE HttpResult handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP);
+	Q_INVOKABLE HttpResult handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
+	Q_INVOKABLE HttpResult handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
 	void appendLog(const QString& line);
 	void updateActiveRequestsLabel();

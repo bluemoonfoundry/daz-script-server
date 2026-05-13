@@ -4,6 +4,8 @@
 
 #include "DzScriptServerPane.h"
 #include "JsonBuilder.h"
+#include "ErrorResponse.h"
+#include "RequestValidator.h"
 #include "common_version.h"
 
 #include <dzapp.h>
@@ -14,6 +16,7 @@
 #include <QtCore/qmetaobject.h>
 #include <QtCore/qsettings.h>
 #include <QtCore/qdatetime.h>
+#include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qregexp.h>
 #include <QtCore/qmutex.h>
@@ -66,6 +69,9 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
 {
+	// Register return type for BlockingQueuedConnection on execute/register handlers.
+	qRegisterMetaType<HttpResult>("HttpResult");
+
 	// Load settings and token
 	loadSettings();
 
@@ -346,15 +352,47 @@ void DzScriptServerPane::startServer()
 	if (m_bRunning)
 		return;
 
-	// Verify we have a valid API token before starting
+	// ── Fail-fast: verify critical startup requirements ──────────────────────
+	//
+	// Refuse to start if any critical component cannot be initialised safely.
+	// Each check logs a detailed error and shows a dialog before returning.
+
+	// 1. DAZ SDK availability
+	if (!dzApp) {
+		appendLog("[CRITICAL] Cannot start server: DAZ Studio application object is not available.");
+		QMessageBox::critical(this, tr("Startup Error"),
+			tr("Cannot start server: DAZ Studio application object (dzApp) is null.\n\n"
+			   "This should not happen in a normal plugin context. "
+			   "Try restarting DAZ Studio."));
+		return;
+	}
+
+	// 2. Crypto / token availability
 	if (m_auth.isEnabled() && (m_auth.getToken().isEmpty() || m_auth.getToken().length() < 32)) {
-		appendLog("[ERROR] Cannot start server: No valid API token available. Token generation may have failed.");
+		appendLog("[CRITICAL] Cannot start server: No valid API token available. "
+		          "The cryptographic RNG may have failed during plugin initialisation.");
 		QMessageBox::critical(this, tr("Security Error"),
 			tr("Cannot start server without a valid API token.\n\n"
-			   "The cryptographic random number generator failed to create a secure token. "
+			   "The cryptographic random number generator failed to produce a secure token. "
 			   "This may indicate a system security configuration issue.\n\n"
-			   "Try disabling authentication temporarily, or check system logs for security errors."));
+			   "Try disabling authentication temporarily, or check system logs for errors."));
 		return;
+	}
+
+	// 3. Token file directory writability
+	{
+		QString tokenPath = AuthenticationService::getTokenFilePath();
+		QFileInfo tokenDir(tokenPath);
+		QString   dirPath = tokenDir.absolutePath();
+		QFile     probe(dirPath + "/.dzsrv_probe");
+		if (!probe.open(QIODevice::WriteOnly)) {
+			appendLog(QString("[WARN] Token file directory may not be writable: %1 — "
+			                  "token persistence may fail").arg(dirPath));
+			// Non-fatal: server can still run; token was already loaded into memory.
+		} else {
+			probe.close();
+			probe.remove();
+		}
 	}
 
 	m_pServer = new httplib::Server();
@@ -525,6 +563,11 @@ void DzScriptServerPane::appendLog(const QString& line)
 
 // ─── Route setup helpers ─────────────────────────────────────────────────────
 
+static inline QByteArray stdToQBA(const std::string& s)
+{
+    return QByteArray(s.c_str(), static_cast<int>(s.size()));
+}
+
 // RAII guard for the concurrent-request counter.
 // Increments on construction; decrements automatically on destruction.
 // operator bool() returns false if the limit was already reached (counter not held).
@@ -630,7 +673,7 @@ void DzScriptServerPane::setupRoutes()
 		ActiveRequestSlot slot(m_nActiveRequests, m_nMaxConcurrentRequests);
 		if (!slot) {
 			res.status = 429;
-			res.set_content("{\"success\":false,\"error\":\"Server busy: Maximum concurrent requests limit reached. Please wait and retry.\"}", "application/json");
+			res.set_content(ErrorResponse::build(ErrorCode::CONCURRENT_LIMIT_EXCEEDED), "application/json");
 			return;
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
@@ -663,7 +706,7 @@ void DzScriptServerPane::setupRoutes()
 		ActiveRequestSlot slot(m_nActiveRequests, m_nMaxConcurrentRequests);
 		if (!slot) {
 			res.status = 429;
-			res.set_content("{\"success\":false,\"error\":\"Server busy: concurrent request limit reached. Please retry.\"}", "application/json");
+			res.set_content(ErrorResponse::build(ErrorCode::CONCURRENT_LIMIT_EXCEEDED), "application/json");
 			return;
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
@@ -828,7 +871,7 @@ QString DzScriptServerPane::listAsyncRequestsJson(const QString& statusFilter) c
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
 
-QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP)
+HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP)
 {
 	QTime startTime = QTime::currentTime();
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
@@ -837,110 +880,42 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	// Parse JSON body (QScriptEngine is a QObject — only safe on a Qt-managed thread)
 	QString bodyStr = QString::fromUtf8(jsonBody.constData(), jsonBody.size());
 
-	// Error handling for malformed JSON
 	QScriptEngine parseEngine;
 	QScriptValue parsed = parseEngine.evaluate("(" + bodyStr + ")");
 	if (parseEngine.hasUncaughtException()) {
-		QString errorMsg = QString("Invalid JSON: %1 at line %2")
-			.arg(parseEngine.uncaughtException().toString())
-			.arg(parseEngine.uncaughtExceptionLineNumber());
-		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(errorMsg), requestId);
+		QString detail = QString("line %1: %2")
+			.arg(parseEngine.uncaughtExceptionLineNumber())
+			.arg(parseEngine.uncaughtException().toString());
 		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] JSON parse error")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr)
-			.arg(requestId));
+			.arg(clientIPStr).arg(requestId));
 		m_metrics.recordRequest(false);
-		return resp.toUtf8();
+		return HttpResult(400,
+			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON, detail.toStdString())));
 	}
 
-	QVariantMap bodyMap = parsed.toVariant().toMap();
+	QVariantMap bodyMap  = parsed.toVariant().toMap();
+	QString scriptFile   = bodyMap.value("scriptFile").toString();
+	QString scriptText   = bodyMap.value("script").toString();
+	QVariantMap argsMap  = bodyMap.value("args").toMap();
 
-	QString scriptFile = bodyMap.value("scriptFile").toString();
-	QString scriptText = bodyMap.value("script").toString();
-	QVariantMap argsMap = bodyMap.value("args").toMap();
-
-	// Input validation
-	if (scriptFile.isEmpty() && scriptText.isEmpty()) {
-		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(QString("Request must include either 'scriptFile' (path) or 'script' (inline code) field")),
-		                                 requestId);
-		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Missing script/scriptFile")
-			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr)
-			.arg(requestId));
-		m_metrics.recordRequest(false);
-		return resp.toUtf8();
-	}
-
-	// Warn if both are provided
+	// Warn if both fields are provided (scriptFile takes precedence)
 	if (!scriptFile.isEmpty() && !scriptText.isEmpty()) {
-		appendLog(QString("[%1] [%2] [WARN] [%3] Both scriptFile and script provided, using scriptFile")
+		appendLog(QString("[%1] [%2] [WARN] [%3] Both scriptFile and script provided; using scriptFile")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr)
-			.arg(requestId));
+			.arg(clientIPStr).arg(requestId));
 	}
 
-	// Validate script text length (use configurable limit)
-	int maxScriptLength = m_nMaxScriptLengthKB * 1024;
-	if (!scriptText.isEmpty() && scriptText.length() > maxScriptLength) {
-		QString resp = buildResponseJson(false, QVariant(), QStringList(),
-		                                 QVariant(QString("Script text too large: %1 bytes exceeds maximum of %2 KB (%3 bytes). Consider using 'scriptFile' instead of inline 'script' for large scripts.")
-		                                          .arg(scriptText.length())
-		                                          .arg(m_nMaxScriptLengthKB)
-		                                          .arg(maxScriptLength)),
-		                                 requestId);
-		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Script too large (%4 bytes)")
+	// Centralised input validation
+	ValidationResult vr = RequestValidator::validateExecuteFields(scriptFile, scriptText, m_nMaxScriptLengthKB);
+	if (!vr.valid) {
+		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Validation: %4")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-			.arg(clientIPStr)
-			.arg(requestId)
-			.arg(scriptText.length()));
+			.arg(clientIPStr).arg(requestId)
+			.arg(ErrorResponse::codeString(vr.errorCode)));
 		m_metrics.recordRequest(false);
-		return resp.toUtf8();
-	}
-
-	// Validate scriptFile path
-	if (!scriptFile.isEmpty()) {
-		QFileInfo fileInfo(scriptFile);
-		if (!fileInfo.exists()) {
-			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Script file not found: '%1' does not exist. Verify the file path is correct and accessible.")
-			                                          .arg(scriptFile)),
-			                                 requestId);
-			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] File not found: %4")
-				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-				.arg(clientIPStr)
-				.arg(requestId)
-				.arg(scriptFile));
-			m_metrics.recordRequest(false);
-			return resp.toUtf8();
-		}
-		if (!fileInfo.isFile()) {
-			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Invalid script path: '%1' is a directory, not a file. Provide a path to a .dsa script file.")
-			                                          .arg(scriptFile)),
-			                                 requestId);
-			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Not a file: %4")
-				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-				.arg(clientIPStr)
-				.arg(requestId)
-				.arg(scriptFile));
-			m_metrics.recordRequest(false);
-			return resp.toUtf8();
-		}
-		if (!fileInfo.isAbsolute()) {
-			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Invalid path format: '%1' is a relative path. Provide an absolute path (e.g., 'C:/Scripts/file.dsa' on Windows or '/home/user/scripts/file.dsa' on Unix).")
-			                                          .arg(scriptFile)),
-			                                 requestId);
-			appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] Path not absolute: %4")
-				.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-				.arg(clientIPStr)
-				.arg(requestId)
-				.arg(scriptFile));
-			m_metrics.recordRequest(false);
-			return resp.toUtf8();
-		}
+		return HttpResult(vr.httpStatus(),
+			stdToQBA(vr.toErrorJson()));
 	}
 
 	// Capture dzApp debug output (print() in DazScript)
@@ -956,15 +931,13 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		// loadFromFile sets the filename so getScriptFileName() and relative
 		// include() calls work correctly inside the script.
 		if (!script->loadFromFile(scriptFile)) {
-			// QScopedPointer auto-deletes script on return
 			disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
 			           this,  SLOT(onMessagePosted(const QString&)));
 			m_bCapturingLog = false;
-			QString resp = buildResponseJson(false, QVariant(), QStringList(),
-			                                 QVariant(QString("Failed to load scriptFile: %1").arg(scriptFile)),
-			                                 requestId);
 			m_metrics.recordRequest(false);
-			return resp.toUtf8();
+			return HttpResult(400,
+				stdToQBA(ErrorResponse::build(
+					ErrorCode::SCRIPT_FILE_LOAD_FAILED, scriptFile.toStdString())));
 		}
 	} else {
 		script->setCode(scriptText);
@@ -1016,40 +989,42 @@ QByteArray DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		.arg(requestId)
 		.arg(logLabel));
 
-	QString resp = buildResponseJson(success,
+	QString body = buildResponseJson(success,
 	                                 success ? scriptResult : QVariant(),
 	                                 m_aCapturedLogLines,
 	                                 errorVar,
 	                                 requestId);
-	return resp.toUtf8();
+	return HttpResult(200, body.toUtf8());
 }
 
 // ─── Script Registry handlers (main thread) ───────────────────────────────────
 
-QByteArray DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP)
+HttpResult DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP)
 {
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
 
 	QScriptEngine parseEngine;
-	QScriptValue  parsed = parseEngine.evaluate("(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+	QScriptValue  parsed = parseEngine.evaluate(
+		"(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
 	if (parseEngine.hasUncaughtException()) {
-		return QByteArray("{\"success\":false,\"error\":\"Invalid JSON in request body\"}");
+		return HttpResult(400,
+			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
 	}
 
-	QVariantMap body = parsed.toVariant().toMap();
+	QVariantMap body    = parsed.toVariant().toMap();
 	QString name        = body.value("name").toString().trimmed();
 	QString description = body.value("description").toString().trimmed();
 	QString script      = body.value("script").toString();
 
-	if (name.isEmpty())
-		return QByteArray("{\"success\":false,\"error\":\"Field 'name' is required\"}");
+	ValidationResult nameResult = RequestValidator::validateScriptName(name);
+	if (!nameResult.valid)
+		return HttpResult(nameResult.httpStatus(),
+			stdToQBA(nameResult.toErrorJson()));
 
-	QRegExp validName("^[A-Za-z0-9_-]{1,64}$");
-	if (!validName.exactMatch(name))
-		return QByteArray("{\"success\":false,\"error\":\"Field 'name' must be 1-64 characters using only letters, digits, hyphens, and underscores\"}");
-
-	if (script.isEmpty())
-		return QByteArray("{\"success\":false,\"error\":\"Field 'script' is required\"}");
+	ValidationResult scriptResult = RequestValidator::validateRequiredField(script, "script");
+	if (!scriptResult.valid)
+		return HttpResult(scriptResult.httpStatus(),
+			stdToQBA(scriptResult.toErrorJson()));
 
 	RegisteredScript entry;
 	entry.description  = description;
@@ -1076,10 +1051,10 @@ QByteArray DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, 
 	json.addMember("registered_at", entry.registeredAt.toString(Qt::ISODate));
 	json.addMember("updated",       isUpdate);
 	json.finishObject();
-	return json.toString().toUtf8();
+	return HttpResult(200, json.toString().toUtf8());
 }
 
-QByteArray DzScriptServerPane::handleRegistryExecuteRequest(
+HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 	const QByteArray& scriptText,
 	const QByteArray& scriptId,
 	const QByteArray& requestBody,
@@ -1144,11 +1119,12 @@ QByteArray DzScriptServerPane::handleRegistryExecuteRequest(
 		.arg(requestId)
 		.arg(scriptIdStr));
 
-	return buildResponseJson(success,
-	                         success ? scriptResult : QVariant(),
-	                         m_aCapturedLogLines,
-	                         errorVar,
-	                         requestId).toUtf8();
+	return HttpResult(200,
+		buildResponseJson(success,
+		                  success ? scriptResult : QVariant(),
+		                  m_aCapturedLogLines,
+		                  errorVar,
+		                  requestId).toUtf8());
 }
 
 void DzScriptServerPane::onMessagePosted(const QString& msg)

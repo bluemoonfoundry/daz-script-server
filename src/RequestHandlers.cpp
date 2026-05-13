@@ -1,6 +1,8 @@
 #include "DzScriptServerPane.h"
 #include "RequestHandler.h"
 #include "JsonBuilder.h"
+#include "ErrorResponse.h"
+#include "RequestValidator.h"
 
 #include <QtCore/qdatetime.h>
 #include <QtCore/qmetaobject.h>
@@ -41,9 +43,7 @@ bool IPWhitelistMiddleware::process(HttpContext& ctx)
     QString ip = QString::fromStdString(ctx.remoteAddr);
     if (m_whitelist.isAllowed(ip)) return true;
 
-    ctx.respond(403,
-        "{\"success\":false,\"error\":\"Access denied: Your IP address is not in the whitelist. "
-        "Contact the server administrator to add your IP to the allowed list.\"}");
+    ctx.respond(403, ErrorResponse::build(ErrorCode::IP_NOT_WHITELISTED, ctx.remoteAddr));
 
     QString logMsg = QString("[%1] [BLOCKED] %2 - IP not whitelisted")
         .arg(QDateTime::currentDateTime().toString("HH:mm:ss")).arg(ip);
@@ -62,9 +62,7 @@ bool RateLimitMiddleware::process(HttpContext& ctx)
     QString ip = QString::fromStdString(ctx.remoteAddr);
     if (m_limiter.checkRequest(ip)) return true;
 
-    ctx.respond(429,
-        "{\"success\":false,\"error\":\"Rate limit exceeded: Too many requests from your IP address. "
-        "Please wait before retrying (sliding window applies).\"}");
+    ctx.respond(429, ErrorResponse::build(ErrorCode::RATE_LIMIT_EXCEEDED, ctx.remoteAddr));
 
     QString logMsg = QString("[%1] [RATE LIMIT] %2")
         .arg(QDateTime::currentDateTime().toString("HH:mm:ss")).arg(ip);
@@ -83,10 +81,11 @@ bool BodySizeMiddleware::process(HttpContext& ctx)
     size_t maxSize = static_cast<size_t>(m_maxSizeMB) * 1024 * 1024;
     if (ctx.body.size() <= maxSize) return true;
 
-    QString errMsg = QString(
-        "{\"success\":false,\"error\":\"Request body too large: Size exceeds maximum of %1MB. "
-        "Reduce script size or use 'scriptFile' instead of inline 'script'.\"}").arg(m_maxSizeMB);
-    ctx.respond(413, errMsg.toStdString());
+    std::string detail =
+        "Body is " + std::to_string(ctx.body.size()) +
+        " bytes; maximum is " + std::to_string(m_maxSizeMB) +
+        " MB (" + std::to_string(maxSize) + " bytes)";
+    ctx.respond(413, ErrorResponse::build(ErrorCode::BODY_TOO_LARGE, detail));
     return false;
 }
 
@@ -107,9 +106,8 @@ bool AuthMiddleware::process(HttpContext& ctx)
     }
     if (m_auth.validateToken(token)) return true;
 
-    ctx.respond(401,
-        "{\"success\":false,\"error\":\"Authentication failed: Invalid or missing API token. "
-        "Include 'X-API-Token' header or 'Authorization: Bearer <token>' with your request.\"}");
+    ErrorCode code = token.empty() ? ErrorCode::AUTH_MISSING_TOKEN : ErrorCode::AUTH_INVALID_TOKEN;
+    ctx.respond(401, ErrorResponse::build(code));
     m_metrics.recordAuthFailure();
 
     QString ip = QString::fromStdString(ctx.remoteAddr);
@@ -155,13 +153,13 @@ void ExecuteScriptHandler::handle(HttpContext& ctx)
 {
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    QByteArray responseBytes;
+    HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleExecuteRequest",
         Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(QByteArray, responseBytes),
+        Q_RETURN_ARG(HttpResult, result),
         Q_ARG(QByteArray, bodyBytes),
         Q_ARG(QByteArray, ipBytes));
-    ctx.responseBody = std::string(responseBytes.constData(), responseBytes.size());
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,13 +170,13 @@ void ScriptRegisterHandler::handle(HttpContext& ctx)
 {
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    QByteArray responseBytes;
+    HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleRegisterScript",
         Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(QByteArray, responseBytes),
+        Q_RETURN_ARG(HttpResult, result),
         Q_ARG(QByteArray, bodyBytes),
         Q_ARG(QByteArray, ipBytes));
-    ctx.responseBody = std::string(responseBytes.constData(), responseBytes.size());
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,8 +209,7 @@ void ScriptExecuteHandler::handle(HttpContext& ctx)
     QString id = QString::fromStdString(ctx.urlMatch);
     QString scriptText;
     if (!m_pPane->lookupRegistryScript(id, scriptText)) {
-        QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(id);
-        ctx.respond(404, errJson.toStdString());
+        ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id.toStdString()));
         return;
     }
 
@@ -220,15 +217,15 @@ void ScriptExecuteHandler::handle(HttpContext& ctx)
     QByteArray scriptIdBytes = id.toUtf8();
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    QByteArray responseBytes;
+    HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleRegistryExecuteRequest",
         Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(QByteArray, responseBytes),
+        Q_RETURN_ARG(HttpResult, result),
         Q_ARG(QByteArray, scriptBytes),
         Q_ARG(QByteArray, scriptIdBytes),
         Q_ARG(QByteArray, bodyBytes),
         Q_ARG(QByteArray, ipBytes));
-    ctx.responseBody = std::string(responseBytes.constData(), responseBytes.size());
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,24 +238,26 @@ void AsyncExecuteHandler::handle(HttpContext& ctx)
     QScriptValue  parsed = parseEngine.evaluate(
         "(" + QString::fromUtf8(ctx.body.c_str(), (int)ctx.body.size()) + ")");
     if (parseEngine.hasUncaughtException()) {
-        ctx.respond(400, "{\"success\":false,\"error\":\"Invalid JSON in request body\"}");
+        ctx.respond(400, ErrorResponse::build(ErrorCode::INVALID_JSON));
         return;
     }
-    QVariantMap body = parsed.toVariant().toMap();
-    QString scriptText = body.value("script").toString();
-    if (scriptText.isEmpty()) {
-        ctx.respond(400, "{\"success\":false,\"error\":\"Field 'script' is required\"}");
+    QVariantMap body       = parsed.toVariant().toMap();
+    QString     scriptText = body.value("script").toString();
+
+    ValidationResult vr = RequestValidator::validateRequiredField(scriptText, "script");
+    if (!vr.valid) {
+        ctx.respond(vr.httpStatus(), vr.toErrorJson());
         return;
     }
 
-    qint64 submittedAt = 0;
+    qint64  submittedAt  = 0;
     QString enqueueError;
     QString requestId = m_pPane->enqueueAsyncRequest(
         scriptText, body.value("args").toMap(), "execute", submittedAt, enqueueError);
 
     if (requestId.isEmpty()) {
-        QString errJson = QString("{\"success\":false,\"error\":\"%1\"}").arg(enqueueError);
-        ctx.respond(503, errJson.toStdString());
+        ctx.respond(503, ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE,
+            enqueueError.toStdString()));
         return;
     }
 
@@ -281,8 +280,7 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
     QString id = QString::fromStdString(ctx.urlMatch);
     QString scriptText;
     if (!m_pPane->lookupRegistryScript(id, scriptText)) {
-        QString errJson = QString("{\"success\":false,\"error\":\"Script not found: '%1'\"}").arg(id);
-        ctx.respond(404, errJson.toStdString());
+        ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id.toStdString()));
         return;
     }
 
@@ -295,14 +293,14 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
             argsMap = parsed.toVariant().toMap().value("args").toMap();
     }
 
-    qint64 submittedAt = 0;
+    qint64  submittedAt  = 0;
     QString enqueueError;
     QString requestId = m_pPane->enqueueAsyncRequest(scriptText, argsMap, "script", submittedAt,
                                                      enqueueError);
 
     if (requestId.isEmpty()) {
-        QString errJson = QString("{\"success\":false,\"error\":\"%1\"}").arg(enqueueError);
-        ctx.respond(503, errJson.toStdString());
+        ctx.respond(503, ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE,
+            enqueueError.toStdString()));
         return;
     }
 

@@ -14,6 +14,8 @@ add_library(DazScriptServer SHARED
 	SecureRandom.cpp
 	JsonBuilder.cpp
 	RequestHandlers.cpp
+	ErrorResponse.cpp
+	RequestValidator.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
@@ -24,6 +26,8 @@ add_library(DazScriptServer SHARED
 	../include/SecureRandom.h
 	../include/JsonBuilder.h
 	../include/RequestHandler.h
+	../include/ErrorResponse.h
+	../include/RequestValidator.h
 	../include/common_version.h
 	../include/dzscriptserver.h
 )
