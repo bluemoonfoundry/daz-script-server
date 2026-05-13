@@ -1,5 +1,4 @@
 #pragma once
-#include <QObject>
 #include <QtCore/qstring.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qqueue.h>
@@ -10,6 +9,12 @@
 #include <QtCore/qstringlist.h>
 #include <string>
 
+// Forward declaration — AsyncRequestManager calls back into the pane via
+// QMetaObject::invokeMethod rather than using Qt signals, which avoids the
+// Q_OBJECT / AUTOMOC dependency and the QObject include chain issue with the
+// DAZ Qt4 SDK headers.
+class QObject;
+
 // ─── AsyncRequestManager ─────────────────────────────────────────────────────
 //
 // THREADING MODEL:
@@ -17,25 +22,21 @@
 //                  listJson() — all acquire m_mutex internally.
 //   Main thread  : dequeueNext(), markRunning(), markCompleted(),
 //                  markCancelled(), clearCurrent(), cleanupExpired()
-//                  — these also acquire m_mutex but are only called from the
-//                  Qt main thread (processNextAsyncRequest / cleanup timer).
+//                  — also acquire m_mutex; called only from the Qt main thread.
 //
-// SIGNALS (cross-thread):
-//   requestEnqueued()     → DzScriptServerPane::processNextAsyncRequest()
-//                           via Qt::QueuedConnection — safe wakeup from HTTP thread.
-//   killRenderRequested() → DzScriptServerPane::killRenderOnMainThread()
-//                           via Qt::QueuedConnection — routes DAZ API call to
-//                           main thread instead of calling from HTTP thread.
-//   requestCompleted()    → lifecycle notification (informational).
+// CROSS-THREAD NOTIFICATIONS (via QMetaObject::invokeMethod, QueuedConnection):
+//   m_notifyTarget / "processNextAsyncRequest"  — wakeup on each submit.
+//   m_notifyTarget / "killRenderOnMainThread"   — routes DAZ killRender() to
+//                  main thread instead of calling it from an HTTP thread.
 
-class AsyncRequestManager : public QObject {
-    Q_OBJECT
-
+class AsyncRequestManager {
 public:
     static const int DEFAULT_MAX_QUEUE_DEPTH      = 100;
     static const int DEFAULT_MAX_TRACKED_REQUESTS = 1000;
 
-    explicit AsyncRequestManager(QObject* parent = nullptr);
+    // notifyTarget must be a DzScriptServerPane* (QObject subclass).
+    // Stored as QObject* to avoid the DAZ header dependency here.
+    explicit AsyncRequestManager(QObject* notifyTarget);
 
     // Config — call before starting server; not guarded (write-once at init).
     void setMaxQueueDepth(int n)      { m_maxQueueDepth = n; }
@@ -82,11 +83,11 @@ public:
                        const QStringList& output, const QString& error,
                        bool& outWasCancelled);
 
-    // Mark a request CANCELLED (used for already-queued requests that had
-    // cancelRequested set before dequeue, or for immediate queue removal).
+    // Mark a request CANCELLED (used for queued requests cancelled before
+    // they were dequeued, or for immediate queue removal).
     void markCancelled(const QString& id, const QString& reason);
 
-    // Release m_currentId so processNextAsyncRequest can dequeue the next item.
+    // Release m_currentId so the next processNextAsyncRequest can dequeue.
     void clearCurrent();
 
     // Returns true if cancelRequested is set for this request (under mutex).
@@ -96,19 +97,9 @@ public:
     // Called from cleanup timer on the main thread. Returns count removed.
     int cleanupExpired(qint64 ttlMs = 60LL * 60LL * 1000LL);
 
-    // Mark all QUEUED and RUNNING requests as CANCELLED. Call when the server
-    // shuts down so that any poll result after restart shows the correct state.
+    // Mark all QUEUED and RUNNING requests as CANCELLED. Call on server stop
+    // so that poll results after restart show the correct terminal state.
     void cancelAllPending(const QString& reason = "Server stopped");
-
-signals:
-    // Posted (QueuedConnection) to the main thread's event loop on each submit.
-    void requestEnqueued();
-    // Posted to the main thread when cancellation arrives for a RUNNING request,
-    // so the DAZ killRender() call happens on the main thread rather than an
-    // HTTP thread.
-    void killRenderRequested();
-    // Informational lifecycle signal.
-    void requestCompleted(const QString& id, bool success);
 
 private:
     enum RequestStatus {
@@ -142,6 +133,8 @@ private:
     };
 
     std::string statusToString(RequestStatus s) const;
+
+    QObject* m_notifyTarget; // DzScriptServerPane*
 
     QMap<QString, AsyncRequest> m_requests;
     QQueue<QString>             m_queue;

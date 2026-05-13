@@ -77,11 +77,9 @@ DzScriptServerPane::DzScriptServerPane()
 		appendLog(msg);
 
 	// ── Async request manager ─────────────────────────────────────────────────
+	// Pass 'this' so AsyncRequestManager can invoke processNextAsyncRequest()
+	// and killRenderOnMainThread() via QMetaObject::invokeMethod internally.
 	m_pAsyncMgr = new AsyncRequestManager(this);
-	connect(m_pAsyncMgr, SIGNAL(requestEnqueued()),
-	        this, SLOT(processNextAsyncRequest()), Qt::QueuedConnection);
-	connect(m_pAsyncMgr, SIGNAL(killRenderRequested()),
-	        this, SLOT(killRenderOnMainThread()), Qt::QueuedConnection);
 
 	// ── Async cleanup timer ───────────────────────────────────────────────────
 	// Created here so it lives on the main thread (correct for QTimer).

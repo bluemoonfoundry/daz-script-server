@@ -2,6 +2,7 @@
 #include "MetricsCollector.h"
 #include "JsonBuilder.h"
 #include <QtCore/qthread.h>
+#include <QtCore/qmetaobject.h>
 
 // QThread::msleep is protected — access it via a minimal subclass.
 namespace {
@@ -10,8 +11,8 @@ struct SleepThread : public QThread {
 };
 }
 
-AsyncRequestManager::AsyncRequestManager(QObject* parent)
-    : QObject(parent)
+AsyncRequestManager::AsyncRequestManager(QObject* notifyTarget)
+    : m_notifyTarget(notifyTarget)
     , m_maxQueueDepth(DEFAULT_MAX_QUEUE_DEPTH)
     , m_maxTrackedRequests(DEFAULT_MAX_TRACKED_REQUESTS)
 {}
@@ -54,8 +55,9 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
         r.submittedAt = req.submittedAt;
     }
 
-    // Post wake-up to main thread via QueuedConnection (signal emitted from HTTP thread).
-    emit requestEnqueued();
+    // Post wake-up to main thread via QueuedConnection (called from HTTP thread).
+    QMetaObject::invokeMethod(m_notifyTarget, "processNextAsyncRequest",
+                              Qt::QueuedConnection);
     return r;
 }
 
@@ -190,14 +192,15 @@ QPair<int, QString> AsyncRequestManager::cancelJson(
             req.error       = "Cancelled by client";
             req.completedAt = QDateTime::currentMSecsSinceEpoch();
         } else {
-            // RUNNING: signal the main thread to call killRender safely.
+            // RUNNING: dispatch killRender to the main thread.
             needKillRender = true;
         }
     }
 
     if (needKillRender) {
         // Route the DAZ API call to the main thread via QueuedConnection.
-        emit killRenderRequested();
+        QMetaObject::invokeMethod(m_notifyTarget, "killRenderOnMainThread",
+                                  Qt::QueuedConnection);
     }
 
     JsonBuilder json;
@@ -272,8 +275,8 @@ int AsyncRequestManager::getTotalTracked() const
 bool AsyncRequestManager::dequeueNext(QString& outId, QString& outScript, QVariantMap& outArgs)
 {
     QMutexLocker locker(&m_mutex);
-    if (!m_currentId.isEmpty()) return false; // Already running one
-    if (m_queue.isEmpty())       return false; // Nothing to do
+    if (!m_currentId.isEmpty()) return false;
+    if (m_queue.isEmpty())       return false;
 
     QString id = m_queue.dequeue();
     m_currentId = id;
@@ -305,18 +308,18 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
     outWasCancelled = false;
     if (!m_requests.contains(id)) return;
 
-    AsyncRequest& req    = m_requests[id];
-    req.completedAt      = QDateTime::currentMSecsSinceEpoch();
-    req.progress         = 1.0;
-    req.outputLines      = output;
+    AsyncRequest& req  = m_requests[id];
+    req.completedAt    = QDateTime::currentMSecsSinceEpoch();
+    req.progress       = 1.0;
+    req.outputLines    = output;
 
     if (req.cancelRequested) {
-        req.status        = REQUEST_CANCELLED;
-        req.error         = "Cancelled by client";
-        outWasCancelled   = true;
+        req.status       = REQUEST_CANCELLED;
+        req.error        = "Cancelled by client";
+        outWasCancelled  = true;
     } else if (executed) {
-        req.status        = REQUEST_COMPLETED;
-        req.scriptResult  = result;
+        req.status         = REQUEST_COMPLETED;
+        req.scriptResult   = result;
         req.scriptExecuted = true;
     } else {
         req.status = REQUEST_FAILED;
