@@ -61,8 +61,10 @@ bool AuthenticationService::loadOrGenerateToken(QStringList& outMessages)
             file.close();
 
             if (!loaded.isEmpty() && loaded.length() >= 32) {
+                QByteArray ba = loaded.toUtf8();
                 QWriteLocker lock(&m_tokenLock);
-                m_sToken = loaded;
+                m_sToken    = loaded;
+                m_sTokenStr = std::string(ba.constData(), ba.size());
                 return true;
             }
             outMessages << "[INFO] Existing token invalid, generating new one";
@@ -77,8 +79,10 @@ bool AuthenticationService::loadOrGenerateToken(QStringList& outMessages)
         return false;
     }
     {
+        QByteArray ba = newToken.toUtf8();
         QWriteLocker lock(&m_tokenLock);
-        m_sToken = newToken;
+        m_sToken    = newToken;
+        m_sTokenStr = std::string(ba.constData(), ba.size());
     }
 
     QString saveMsg;
@@ -114,13 +118,22 @@ bool AuthenticationService::saveToken(QString& outMessage)
     return true;
 }
 
+static std::string trimStr(const std::string& s)
+{
+    const char* ws = " \t\r\n";
+    size_t start = s.find_first_not_of(ws);
+    if (start == std::string::npos) return std::string();
+    size_t end = s.find_last_not_of(ws);
+    return s.substr(start, end - start + 1);
+}
+
 bool AuthenticationService::validateToken(const std::string& providedToken) const
 {
     if (providedToken.empty())
         return false;
-    QString provided = QString::fromStdString(providedToken).trimmed();
+    std::string trimmed = trimStr(providedToken);
     QReadLocker lock(&m_tokenLock);
-    return provided == m_sToken;
+    return trimmed == m_sTokenStr;
 }
 
 QString AuthenticationService::getToken() const
@@ -131,6 +144,8 @@ QString AuthenticationService::getToken() const
 
 void AuthenticationService::setToken(const QString& token)
 {
+    QByteArray ba = token.toUtf8();
     QWriteLocker lock(&m_tokenLock);
-    m_sToken = token;
+    m_sToken    = token;
+    m_sTokenStr = std::string(ba.constData(), ba.size());
 }

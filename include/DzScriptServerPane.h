@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <string>
+#include <utility>
 #include <dzpane.h>
 #include <QtCore/qpair.h>
 #include <QtCore/qthread.h>
@@ -76,27 +77,39 @@ public slots:
 	Q_INVOKABLE HttpResult handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
 	Q_INVOKABLE HttpResult handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
+	// Async enqueue helpers — called on main thread via BlockingQueuedConnection from
+	// AsyncExecuteHandler / AsyncScriptHandler so that QScriptEngine and QString work
+	// stays on the Qt main thread.
+	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody);
+	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
+	                                                const QByteArray& scriptIdBytes,
+	                                                const QByteArray& bodyBytes);
+
 	void appendLog(const QString& line);
+	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
+	// not ::free, so it is safe to construct/destroy on httplib worker threads).
+	void appendLogBytes(const QByteArray& data);
 	void updateActiveRequestsLabel();
 
 public:
-	// Observability — called from HTTP threads (thread-safe via internal mutexes/atomics)
-	QString getHealthJson() const;
-	QString getMetricsJson() const;
+	// Observability — called from HTTP threads (thread-safe; no Qt string ops on worker threads)
+	std::string getHealthJson() const;
+	std::string getMetricsJson() const;
 
-	// Script Registry operations — called from HTTP threads (mutex-protected)
-	QString              listScriptsJson() const;
-	QPair<int, QString>  deleteRegistryScriptJson(const QString& id, const QString& clientIP);
-	bool                 lookupRegistryScript(const QString& id, QString& outScript) const;
+	// Script Registry operations — called from HTTP threads (mutex-protected, no Qt string ops)
+	std::string                 listScriptsJson() const;
+	std::pair<int, std::string> deleteRegistryScriptJson(const std::string& id, const std::string& clientIP);
+	bool                        lookupRegistryScript(const std::string& id, std::string& outScript) const;
 
 	// Async request management — called from HTTP threads (delegated to AsyncRequestManager)
+	// enqueueAsyncRequest still takes Qt types (used by Tier-1 async handlers — fix pending)
 	QString              enqueueAsyncRequest(const QString& scriptText, const QVariantMap& args,
 	                                         const QString& idPrefix, qint64& outSubmittedAt,
 	                                         QString& outError);
-	QPair<int, QString>  getAsyncStatusJson(const QString& requestId) const;
-	QPair<int, QString>  getAsyncResultJson(const QString& requestId, bool doWait, int timeoutSec);
-	QPair<int, QString>  cancelAsyncRequestJson(const QString& requestId, const QString& clientIP);
-	QString              listAsyncRequestsJson(const QString& statusFilter) const;
+	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId) const;
+	std::pair<int, std::string> getAsyncResultJson(const std::string& requestId, bool doWait, int timeoutSec);
+	std::pair<int, std::string> cancelAsyncRequestJson(const std::string& requestId, const std::string& clientIP);
+	std::string                 listAsyncRequestsJson(const std::string& statusFilter) const;
 
 private slots:
 	void onStartClicked();
@@ -162,7 +175,10 @@ private:
 		QDateTime registeredAt;
 	};
 	struct ScriptRegistry {
-		QMap<QString, RegisteredScript> scripts;
+		// Key is QByteArray (not QString) so worker threads can look up scripts
+		// without creating QString temporaries that ~QString would free via the
+		// wrong CRT (ucrtbase vs msvcr100).
+		QMap<QByteArray, RegisteredScript> scripts;
 		mutable QMutex mutex;
 	};
 	ScriptRegistry m_scriptRegistry;

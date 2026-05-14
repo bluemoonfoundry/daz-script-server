@@ -1,6 +1,6 @@
 #include "RateLimiterService.h"
 
-#include <QtCore/qdatetime.h>
+#include <ctime>
 
 static const int CLEANUP_INTERVAL = 100;  // matches ServerConfig::RATE_LIMIT_CLEANUP_INTERVAL
 
@@ -17,17 +17,18 @@ void RateLimiterService::configure(int maxRequests, int windowSec)
     m_nWindowSec = windowSec;
 }
 
-bool RateLimiterService::checkRequest(const QString& clientIP)
+bool RateLimiterService::checkRequest(const std::string& clientIP)
 {
     if (!m_bEnabled)
         return true;
 
+    QByteArray key(clientIP.c_str(), (int)clientIP.size());
     QMutexLocker lock(&m_mutex);
 
-    qint64 now         = QDateTime::currentDateTime().toTime_t();
+    qint64 now         = (qint64)time(nullptr);
     qint64 windowStart = now - m_nWindowSec;
 
-    RateLimitInfo& info = m_ipMap[clientIP];
+    RateLimitInfo& info = m_ipMap[key];
 
     // Remove timestamps outside the window
     QList<qint64>::iterator it = info.timestamps.begin();
@@ -64,10 +65,10 @@ void RateLimiterService::cleanupStale()
 {
     QMutexLocker lock(&m_mutex);
 
-    qint64 now         = QDateTime::currentDateTime().toTime_t();
+    qint64 now         = (qint64)time(nullptr);
     qint64 windowStart = now - m_nWindowSec;
 
-    QMap<QString, RateLimitInfo>::iterator it = m_ipMap.begin();
+    QMap<QByteArray, RateLimitInfo>::iterator it = m_ipMap.begin();
     while (it != m_ipMap.end()) {
         RateLimitInfo& info = it.value();
 

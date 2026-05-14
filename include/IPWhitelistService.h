@@ -1,6 +1,7 @@
 #pragma once
+#include <string>
+#include <vector>
 #include <QtCore/qstring.h>
-#include <QtCore/qstringlist.h>
 
 // Exact-match IP whitelist. Immutable after parse — no mutex needed during checks.
 class IPWhitelistService {
@@ -15,10 +16,11 @@ public:
     QString getWhitelist() const { return m_sRawList; }
 
     // Returns true if the IP is allowed (whitelist disabled → always true).
-    bool isAllowed(const QString& clientIP) const;
+    // Safe to call from any thread — no Qt string allocation/deallocation.
+    bool isAllowed(const std::string& clientIP) const;
 
 private:
     bool        m_bEnabled;
-    QString     m_sRawList;
-    QStringList m_aParsedIPs;
+    QString     m_sRawList;              // for UI display (main thread only)
+    std::vector<std::string> m_aParsedIPs; // for hot-path checking (any thread)
 };

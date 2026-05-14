@@ -3,6 +3,12 @@
 #include <QtCore/qregexp.h>
 #include <string>
 
+static inline std::string qstrToStr(const QString& s)
+{
+    QByteArray ba = s.toUtf8();
+    return std::string(ba.constData(), ba.size());
+}
+
 ValidationResult RequestValidator::validateExecuteFields(
     const QString& scriptFile,
     const QString& scriptText,
@@ -29,10 +35,10 @@ ValidationResult RequestValidator::validateExecuteFields(
             return ValidationResult::fail(ErrorCode::SCRIPT_FILE_NOT_ABSOLUTE);
         if (!info.exists())
             return ValidationResult::fail(ErrorCode::SCRIPT_FILE_NOT_FOUND,
-                scriptFile.toStdString());
+                qstrToStr(scriptFile));
         if (!info.isFile())
             return ValidationResult::fail(ErrorCode::SCRIPT_FILE_NOT_FILE,
-                scriptFile.toStdString());
+                qstrToStr(scriptFile));
     }
 
     return ValidationResult::ok();

@@ -1,14 +1,41 @@
 #include "DzScriptServerPane.h"
 #include "RequestHandler.h"
-#include "JsonBuilder.h"
 #include "ErrorResponse.h"
-#include "RequestValidator.h"
-
-#include <QtCore/qdatetime.h>
 #include <QtCore/qmetaobject.h>
-#include <QtCore/qpair.h>
-#include <QtScript/qscriptengine.h>
-#include <QtScript/qscriptvalue.h>
+#include <ctime>
+
+// ─── std::string helpers (no Qt — safe to call from any thread) ──────────────
+
+static std::string jsonEscapeStr(const std::string& s)
+{
+    std::string r;
+    r.reserve(s.size() + 4);
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if      (c == '"')  r += "\\\"";
+        else if (c == '\\') r += "\\\\";
+        else if (c == '\n') r += "\\n";
+        else if (c == '\r') r += "\\r";
+        else if (c == '\t') r += "\\t";
+        else if (c < 0x20)  { char esc[8]; std::snprintf(esc, sizeof(esc), "\\u%04x", c); r += esc; }
+        else                r += (char)c;
+    }
+    return r;
+}
+
+static std::string currentTimeStr()
+{
+    time_t t = time(nullptr);
+    struct tm tm_val = {};
+#ifdef _WIN32
+    localtime_s(&tm_val, &t);
+#else
+    localtime_r(&t, &tm_val);
+#endif
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_val);
+    return buf;
+}
 
 // ─── MiddlewareChain ──────────────────────────────────────────────────────────
 
@@ -40,15 +67,13 @@ IPWhitelistMiddleware::IPWhitelistMiddleware(IPWhitelistService& whitelist, DzSc
 
 bool IPWhitelistMiddleware::process(HttpContext& ctx)
 {
-    QString ip = QString::fromStdString(ctx.remoteAddr);
-    if (m_whitelist.isAllowed(ip)) return true;
+    if (m_whitelist.isAllowed(ctx.remoteAddr)) return true;
 
     ctx.respond(403, ErrorResponse::build(ErrorCode::IP_NOT_WHITELISTED, ctx.remoteAddr));
 
-    QString logMsg = QString("[%1] [BLOCKED] %2 - IP not whitelisted")
-        .arg(QDateTime::currentDateTime().toString("HH:mm:ss")).arg(ip);
-    QMetaObject::invokeMethod(m_pPane, "appendLog", Qt::QueuedConnection,
-        Q_ARG(QString, logMsg));
+    std::string logLine = "[" + currentTimeStr() + "] [BLOCKED] " + ctx.remoteAddr + " - IP not whitelisted";
+    QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
+        Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
     return false;
 }
 
@@ -59,15 +84,13 @@ RateLimitMiddleware::RateLimitMiddleware(RateLimiterService& limiter, DzScriptSe
 
 bool RateLimitMiddleware::process(HttpContext& ctx)
 {
-    QString ip = QString::fromStdString(ctx.remoteAddr);
-    if (m_limiter.checkRequest(ip)) return true;
+    if (m_limiter.checkRequest(ctx.remoteAddr)) return true;
 
     ctx.respond(429, ErrorResponse::build(ErrorCode::RATE_LIMIT_EXCEEDED, ctx.remoteAddr));
 
-    QString logMsg = QString("[%1] [RATE LIMIT] %2")
-        .arg(QDateTime::currentDateTime().toString("HH:mm:ss")).arg(ip);
-    QMetaObject::invokeMethod(m_pPane, "appendLog", Qt::QueuedConnection,
-        Q_ARG(QString, logMsg));
+    std::string logLine = "[" + currentTimeStr() + "] [RATE LIMIT] " + ctx.remoteAddr;
+    QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
+        Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
     return false;
 }
 
@@ -110,11 +133,9 @@ bool AuthMiddleware::process(HttpContext& ctx)
     ctx.respond(401, ErrorResponse::build(code));
     m_metrics.recordAuthFailure();
 
-    QString ip = QString::fromStdString(ctx.remoteAddr);
-    QString logMsg = QString("[%1] [AUTH FAILED] %2")
-        .arg(QDateTime::currentDateTime().toString("HH:mm:ss")).arg(ip);
-    QMetaObject::invokeMethod(m_pPane, "appendLog", Qt::QueuedConnection,
-        Q_ARG(QString, logMsg));
+    std::string logLine = "[" + currentTimeStr() + "] [AUTH FAILED] " + ctx.remoteAddr;
+    QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
+        Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
     return false;
 }
 
@@ -133,7 +154,7 @@ HealthHandler::HealthHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void HealthHandler::handle(HttpContext& ctx)
 {
-    ctx.responseBody = m_pPane->getHealthJson().toStdString();
+    ctx.responseBody = m_pPane->getHealthJson();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,7 +163,7 @@ MetricsHandler::MetricsHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void MetricsHandler::handle(HttpContext& ctx)
 {
-    ctx.responseBody = m_pPane->getMetricsJson().toStdString();
+    ctx.responseBody = m_pPane->getMetricsJson();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,7 +206,7 @@ ScriptListHandler::ScriptListHandler(DzScriptServerPane* pane) : m_pPane(pane) {
 
 void ScriptListHandler::handle(HttpContext& ctx)
 {
-    ctx.responseBody = m_pPane->listScriptsJson().toStdString();
+    ctx.responseBody = m_pPane->listScriptsJson();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,10 +215,8 @@ ScriptDeleteHandler::ScriptDeleteHandler(DzScriptServerPane* pane) : m_pPane(pan
 
 void ScriptDeleteHandler::handle(HttpContext& ctx)
 {
-    QString id = QString::fromStdString(ctx.urlMatch);
-    QString ip = QString::fromStdString(ctx.remoteAddr);
-    QPair<int, QString> result = m_pPane->deleteRegistryScriptJson(id, ip);
-    ctx.respond(result.first, result.second.toStdString());
+    std::pair<int, std::string> result = m_pPane->deleteRegistryScriptJson(ctx.urlMatch, ctx.remoteAddr);
+    ctx.respond(result.first, result.second);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,15 +225,14 @@ ScriptExecuteHandler::ScriptExecuteHandler(DzScriptServerPane* pane) : m_pPane(p
 
 void ScriptExecuteHandler::handle(HttpContext& ctx)
 {
-    QString id = QString::fromStdString(ctx.urlMatch);
-    QString scriptText;
-    if (!m_pPane->lookupRegistryScript(id, scriptText)) {
-        ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id.toStdString()));
+    std::string scriptText;
+    if (!m_pPane->lookupRegistryScript(ctx.urlMatch, scriptText)) {
+        ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, ctx.urlMatch));
         return;
     }
 
-    QByteArray scriptBytes   = scriptText.toUtf8();
-    QByteArray scriptIdBytes = id.toUtf8();
+    QByteArray scriptBytes(scriptText.c_str(), (int)scriptText.size());
+    QByteArray scriptIdBytes(ctx.urlMatch.c_str(), (int)ctx.urlMatch.size());
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
     HttpResult result;
@@ -234,41 +252,13 @@ AsyncExecuteHandler::AsyncExecuteHandler(DzScriptServerPane* pane) : m_pPane(pan
 
 void AsyncExecuteHandler::handle(HttpContext& ctx)
 {
-    QScriptEngine parseEngine;
-    QScriptValue  parsed = parseEngine.evaluate(
-        "(" + QString::fromUtf8(ctx.body.c_str(), (int)ctx.body.size()) + ")");
-    if (parseEngine.hasUncaughtException()) {
-        ctx.respond(400, ErrorResponse::build(ErrorCode::INVALID_JSON));
-        return;
-    }
-    QVariantMap body       = parsed.toVariant().toMap();
-    QString     scriptText = body.value("script").toString();
-
-    ValidationResult vr = RequestValidator::validateRequiredField(scriptText, "script");
-    if (!vr.valid) {
-        ctx.respond(vr.httpStatus(), vr.toErrorJson());
-        return;
-    }
-
-    qint64  submittedAt  = 0;
-    QString enqueueError;
-    QString requestId = m_pPane->enqueueAsyncRequest(
-        scriptText, body.value("args").toMap(), "execute", submittedAt, enqueueError);
-
-    if (requestId.isEmpty()) {
-        ctx.respond(503, ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE,
-            enqueueError.toStdString()));
-        return;
-    }
-
-    JsonBuilder json;
-    json.startObject();
-    json.addMember("request_id",   requestId);
-    json.addMember("status",       "queued");
-    json.addMember("submitted_at",
-        QDateTime::fromMSecsSinceEpoch(submittedAt).toString(Qt::ISODate));
-    json.finishObject();
-    ctx.responseBody = json.toString().toStdString();
+    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleAsyncExecuteEnqueue",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result),
+        Q_ARG(QByteArray, bodyBytes));
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,48 +267,23 @@ AsyncScriptHandler::AsyncScriptHandler(DzScriptServerPane* pane) : m_pPane(pane)
 
 void AsyncScriptHandler::handle(HttpContext& ctx)
 {
-    QString id = QString::fromStdString(ctx.urlMatch);
-    QString scriptText;
-    if (!m_pPane->lookupRegistryScript(id, scriptText)) {
-        ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id.toStdString()));
+    std::string scriptText;
+    if (!m_pPane->lookupRegistryScript(ctx.urlMatch, scriptText)) {
+        ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, ctx.urlMatch));
         return;
     }
 
-    QVariantMap argsMap;
-    if (!ctx.body.empty()) {
-        QScriptEngine parseEngine;
-        QScriptValue  parsed = parseEngine.evaluate(
-            "(" + QString::fromUtf8(ctx.body.c_str(), (int)ctx.body.size()) + ")");
-        if (!parseEngine.hasUncaughtException())
-            argsMap = parsed.toVariant().toMap().value("args").toMap();
-    }
-
-    qint64  submittedAt  = 0;
-    QString enqueueError;
-    QString requestId = m_pPane->enqueueAsyncRequest(scriptText, argsMap, "script", submittedAt,
-                                                     enqueueError);
-
-    if (requestId.isEmpty()) {
-        ctx.respond(503, ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE,
-            enqueueError.toStdString()));
-        return;
-    }
-
-    JsonBuilder json;
-    json.startObject();
-    json.addMember("request_id",   requestId);
-    json.addMember("status",       "queued");
-    json.addMember("submitted_at",
-        QDateTime::fromMSecsSinceEpoch(submittedAt).toString(Qt::ISODate));
-    json.finishObject();
-    ctx.responseBody = json.toString().toStdString();
-
-    QString logMsg = QString("[%1] [%2] [ASYNC QUEUED] script:%3 -> %4")
-        .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-        .arg(QString::fromStdString(ctx.remoteAddr))
-        .arg(id).arg(requestId);
-    QMetaObject::invokeMethod(m_pPane, "appendLog", Qt::QueuedConnection,
-        Q_ARG(QString, logMsg));
+    QByteArray scriptBytes(scriptText.c_str(), (int)scriptText.size());
+    QByteArray scriptIdBytes(ctx.urlMatch.c_str(), (int)ctx.urlMatch.size());
+    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleAsyncScriptEnqueue",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result),
+        Q_ARG(QByteArray, scriptBytes),
+        Q_ARG(QByteArray, scriptIdBytes),
+        Q_ARG(QByteArray, bodyBytes));
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -327,9 +292,8 @@ AsyncStatusHandler::AsyncStatusHandler(DzScriptServerPane* pane) : m_pPane(pane)
 
 void AsyncStatusHandler::handle(HttpContext& ctx)
 {
-    QPair<int, QString> result =
-        m_pPane->getAsyncStatusJson(QString::fromStdString(ctx.urlMatch));
-    ctx.respond(result.first, result.second.toStdString());
+    std::pair<int, std::string> result = m_pPane->getAsyncStatusJson(ctx.urlMatch);
+    ctx.respond(result.first, result.second);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -341,13 +305,13 @@ void AsyncResultHandler::handle(HttpContext& ctx)
     bool doWait = ctx.hasParam("wait") && ctx.getParam("wait") == "true";
     int  timeoutSec = 300;
     if (ctx.hasParam("timeout")) {
-        bool ok = false;
-        int t = QString::fromStdString(ctx.getParam("timeout")).toInt(&ok);
-        if (ok && t > 0) timeoutSec = t;
+        const std::string& ts = ctx.getParam("timeout");
+        char* end = nullptr;
+        long t = std::strtol(ts.c_str(), &end, 10);
+        if (end != ts.c_str() && t > 0) timeoutSec = (int)t;
     }
-    QPair<int, QString> result = m_pPane->getAsyncResultJson(
-        QString::fromStdString(ctx.urlMatch), doWait, timeoutSec);
-    ctx.respond(result.first, result.second.toStdString());
+    std::pair<int, std::string> result = m_pPane->getAsyncResultJson(ctx.urlMatch, doWait, timeoutSec);
+    ctx.respond(result.first, result.second);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,10 +320,8 @@ AsyncCancelHandler::AsyncCancelHandler(DzScriptServerPane* pane) : m_pPane(pane)
 
 void AsyncCancelHandler::handle(HttpContext& ctx)
 {
-    QPair<int, QString> result = m_pPane->cancelAsyncRequestJson(
-        QString::fromStdString(ctx.urlMatch),
-        QString::fromStdString(ctx.remoteAddr));
-    ctx.respond(result.first, result.second.toStdString());
+    std::pair<int, std::string> result = m_pPane->cancelAsyncRequestJson(ctx.urlMatch, ctx.remoteAddr);
+    ctx.respond(result.first, result.second);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,8 +330,6 @@ AsyncListHandler::AsyncListHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void AsyncListHandler::handle(HttpContext& ctx)
 {
-    QString filter = ctx.hasParam("status")
-        ? QString::fromStdString(ctx.getParam("status"))
-        : QString();
-    ctx.responseBody = m_pPane->listAsyncRequestsJson(filter).toStdString();
+    std::string filter = ctx.hasParam("status") ? ctx.getParam("status") : std::string();
+    ctx.responseBody = m_pPane->listAsyncRequestsJson(filter);
 }

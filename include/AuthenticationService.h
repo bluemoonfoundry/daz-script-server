@@ -34,5 +34,6 @@ private:
 
     bool    m_bEnabled;
     QString m_sToken;
+    std::string m_sTokenStr;  // ucrtbase-allocated copy for worker-thread comparison
     mutable QReadWriteLock m_tokenLock;
 };

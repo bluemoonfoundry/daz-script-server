@@ -8,6 +8,7 @@
 #include <QtCore/qvariant.h>
 #include <QtCore/qstringlist.h>
 #include <string>
+#include <utility>
 
 // Forward declaration — AsyncRequestManager calls back into the pane via
 // QMetaObject::invokeMethod rather than using Qt signals, which avoids the
@@ -58,11 +59,11 @@ public:
     SubmitResult        submit(const QString& scriptText, const QVariantMap& args,
                                const QString& idPrefix);
 
-    // All four methods below are safe to call from HTTP threads.
-    QPair<int, QString> getStatusJson(const QString& requestId) const;
-    QPair<int, QString> getResultJson(const QString& requestId, bool doWait, int timeoutSec);
-    QPair<int, QString> cancelJson(const QString& requestId, const QString& clientIP);
-    QString             listJson(const QString& statusFilter) const;
+    // All four methods below are safe to call from HTTP threads (no Qt string ops).
+    std::pair<int, std::string> getStatusJson(const std::string& requestId) const;
+    std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec);
+    std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP);
+    std::string                 listJson(const std::string& statusFilter) const;
 
     // Live counters — acquire mutex.
     int getQueueDepth()   const;

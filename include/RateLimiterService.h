@@ -1,5 +1,6 @@
 #pragma once
-#include <QtCore/qstring.h>
+#include <string>
+#include <QtCore/qbytearray.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qmutex.h>
@@ -14,7 +15,8 @@ public:
     bool isEnabled() const        { return m_bEnabled; }
 
     // Returns true if the request is allowed, false if the IP is over limit.
-    bool checkRequest(const QString& clientIP);
+    // Safe to call from any thread — no Qt string allocation/deallocation.
+    bool checkRequest(const std::string& clientIP);
 
     // Clears all per-IP tracking (call on server stop).
     void reset();
@@ -30,7 +32,7 @@ private:
     int   m_nMax;
     int   m_nWindowSec;
 
-    QMap<QString, RateLimitInfo> m_ipMap;
+    QMap<QByteArray, RateLimitInfo> m_ipMap;
     QMutex  m_mutex;
     int     m_cleanupCounter;
 };

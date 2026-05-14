@@ -1,4 +1,12 @@
 #include "IPWhitelistService.h"
+#include <QtCore/qstringlist.h>
+#include <string>
+
+static inline std::string qstrToStr(const QString& s)
+{
+    QByteArray ba = s.toUtf8();
+    return std::string(ba.constData(), ba.size());
+}
 
 IPWhitelistService::IPWhitelistService()
     : m_bEnabled(false)
@@ -17,15 +25,17 @@ void IPWhitelistService::setWhitelist(const QString& csvIPs)
     foreach (const QString& ip, raw) {
         QString trimmed = ip.trimmed();
         if (!trimmed.isEmpty())
-            m_aParsedIPs.append(trimmed);
+            m_aParsedIPs.push_back(qstrToStr(trimmed));
     }
 }
 
-bool IPWhitelistService::isAllowed(const QString& clientIP) const
+bool IPWhitelistService::isAllowed(const std::string& clientIP) const
 {
     if (!m_bEnabled)
         return true;
-    if (m_aParsedIPs.isEmpty())
+    if (m_aParsedIPs.empty())
         return false;  // Enabled but no IPs configured — block all
-    return m_aParsedIPs.contains(clientIP);
+    for (size_t i = 0; i < m_aParsedIPs.size(); ++i)
+        if (m_aParsedIPs[i] == clientIP) return true;
+    return false;
 }

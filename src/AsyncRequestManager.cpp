@@ -1,8 +1,99 @@
 #include "AsyncRequestManager.h"
 #include "MetricsCollector.h"
-#include "JsonBuilder.h"
 #include <QtCore/qthread.h>
 #include <QtCore/qmetaobject.h>
+#include <ctime>
+#include <vector>
+
+// ─── std::string JSON helpers (no Qt — safe to call from any thread) ──────────
+
+// Safe QString→std::string: see DzScriptServerPane.cpp for explanation.
+static inline std::string qstrToStr(const QString& s)
+{
+    QByteArray ba = s.toUtf8();
+    return std::string(ba.constData(), ba.size());
+}
+
+static std::string jsonEscapeStr(const std::string& s)
+{
+    std::string r;
+    r.reserve(s.size() + 4);
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if      (c == '"')  r += "\\\"";
+        else if (c == '\\') r += "\\\\";
+        else if (c == '\n') r += "\\n";
+        else if (c == '\r') r += "\\r";
+        else if (c == '\t') r += "\\t";
+        else if (c < 0x20)  { char esc[8]; std::snprintf(esc, sizeof(esc), "\\u%04x", c); r += esc; }
+        else                r += (char)c;
+    }
+    return r;
+}
+
+static std::string msecToIsoString(long long msec)
+{
+    time_t t = (time_t)(msec / 1000);
+    struct tm tm_val = {};
+#ifdef _WIN32
+    localtime_s(&tm_val, &t);
+#else
+    localtime_r(&t, &tm_val);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_val);
+    return buf;
+}
+
+// Forward declaration for mutual recursion in variantToJson.
+static std::string variantToJson(const QVariant& v);
+
+static std::string variantToJson(const QVariant& v)
+{
+    if (!v.isValid() || v.isNull()) return "null";
+    switch (v.type()) {
+    case QVariant::Bool:
+        return v.toBool() ? "true" : "false";
+    case QVariant::Int:
+    case QVariant::LongLong:
+    case QVariant::UInt:
+    case QVariant::ULongLong:
+        return std::to_string(v.toLongLong());
+    case QVariant::Double: {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.15g", v.toDouble());
+        return buf;
+    }
+    case QVariant::String:
+        return "\"" + jsonEscapeStr(qstrToStr(v.toString())) + "\"";
+    case QVariant::List:
+    case QVariant::StringList: {
+        QVariantList list = v.toList();
+        std::string s = "[";
+        for (int i = 0; i < list.size(); ++i) {
+            if (i > 0) s += ",";
+            s += variantToJson(list.at(i));
+        }
+        s += "]";
+        return s;
+    }
+    case QVariant::Map: {
+        QVariantMap map = v.toMap();
+        std::string s = "{";
+        bool first = true;
+        for (QVariantMap::const_iterator it = map.begin(); it != map.end(); ++it) {
+            if (!first) s += ",";
+            first = false;
+            s += "\"" + jsonEscapeStr(qstrToStr(it.key())) + "\":";
+            s += variantToJson(it.value());
+        }
+        s += "}";
+        return s;
+    }
+    default:
+        return "\"" + jsonEscapeStr(qstrToStr(v.toString())) + "\"";
+    }
+}
 
 // QThread::msleep is protected — access it via a minimal subclass.
 namespace {
@@ -61,49 +152,55 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
     return r;
 }
 
-QPair<int, QString> AsyncRequestManager::getStatusJson(const QString& requestId) const
+std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string& requestId) const
 {
+    QString qid = QString::fromStdString(requestId);
     QMutexLocker locker(&m_mutex);
-    if (!m_requests.contains(requestId))
-        return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
+    if (!m_requests.contains(qid))
+        return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
 
-    const AsyncRequest& req = m_requests.value(requestId);
+    const AsyncRequest& req = m_requests.value(qid);
+    std::string status = statusToString(req.status);
 
-    JsonBuilder json;
-    json.startObject();
-    json.addMember("request_id", req.id);
-    json.addMember("status",     statusToString(req.status).c_str());
-    json.addMember("progress",   req.progress);
+    char progBuf[32];
+    std::snprintf(progBuf, sizeof(progBuf), "%.15g", req.progress);
+
+    std::string s = "{\"request_id\":\"";
+    s += jsonEscapeStr(qstrToStr(req.id));
+    s += "\",\"status\":\"" + status + "\"";
+    s += ",\"progress\":" + std::string(progBuf);
 
     if (req.status == REQUEST_RUNNING && req.startedAt > 0) {
-        qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - req.startedAt;
-        json.addMember("elapsed_ms", elapsed);
+        long long elapsed = (long long)(QDateTime::currentMSecsSinceEpoch() - req.startedAt);
+        s += ",\"elapsed_ms\":" + std::to_string(elapsed);
     }
     if (req.status == REQUEST_QUEUED) {
         int pos = 1;
         QQueue<QString> qCopy = m_queue;
         while (!qCopy.isEmpty()) {
-            if (qCopy.dequeue() == requestId) break;
-            pos++;
+            if (qCopy.dequeue() == qid) break;
+            ++pos;
         }
-        json.addMember("queue_position", pos);
+        s += ",\"queue_position\":" + std::to_string(pos);
     }
-    json.finishObject();
-    return QPair<int, QString>(200, json.toString());
+    s += "}";
+    return {200, s};
 }
 
-QPair<int, QString> AsyncRequestManager::getResultJson(
-    const QString& requestId, bool doWait, int timeoutSec)
+std::pair<int, std::string> AsyncRequestManager::getResultJson(
+    const std::string& requestId, bool doWait, int timeoutSec)
 {
+    QString qid = QString::fromStdString(requestId);
+
     if (doWait) {
         qint64 deadline = QDateTime::currentMSecsSinceEpoch() + (qint64)timeoutSec * 1000;
         while (QDateTime::currentMSecsSinceEpoch() < deadline) {
             RequestStatus s;
             {
                 QMutexLocker locker(&m_mutex);
-                if (!m_requests.contains(requestId))
-                    return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
-                s = m_requests.value(requestId).status;
+                if (!m_requests.contains(qid))
+                    return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+                s = m_requests.value(qid).status;
             }
             if (s == REQUEST_COMPLETED || s == REQUEST_FAILED || s == REQUEST_CANCELLED)
                 break;
@@ -112,150 +209,146 @@ QPair<int, QString> AsyncRequestManager::getResultJson(
     }
 
     QMutexLocker locker(&m_mutex);
-    if (!m_requests.contains(requestId))
-        return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
+    if (!m_requests.contains(qid))
+        return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
 
-    const AsyncRequest& req = m_requests.value(requestId);
+    const AsyncRequest& req = m_requests.value(qid);
+    std::string status = statusToString(req.status);
 
-    JsonBuilder json;
-    json.startObject();
-    json.addMember("request_id", req.id);
-    json.addMember("status",     statusToString(req.status).c_str());
+    std::string s = "{\"request_id\":\"";
+    s += jsonEscapeStr(qstrToStr(req.id));
+    s += "\",\"status\":\"" + status + "\"";
 
     if (req.status == REQUEST_COMPLETED) {
-        json.addMember("success", true);
-        json.addMember("result",  req.scriptResult);
-        QVariantList outList;
-        foreach (const QString& line, req.outputLines)
-            outList << QVariant(line);
-        json.addMember("output", QVariant(outList));
-        json.addMemberNull("error");
+        s += ",\"success\":true";
+        s += ",\"result\":" + variantToJson(req.scriptResult);
+        s += ",\"output\":[";
+        for (int i = 0; i < req.outputLines.size(); ++i) {
+            if (i > 0) s += ",";
+            s += "\"" + jsonEscapeStr(qstrToStr(req.outputLines[i])) + "\"";
+        }
+        s += "],\"error\":null";
     } else if (req.status == REQUEST_FAILED) {
-        json.addMember("success", false);
-        json.addMemberNull("result");
-        json.addMember("output", QVariant(QVariantList()));
-        json.addMember("error",  req.error);
+        s += ",\"success\":false,\"result\":null,\"output\":[]";
+        s += ",\"error\":\"" + jsonEscapeStr(qstrToStr(req.error)) + "\"";
     } else if (req.status == REQUEST_CANCELLED) {
-        json.addMember("success", false);
-        json.addMemberNull("result");
-        json.addMember("output", QVariant(QVariantList()));
-        json.addMember("error",  QString("Cancelled"));
+        s += ",\"success\":false,\"result\":null,\"output\":[]";
+        s += ",\"error\":\"Cancelled\"";
     } else {
-        json.addMember("progress", req.progress);
+        char progBuf[32];
+        std::snprintf(progBuf, sizeof(progBuf), "%.15g", req.progress);
+        s += ",\"progress\":";
+        s += progBuf;
         if (req.startedAt > 0) {
-            qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - req.startedAt;
-            json.addMember("elapsed_ms", elapsed);
+            long long elapsed = (long long)(QDateTime::currentMSecsSinceEpoch() - req.startedAt);
+            s += ",\"elapsed_ms\":" + std::to_string(elapsed);
         }
     }
 
     if (req.completedAt > 0 && req.startedAt > 0) {
-        json.addMember("duration_ms",  req.completedAt - req.startedAt);
-        json.addMember("completed_at",
-            QDateTime::fromMSecsSinceEpoch(req.completedAt).toString(Qt::ISODate));
+        s += ",\"duration_ms\":" + std::to_string((long long)(req.completedAt - req.startedAt));
+        s += ",\"completed_at\":\"" + msecToIsoString((long long)req.completedAt) + "\"";
     }
-    json.finishObject();
-    return QPair<int, QString>(200, json.toString());
+    s += "}";
+    return {200, s};
 }
 
-QPair<int, QString> AsyncRequestManager::cancelJson(
-    const QString& requestId, const QString& clientIP)
+std::pair<int, std::string> AsyncRequestManager::cancelJson(
+    const std::string& requestId, const std::string& clientIP)
 {
     (void)clientIP;
+    QString qid = QString::fromStdString(requestId);
 
     RequestStatus statusBefore = REQUEST_QUEUED;
     bool needKillRender = false;
     {
         QMutexLocker locker(&m_mutex);
-        if (!m_requests.contains(requestId))
-            return QPair<int, QString>(404, "{\"success\":false,\"error\":\"Request not found\"}");
+        if (!m_requests.contains(qid))
+            return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
 
-        AsyncRequest& req = m_requests[requestId];
+        AsyncRequest& req = m_requests[qid];
         statusBefore = req.status;
 
         if (statusBefore == REQUEST_COMPLETED ||
             statusBefore == REQUEST_FAILED    ||
             statusBefore == REQUEST_CANCELLED) {
-            return QPair<int, QString>(400, "{\"success\":false,\"error\":\"Request already finished\"}");
+            return {400, "{\"success\":false,\"error\":\"Request already finished\"}"};
         }
 
         req.cancelRequested = 1;
 
         if (statusBefore == REQUEST_QUEUED) {
-            // Remove from queue immediately; main thread won't pick it up.
             QQueue<QString> newQueue;
             while (!m_queue.isEmpty()) {
                 QString id = m_queue.dequeue();
-                if (id != requestId) newQueue.enqueue(id);
+                if (id != qid) newQueue.enqueue(id);
             }
             m_queue = newQueue;
             req.status      = REQUEST_CANCELLED;
             req.error       = "Cancelled by client";
             req.completedAt = QDateTime::currentMSecsSinceEpoch();
         } else {
-            // RUNNING: dispatch killRender to the main thread.
             needKillRender = true;
         }
     }
 
     if (needKillRender) {
-        // Route the DAZ API call to the main thread via QueuedConnection.
         QMetaObject::invokeMethod(m_notifyTarget, "killRenderOnMainThread",
                                   Qt::QueuedConnection);
     }
 
-    JsonBuilder json;
-    json.startObject();
-    json.addMember("request_id",   requestId);
-    json.addMember("status",       "cancelled");
-    json.addMember("message",      "Cancellation requested");
-    json.addMember("cancelled_at", QDateTime::currentDateTime().toString(Qt::ISODate));
-    json.finishObject();
-    return QPair<int, QString>(200, json.toString());
+    long long nowMs = (long long)QDateTime::currentMSecsSinceEpoch();
+    std::string s = "{\"request_id\":\"";
+    s += jsonEscapeStr(requestId);
+    s += "\",\"status\":\"cancelled\"";
+    s += ",\"message\":\"Cancellation requested\"";
+    s += ",\"cancelled_at\":\"" + msecToIsoString(nowMs) + "\"";
+    s += "}";
+    return {200, s};
 }
 
-QString AsyncRequestManager::listJson(const QString& statusFilter) const
+std::string AsyncRequestManager::listJson(const std::string& statusFilter) const
 {
     QMutexLocker locker(&m_mutex);
 
-    QVariantList requestsList;
     int nQueued = 0, nRunning = 0, nCompleted = 0, nFailed = 0, nCancelled = 0;
+    std::string items;
 
     for (QMap<QString, AsyncRequest>::const_iterator it = m_requests.constBegin();
          it != m_requests.constEnd(); ++it) {
         const AsyncRequest& req = it.value();
         std::string statusStr = statusToString(req.status);
 
-        if (!statusFilter.isEmpty() && statusStr != statusFilter.toStdString())
+        if (!statusFilter.empty() && statusStr != statusFilter)
             continue;
 
-        QVariantMap entry;
-        entry["request_id"]   = req.id;
-        entry["status"]       = QString::fromStdString(statusStr);
-        entry["progress"]     = req.progress;
-        entry["submitted_at"] = QDateTime::fromMSecsSinceEpoch(req.submittedAt)
-                                .toString(Qt::ISODate);
-        requestsList.append(entry);
+        char progBuf[32];
+        std::snprintf(progBuf, sizeof(progBuf), "%.15g", req.progress);
+
+        if (!items.empty()) items += ",";
+        items += "{\"request_id\":\"" + jsonEscapeStr(qstrToStr(req.id)) + "\"";
+        items += ",\"status\":\"" + statusStr + "\"";
+        items += ",\"progress\":" + std::string(progBuf);
+        items += ",\"submitted_at\":\"" + msecToIsoString((long long)req.submittedAt) + "\"}";
 
         switch (req.status) {
-            case REQUEST_QUEUED:    nQueued++;    break;
-            case REQUEST_RUNNING:   nRunning++;   break;
-            case REQUEST_COMPLETED: nCompleted++; break;
-            case REQUEST_FAILED:    nFailed++;    break;
-            case REQUEST_CANCELLED: nCancelled++; break;
+            case REQUEST_QUEUED:    ++nQueued;    break;
+            case REQUEST_RUNNING:   ++nRunning;   break;
+            case REQUEST_COMPLETED: ++nCompleted; break;
+            case REQUEST_FAILED:    ++nFailed;    break;
+            case REQUEST_CANCELLED: ++nCancelled; break;
         }
     }
 
-    JsonBuilder json;
-    json.startObject();
-    json.addMember("requests",  QVariant(requestsList));
-    json.addMember("total",     (int)m_requests.size());
-    json.addMember("queued",    nQueued);
-    json.addMember("running",   nRunning);
-    json.addMember("completed", nCompleted);
-    json.addMember("failed",    nFailed);
-    json.addMember("cancelled", nCancelled);
-    json.finishObject();
-    return json.toString();
+    std::string s = "{\"requests\":[" + items + "]";
+    s += ",\"total\":"     + std::to_string((int)m_requests.size());
+    s += ",\"queued\":"    + std::to_string(nQueued);
+    s += ",\"running\":"   + std::to_string(nRunning);
+    s += ",\"completed\":" + std::to_string(nCompleted);
+    s += ",\"failed\":"    + std::to_string(nFailed);
+    s += ",\"cancelled\":" + std::to_string(nCancelled);
+    s += "}";
+    return s;
 }
 
 int AsyncRequestManager::getQueueDepth() const
