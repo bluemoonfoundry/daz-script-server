@@ -204,7 +204,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
             }
             if (s == REQUEST_COMPLETED || s == REQUEST_FAILED || s == REQUEST_CANCELLED)
                 break;
-            SleepThread::msleep(500);
+            SleepThread::msleep(RESULT_POLL_INTERVAL_MS);
         }
     }
 

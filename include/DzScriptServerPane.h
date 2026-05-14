@@ -49,6 +49,15 @@ namespace ServerConfig {
     const int MAX_LOG_LINES = 1000;
     const int MAX_CAPTURED_LINES = 10000;
     const int RATE_LIMIT_CLEANUP_INTERVAL = 100;
+
+    // Server lifecycle timing
+    const int SERVER_BIND_WAIT_MS = 100;           // Wait after listen() before checking is_running()
+    const int SERVER_THREAD_STOP_TIMEOUT_MS = 5000; // Max wait for server thread to join on stop
+    const int HTTP_KEEP_ALIVE_MAX_COUNT = 5;        // Max requests per persistent connection
+    const int HTTP_KEEP_ALIVE_TIMEOUT_SEC = 5;      // Keep-alive idle timeout in seconds
+
+    // Async request management
+    const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
 }
 
 class DzScriptServerPane : public DzPane {
@@ -131,7 +140,6 @@ private slots:
 private:
 	void   setupRoutes();
 	void   updateUI();
-	QString variantToJson(const QVariant& v);
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
 	                          const QStringList& output,

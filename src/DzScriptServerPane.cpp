@@ -402,8 +402,8 @@ void DzScriptServerPane::startServer()
 
 	// Limit concurrent connections to prevent resource exhaustion
 	// cpp-httplib spawns a thread per request; limit keep-alive to reduce thread buildup
-	m_pServer->set_keep_alive_max_count(5);  // Max 5 requests per persistent connection
-	m_pServer->set_keep_alive_timeout(5);     // 5 second keep-alive timeout
+	m_pServer->set_keep_alive_max_count(ServerConfig::HTTP_KEEP_ALIVE_MAX_COUNT);
+	m_pServer->set_keep_alive_timeout(ServerConfig::HTTP_KEEP_ALIVE_TIMEOUT_SEC);
 
 	// Set socket flags to improve resource handling
 	m_pServer->set_socket_options([](int sock) {
@@ -438,8 +438,7 @@ void DzScriptServerPane::startServer()
 
 	m_pServerThread->start();
 
-	// Give thread a moment to bind
-	ServerListenThread::msSleep(100);
+	ServerListenThread::msSleep(ServerConfig::SERVER_BIND_WAIT_MS);
 
 	// Check if server bound successfully
 	if (!m_pServer->is_running()) {
@@ -463,8 +462,7 @@ void DzScriptServerPane::startServer()
 		.arg(m_nPort)
 		.arg(m_nTimeoutSec));
 
-	// Start async request cleanup timer (every 5 minutes)
-	m_pCleanupTimer->start(5 * 60 * 1000);
+	m_pCleanupTimer->start(ServerConfig::ASYNC_CLEANUP_INTERVAL_MIN * 60 * 1000);
 }
 
 void DzScriptServerPane::stopServer()
@@ -481,7 +479,7 @@ void DzScriptServerPane::stopServer()
 		m_pServer = nullptr;
 	}
 	if (m_pServerThread) {
-		if (!m_pServerThread->wait(5000)) {
+		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
 			appendLog("Warning: Server thread did not stop cleanly");
 		}
 		delete m_pServerThread;
@@ -1188,6 +1186,16 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 		                  requestId).toUtf8());
 }
 
+static HttpResult buildQueuedResponse(const QString& requestId, qint64 submittedAt)
+{
+	std::string resp = "{\"request_id\":\"";
+	resp += jsonEscapeStr(qstrToStr(requestId));
+	resp += "\",\"status\":\"queued\",\"submitted_at\":\"";
+	resp += msecToIsoString((long long)submittedAt);
+	resp += "\"}";
+	return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+}
+
 HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonBody)
 {
 	QScriptEngine parseEngine;
@@ -1213,12 +1221,7 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonB
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
 			ErrorCode::SERVER_UNAVAILABLE, qstrToStr(enqueueError))));
 
-	std::string resp = "{\"request_id\":\"";
-	resp += jsonEscapeStr(qstrToStr(requestId));
-	resp += "\",\"status\":\"queued\",\"submitted_at\":\"";
-	resp += msecToIsoString((long long)submittedAt);
-	resp += "\"}";
-	return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+	return buildQueuedResponse(requestId, submittedAt);
 }
 
 HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
@@ -1251,12 +1254,7 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 		.arg(scriptId).arg(requestId));
 
-	std::string resp = "{\"request_id\":\"";
-	resp += jsonEscapeStr(qstrToStr(requestId));
-	resp += "\",\"status\":\"queued\",\"submitted_at\":\"";
-	resp += msecToIsoString((long long)submittedAt);
-	resp += "\"}";
-	return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+	return buildQueuedResponse(requestId, submittedAt);
 }
 
 void DzScriptServerPane::onMessagePosted(const QString& msg)
@@ -1277,54 +1275,6 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 }
 
 // ─── JSON helpers (main thread only) ─────────────────────────────────────────
-
-QString DzScriptServerPane::variantToJson(const QVariant& v)
-{
-	if (!v.isValid() || v.isNull())
-		return "null";
-
-	switch (v.type()) {
-	case QVariant::Bool:
-		return v.toBool() ? "true" : "false";
-	case QVariant::Int:
-	case QVariant::LongLong:
-	case QVariant::UInt:
-	case QVariant::ULongLong:
-		return QString::number(v.toLongLong());
-	case QVariant::Double:
-		return QString::number(v.toDouble(), 'g', 15);
-	case QVariant::String: {
-		QString s = v.toString();
-		s.replace('\\', "\\\\");
-		s.replace('"',  "\\\"");
-		s.replace('\n', "\\n");
-		s.replace('\r', "\\r");
-		s.replace('\t', "\\t");
-		return "\"" + s + "\"";
-	}
-	case QVariant::List:
-	case QVariant::StringList: {
-		QVariantList list = v.toList();
-		QStringList parts;
-		foreach (const QVariant& item, list)
-			parts.append(variantToJson(item));
-		return "[" + parts.join(",") + "]";
-	}
-	case QVariant::Map: {
-		QVariantMap map = v.toMap();
-		QStringList parts;
-		for (QVariantMap::const_iterator it = map.begin(); it != map.end(); ++it) {
-			QString key = it.key();
-			key.replace('\\', "\\\\");
-			key.replace('"',  "\\\"");
-			parts.append("\"" + key + "\":" + variantToJson(it.value()));
-		}
-		return "{" + parts.join(",") + "}";
-	}
-	default:
-		return variantToJson(QVariant(v.toString()));
-	}
-}
 
 QString DzScriptServerPane::buildResponseJson(bool success,
                                               const QVariant& result,

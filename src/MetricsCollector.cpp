@@ -21,7 +21,7 @@ void MetricsCollector::recordRequest(bool success)
             m_nSuccessful++;
         else
             m_nFailed++;
-        shouldSave = (m_nTotal % 10 == 0);
+        shouldSave = (m_nTotal % SAVE_INTERVAL == 0);
     }
     if (shouldSave)
         saveToSettings();
@@ -64,14 +64,14 @@ void MetricsCollector::loadFromSettings()
 QString MetricsCollector::generateRequestId()
 {
     QUuid uuid = QUuid::createUuid();
-    return uuid.toString().mid(1, 8);
+    return uuid.toString().mid(1, REQUEST_ID_LENGTH);
 }
 
 // static
 QString MetricsCollector::generateAsyncId(const QString& type)
 {
     QString uuid = QUuid::createUuid().toString();
-    return type + "-" + uuid.mid(1, 8);
+    return type + "-" + uuid.mid(1, REQUEST_ID_LENGTH);
 }
 
 int MetricsCollector::getTotalRequests() const

@@ -34,6 +34,7 @@ class AsyncRequestManager {
 public:
     static const int DEFAULT_MAX_QUEUE_DEPTH      = 100;
     static const int DEFAULT_MAX_TRACKED_REQUESTS = 1000;
+    static const int RESULT_POLL_INTERVAL_MS      = 500; // Long-poll sleep interval in getResultJson()
 
     // notifyTarget must be a DzScriptServerPane* (QObject subclass).
     // Stored as QObject* to avoid the DAZ header dependency here.

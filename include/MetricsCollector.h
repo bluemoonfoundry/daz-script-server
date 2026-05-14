@@ -7,6 +7,9 @@
 // from the main thread or from HTTP threads (via BlockingQueuedConnection).
 class MetricsCollector {
 public:
+    static const int REQUEST_ID_LENGTH = 8;  // Characters taken from UUID for request/async IDs
+    static const int SAVE_INTERVAL     = 10; // Persist metrics to QSettings every N requests
+
     MetricsCollector();
 
     void recordRequest(bool success);
