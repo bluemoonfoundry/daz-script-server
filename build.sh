@@ -14,7 +14,7 @@ Commands:
   build              Configure (if needed) and build (default)
   install            Build and copy plugin to DAZ Studio plugins folder
   clean              Delete the build directory and exit
-  release <tag>      Build, then create a GitHub release and attach the plugin
+  release <tag>      Build plugin + dazpy wheel, create a GitHub release and attach both
 
 Options:
   --clean            Wipe the build directory before building
@@ -24,6 +24,7 @@ Options:
   --title <title>    Release title (release command only; defaults to <tag>)
   --notes <text>     Release notes text (release command only)
   --update           Update an existing release instead of creating a new one (release command only)
+  --no-wheel         Skip building the dazpy wheel (release command only)
   --help             Show this help message and exit
 
 Examples:
@@ -32,6 +33,7 @@ Examples:
   ./build.sh install --clean
   ./build.sh clean
   ./build.sh release v1.3.0 --title "v1.3.0" --notes "Bug fixes"
+  ./build.sh release v1.3.0 --no-wheel
 
 Required environment variables (loaded from .env if present):
   DAZ_SDK_DIR          Path to the DAZStudio4.5+ SDK
@@ -64,6 +66,7 @@ OPT_RECONFIGURE=0
 OPT_DEBUG=0
 OPT_VERBOSE=0
 OPT_UPDATE=0
+OPT_NO_WHEEL=0
 OPT_TITLE=""
 OPT_NOTES=""
 
@@ -74,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --debug)       OPT_DEBUG=1;                                      shift ;;
         --verbose)     OPT_VERBOSE=1;                                    shift ;;
         --update)      OPT_UPDATE=1;                                     shift ;;
+        --no-wheel)    OPT_NO_WHEEL=1;                                   shift ;;
         --title)       OPT_TITLE="${2:?'--title requires a value'}";     shift 2 ;;
         --notes)       OPT_NOTES="${2:?'--notes requires a value'}";     shift 2 ;;
         --help|-h)     usage; exit 0 ;;
@@ -208,14 +212,44 @@ if [ "$COMMAND" = "release" ]; then
         exit 1
     fi
 
+    RELEASE_ARTIFACTS=("$ARTIFACT")
+
+    # ── Build dazpy wheel ────────────────────────────────────────────────────
+    if [ "$OPT_NO_WHEEL" = 0 ]; then
+        if ! command -v python &>/dev/null && ! command -v python3 &>/dev/null; then
+            echo "Error: python not found. Install Python 3.10+ or use --no-wheel." >&2
+            exit 1
+        fi
+        PYTHON=$(command -v python || command -v python3)
+
+        if ! "$PYTHON" -c "import build" &>/dev/null; then
+            echo "Error: python 'build' package not found. Run: pip install build" >&2
+            echo "Or use --no-wheel to skip wheel building." >&2
+            exit 1
+        fi
+
+        WHEEL_DIST="$SCRIPT_DIR/dist"
+        echo "Building dazpy wheel..."
+        "$PYTHON" -m build --wheel --outdir "$WHEEL_DIST" "$SCRIPT_DIR"
+
+        WHEEL_FILE=$(ls "$WHEEL_DIST"/dazpy-*.whl 2>/dev/null | sort -V | tail -1)
+        if [ -z "$WHEEL_FILE" ]; then
+            echo "Error: wheel not found in $WHEEL_DIST after build." >&2
+            exit 1
+        fi
+        echo "Wheel: $WHEEL_FILE"
+        RELEASE_ARTIFACTS+=("$WHEEL_FILE")
+    fi
+
+    # ── Publish GitHub release ───────────────────────────────────────────────
     if [ "$OPT_UPDATE" = 1 ]; then
-        GH_ARGS=("release" "upload" "$RELEASE_TAG" "$ARTIFACT" "--clobber")
-        echo "Updating GitHub release $RELEASE_TAG with $ARTIFACT..."
+        GH_ARGS=("release" "upload" "$RELEASE_TAG" "${RELEASE_ARTIFACTS[@]}" "--clobber")
+        echo "Updating GitHub release $RELEASE_TAG with ${RELEASE_ARTIFACTS[*]}..."
     else
         RELEASE_TITLE="${OPT_TITLE:-$RELEASE_TAG}"
-        GH_ARGS=("release" "create" "$RELEASE_TAG" "$ARTIFACT" "--title" "$RELEASE_TITLE")
+        GH_ARGS=("release" "create" "$RELEASE_TAG" "${RELEASE_ARTIFACTS[@]}" "--title" "$RELEASE_TITLE")
         [ -n "$OPT_NOTES" ] && GH_ARGS+=("--notes" "$OPT_NOTES")
-        echo "Creating GitHub release $RELEASE_TAG and attaching $ARTIFACT..."
+        echo "Creating GitHub release $RELEASE_TAG and attaching ${RELEASE_ARTIFACTS[*]}..."
     fi
     gh "${GH_ARGS[@]}"
 fi

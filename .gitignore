@@ -1,4 +1,6 @@
 build/
+dist/
+*.egg-info/
 .claude/
 .env*
 __pycache__/
