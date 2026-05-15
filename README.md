@@ -657,7 +657,7 @@ There are two options for getting the plugin. For most users, Option A, download
    cmake --build build --config Release
    ```
 
-   Output: `build/lib/Release/DazScriptServer.dll` (Windows) or `build/lib/DazScriptServer.dylib` (macOS)
+   Output: `build/plugin/Release/DazScriptServer.dll` (Windows) or `build/plugin/DazScriptServer.dylib` (macOS)
 
 ### build.sh convenience script
 

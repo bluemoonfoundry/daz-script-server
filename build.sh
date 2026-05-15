@@ -127,11 +127,11 @@ fi
 if [ "$PLATFORM" = "win" ]; then
     BUILD_CONFIG="Release"
     [ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
-    ARTIFACT="$BUILD_DIR/lib/$BUILD_CONFIG/DazScriptServer.dll"
+    ARTIFACT="$BUILD_DIR/plugin/$BUILD_CONFIG/DazScriptServer.dll"
 else
     BUILD_CONFIG="Release"
     [ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
-    ARTIFACT="$BUILD_DIR/lib/DazScriptServer.dylib"
+    ARTIFACT="$BUILD_DIR/plugin/DazScriptServer.dylib"
 fi
 
 # ── clean command ─────────────────────────────────────────────────────────────
