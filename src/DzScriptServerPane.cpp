@@ -1308,62 +1308,57 @@ QString DzScriptServerPane::buildResponseJson(bool success,
 
 void DzScriptServerPane::loadSettings()
 {
-	QSettings settings("DAZ 3D", "DazScriptServer");
-	m_sHost       = settings.value("host", "127.0.0.1").toString();
-	m_nPort       = settings.value("port", 18811).toInt();
-	m_nTimeoutSec = settings.value("timeout", 30).toInt();
-	m_bAutoStart  = settings.value("autoStart", false).toBool();
+	QStringList msgs;
+	ServerSettings s = m_settingsService.load(msgs);
+	for (const QString& msg : msgs)
+		appendLog(msg);
 
-	// Advanced Limits
-	m_nMaxConcurrentRequests = settings.value("maxConcurrentRequests",
-	                           ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS).toInt();
-	m_nMaxBodySizeMB = settings.value("maxBodySizeMB",
-	                   ServerConfig::DEFAULT_MAX_BODY_SIZE_MB).toInt();
-	m_nMaxScriptLengthKB = settings.value("maxScriptLengthKB",
-	                       ServerConfig::DEFAULT_MAX_SCRIPT_LENGTH_KB).toInt();
-
-	// Authentication service
-	m_auth.setEnabled(settings.value("authEnabled", true).toBool());
-
-	// IP Whitelist service
-	m_ipWhitelist.setEnabled(settings.value("ipWhitelistEnabled", false).toBool());
-	m_ipWhitelist.setWhitelist(settings.value("ipWhitelist", "127.0.0.1").toString());
-
-	// Rate Limiter service
-	m_rateLimiter.setEnabled(settings.value("rateLimitEnabled", false).toBool());
-	m_rateLimiter.configure(
-		settings.value("rateLimitMax",    ServerConfig::DEFAULT_RATE_LIMIT_MAX).toInt(),
-		settings.value("rateLimitWindow", ServerConfig::DEFAULT_RATE_LIMIT_WINDOW).toInt());
+	applySettings(s);
 
 	// Persistent metrics — cumulative across restarts
 	m_metrics.loadFromSettings();
 }
 
+void DzScriptServerPane::applySettings(const ServerSettings& s)
+{
+	m_sHost                  = s.host;
+	m_nPort                  = s.port;
+	m_nTimeoutSec            = s.timeoutSec;
+	m_bAutoStart             = s.autoStart;
+	m_nMaxConcurrentRequests = s.maxConcurrentRequests;
+	m_nMaxBodySizeMB         = s.maxBodySizeMB;
+	m_nMaxScriptLengthKB     = s.maxScriptLengthKB;
+
+	m_auth.setEnabled(s.authEnabled);
+
+	m_ipWhitelist.setEnabled(s.ipWhitelistEnabled);
+	m_ipWhitelist.setWhitelist(s.ipWhitelist);
+
+	m_rateLimiter.setEnabled(s.rateLimitEnabled);
+	m_rateLimiter.configure(s.rateLimitMax, s.rateLimitWindow);
+}
+
 void DzScriptServerPane::saveSettings()
 {
-	QSettings settings("DAZ 3D", "DazScriptServer");
-	settings.setValue("host",      m_sHost);
-	settings.setValue("port",      m_nPort);
-	settings.setValue("timeout",   m_nTimeoutSec);
-	settings.setValue("autoStart", m_bAutoStart);
+	ServerSettings s;
+	s.host                  = m_sHost;
+	s.port                  = m_nPort;
+	s.timeoutSec            = m_nTimeoutSec;
+	s.autoStart             = m_bAutoStart;
+	s.maxConcurrentRequests = m_nMaxConcurrentRequests;
+	s.maxBodySizeMB         = m_nMaxBodySizeMB;
+	s.maxScriptLengthKB     = m_nMaxScriptLengthKB;
+	s.authEnabled           = m_auth.isEnabled();
+	s.ipWhitelistEnabled    = m_ipWhitelist.isEnabled();
+	s.ipWhitelist           = m_ipWhitelist.getWhitelist();
+	s.rateLimitEnabled      = m_rateLimiter.isEnabled();
+	// Prefer live UI values for rate limit so the user sees what was saved.
+	s.rateLimitMax    = m_pRateLimitMaxSpin    ? m_pRateLimitMaxSpin->value()
+	                                           : ServerConfig::DEFAULT_RATE_LIMIT_MAX;
+	s.rateLimitWindow = m_pRateLimitWindowSpin ? m_pRateLimitWindowSpin->value()
+	                                           : ServerConfig::DEFAULT_RATE_LIMIT_WINDOW;
 
-	// Advanced Limits
-	settings.setValue("maxConcurrentRequests", m_nMaxConcurrentRequests);
-	settings.setValue("maxBodySizeMB",         m_nMaxBodySizeMB);
-	settings.setValue("maxScriptLengthKB",     m_nMaxScriptLengthKB);
-
-	// Authentication service
-	settings.setValue("authEnabled", m_auth.isEnabled());
-
-	// IP Whitelist service
-	settings.setValue("ipWhitelistEnabled", m_ipWhitelist.isEnabled());
-	settings.setValue("ipWhitelist",        m_ipWhitelist.getWhitelist());
-
-	// Rate Limiter service — spin box values read from UI at start; save what we have
-	settings.setValue("rateLimitEnabled", m_rateLimiter.isEnabled());
-	settings.setValue("rateLimitMax",    m_pRateLimitMaxSpin    ? m_pRateLimitMaxSpin->value()    : ServerConfig::DEFAULT_RATE_LIMIT_MAX);
-	settings.setValue("rateLimitWindow", m_pRateLimitWindowSpin ? m_pRateLimitWindowSpin->value() : ServerConfig::DEFAULT_RATE_LIMIT_WINDOW);
-
+	m_settingsService.save(s);
 	m_metrics.saveToSettings();
 }
 

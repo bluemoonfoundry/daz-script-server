@@ -27,6 +27,8 @@
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
+#include "SettingsService.h"
+#include "ServerSettings.h"
 
 // Required for BlockingQueuedConnection return from execute/register handlers.
 typedef QPair<int, QByteArray> HttpResult;
@@ -148,6 +150,7 @@ private:
 
 	void    loadSettings();
 	void    saveSettings();
+	void    applySettings(const ServerSettings& s);
 
 	// Server state
 	httplib::Server* m_pServer;
@@ -167,6 +170,9 @@ private:
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
 	bool        m_bCapturingLog;
+
+	// ── Settings service ─────────────────────────────────────────────────────
+	SettingsService       m_settingsService;
 
 	// ── Service objects ───────────────────────────────────────────────────────
 	AuthenticationService m_auth;

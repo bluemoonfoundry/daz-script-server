@@ -16,6 +16,7 @@ add_library(DazScriptServer SHARED
 	RequestHandlers.cpp
 	ErrorResponse.cpp
 	RequestValidator.cpp
+	SettingsService.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
@@ -30,6 +31,8 @@ add_library(DazScriptServer SHARED
 	../include/RequestValidator.h
 	../include/common_version.h
 	../include/dzscriptserver.h
+	../include/SettingsService.h
+	../include/ServerSettings.h
 )
 
 target_include_directories(DazScriptServer
