@@ -128,14 +128,52 @@ class DazRenderSettings:
         """)
         self._client.execute(script)
 
-    def render(self) -> bool:
-        """Trigger a render. Returns True if the render was started successfully."""
+    def render(self, camera_name: str | None = None) -> bool:
+        """Render the scene to :attr:`output_path`.
+
+        DAZ Studio's ``doRender()`` only writes to disk when ``renderImgToId`` is set
+        to ``DzRenderOptions.DirectToFile`` and the camera is applied to both the
+        render options and the active viewport before the call.
+
+        Args:
+            camera_name: Internal name of the camera node to render from.  When
+                omitted the active viewport camera is used.
+
+        Returns:
+            ``True`` if the render completed without error.
+        """
+        if camera_name is not None:
+            cam_expr = f"Scene.findCamera({json.dumps(camera_name)})"
+        else:
+            cam_expr = (
+                "MainWindow.getViewportMgr().getActiveViewport()"
+                ".get3DViewport().getCamera()"
+            )
         script = ScriptBuilder.iife(f"""
             var mgr = {self._render_mgr()};
             if (!mgr) return false;
-            return mgr.doRender();
+            var cam = {cam_expr};
+            if (!cam) return false;
+            var opts = mgr.getRenderOptions();
+            opts.camera = cam;
+            opts.renderImgToId = DzRenderOptions.DirectToFile;
+            var vp = MainWindow.getViewportMgr().getActiveViewport().get3DViewport();
+            var prevCam = vp ? vp.getCamera() : null;
+            if (vp) vp.setCamera(cam);
+            var err = mgr.doRender(opts);
+            if (vp && prevCam) vp.setCamera(prevCam);
+            return (err === 0 || err === true);
         """)
         return bool(self._client.execute(script).value)
+
+    def render_and_wait(
+        self, poll_interval: float = 1.0, timeout: float = 600.0
+    ) -> bool:
+        """Alias for :meth:`render` kept for backwards compatibility.
+
+        ``doRender()`` is synchronous in DAZ Studio so no polling is required.
+        """
+        return self.render()
 
     def has_render(self) -> bool:
         """Return True if there is a completed render available to save."""

@@ -30,6 +30,14 @@ class DazProperty(DazElement):
         object.__setattr__(self, "_owner_locator", owner_locator)
         object.__setattr__(self, "_property_label", property_label)
 
+    @classmethod
+    def _from_locator(cls, client: "DazClient", locator: str) -> "DazProperty":  # noqa: F821
+        """Construct a DazProperty from a pre-built JavaScript locator expression."""
+        from ._element import DazElement
+        prop = object.__new__(cls)
+        DazElement.__init__(prop, client, locator)
+        return prop
+
     @property
     def value(self) -> object:
         """Current property value (read/write)."""

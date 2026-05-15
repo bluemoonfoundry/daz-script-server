@@ -34,3 +34,12 @@ class ScriptBuilder:
             f"if (!_node) return null;\n"
             f"{body}"
         )
+
+    @staticmethod
+    def node_body_from_locator(locator: str, body: str) -> str:
+        """Like node_body but uses a pre-built JS locator expression for _node."""
+        return ScriptBuilder.iife(
+            f"var _node = {locator};\n"
+            f"if (!_node) return null;\n"
+            f"{body}"
+        )

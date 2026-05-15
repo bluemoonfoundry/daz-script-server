@@ -106,13 +106,9 @@ class DazScene:
         )
         if not self._client.execute(exists).value:
             raise NodeNotFoundError(f"Node with label not found: {label!r}")
-        # Resolve to internal name for stable identity
-        name_script = ScriptBuilder.iife(
-            f"var n = Scene.findNodeByLabel({ScriptBuilder.escape_string(label)});"
-            "return n ? n.getName() : null;"
-        )
-        name = self._client.execute(name_script).value
-        return DazNode(self._client, NodeIdentifier(name or label))
+        # Keep kind="label" — nodes with the same asset type share the same internal
+        # name, so resolving to getName() would collapse distinct nodes into one.
+        return DazNode(self._client, NodeIdentifier(label, kind="label"))
 
     def num_nodes(self) -> int:
         """Return the total number of nodes in the scene."""
@@ -194,13 +190,16 @@ class DazScene:
         """
         from ._skeleton import DazSkeleton
         from .exceptions import NodeNotFoundError
-        name_script = ScriptBuilder.iife(
-            f"var s = Scene.findSkeletonByLabel({ScriptBuilder.escape_string(label)}); return s ? s.getName() : null;"
+        exists_script = ScriptBuilder.iife(
+            f"return !!Scene.findSkeletonByLabel({ScriptBuilder.escape_string(label)});"
         )
-        name = self._client.execute(name_script).value
-        if name is None:
+        if not self._client.execute(exists_script).value:
             raise NodeNotFoundError(f"Skeleton with label not found: {label!r}")
-        return DazSkeleton(self._client, NodeIdentifier(name))
+        # Keep kind="label" so _skeleton_body matches on getLabel(), not getName().
+        # Multiple figures of the same type share the same internal name (e.g. both
+        # Genesis 9 figures have getName() == "Genesis 9"), so name-based lookup
+        # would silently resolve both to the first figure in the scene.
+        return DazSkeleton(self._client, NodeIdentifier(label, kind="label"))
 
     def num_skeletons(self) -> int:
         """Return the total number of skeleton nodes in the scene."""

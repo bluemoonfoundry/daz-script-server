@@ -30,6 +30,27 @@ class DazSkeleton(DazNode):
         )
         return ScriptBuilder.iife(f"{lookup}\nif (!_node) return null;\n{body}")
 
+    def _bone_locator(self, bone_name: str) -> str:
+        """Build a JS locator that resolves a bone through this specific skeleton.
+
+        Uses the skeleton list rather than Scene.findNode() so that two figures
+        with the same internal name (e.g. two Genesis 9 figures) are kept distinct.
+        """
+        kind = self._identifier.kind
+        value = json.dumps(self._identifier.value)
+        match = (
+            f"_skels[_i].getLabel() === {value}"
+            if kind == "label"
+            else f"_skels[_i].getName() === {value}"
+        )
+        return (
+            f"(function(){{"
+            f"var _skel=null,_skels=Scene.getSkeletonList();"
+            f"for(var _i=0;_i<_skels.length;_i++){{if({match}){{_skel=_skels[_i];break;}}}}"
+            f"return _skel?_skel.findBone({json.dumps(bone_name)}):null;"
+            f"}})()"
+        )
+
     def bones(self) -> list["DazBone"]:  # noqa: F821
         """Return all bones in this skeleton."""
         from ._bone import DazBone
@@ -44,7 +65,7 @@ class DazSkeleton(DazNode):
             """
         )
         names = self._client.execute(script).value or []
-        return [DazBone(self._client, NodeIdentifier(n)) for n in names]
+        return [DazBone._from_locator(self._client, self._bone_locator(n), n) for n in names]
 
     def find_bone(self, name: str) -> "DazBone":  # noqa: F821
         """Find a bone by its internal name.
@@ -66,7 +87,7 @@ class DazSkeleton(DazNode):
         result = self._client.execute(script).value
         if result is None:
             raise NodeNotFoundError(f"Bone not found: {name!r}")
-        return DazBone(self._client, NodeIdentifier(result))
+        return DazBone._from_locator(self._client, self._bone_locator(result), result)
 
     def find_bone_by_label(self, label: str) -> "DazBone":  # noqa: F821
         """Find a bone by its user-visible label.
@@ -88,7 +109,7 @@ class DazSkeleton(DazNode):
         result = self._client.execute(script).value
         if result is None:
             raise NodeNotFoundError(f"Bone with label not found: {label!r}")
-        return DazBone(self._client, NodeIdentifier(result))
+        return DazBone._from_locator(self._client, self._bone_locator(result), result)
 
     def num_bones(self) -> int:
         """Return the total number of bones in this skeleton."""

@@ -295,6 +295,95 @@ class DazNode(DazElement):
             return None
         return DazMaterial(self._client, self._material_locator(result))
 
+    def find_modifier_by_label(self, label: str) -> "DazModifier | None":
+        """Find a modifier by its user-visible label (the name shown in the DAZ UI).
+
+        DAZ Studio morphs have both an internal name (e.g. ``"PHMSmileFull"``) and a
+        display label (e.g. ``"Smile Full Face"``).  :meth:`find_modifier` matches the
+        internal name; this method matches the label instead.
+
+        Args:
+            label: The ``getLabel()`` string shown in the Parameters pane.
+
+        Returns:
+            A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
+            ``None`` if no modifier with that label exists.
+        """
+        from ._modifier import DazModifier
+        from ._morph import DazMorph
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"""
+            var obj = _node.getObject();
+            if (!obj) return null;
+            for (var i = 0; i < obj.getNumModifiers(); i++) {{
+                var m = obj.getModifier(i);
+                if (m.getLabel() === {json.dumps(label)}) {{
+                    return {{name: m.getName(), className: m.className()}};
+                }}
+            }}
+            return null;
+            """
+        )
+        result = self._client.execute(script).value
+        if result is None:
+            return None
+        loc = self._modifier_locator(result["name"])
+        if result["className"] == "DzMorph":
+            return DazMorph(self._client, loc)
+        return DazModifier(self._client, loc)
+
+    def find_property(self, name: str) -> "DazProperty | None":  # noqa: F821
+        """Find a node-level property by its internal name.
+
+        This searches properties directly on the node (via ``DzNode::findProperty``),
+        which covers pose controls, FACS dials, and other parameter channels that are
+        **not** geometry modifiers and therefore invisible to :meth:`find_modifier`.
+
+        Args:
+            name: The ``getName()`` / ID string of the property (e.g.
+                ``"facs_ctrl_SmileFullFace"``).
+
+        Returns:
+            A :class:`~dazpy.DazProperty` proxy, or ``None`` if not found.
+        """
+        from ._property import DazProperty
+        locator = (
+            f"(function(){{var _n={self._locator};"
+            f"return _n ? _n.findProperty({json.dumps(name)}) : null;}})()"
+        )
+        exists = self._client.execute(
+            ScriptBuilder.iife(f"return !!({locator});")
+        ).value
+        if not exists:
+            return None
+        return DazProperty._from_locator(self._client, locator)
+
+    def find_property_by_label(self, label: str) -> "DazProperty | None":  # noqa: F821
+        """Find a node-level property by its user-visible label.
+
+        Equivalent to :meth:`find_property` but matches on ``getLabel()`` instead
+        of ``getName()``.  Use this when you know the label shown in the DAZ Studio
+        Parameters pane (e.g. ``"Smile Full Face"``) but not the internal ID.
+
+        Args:
+            label: The ``getLabel()`` string shown in the Parameters pane.
+
+        Returns:
+            A :class:`~dazpy.DazProperty` proxy, or ``None`` if not found.
+        """
+        from ._property import DazProperty
+        locator = (
+            f"(function(){{var _n={self._locator};"
+            f"return _n ? _n.findPropertyByLabel({json.dumps(label)}) : null;}})()"
+        )
+        exists = self._client.execute(
+            ScriptBuilder.iife(f"return !!({locator});")
+        ).value
+        if not exists:
+            return None
+        return DazProperty._from_locator(self._client, locator)
+
     def morphs(self) -> list["DazMorph"]:
         """Return only the morph modifiers on this node (convenience filter)."""
         from ._morph import DazMorph

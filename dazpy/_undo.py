@@ -9,8 +9,8 @@ from ._script_builder import ScriptBuilder
 class UndoGroup:
     """Context manager that groups DAZ Studio operations into a single undo step.
 
-    On successful exit the changes are committed with ``Scene.acceptUndo()``.
-    If an exception propagates, ``Scene.cancelUndo()`` is called instead.
+    On successful exit the changes are committed with ``acceptUndo(label)``.
+    If an exception propagates, ``cancelUndo()`` is called instead.
 
     Obtain via :meth:`DazScene.undo` rather than constructing directly::
 
@@ -27,16 +27,14 @@ class UndoGroup:
         self._label = label
 
     def __enter__(self) -> "UndoGroup":
-        script = ScriptBuilder.iife(
-            f"Scene.beginUndo(); Scene.setUndoLabel({json.dumps(self._label)});"
-        )
+        script = ScriptBuilder.iife("beginUndo();")
         self._client.execute(script)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         if exc_type is None:
-            script = ScriptBuilder.iife("Scene.acceptUndo();")
+            script = ScriptBuilder.iife(f"acceptUndo({json.dumps(self._label)});")
         else:
-            script = ScriptBuilder.iife("Scene.cancelUndo();")
+            script = ScriptBuilder.iife("cancelUndo();")
         self._client.execute(script)
         return False
