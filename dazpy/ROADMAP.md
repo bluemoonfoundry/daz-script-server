@@ -347,7 +347,7 @@ Add:
 - `is_visible_in_render() -> bool` / `set_visible_in_render(on: bool)` — `isVisibleInRender()` / `setVisibleInRender()`
 - `is_visible_in_viewport() -> bool` / `set_visible_in_viewport(on: bool)`
 - `bounding_box() -> dict` — `getWSBoundingBox()`; return `{min: {x,y,z}, max: {x,y,z}}`
-- `duplicate() -> DazNode` — `duplicate(false)`, returns new node's name
+- ~~`duplicate() -> DazNode`~~ — removed; `DzNode.duplicate()` requires the Qt event loop and deadlocks under synchronous script execution
 
 ---
 
@@ -399,7 +399,7 @@ Section 7 — Geometry
 [x] 7b  face/material group names, subdivision level, tri/quad counts
 
 Section 8 — Node queries
-[x] 8a  is_in_scene, is_root, render/viewport visibility, bounding_box, duplicate
+[x] 8a  is_in_scene, is_root, render/viewport visibility, bounding_box (duplicate removed — deadlocks)
 ```
 
 ---

@@ -264,12 +264,16 @@ class TestDazScene(unittest.TestCase):
         self.assertLessEqual(r["start"], r["end"])
 
     def test_set_play_range_round_trips(self):
-        original = self.scene.play_range()
+        original_play = self.scene.play_range()
+        original_anim = self.scene.anim_range()
+        # Expand anim range first — setPlayRange is clamped to the animation range.
+        self.scene.set_anim_range(0, 60)
         self.scene.set_play_range(0, 60)
         updated = self.scene.play_range()
         self.assertEqual(updated["start"], 0)
         self.assertEqual(updated["end"], 60)
-        self.scene.set_play_range(original["start"], original["end"])
+        self.scene.set_anim_range(original_anim["start"], original_anim["end"])
+        self.scene.set_play_range(original_play["start"], original_play["end"])
 
     def test_set_anim_range_does_not_raise(self):
         r = self.scene.play_range()
@@ -1319,14 +1323,6 @@ class TestDazNodeAdditionalQueries(unittest.TestCase):
         for key in ("x", "y", "z"):
             self.assertGreaterEqual(bb["max"][key], bb["min"][key])
 
-    def test_duplicate_returns_daznode_or_none(self):
-        dup = self.node.duplicate()
-        self.assertTrue(dup is None or isinstance(dup, DazNode))
-        if dup is not None:
-            self.assertIsNotNone(dup.name)
-            import json as _json
-            cleanup = f'(function(){{ var n = Scene.findNode({_json.dumps(dup.name)}); if (n) Scene.removeNode(n); }})()'
-            dup._client.execute(cleanup)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

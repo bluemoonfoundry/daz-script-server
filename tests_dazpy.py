@@ -1201,18 +1201,6 @@ class TestDazNodeAdditionalQueries(unittest.TestCase):
         result = node.bounding_box()
         self.assertIsNone(result)
 
-    def test_duplicate_returns_node_with_returned_name(self):
-        node, client = self._node("Genesis9_copy")
-        dup = node.duplicate()
-        self.assertIsInstance(dup, DazNode)
-        script = client.execute.call_args[0][0]
-        self.assertIn("duplicate", script)
-        self.assertIn("false", script)
-
-    def test_duplicate_returns_none_when_server_returns_none(self):
-        node, client = self._node(None)
-        dup = node.duplicate()
-        self.assertIsNone(dup)
 
 
 class TestDazSceneSelection(unittest.TestCase):
