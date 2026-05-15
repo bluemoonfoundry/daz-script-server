@@ -242,60 +242,77 @@ def apply_expression(
     aus: dict[str, float],
     scale: float = 1.0,
     reset: bool = True,
+    debug: bool = False,
 ) -> dict[str, float]:
     """Apply AU values to Genesis 9 FACS properties in a single HTTP call.
 
     Iterates all numeric skeleton properties once to build a label→property
-    map in DazScript, then sets each mapped value.  Missing labels are silently
-    skipped; the return dict lets the caller detect when nothing matched.
+    map in DazScript, then sets each mapped value.  Returns the count of
+    properties that were actually matched and set.
 
     Args:
         client: Active DazClient.
         figure_label: Label of the target figure in DAZ Studio.
         aus: AU key → magnitude in [0, 1].
         scale: Global multiplier applied after per-AU scale factors.
-        reset: Zero all mapped FACS properties before applying.  Set False
-            to blend on top of an existing expression.
+        reset: Zero all mapped FACS properties before applying.
+        debug: Return full diagnostics instead of just the match count.
 
     Returns:
         Dict of property label → applied value (for logging).
     """
-    # Build {label: value} for every AU we want to set.
     targets: dict[str, float] = {}
     for au_key, (label, au_scale) in FACS_MAP.items():
         if reset or aus.get(au_key, 0.0) != 0.0:
             targets[label] = round(_clamp(aus.get(au_key, 0.0) * au_scale * scale), 4)
 
-    # Serialise as a JS object literal: {"Eye Blink Left": 0.259, ...}
     targets_js = "{" + ",".join(f"{json.dumps(k)}:{v}" for k, v in targets.items()) + "}"
 
-    # One pass over all skeleton properties to build a label→prop map, then apply.
     script = f"""(function(){{
         {_skel_lookup(figure_label)}
         if (!_skel) return null;
         var targets = {targets_js};
-        var applied = 0;
+        var matched = [], all_labels = [];
         for (var i = 0; i < _skel.getNumProperties(); i++) {{
             var p = _skel.getProperty(i);
-            if (!p || !p.setValue) continue;
-            var lbl = p.getLabel();
+            if (!p) continue;
+            var lbl = p.getLabel ? p.getLabel() : null;
+            if (!lbl) continue;
+            all_labels.push(lbl);
             if (targets.hasOwnProperty(lbl)) {{
-                p.setValue(targets[lbl]);
-                applied++;
+                if (p.setValue) p.setValue(targets[lbl]);
+                matched.push(lbl);
             }}
         }}
-        return applied;
+        return {{matched: matched, total_props: all_labels.length, all_labels: all_labels}};
     }})()"""
 
-    matched = client.execute(script).value
-    if matched is None:
+    result = client.execute(script).value
+    if result is None:
         sys.exit(f"Error: figure {figure_label!r} not found in scene.")
 
-    if matched == 0:
+    matched_labels = result.get("matched", [])
+    total_props    = result.get("total_props", 0)
+    all_labels     = result.get("all_labels", [])
+
+    if debug:
+        print(f"\nDebug: {total_props} properties on skeleton.")
+        missing = [lbl for lbl in targets if lbl not in matched_labels]
+        if matched_labels:
+            print(f"  Matched ({len(matched_labels)}): {matched_labels}")
+        if missing:
+            print(f"  Not found ({len(missing)}): {missing}")
+        if all_labels:
+            print(f"\n  All skeleton property labels:")
+            for lbl in sorted(all_labels):
+                print(f"    {lbl!r}")
+
+    if not matched_labels:
         print(
-            "\nWarning: no FACS properties were matched on the figure.\n"
-            "Run --list-properties to see the exact labels available, then\n"
-            "update FACS_MAP at the top of this file to match.",
+            f"\nWarning: 0 of {len(targets)} FACS properties matched on {figure_label!r} "
+            f"({total_props} skeleton properties searched).\n"
+            "Run --list-properties or --debug to see available labels, then\n"
+            "update FACS_MAP at the top of this file.",
             file=sys.stderr,
         )
 
@@ -356,6 +373,8 @@ parser.add_argument("--no-reset", dest="reset", action="store_false",
                     help="Blend onto existing expression instead of zeroing first")
 parser.add_argument("--list-properties", action="store_true",
                     help="List numeric properties on the figure and exit")
+parser.add_argument("--debug", action="store_true",
+                    help="Print which FACS labels matched/missed and all skeleton property labels")
 args = parser.parse_args()
 
 client = DazClient()
@@ -380,7 +399,7 @@ for k, v in aus.items():
     bar = "#" * int(v * 20)
     print(f"  {k:20s}  {v:.3f}  {bar}")
 
-applied = apply_expression(client, args.figure, aus, scale=args.scale, reset=args.reset)
+applied = apply_expression(client, args.figure, aus, scale=args.scale, reset=args.reset, debug=args.debug)
 
 active = {label: v for label, v in applied.items() if v > 0.005}
 print(f"\nApplied {len(active)} active FACS properties to {args.figure!r}:")
