@@ -24,6 +24,7 @@ pip install dazpy
 ```
 
 ```python
+import time
 from dazpy import DazClient, DazScene
 
 client = DazClient()          # auto-loads token from ~/.daz3d/dazscriptserver_token.txt
@@ -32,7 +33,16 @@ scene  = DazScene(client)
 print(scene.num_nodes(), "nodes in scene")
 
 figure = scene.find_skeleton_by_label("Genesis 9")
-figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+
+bones = figure.bones()
+print([b._identifier.value for b in bones if "neck" in b._identifier.value.lower()])
+
+rots=[0,4,10,15,20]
+
+for rot in rots:
+    print (f"Set rotation {rot}")
+    figure.find_bone("neck1").set_local_rotation(0, rot, 0)
+    time.sleep(1)
 ```
 
 **Option B — raw HTTP (any language):**
