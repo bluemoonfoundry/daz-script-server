@@ -1,0 +1,797 @@
+openapi: 3.0.3
+info:
+  title: DazScript Server API
+  description: |
+    HTTP API for remote DazScript execution inside DAZ Studio.
+
+    ## Authentication
+
+    All endpoints except `/status`, `/health`, and `/metrics` require a token
+    when authentication is enabled (default: on). Pass the token in either:
+
+    - `X-API-Token: <token>` header
+    - `Authorization: Bearer <token>` header
+
+    The token is auto-generated on first run and stored at
+    `~/.daz3d/dazscriptserver_token.txt`.
+
+    ## Threading model
+
+    All DazScript execution happens serially on DAZ Studio's main Qt thread.
+    "Concurrent" means HTTP connections are accepted concurrently, but scripts
+    queue behind each other. The `/execute/async` family lets callers submit
+    work without blocking their HTTP connection.
+
+  version: 2.0.0
+  contact:
+    name: Blue Moon Foundry
+    url: https://github.com/bluemoonfoundry/daz-script-server/issues
+  license:
+    name: AGPL v3
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://127.0.0.1:18811
+    description: Default local server
+
+tags:
+  - name: Server
+    description: Server status and health
+  - name: Execute
+    description: Synchronous script execution
+  - name: Registry
+    description: Registered script management
+  - name: Async
+    description: Asynchronous script execution and request lifecycle
+
+paths:
+  /status:
+    get:
+      tags: [Server]
+      summary: Check if the server is running
+      operationId: getStatus
+      security: []
+      responses:
+        '200':
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                running: true
+                version: "2.0.0"
+
+  /health:
+    get:
+      tags: [Server]
+      summary: Health check for monitoring and load balancers
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                version: "2.0.0"
+                running: true
+                auth_enabled: true
+                active_requests: 2
+                uptime_seconds: 3600
+
+  /metrics:
+    get:
+      tags: [Server]
+      summary: Request statistics and performance counters
+      operationId: getMetrics
+      security: []
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+              example:
+                total_requests: 1523
+                successful_requests: 1489
+                failed_requests: 28
+                auth_failures: 6
+                active_requests: 2
+                uptime_seconds: 86400
+                success_rate_percent: 97.77
+
+  /execute:
+    post:
+      tags: [Execute]
+      summary: Execute a DazScript synchronously and return the result
+      operationId: execute
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+            examples:
+              inline:
+                summary: Inline script
+                value:
+                  script: "(function(){ return Scene.getNumNodes(); })()"
+                  args:
+                    label: "FN Ethan"
+              file:
+                summary: Script file
+                value:
+                  scriptFile: "/path/to/script.dsa"
+                  args:
+                    width: 1920
+                    height: 1080
+      responses:
+        '200':
+          description: Script executed (check `success` field — errors also return 200)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /scripts/register:
+    post:
+      tags: [Registry]
+      summary: Register or update a named script
+      operationId: registerScript
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              name: scene-info
+              description: Return scene node count
+              script: "(function(){ return { nodes: Scene.getNumNodes() }; })()"
+      responses:
+        '200':
+          description: Script registered (or updated)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /scripts:
+    get:
+      tags: [Registry]
+      summary: List all registered scripts
+      operationId: listScripts
+      security:
+        - apiToken: []
+        - bearerToken: []
+      responses:
+        '200':
+          description: Script list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /scripts/{id}/execute:
+    post:
+      tags: [Registry]
+      summary: Execute a registered script by ID
+      operationId: executeScript
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ScriptId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptExecuteRequest'
+            example:
+              args:
+                label: "FN Ethan"
+      responses:
+        '200':
+          description: Script executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /scripts/{id}:
+    delete:
+      tags: [Registry]
+      summary: Remove a script from the registry
+      operationId: deleteScript
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ScriptId'
+      responses:
+        '200':
+          description: Script removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteScriptResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /execute/async:
+    post:
+      tags: [Async]
+      summary: Submit an inline script for asynchronous execution
+      operationId: executeAsync
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+      responses:
+        '200':
+          description: Request queued — poll `/requests/{id}/status` for progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncSubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /scripts/{id}/async:
+    post:
+      tags: [Async]
+      summary: Submit a registered script for asynchronous execution
+      operationId: executeScriptAsync
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ScriptId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptExecuteRequest'
+      responses:
+        '200':
+          description: Request queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncSubmitResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /requests:
+    get:
+      tags: [Async]
+      summary: List all active and recently completed async requests
+      operationId: listRequests
+      security:
+        - apiToken: []
+        - bearerToken: []
+      responses:
+        '200':
+          description: Request list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /requests/{id}/status:
+    get:
+      tags: [Async]
+      summary: Poll the status of an async request
+      operationId: getRequestStatus
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Request status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /requests/{id}/result:
+    get:
+      tags: [Async]
+      summary: Fetch the final result of an async request
+      description: |
+        Returns the script result once execution is complete.
+
+        Use `?wait=true` to long-poll until completion instead of polling
+        `/requests/{id}/status` in a loop.
+      operationId: getRequestResult
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: wait
+          in: query
+          description: Block until the request completes
+          schema:
+            type: boolean
+            default: false
+        - name: timeout
+          in: query
+          description: Maximum seconds to wait when `wait=true`
+          schema:
+            type: integer
+            default: 300
+            minimum: 1
+            maximum: 3600
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncResultResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /requests/{id}:
+    delete:
+      tags: [Async]
+      summary: Cancel a queued or running async request
+      description: |
+        - `queued` requests are removed from the queue immediately.
+        - `running` requests have a cancel flag set and `killRender()` called;
+          DAZ Studio honours the flag when the script returns.
+      operationId: cancelRequest
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Request cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    apiToken:
+      type: apiKey
+      in: header
+      name: X-API-Token
+    bearerToken:
+      type: http
+      scheme: bearer
+
+  parameters:
+    ScriptId:
+      name: id
+      in: path
+      required: true
+      description: Script name (1-64 chars, `[A-Za-z0-9_-]`)
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,64}$'
+    RequestId:
+      name: id
+      in: path
+      required: true
+      description: Async request ID (8-char UUID)
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 8
+
+  schemas:
+    ExecuteRequest:
+      type: object
+      description: |
+        Provide either `script` (inline code) or `scriptFile` (absolute path).
+        If both are given, `scriptFile` takes precedence.
+      properties:
+        script:
+          type: string
+          description: Inline DazScript source code (max configurable, default 1 MB)
+          example: "(function(){ return Scene.getNumNodes(); })()"
+        scriptFile:
+          type: string
+          description: Absolute path to a `.dsa` file on the DAZ Studio machine
+          example: "/path/to/render.dsa"
+        args:
+          type: object
+          description: Arbitrary JSON object; accessible inside the script via `getArguments()[0]`
+          additionalProperties: true
+          example:
+            width: 1920
+            height: 1080
+
+    ExecuteResponse:
+      type: object
+      required: [success, result, output, error, request_id]
+      properties:
+        success:
+          type: boolean
+          description: "`true` if the script ran without throwing"
+        result:
+          description: Script return value (any JSON-serialisable type), or `null` on error
+          nullable: true
+        output:
+          type: array
+          items:
+            type: string
+          description: Lines captured from `print()` calls (max 10,000)
+        error:
+          type: string
+          nullable: true
+          description: Error message with line number, or `null`
+        request_id:
+          type: string
+          description: 8-character ID for log correlation
+          example: "a3f2b891"
+
+    RegisterRequest:
+      type: object
+      required: [name, script]
+      properties:
+        name:
+          type: string
+          description: Script ID — 1-64 chars, `[A-Za-z0-9_-]` only
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+          example: scene-info
+        script:
+          type: string
+          description: DazScript source code
+        description:
+          type: string
+          description: Human-readable description
+
+    RegisterResponse:
+      type: object
+      required: [success, id, registered_at, updated]
+      properties:
+        success:
+          type: boolean
+        id:
+          type: string
+          example: scene-info
+        registered_at:
+          type: string
+          format: date-time
+          example: "2026-05-14T10:15:00"
+        updated:
+          type: boolean
+          description: "`true` if this overwrote an existing registration"
+
+    ScriptListResponse:
+      type: object
+      required: [scripts, count]
+      properties:
+        scripts:
+          type: array
+          items:
+            type: object
+            required: [id, registered_at]
+            properties:
+              id:
+                type: string
+              description:
+                type: string
+              registered_at:
+                type: string
+                format: date-time
+        count:
+          type: integer
+
+    ScriptExecuteRequest:
+      type: object
+      properties:
+        args:
+          type: object
+          additionalProperties: true
+
+    DeleteScriptResponse:
+      type: object
+      required: [success, id]
+      properties:
+        success:
+          type: boolean
+        id:
+          type: string
+
+    AsyncSubmitResponse:
+      type: object
+      required: [request_id, status, submitted_at]
+      properties:
+        request_id:
+          type: string
+          example: "a3f2b891"
+        status:
+          type: string
+          enum: [queued]
+        submitted_at:
+          type: string
+          format: date-time
+
+    RequestListResponse:
+      type: object
+      required: [requests, total, queued, running, completed]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestSummary'
+        total:
+          type: integer
+        queued:
+          type: integer
+        running:
+          type: integer
+        completed:
+          type: integer
+
+    RequestSummary:
+      type: object
+      required: [request_id, status, submitted_at]
+      properties:
+        request_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        submitted_at:
+          type: string
+          format: date-time
+        elapsed_ms:
+          type: integer
+
+    RequestStatusResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        progress:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        elapsed_ms:
+          type: integer
+        queue_position:
+          type: integer
+          description: Only meaningful when `status` is `queued`
+
+    AsyncResultResponse:
+      allOf:
+        - $ref: '#/components/schemas/ExecuteResponse'
+        - type: object
+          required: [duration_ms, completed_at, status]
+          properties:
+            duration_ms:
+              type: integer
+            completed_at:
+              type: string
+              format: date-time
+            status:
+              $ref: '#/components/schemas/RequestStatus'
+
+    CancelResponse:
+      type: object
+      required: [request_id, status, cancelled_at]
+      properties:
+        request_id:
+          type: string
+        status:
+          type: string
+          enum: [cancelled]
+        cancelled_at:
+          type: string
+          format: date-time
+
+    RequestStatus:
+      type: string
+      enum: [queued, running, completed, failed, cancelled]
+
+    StatusResponse:
+      type: object
+      required: [running, version]
+      properties:
+        running:
+          type: boolean
+        version:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status, version, running, auth_enabled, active_requests, uptime_seconds]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+        running:
+          type: boolean
+        auth_enabled:
+          type: boolean
+        active_requests:
+          type: integer
+        uptime_seconds:
+          type: integer
+
+    MetricsResponse:
+      type: object
+      required: [total_requests, successful_requests, failed_requests, auth_failures, active_requests, uptime_seconds, success_rate_percent]
+      properties:
+        total_requests:
+          type: integer
+        successful_requests:
+          type: integer
+        failed_requests:
+          type: integer
+        auth_failures:
+          type: integer
+        active_requests:
+          type: integer
+        uptime_seconds:
+          type: integer
+        success_rate_percent:
+          type: number
+          format: float
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Malformed JSON or invalid parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "JSON parse error at line 3: unexpected token"
+    Unauthorized:
+      description: Missing or invalid API token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Invalid or missing authentication token"
+    Forbidden:
+      description: IP address not in whitelist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "IP not whitelisted: 192.168.1.50"
+    NotFound:
+      description: Script or request ID not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Script not found: 'scene-info'"
+    TooLarge:
+      description: Request body exceeds configured maximum
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Request body too large (max 5 MB)"
+    TooManyRequests:
+      description: Concurrent request limit or per-IP rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error: "Maximum concurrent requests limit reached"

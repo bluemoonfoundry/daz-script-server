@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 1.3.0** | DAZ Studio 4.5+ | Windows & macOS
+**Version 2.0.0** | DAZ Studio 4.5+ | Windows & macOS
 
 A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
 
@@ -36,6 +36,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.0.0](#whats-new-in-v200)
 - [What's New in v1.3.0](#whats-new-in-v130)
 - [What's New in v1.2.0](#whats-new-in-v120)
 - [Requirements](#requirements)
@@ -65,6 +66,13 @@ print(response.json())
 - [Contributing](#contributing)
 - [License](#license--attribution)
 
+### Additional Documentation
+- [OpenAPI Specification](openapi.yaml)
+- [Architecture](ARCHITECTURE.md)
+- [Migration Guide (v1.x → v2.0)](MIGRATION.md)
+- [Changelog](CHANGELOG.md)
+- [Contributing Guide](CONTRIBUTING.md)
+
 ---
 
 ## Why This Exists
@@ -83,6 +91,41 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.0.0
+
+v2.0 is a **backward-compatible** internal rewrite focused on correctness and reliability.
+The HTTP API, authentication mechanism, and all settings are unchanged.
+
+### Bug Fixes
+
+- **Concurrent request race condition fixed** — Under heavy load, more requests than the
+  configured maximum could slip through. The active-request counter is now atomically
+  managed under a `QMutex`.
+- **DzScript memory safety** — Script objects are always destroyed on the main Qt thread,
+  eliminating intermittent crashes from cross-thread deletion.
+- **Signal/slot leak** — The `print()` capture connection is now always explicitly
+  disconnected on early-return paths (auth failure, rate limit, etc.), preventing stale
+  output from appearing in unrelated responses.
+
+### Architecture
+
+- Extracted `AuthenticationService`, `RateLimiterService`, `IPWhitelistService`,
+  `MetricsCollector`, and `AsyncRequestManager` from the monolithic pane class
+- `RequestValidator` and `RequestProcessor` replace inline dispatch logic
+- `ServerSettings` / `ServerConfig` centralise all defaults and magic numbers
+
+### New Documentation
+
+- `openapi.yaml` — machine-readable OpenAPI 3.0 specification
+- `ARCHITECTURE.md` — component and threading diagrams (Mermaid)
+- `MIGRATION.md` — step-by-step upgrade guide from v1.x
+- `CHANGELOG.md` — full version history
+- `CONTRIBUTING.md` — developer guide
+
+See the [full migration guide](MIGRATION.md) for upgrade steps and rollback instructions.
 
 ---
 
@@ -351,7 +394,7 @@ All endpoints except `/status`, `/health`, and `/metrics` require authentication
 ```json
 {
   "running": true,
-  "version": "1.3.0"
+  "version": "2.0.0"
 }
 ```
 
@@ -366,7 +409,7 @@ All endpoints except `/status`, `/health`, and `/metrics` require authentication
 ```json
 {
   "status": "ok",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "running": true,
   "auth_enabled": true,
   "active_requests": 2,
@@ -1405,7 +1448,7 @@ Contributions are welcome! See areas for improvement:
 - Docker image with DAZ Studio and plugin
 - More example clients (Go, Rust, C#)
 
-See `FUTURE_ENHANCEMENTS.md` for a complete list of planned features (Phases 2-6).
+Open a GitHub issue to request features or report bugs.
 
 ### Development
 
