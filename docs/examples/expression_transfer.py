@@ -245,9 +245,9 @@ def apply_expression(
 ) -> dict[str, float]:
     """Apply AU values to Genesis 9 FACS properties in a single HTTP call.
 
-    Builds one DazScript that walks every mapped AU, locates the corresponding
-    property by label, and sets it.  Missing properties are silently skipped —
-    no error is raised if a label is not present on the figure.
+    Iterates all numeric skeleton properties once to build a label→property
+    map in DazScript, then sets each mapped value.  Missing labels are silently
+    skipped; the return dict lets the caller detect when nothing matched.
 
     Args:
         client: Active DazClient.
@@ -260,30 +260,46 @@ def apply_expression(
     Returns:
         Dict of property label → applied value (for logging).
     """
-    lines: list[str] = []
-    applied: dict[str, float] = {}
-
+    # Build {label: value} for every AU we want to set.
+    targets: dict[str, float] = {}
     for au_key, (label, au_scale) in FACS_MAP.items():
-        value = round(_clamp(aus.get(au_key, 0.0) * au_scale * scale), 4)
-        if reset or value != 0.0:
-            escaped = json.dumps(label)
-            lines.append(
-                f"var _p=_skel.findPropertyByLabel({escaped});"
-                f"if(_p&&_p.setValue)_p.setValue({value});"
-            )
-            applied[label] = value
+        if reset or aus.get(au_key, 0.0) != 0.0:
+            targets[label] = round(_clamp(aus.get(au_key, 0.0) * au_scale * scale), 4)
 
+    # Serialise as a JS object literal: {"Eye Blink Left": 0.259, ...}
+    targets_js = "{" + ",".join(f"{json.dumps(k)}:{v}" for k, v in targets.items()) + "}"
+
+    # One pass over all skeleton properties to build a label→prop map, then apply.
     script = f"""(function(){{
         {_skel_lookup(figure_label)}
-        if (!_skel) return false;
-        {"".join(lines)}
-        return true;
+        if (!_skel) return null;
+        var targets = {targets_js};
+        var applied = 0;
+        for (var i = 0; i < _skel.getNumProperties(); i++) {{
+            var p = _skel.getProperty(i);
+            if (!p || !p.setValue) continue;
+            var lbl = p.getLabel();
+            if (targets.hasOwnProperty(lbl)) {{
+                p.setValue(targets[lbl]);
+                applied++;
+            }}
+        }}
+        return applied;
     }})()"""
 
-    if not client.execute(script).value:
+    matched = client.execute(script).value
+    if matched is None:
         sys.exit(f"Error: figure {figure_label!r} not found in scene.")
 
-    return applied
+    if matched == 0:
+        print(
+            "\nWarning: no FACS properties were matched on the figure.\n"
+            "Run --list-properties to see the exact labels available, then\n"
+            "update FACS_MAP at the top of this file to match.",
+            file=sys.stderr,
+        )
+
+    return targets
 
 
 # ── image → landmarks ──────────────────────────────────────────────────────────
