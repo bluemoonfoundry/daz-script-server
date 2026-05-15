@@ -303,20 +303,24 @@ def apply_expression(
         if missing:
             print(f"  Not found ({len(missing)}): {missing}")
         if missing and all_labels:
-            # For each unmatched label, show skeleton properties whose label
-            # shares at least one significant word — helps identify the real name.
+            # For each unmatched label show skeleton properties that share a
+            # meaningful word.  Directional/positional words are excluded because
+            # they appear in thousands of unrelated property names.
+            _SKIP = {"left", "right", "up", "down", "inner", "outer", "the",
+                     "and", "for", "open", "close"}
             print("\n  Candidate properties for unmatched labels:")
             for target_lbl in missing:
                 keywords = {w.lower() for w in target_lbl.split()
-                            if len(w) > 2 and w.lower() not in {"the", "and", "for"}}
+                            if len(w) >= 4 and w.lower() not in _SKIP}
                 candidates = [lbl for lbl in all_labels
                               if any(kw in lbl.lower() for kw in keywords)]
                 if candidates:
-                    print(f"    {target_lbl!r}:")
-                    for c in sorted(set(candidates))[:8]:
+                    print(f"    {target_lbl!r}  (keywords: {sorted(keywords)}):")
+                    for c in sorted(set(candidates))[:10]:
                         print(f"      {c!r}")
                 else:
-                    print(f"    {target_lbl!r}: (no candidates found)")
+                    print(f"    {target_lbl!r}: (no candidates — try: "
+                          f"--list-properties --search {target_lbl.split()[0].lower()!r})")
 
     if not matched_labels:
         print(
