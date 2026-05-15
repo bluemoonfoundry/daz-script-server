@@ -1,3 +1,7 @@
 build/
 .claude/
 .env*
+__pycache__/
+*.pyc
+CMakeCache.txt
+CMakeFiles/
