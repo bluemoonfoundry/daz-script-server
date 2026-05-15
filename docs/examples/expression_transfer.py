@@ -184,26 +184,26 @@ def compute_aus(lm: list[tuple[float, float]]) -> dict[str, float]:
 
 # ── FACS property mapping ──────────────────────────────────────────────────────
 # Maps AU key → (DAZ property label, per-AU scale factor).
-# Labels match the Parameters pane labels for Genesis 9 FACS HD Expressions.
-# Run --list-properties to see what is actually on your figure, then update
-# the labels here if your FACS product uses different names.
+# Genesis 9 base FACS uses "AU XX Description Left/Right" label convention.
+# Run --debug or --list-properties --search <term> if values still don't apply —
+# installed FACS products vary, and you may need to adjust these labels.
 
 FACS_MAP: dict[str, tuple[str, float]] = {
-    "eye_blink_l":     ("Eye Blink Left",      1.0),
-    "eye_blink_r":     ("Eye Blink Right",     1.0),
-    "eye_wide_l":      ("Eye Wide Left",       0.8),
-    "eye_wide_r":      ("Eye Wide Right",      0.8),
-    "brow_inner_up_l": ("Brow Inner Up Left",  0.9),
-    "brow_inner_up_r": ("Brow Inner Up Right", 0.9),
-    "brow_outer_up_l": ("Brow Outer Up Left",  0.9),
-    "brow_outer_up_r": ("Brow Outer Up Right", 0.9),
-    "brow_down_l":     ("Brow Down Left",      0.9),
-    "brow_down_r":     ("Brow Down Right",     0.9),
-    "jaw_open":        ("Jaw Open",            1.0),
-    "mouth_smile_l":   ("Mouth Smile Left",    0.9),
-    "mouth_smile_r":   ("Mouth Smile Right",   0.9),
-    "mouth_frown_l":   ("Mouth Frown Left",    0.9),
-    "mouth_frown_r":   ("Mouth Frown Right",   0.9),
+    "eye_blink_l":     ("AU 45 Blink Left",                1.0),
+    "eye_blink_r":     ("AU 45 Blink Right",               1.0),
+    "eye_wide_l":      ("Eye Wide Left",                   0.8),
+    "eye_wide_r":      ("Eye Wide Right",                  0.8),
+    "brow_inner_up_l": ("AU 01 Inner Brow Raiser Left",    0.9),
+    "brow_inner_up_r": ("AU 01 Inner Brow Raiser Right",   0.9),
+    "brow_outer_up_l": ("AU 02 Outer Brow Raiser Left",    0.9),
+    "brow_outer_up_r": ("AU 02 Outer Brow Raiser Right",   0.9),
+    "brow_down_l":     ("AU 04 Brow Lowerer Left",         0.9),
+    "brow_down_r":     ("AU 04 Brow Lowerer Right",        0.9),
+    "jaw_open":        ("AU 26 Jaw Drop",                  1.0),
+    "mouth_smile_l":   ("AU 12 Lip Corner Puller Left",    0.9),
+    "mouth_smile_r":   ("AU 12 Lip Corner Puller Right",   0.9),
+    "mouth_frown_l":   ("AU 15 Lip Corner Depressor Left", 0.9),
+    "mouth_frown_r":   ("AU 15 Lip Corner Depressor Right",0.9),
 }
 
 # ── DazScript helpers ──────────────────────────────────────────────────────────
@@ -311,7 +311,7 @@ def apply_expression(
             print("\n  Candidate properties for unmatched labels:")
             for target_lbl in missing:
                 keywords = {w.lower() for w in target_lbl.split()
-                            if len(w) >= 4 and w.lower() not in _SKIP}
+                            if len(w) >= 3 and w.lower() not in _SKIP}
                 candidates = [lbl for lbl in all_labels
                               if any(kw in lbl.lower() for kw in keywords)]
                 if candidates:
