@@ -13,16 +13,33 @@ A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ
 1. Open DAZ Studio → **Window → Panes → Daz Script Server**
 2. Click **Start Server** (default: `127.0.0.1:18811`)
 3. Click **Copy** to copy your API token
-4. Test with Python:
+
+**Option A — dazpy Python SDK (recommended):**
+
+```bash
+pip install dazpy
+```
+
+```python
+from dazpy import DazClient, DazScene
+
+client = DazClient()          # auto-loads token from ~/.daz3d/dazscriptserver_token.txt
+scene  = DazScene(client)
+
+print(scene.num_nodes(), "nodes in scene")
+
+figure = scene.find_skeleton_by_label("Genesis 9")
+figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+```
+
+**Option B — raw HTTP (any language):**
 
 ```python
 import requests
 
 response = requests.post(
     "http://127.0.0.1:18811/execute",
-    json = {
-        "script": "(function(){ return 'Hello there from Daz Studio!'; })()"
-    }    
+    json={"script": "(function(){ return 'Hello there from Daz Studio!'; })()"}
 )
 print(response.json())
 ```
@@ -41,6 +58,21 @@ print(response.json())
 - [What's New in v1.2.0](#whats-new-in-v120)
 - [Requirements](#requirements)
 - [Getting the Plugin](#getting-the-plugin)
+
+### dazpy Python SDK
+- [Overview](#-dazpy-python-sdk)
+- [Installation](#installation)
+- [Connecting to DAZ Studio](#connecting-to-daz-studio)
+- [Scene Graph](#scene-graph)
+- [Figures — Skeletons and Bones](#figures--skeletons-and-bones)
+- [Morphs](#morphs)
+- [Materials](#materials)
+- [Cameras and Lights](#cameras-and-lights)
+- [Scene I/O and Timeline](#scene-io-and-timeline)
+- [Geometry](#geometry)
+- [Advanced: Batch, Undo, Async](#advanced-batch-undo-and-async)
+- [Error Handling](#error-handling)
+- [Testing dazpy](#testing-dazpy)
 
 ### Using the Plugin
 - [Starting the Server](#starting-the-server)
@@ -98,6 +130,13 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 v2.0 is a **backward-compatible** internal rewrite focused on correctness and reliability.
 The HTTP API, authentication mechanism, and all settings are unchanged.
+
+### dazpy Python SDK
+
+A full-featured Python SDK ships alongside the plugin, installable as a wheel from the
+release page or via `pip install dazpy`. It exposes DAZ Studio's scene graph as typed
+Python objects: `DazScene`, `DazSkeleton`, `DazBone`, `DazMaterial`, `DazMorph`, and more.
+See [dazpy Python SDK](#-dazpy-python-sdk) below for the complete reference.
 
 ### Bug Fixes
 
@@ -182,18 +221,422 @@ All settings (security, limits, monitoring) are saved via QSettings and restored
 
 ---
 
+## 🐍 dazpy Python SDK
+
+`dazpy` is a Python SDK that drives DAZ Studio through the Script Server.
+It exposes the DAZ Studio scene graph as typed Python objects so you can write
+automation code without authoring DazScript by hand.
+
+### Installation
+
+Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
+
+```bash
+pip install dazpy-0.1.0-py3-none-any.whl
+```
+
+Or install directly from the repo for development:
+
+```bash
+pip install -e .
+```
+
+**Requirements:** Python 3.10+, `requests` (installed automatically).
+
+---
+
+### Connecting to DAZ Studio
+
+```python
+from dazpy import DazClient, DazScene
+
+# Default: 127.0.0.1:18811, token auto-loaded from ~/.daz3d/dazscriptserver_token.txt
+client = DazClient()
+
+# Explicit connection
+client = DazClient(host="127.0.0.1", port=18811, token="your-token", timeout=30.0)
+
+scene = DazScene(client)     # or just DazScene() to use a default client
+```
+
+`DazClient` also exposes `status()`, `health()`, and `metrics()` for server introspection.
+
+---
+
+### Scene Graph
+
+`DazScene` is the primary entry point. All methods execute DazScript on the server and
+return typed Python objects.
+
+```python
+scene = DazScene()
+
+# Node counts
+print(scene.num_nodes())        # total nodes
+print(scene.num_skeletons())    # figures only
+
+# Get all nodes (returns DazSkeleton / DazCamera / DazLight / DazNode as appropriate)
+for node in scene.nodes():
+    print(node.name(), node.label(), node.position())
+
+# Find nodes
+node    = scene.find_node("Genesis9")
+node    = scene.find_node_by_label("Genesis 9")
+
+# Scene tree (hierarchy as nested dicts)
+tree = scene.node_tree()
+
+# All transforms in one round-trip
+transforms = scene.all_node_transforms()
+
+# Selection
+selected = scene.selected_nodes()
+primary  = scene.primary_selection()
+scene.set_primary_selection(node)
+scene.select_all(on=False)
+```
+
+#### DazNode
+
+Every scene object is a `DazNode`. Common operations:
+
+```python
+node = scene.find_node_by_label("Cube")
+
+# Transforms (world-space)
+pos = node.position()                   # {"x": 0.0, "y": 0.0, "z": 0.0}
+rot = node.rotation()                   # {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+node.set_position(10, 0, 0)
+node.set_rotation(0, 45, 0)             # degrees
+
+# Local-space transforms
+lpos = node.local_position()
+lrot = node.local_rotation()
+node.set_local_position(0, 100, 0)
+node.set_local_rotation(0, 0, 30)
+
+# Scale
+gs   = node.general_scale()            # uniform scale float
+axes = node.scale()                     # {"x": 1.0, "y": 1.0, "z": 1.0, "general": 1.0}
+
+# Visibility and scene membership
+node.is_visible()
+node.is_visible_in_render()
+node.set_visible_in_render(False)
+node.is_visible_in_viewport()
+node.set_visible_in_viewport(True)
+node.is_in_scene()
+node.is_root()
+
+# Bounding box
+bb = node.bounding_box()                # {"min": {"x":…, "y":…, "z":…}, "max": {…}}
+
+# Selection
+node.is_selected()
+node.select(True)
+
+# Generic property access (fallback for anything not wrapped)
+val = node.get_property("Some Property Label")
+node.set_property("Some Property Label", 1.0)
+```
+
+---
+
+### Figures — Skeletons and Bones
+
+Figures in DAZ Studio are `DzSkeleton` instances. Posing a figure means setting
+bone rotations.
+
+```python
+# Find a figure
+figure = scene.find_skeleton_by_label("Genesis 9")
+# or: scene.find_skeleton("Genesis9"), scene.skeletons()
+
+# Bones
+all_bones = figure.bones()              # list[DazBone]
+forearm   = figure.find_bone("rForeArm")
+forearm   = figure.find_bone_by_label("Right Forearm")
+n         = figure.num_bones()
+
+# Follow target (clothing/hair fitted to a figure)
+target = figure.follow_target()         # DazSkeleton | None
+
+# DazBone — pose by setting local Euler angles (degrees)
+rot = forearm.local_rotation()          # {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+forearm.set_local_rotation(0, 0, 45)    # bend forearm 45° on Z axis
+
+pos   = forearm.local_position()
+order = forearm.rotation_order()        # "XYZ", "ZYX", etc.
+skel  = forearm.get_skeleton()          # back-reference to the figure
+
+# Example: pose a figure's arm
+with scene.undo("Pose arm"):
+    figure.find_bone("lShldrBend").set_local_rotation(0, 0, -60)
+    figure.find_bone("lForeArm").set_local_rotation(0, 0, -30)
+```
+
+`scene.nodes()` automatically returns `DazSkeleton` for figure nodes so you can
+iterate and call `bones()` without an extra lookup.
+
+---
+
+### Morphs
+
+Morphs control body shapes, facial expressions, and clothing fits.
+
+```python
+figure = scene.find_skeleton_by_label("Genesis 9")
+
+# List all modifiers on a node
+for mod in figure.modifiers():
+    print(mod.name())
+
+# Morphs only (DzMorph subclass)
+for morph in figure.morphs():
+    print(morph.name(), morph.value())
+
+# Find and adjust a specific morph
+smile = figure.find_modifier("PHMSmileOpen")
+print(smile.value())        # 0.0–1.0
+smile.set_value(0.8)
+
+# Or via DazMorph properties
+morph = figure.find_modifier("BodyMorphHeavy")
+morph.value = 0.5           # property-style write
+print(morph.min, morph.max)
+```
+
+---
+
+### Materials
+
+```python
+node = scene.find_node_by_label("Genesis 9 Skin")
+
+# All materials on a node
+for mat in node.materials():
+    print(mat.name(), mat.diffuse_color())
+
+# Find a specific material
+skin = node.find_material("Torso")
+
+# Color and opacity
+color = skin.diffuse_color()            # {"r": 255, "g": 220, "b": 200}
+skin.set_diffuse_color(255, 210, 190)
+print(skin.opacity())                   # 1.0
+print(skin.color_map())                 # texture filename or None
+print(skin.is_opaque())
+print(skin.smoothing_angle())
+print(skin.is_smoothing_on())
+
+# Generic property fallback
+skin.set_property("Glossy Reflectivity", 0.3)
+```
+
+---
+
+### Cameras and Lights
+
+```python
+# Cameras
+for cam in scene.cameras():
+    print(cam.name(), cam.focal_length(), cam.is_view_camera())
+
+cam = scene.cameras()[0]
+cam.focal_length()          # mm
+cam.frame_width()
+cam.focal_distance()
+cam.aspect_width()
+cam.aspect_height()
+cam.pixels_width()
+cam.pixels_height()
+cam.near_clipping_plane()
+cam.far_clipping_plane()
+cam.focal_point()           # {"x": …, "y": …, "z": …}
+cam.aim_at(0, 150, 0)       # aim camera at world point
+
+# Lights
+for light in scene.lights():
+    print(light.name(), light.is_on(), light.is_directional())
+
+light = scene.lights()[0]
+light.is_on()
+light.is_directional()
+light.is_area_light()
+light.direction()           # {"x": …, "y": …, "z": …} (directional lights only)
+light.set_color(1.0, 0.9, 0.8)
+```
+
+---
+
+### Scene I/O and Timeline
+
+```python
+# Load and save
+scene.load("/path/to/scene.duf")     # merge mode (does not clear existing scene)
+scene.save("/path/to/output.duf")
+print(scene.filename())
+print(scene.needs_save())
+
+# Timeline
+print(scene.frame())
+scene.set_frame(24)
+print(scene.play_range())            # {"start": 0, "end": 240}
+scene.set_play_range(0, 120)
+scene.set_anim_range(0, 240)
+print(scene.is_playing())
+scene.loop_playback(True)
+```
+
+---
+
+### Geometry
+
+`DazGeometry` provides access to the raw mesh data of a node's shape.
+
+```python
+node = scene.find_node_by_label("My Prop")
+geo  = node.geometry()
+
+print(geo.num_vertices())
+print(geo.num_faces())
+print(geo.subdivision_level())
+print(geo.tris_count(), geo.quads_count())
+
+# Vertices (chunked — returns slice starting at offset)
+verts = geo.vertices(start=0, count=1000)
+# {"total": 5000, "start": 0, "vertices": [[x,y,z], …]}
+
+# Faces (vertex indices per polygon)
+faces = geo.face_vertex_indices(start=0, count=1000)
+# {"total": 4800, "start": 0, "facets": [[v0,v1,v2,v3], …]}
+
+# Normals
+normals = geo.normals(start=0, count=5000)
+
+# UV sets
+print(geo.uv_set_count())
+uvs = geo.uv_positions(uv_set=0, start=0, count=5000)
+
+# Groups
+print(geo.face_group_names())
+print(geo.material_group_names())
+```
+
+---
+
+### Advanced: Batch, Undo, and Async
+
+#### Undo Groups
+
+Wrap multiple changes in a single undo step visible in DAZ Studio's Edit menu:
+
+```python
+with scene.undo("Apply pose"):
+    figure.find_bone("lShldrBend").set_local_rotation(0, 0, -60)
+    figure.find_bone("rShldrBend").set_local_rotation(0, 0,  60)
+    figure.find_modifier("PHMSmileOpen").set_value(0.5)
+```
+
+#### Batch Execution
+
+`Batch` groups multiple DazScript snippets into a single HTTP round-trip:
+
+```python
+from dazpy import Batch
+
+batch = Batch(client)
+batch.add("(function(){ return Scene.getNumNodes(); })()")
+batch.add("(function(){ return Scene.getNumSkeletons(); })()")
+results = batch.execute()           # one HTTP request, list of ExecutionResult
+print(results[0].value, results[1].value)
+
+# BatchFuture — fire and collect later
+future = batch.submit_async()       # returns BatchFuture
+# ... do other work ...
+results = future.collect()
+```
+
+#### Long-Running Operations
+
+`execute_long` wraps the async submit/poll/collect cycle for operations like renders:
+
+```python
+from dazpy import execute_long
+
+result = execute_long(
+    client,
+    script="App.getRenderMgr().doRender(); return 'done';",
+    poll_interval=2.0,
+    timeout=300.0,
+)
+print(result.value)
+```
+
+---
+
+### Error Handling
+
+All dazpy exceptions are in `dazpy.exceptions`:
+
+```python
+from dazpy import DazClient, DazScene
+from dazpy.exceptions import (
+    ConnectionError,       # DAZ Studio not reachable
+    AuthenticationError,   # bad token or IP blocked
+    ScriptSyntaxError,     # DazScript parse error
+    ScriptRuntimeError,    # DazScript runtime exception
+    TimeoutError,          # HTTP request timed out
+    NodeNotFoundError,     # scene.find_node / find_skeleton raised
+)
+
+try:
+    scene.find_skeleton_by_label("NonExistent")
+except NodeNotFoundError as e:
+    print(e)
+
+try:
+    client.execute("this is not valid { script")
+except ScriptSyntaxError as e:
+    print(e.request_id)    # correlate with server log
+```
+
+`ScriptRuntimeError` and `ScriptSyntaxError` both carry a `request_id` attribute
+that matches the 8-character ID in the server's request log.
+
+---
+
+### Testing dazpy
+
+The SDK ships with two test suites:
+
+```bash
+# Unit tests — no DAZ Studio needed (mock-based)
+python tests_dazpy.py
+
+# Integration tests — skip gracefully if server is down
+python tests_dazpy_integration.py
+```
+
+Tests requiring a live DAZ Studio session are gated with `@skip_no_daz` and
+silently skipped when the `Scene` global is unavailable.
+
+---
+
 ## Getting the Plugin
 
 There are two options for getting the plugin. For most users, Option A, downloading a pre-built release, is the easiest route. 
 
 ### A. Download a pre-built release
 
-1. Browse to tha latest stable release page: https://github.com/bluemoonfoundry/daz-script-server/releases/latest
-2. Scroll down to the Assets section and download the DazScriptServer.dll file to your local hard drive
-3. Copy the .dll file from the downloaded location to the plugins/ folder in your DAZ Studio folder. For example:
+1. Browse to the latest stable release page: https://github.com/bluemoonfoundry/daz-script-server/releases/latest
+2. Scroll down to the Assets section. Each release includes:
+   - `DazScriptServer.dll` / `DazScriptServer.dylib` — the plugin
+   - `dazpy-*.whl` — the Python SDK wheel (`pip install dazpy-*.whl`)
+3. Download `DazScriptServer.dll` and copy it to the plugins folder in your DAZ Studio installation:
     - **Windows:** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
     - **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
-    - Unsure where you DAZ Studio is installed? Right-click on its icon and select 'Properties', then click on 'Open File Location'
+    - Unsure where DAZ Studio is installed? Right-click its icon → Properties → Open File Location.
 
 ### B. Building it yourself from source
 
@@ -222,7 +665,7 @@ There are two options for getting the plugin. For most users, Option A, download
 | `build` | Configure (if needed) and build (default) |
 | `install` | Build and copy plugin to DAZ Studio plugins folder |
 | `clean` | Delete the build directory and exit |
-| `release <tag>` | Build, then create a GitHub release and attach the plugin |
+| `release <tag>` | Build plugin + dazpy wheel, create a GitHub release and attach both |
 
 **Options** (flags, combinable with any command):
 
@@ -235,6 +678,7 @@ There are two options for getting the plugin. For most users, Option A, download
 | `--title <title>` | Release title (`release` only; defaults to tag) |
 | `--notes <text>` | Release notes text (`release` only) |
 | `--update` | Update an existing release instead of creating a new one (`release` only) |
+| `--no-wheel` | Skip building the dazpy wheel (`release` only) |
 | `--help` | Show usage and exit |
 
 ```bash
@@ -243,7 +687,8 @@ There are two options for getting the plugin. For most users, Option A, download
 ./build.sh install --clean                             # DAZ Studio must not be running
 ./build.sh clean
 ./build.sh release v1.3.0 --title "v1.3.0" --notes "Bug fixes"
-./build.sh release v1.3.0 --update                    # replace asset on existing release
+./build.sh release v1.3.0 --update                    # replace assets on existing release
+./build.sh release v1.3.0 --no-wheel                  # plugin DLL only, skip wheel
 ```
 
 ### Installation
@@ -860,24 +1305,62 @@ For controlling DAZ Studio from other machines:
 
 The repository includes example clients in multiple languages.
 
-### Python
+### Python — dazpy SDK
+
+**Install:**
+```bash
+pip install dazpy-*.whl      # from the release page
+# or: pip install -e .       # from source
+```
 
 **Files:**
-- `test-simple.py` - Basic Python client
-- `tests.py` - Comprehensive integration test suite (72 tests)
-- `test-performance.py` - Performance benchmarks and load tests
+- `tests_dazpy.py` — SDK unit tests (mock-based, no server needed)
+- `tests_dazpy_integration.py` — SDK integration tests (requires running server)
+
+**Usage:**
+```python
+from dazpy import DazClient, DazScene
+
+client = DazClient()          # auto-loads token
+scene  = DazScene(client)
+
+# Inspect scene
+print(scene.num_nodes(), "nodes")
+for node in scene.nodes():
+    print(node.label(), node.position())
+
+# Pose a figure
+figure = scene.find_skeleton_by_label("Genesis 9")
+with scene.undo("T-pose arms"):
+    figure.find_bone("lShldrBend").set_local_rotation(0, 0, -90)
+    figure.find_bone("rShldrBend").set_local_rotation(0, 0,  90)
+
+# Adjust morphs
+smile = figure.find_modifier("PHMSmileOpen")
+smile.set_value(0.75)
+
+# Render asynchronously
+from dazpy import execute_long
+result = execute_long(client, "App.getRenderMgr().doRender(); return 'done';",
+                      timeout=300.0)
+```
+
+### Python — Raw HTTP
+
+**Files:**
+- `test-simple.py` — Basic raw-HTTP client
+- `tests.py` — Comprehensive server integration test suite (72 tests)
+- `test-performance.py` — Performance benchmarks and load tests
 
 **Usage:**
 ```python
 import requests
 import os
 
-# Read token from file
 token_path = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
 with open(token_path) as f:
     token = f.read().strip()
 
-# Execute script
 response = requests.post(
     "http://127.0.0.1:18811/execute",
     headers={"X-API-Token": token},
@@ -942,7 +1425,13 @@ $response
 
 **Running examples:**
 ```bash
-# Python integration tests (requires DAZ Studio running)
+# dazpy unit tests (no server needed)
+python tests_dazpy.py
+
+# dazpy integration tests (requires server running)
+python tests_dazpy_integration.py
+
+# Server integration tests
 python tests.py
 
 # Python smoke tests
