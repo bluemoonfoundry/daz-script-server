@@ -480,7 +480,9 @@ void DzScriptServerPane::stopServer()
 	}
 	if (m_pServerThread) {
 		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
-			appendLog("Warning: Server thread did not stop cleanly");
+			appendLog("[WARN] Server thread did not stop within timeout; forcing termination.");
+			m_pServerThread->terminate();
+			m_pServerThread->wait(1000);
 		}
 		delete m_pServerThread;
 		m_pServerThread = nullptr;

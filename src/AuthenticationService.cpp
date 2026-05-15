@@ -57,6 +57,7 @@ bool AuthenticationService::loadOrGenerateToken(QStringList& outMessages)
 #endif
         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream in(&file);
+            in.setCodec("UTF-8");
             QString loaded = in.readLine().trimmed();
             file.close();
 
@@ -105,6 +106,7 @@ bool AuthenticationService::saveToken(QString& outMessage)
         return false;
     }
     QTextStream out(&file);
+    out.setCodec("UTF-8");
     out << m_sToken << "\n";
     file.close();
 

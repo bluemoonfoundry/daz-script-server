@@ -2,14 +2,22 @@
 #include <QtCore/qdebug.h>
 
 #ifdef _WIN32
-    // Windows: Use CryptoAPI (available since Windows 2000)
     #include <windows.h>
     #include <wincrypt.h>
-    // Link with advapi32.lib (done in CMakeLists.txt)
+    // RtlGenRandom (SystemFunction036) — available since Windows XP, no context required
+    #define RtlGenRandom SystemFunction036
+    extern "C" BOOLEAN NTAPI RtlGenRandom(PVOID RandomBuffer, ULONG RandomBufferLength);
+    #pragma comment(lib, "advapi32.lib")
 #else
-    // Unix/macOS: Use /dev/urandom (kernel CSPRNG)
     #include <fstream>
+    #ifdef __linux__
+        #include <sys/syscall.h>
+        #include <unistd.h>
+        #include <errno.h>
+    #endif
 #endif
+
+static const int MAX_RETRIES = 3;
 
 QByteArray SecureRandom::generateBytes(int count)
 {
@@ -21,55 +29,85 @@ QByteArray SecureRandom::generateBytes(int count)
     QByteArray randomBytes(count, 0);
 
 #ifdef _WIN32
-    // ─── Windows: CryptoAPI ───────────────────────────────────────────────────
-    HCRYPTPROV hProvider = 0;
+    // ─── Windows: CryptoAPI with RtlGenRandom fallback ───────────────────────
+    for (int attempt = 1; attempt <= MAX_RETRIES; ++attempt) {
+        HCRYPTPROV hProvider = 0;
+        if (!CryptAcquireContext(&hProvider, NULL, NULL, PROV_RSA_FULL,
+                                 CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
+            DWORD err = GetLastError();
+            qWarning("SecureRandom: CryptAcquireContext failed (attempt %d/%d), error 0x%lx",
+                     attempt, MAX_RETRIES, err);
+            if (attempt < MAX_RETRIES) {
+                Sleep(10 * attempt);
+                continue;
+            }
+            // All CryptoAPI attempts exhausted — fall through to RtlGenRandom
+            break;
+        }
 
-    // Acquire cryptographic context
-    // PROV_RSA_FULL: RSA provider with full key exchange and signature capabilities
-    // CRYPT_VERIFYCONTEXT: No private key access needed (for RNG only)
-    // CRYPT_SILENT: No user interface prompts
-    if (!CryptAcquireContext(&hProvider, NULL, NULL, PROV_RSA_FULL,
-                             CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
-        DWORD err = GetLastError();
-        qWarning("SecureRandom: CryptAcquireContext failed with error 0x%lx", err);
-        return QByteArray();
+        BOOL ok = CryptGenRandom(hProvider, (DWORD)count, (BYTE*)randomBytes.data());
+        DWORD err = ok ? 0 : GetLastError();
+        CryptReleaseContext(hProvider, 0);
+
+        if (ok)
+            return randomBytes;
+
+        qWarning("SecureRandom: CryptGenRandom failed (attempt %d/%d), error 0x%lx",
+                 attempt, MAX_RETRIES, err);
+        if (attempt < MAX_RETRIES)
+            Sleep(10 * attempt);
     }
 
-    // Generate random bytes using Windows crypto API
-    BOOL result = CryptGenRandom(hProvider, (DWORD)count, (BYTE*)randomBytes.data());
-    DWORD err = result ? 0 : GetLastError();
+    // Fallback: RtlGenRandom (SystemFunction036) — simpler, no context needed
+    qWarning("SecureRandom: Falling back to RtlGenRandom");
+    if (RtlGenRandom((PVOID)randomBytes.data(), (ULONG)count))
+        return randomBytes;
 
-    // Always release the context
-    CryptReleaseContext(hProvider, 0);
-
-    if (!result) {
-        qWarning("SecureRandom: CryptGenRandom failed with error 0x%lx", err);
-        return QByteArray();
-    }
+    qWarning("SecureRandom: RtlGenRandom also failed — crypto unavailable");
+    return QByteArray();
 
 #else
-    // ─── Unix/macOS: /dev/urandom ─────────────────────────────────────────────
-    // /dev/urandom is the kernel's cryptographically secure PRNG
-    // It never blocks (unlike /dev/random) and is suitable for all cryptographic uses
-    std::ifstream urandom("/dev/urandom", std::ios::binary);
+    // ─── Unix/macOS: /dev/urandom with /dev/random fallback ──────────────────
+    for (int attempt = 1; attempt <= MAX_RETRIES; ++attempt) {
+        std::ifstream urandom("/dev/urandom", std::ios::binary);
+        if (!urandom.is_open()) {
+            qWarning("SecureRandom: Cannot open /dev/urandom (attempt %d/%d)", attempt, MAX_RETRIES);
+            if (attempt < MAX_RETRIES) {
+                usleep(10000 * attempt);
+                continue;
+            }
+            break;
+        }
 
-    if (!urandom.is_open()) {
-        qWarning("SecureRandom: Cannot open /dev/urandom");
-        return QByteArray();
-    }
-
-    urandom.read(randomBytes.data(), count);
-
-    if (!urandom.good()) {
-        qWarning("SecureRandom: Failed to read %d bytes from /dev/urandom", count);
+        urandom.read(randomBytes.data(), count);
+        bool ok = urandom.good();
         urandom.close();
-        return QByteArray();
+
+        if (ok)
+            return randomBytes;
+
+        qWarning("SecureRandom: Failed to read %d bytes from /dev/urandom (attempt %d/%d)",
+                 count, attempt, MAX_RETRIES);
+        if (attempt < MAX_RETRIES)
+            usleep(10000 * attempt);
     }
 
-    urandom.close();
-#endif
+    // Fallback: /dev/random (blocking but always available)
+    qWarning("SecureRandom: Falling back to /dev/random");
+    std::ifstream devRandom("/dev/random", std::ios::binary);
+    if (devRandom.is_open()) {
+        devRandom.read(randomBytes.data(), count);
+        bool ok = devRandom.good();
+        devRandom.close();
+        if (ok)
+            return randomBytes;
+        qWarning("SecureRandom: /dev/random read failed");
+    } else {
+        qWarning("SecureRandom: Cannot open /dev/random");
+    }
 
-    return randomBytes;
+    return QByteArray();
+#endif
 }
 
 QString SecureRandom::generateHexToken(int byteCount)
@@ -81,6 +119,5 @@ QString SecureRandom::generateHexToken(int byteCount)
         return QString();
     }
 
-    // Convert to hexadecimal string (2 hex chars per byte)
     return QString(randomBytes.toHex());
 }
