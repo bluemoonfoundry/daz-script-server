@@ -1,0 +1,70 @@
+name: Docs
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy at a time; cancel the in-flight run if a new push arrives.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dazpy and Sphinx dependencies
+        run: pip install -e ".[docs]"
+
+      - name: Build Sphinx docs
+        run: sphinx-build -b html docs docs/_build/html
+
+      - name: Generate Redoc API reference page
+        run: |
+          mkdir -p docs/_build/html/api-reference
+          cp openapi.yaml docs/_build/html/api-reference/openapi.yaml
+          cat > docs/_build/html/api-reference/index.html << 'REDOC_EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>DazScript Server — HTTP API Reference</title>
+            <meta charset="utf-8"/>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>body { margin: 0; padding: 0; }</style>
+          </head>
+          <body>
+            <redoc spec-url='openapi.yaml'></redoc>
+            <script src="https://cdn.jsdelivr.net/npm/redoc/bundles/redoc.standalone.js"></script>
+          </body>
+          </html>
+          REDOC_EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

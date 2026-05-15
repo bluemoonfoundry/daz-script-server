@@ -1,0 +1,62 @@
+"""dazpy — Python SDK for the DAZ Studio Script Server.
+
+Connect to a running DAZ Studio instance, execute DazScript code, and
+manipulate the scene through a type-safe Python API.
+
+Typical usage::
+
+    from dazpy import DazClient, DazScene
+
+    client = DazClient()           # connects to 127.0.0.1:18811
+    scene  = DazScene(client)
+    figure = scene.find_skeleton("Genesis 9")
+    figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+"""
+
+__version__ = "0.1.0"
+
+from ._client import DazClient
+from ._scene import DazScene
+from ._node import DazNode, NodeIdentifier
+from ._skeleton import DazSkeleton
+from ._bone import DazBone
+from ._camera import DazCamera
+from ._light import DazLight
+from ._material import DazMaterial
+from ._modifier import DazModifier
+from ._morph import DazMorph
+from ._geometry import DazGeometry
+from ._render import DazRenderSettings
+from ._timeline import DazTimeline
+from ._property import DazProperty
+from ._element import DazElement
+from ._batch import Batch, BatchFuture
+from ._undo import UndoGroup
+from ._result import ExecutionResult
+from ._polling import execute_long
+from . import exceptions
+
+__all__ = [
+    "DazClient",
+    "DazScene",
+    "DazNode",
+    "NodeIdentifier",
+    "DazSkeleton",
+    "DazBone",
+    "DazCamera",
+    "DazLight",
+    "DazMaterial",
+    "DazModifier",
+    "DazMorph",
+    "DazGeometry",
+    "DazRenderSettings",
+    "DazTimeline",
+    "DazProperty",
+    "DazElement",
+    "Batch",
+    "BatchFuture",
+    "UndoGroup",
+    "ExecutionResult",
+    "execute_long",
+    "exceptions",
+]
