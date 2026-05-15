@@ -1,6 +1,6 @@
 """Apply a facial expression from a photo to a Genesis 9 figure in DAZ Studio.
 
-MediaPipe Face Mesh extracts 468 landmarks from the source image.  Python
+MediaPipe FaceLandmarker extracts 478 landmarks from the source image.  Python
 computes landmark geometry into Action Unit (AU) magnitudes, maps them to
 Genesis 9 FACS HD property values, and sends a single HTTP call to DAZ Studio.
 
@@ -35,13 +35,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import urllib.request
 
 import cv2
 import mediapipe as mp
 import numpy as np
 
 from dazpy import DazClient
+
+# ── model setup ────────────────────────────────────────────────────────────────
+# mediapipe >= 0.10 uses the Tasks API and requires a model file.
+# We download it automatically on first use.
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+)
+_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_landmarker.task")
+
+
+def _ensure_model() -> str:
+    if not os.path.exists(_MODEL_PATH):
+        print(f"Downloading face landmarker model → {_MODEL_PATH}")
+        urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    return _MODEL_PATH
 
 # ── landmark index constants ───────────────────────────────────────────────────
 # MediaPipe Face Mesh canonical indices, from the person's perspective.
@@ -271,7 +289,10 @@ def apply_expression(
 # ── image → landmarks ──────────────────────────────────────────────────────────
 
 def extract_landmarks(image_path: str) -> list[tuple[float, float]]:
-    """Decode an image and return 468 pixel-space face mesh landmarks.
+    """Decode an image and return 478 pixel-space face landmarks.
+
+    Uses the mediapipe Tasks API (mediapipe >= 0.10).  Downloads the
+    face_landmarker.task model file to the same directory on first run.
 
     Raises SystemExit if the image cannot be loaded or no face is detected.
     """
@@ -282,19 +303,25 @@ def extract_landmarks(image_path: str) -> list[tuple[float, float]]:
     h, w = img.shape[:2]
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    face_mesh = mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-    )
-    results = face_mesh.process(rgb)
-    face_mesh.close()
+    FaceLandmarker = mp.tasks.vision.FaceLandmarker
+    FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+    BaseOptions = mp.tasks.BaseOptions
+    RunningMode = mp.tasks.vision.RunningMode
 
-    if not results.multi_face_landmarks:
+    options = FaceLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=_ensure_model()),
+        running_mode=RunningMode.IMAGE,
+        num_faces=1,
+    )
+
+    with FaceLandmarker.create_from_options(options) as landmarker:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect(mp_image)
+
+    if not result.face_landmarks:
         sys.exit("No face detected in image.")
 
-    lms = results.multi_face_landmarks[0].landmark
+    lms = result.face_landmarks[0]
     return [(lm.x * w, lm.y * h) for lm in lms]
 
 
