@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
 
@@ -10,11 +12,28 @@ class DazSkeleton(DazNode):
     Extends :class:`~dazpy.DazNode` with bone-access helpers.
     """
 
+    def _skeleton_body(self, body: str) -> str:
+        # Scene.findNode() returns DzNode which lacks DzSkeleton methods like
+        # findBone(). Retrieve a properly typed DzSkeleton by iterating
+        # getSkeletonList(), which is the only proven-typed accessor in the API.
+        kind = self._identifier.kind
+        value = json.dumps(self._identifier.value)
+        if kind == "label":
+            match = f"_skels[_i].getLabel() === {value}"
+        else:
+            match = f"_skels[_i].getName() === {value}"
+        lookup = (
+            f"var _node = null;"
+            f" var _skels = Scene.getSkeletonList();"
+            f" for (var _i = 0; _i < _skels.length; _i++) {{"
+            f" if ({match}) {{ _node = _skels[_i]; break; }} }}"
+        )
+        return ScriptBuilder.iife(f"{lookup}\nif (!_node) return null;\n{body}")
+
     def bones(self) -> list["DazBone"]:  # noqa: F821
         """Return all bones in this skeleton."""
         from ._bone import DazBone
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = self._skeleton_body(
             """
             var bones = _node.getAllBones();
             var names = [];
@@ -41,8 +60,7 @@ class DazSkeleton(DazNode):
         """
         from ._bone import DazBone
         from .exceptions import NodeNotFoundError
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = self._skeleton_body(
             f"var b = _node.findBone({ScriptBuilder.escape_string(name)}); return b ? b.getName() : null;"
         )
         result = self._client.execute(script).value
@@ -64,8 +82,7 @@ class DazSkeleton(DazNode):
         """
         from ._bone import DazBone
         from .exceptions import NodeNotFoundError
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = self._skeleton_body(
             f"var b = _node.findBoneByLabel({ScriptBuilder.escape_string(label)}); return b ? b.getName() : null;"
         )
         result = self._client.execute(script).value
@@ -75,16 +92,12 @@ class DazSkeleton(DazNode):
 
     def num_bones(self) -> int:
         """Return the total number of bones in this skeleton."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
-            "return _node.getAllBones().length;"
-        )
+        script = self._skeleton_body("return _node.getAllBones().length;")
         return self._client.execute(script).value or 0
 
     def follow_target(self) -> "DazSkeleton | None":
         """Return the IK follow-target skeleton, or ``None`` if not set."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = self._skeleton_body(
             "var t = _node.getFollowTarget(); return t ? t.getName() : null;"
         )
         name = self._client.execute(script).value
