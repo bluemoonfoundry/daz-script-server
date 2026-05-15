@@ -7,16 +7,17 @@ Suites:
   integration  tests_dazpy_integration.py  dazpy SDK, requires DAZ Studio
 
 Usage:
-  python tests.py                        # run all suites
-  python tests.py --unit                 # unit tests only (no server needed)
-  python tests.py --api                  # HTTP API tests only
-  python tests.py --integration          # dazpy SDK integration tests only
-  python tests.py --unit --integration   # any combination of suites
+  python tests.py unit                   # unit tests only (no server needed)
+  python tests.py api                    # HTTP API tests only
+  python tests.py integration            # dazpy SDK integration tests only
+  python tests.py unit integration       # any combination of suites
 """
 
 import argparse
 import sys
 import unittest
+
+VALID_SUITES = ("unit", "api", "integration")
 
 
 def _parse_args():
@@ -25,17 +26,22 @@ def _parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "suites:\n"
-            "  --unit         tests_dazpy.py              mocked, no server needed\n"
-            "  --api          tests_api.py                raw HTTP API, requires server\n"
-            "  --integration  tests_dazpy_integration.py  dazpy SDK, requires DAZ Studio\n"
+            "  unit         tests_dazpy.py              mocked, no server needed\n"
+            "  api          tests_api.py                raw HTTP API, requires server\n"
+            "  integration  tests_dazpy_integration.py  dazpy SDK, requires DAZ Studio\n"
         ),
     )
-    p.add_argument("--unit", action="store_true", help="Run unit tests (no server needed)")
-    p.add_argument("--api", action="store_true", help="Run HTTP API integration tests")
-    p.add_argument("--integration", action="store_true", help="Run dazpy SDK integration tests")
+    p.add_argument(
+        "suites",
+        nargs="*",
+        choices=VALID_SUITES,
+        metavar="suite",
+        help=f"One or more suites to run: {', '.join(VALID_SUITES)}",
+    )
     args = p.parse_args()
-    if not any([args.unit, args.api, args.integration]):
-        args.unit = args.api = args.integration = True
+    if not args.suites:
+        p.print_help()
+        sys.exit(0)
     return args
 
 
@@ -44,11 +50,11 @@ def main():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
 
-    if args.unit:
+    if "unit" in args.suites:
         import tests_dazpy as _unit
         suite.addTests(loader.loadTestsFromModule(_unit))
 
-    if args.api:
+    if "api" in args.suites:
         import tests_api as _api
         if not _api.TOKEN:
             print(f"NOTE: No token file found at {_api.TOKEN_FILE}")
@@ -56,7 +62,7 @@ def main():
             print("NOTE: Authentication appears disabled — auth tests will be skipped.")
         suite.addTests(loader.loadTestsFromModule(_api))
 
-    if args.integration:
+    if "integration" in args.suites:
         import tests_dazpy_integration as _integration
         suite.addTests(loader.loadTestsFromModule(_integration))
 
