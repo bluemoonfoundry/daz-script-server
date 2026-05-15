@@ -427,6 +427,27 @@ class DazNode(DazElement):
         self._client.execute(script)
 
     @property
+    def local_euler(self) -> tuple[float, float, float] | None:
+        """Local-space rotation as an ``(x, y, z)`` tuple of Euler angles in degrees.
+
+        Reads the rotation controls written by :meth:`set_local_rotation`, so the
+        two are exact inverses.
+
+        Returns:
+            ``(x, y, z)`` in degrees, or ``None`` if the node cannot be found.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            "return [_node.getXRotControl().getValue(), "
+            "_node.getYRotControl().getValue(), "
+            "_node.getZRotControl().getValue()];"
+        )
+        result = self._client.execute(script).value
+        if result is None:
+            return None
+        return (result[0], result[1], result[2])
+
+    @property
     def local_rotation(self) -> dict | None:
         """Local-space rotation as ``{"x", "y", "z", "w"}`` quaternion (read-only)."""
         script = ScriptBuilder.node_body(
