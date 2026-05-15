@@ -302,10 +302,21 @@ def apply_expression(
             print(f"  Matched ({len(matched_labels)}): {matched_labels}")
         if missing:
             print(f"  Not found ({len(missing)}): {missing}")
-        if all_labels:
-            print(f"\n  All skeleton property labels:")
-            for lbl in sorted(all_labels):
-                print(f"    {lbl!r}")
+        if missing and all_labels:
+            # For each unmatched label, show skeleton properties whose label
+            # shares at least one significant word — helps identify the real name.
+            print("\n  Candidate properties for unmatched labels:")
+            for target_lbl in missing:
+                keywords = {w.lower() for w in target_lbl.split()
+                            if len(w) > 2 and w.lower() not in {"the", "and", "for"}}
+                candidates = [lbl for lbl in all_labels
+                              if any(kw in lbl.lower() for kw in keywords)]
+                if candidates:
+                    print(f"    {target_lbl!r}:")
+                    for c in sorted(set(candidates))[:8]:
+                        print(f"      {c!r}")
+                else:
+                    print(f"    {target_lbl!r}: (no candidates found)")
 
     if not matched_labels:
         print(
@@ -373,6 +384,8 @@ parser.add_argument("--no-reset", dest="reset", action="store_false",
                     help="Blend onto existing expression instead of zeroing first")
 parser.add_argument("--list-properties", action="store_true",
                     help="List numeric properties on the figure and exit")
+parser.add_argument("--search", metavar="TERM",
+                    help="Filter --list-properties output (case-insensitive substring)")
 parser.add_argument("--debug", action="store_true",
                     help="Print which FACS labels matched/missed and all skeleton property labels")
 args = parser.parse_args()
@@ -383,7 +396,12 @@ if args.list_properties:
     props = list_properties(client, args.figure)
     if props is None:
         sys.exit(f"Figure {args.figure!r} not found in scene.")
-    print(f"{len(props)} numeric properties on {args.figure!r}:\n")
+    if args.search:
+        term = args.search.lower()
+        props = [p for p in props if term in p["label"].lower()]
+        print(f"{len(props)} properties matching {args.search!r} on {args.figure!r}:\n")
+    else:
+        print(f"{len(props)} numeric properties on {args.figure!r}:\n")
     for p in sorted(props, key=lambda x: x["label"]):
         print(f"  {p['label']!r:40s}  ({p['name']})")
     sys.exit(0)
