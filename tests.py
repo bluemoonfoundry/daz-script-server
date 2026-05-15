@@ -389,7 +389,7 @@ class TestAsyncExecution(unittest.TestCase):
         r = async_execute(script=iife("return 1;"))
         request_id = r.json()["request_id"]
 
-        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}/cancel",
+        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
                                    headers=auth_headers(), timeout=5)
         # 200 = cancelled, 400 = already finished (race) — both are acceptable
         self.assertIn(cancel_r.status_code, (200, 400))
@@ -402,7 +402,7 @@ class TestAsyncExecution(unittest.TestCase):
         request_id = r.json()["request_id"]
         poll_status(request_id, timeout=20)  # Wait until terminal
 
-        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}/cancel",
+        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
                                    headers=auth_headers(), timeout=5)
         self.assertEqual(cancel_r.status_code, 400)
 
