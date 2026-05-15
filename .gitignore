@@ -1,6 +1,7 @@
 build/
 dist/
 *.egg-info/
+docs/_build/
 .claude/
 .env*
 __pycache__/
