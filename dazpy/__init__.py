@@ -1,3 +1,20 @@
+"""dazpy — Python SDK for the DAZ Studio Script Server.
+
+Connect to a running DAZ Studio instance, execute DazScript code, and
+manipulate the scene through a type-safe Python API.
+
+Typical usage::
+
+    from dazpy import DazClient, DazScene
+
+    client = DazClient()           # connects to 127.0.0.1:18811
+    scene  = DazScene(client)
+    figure = scene.find_skeleton("Genesis 9")
+    figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+"""
+
+__version__ = "0.1.0"
+
 from ._client import DazClient
 from ._scene import DazScene
 from ._node import DazNode, NodeIdentifier

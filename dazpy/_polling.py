@@ -14,6 +14,26 @@ def execute_long(
     timeout: float = 120.0,
     poll_interval: float = 0.5,
 ) -> ExecutionResult:
+    """Execute a potentially long-running script via the async endpoint with polling.
+
+    Submits *script* asynchronously, then polls ``/requests/:id/result`` with
+    long-polling until the script completes or *timeout* is exceeded.
+
+    Args:
+        client: The :class:`~dazpy.DazClient` to use.
+        script: DazScript source code.
+        args: Optional argument passed to the script.
+        timeout: Maximum total wall-clock seconds to wait.
+        poll_interval: Seconds to sleep between short polls when the server
+            returns before the long-poll timeout.
+
+    Returns:
+        An :class:`~dazpy.ExecutionResult` on success.
+
+    Raises:
+        AsyncExecutionError: If the script fails or the request is cancelled.
+        TimeoutError: If *timeout* is exceeded before the script completes.
+    """
     request_id = client.execute_async_submit(script, args)
     deadline = time.monotonic() + timeout
 

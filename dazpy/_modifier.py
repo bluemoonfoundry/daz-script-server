@@ -5,13 +5,19 @@ from ._script_builder import ScriptBuilder
 
 
 class DazModifier(DazElement):
-    """Proxy for a DzModifier on a given node."""
+    """Proxy for a ``DzModifier`` (constraint, formula, etc.) on a node.
+
+    Instances are obtained via :meth:`DazNode.modifiers` or
+    :meth:`DazNode.find_modifier`.  For morph/blendshape modifiers, the more
+    specific :class:`~dazpy.DazMorph` subclass is returned automatically.
+    """
 
     def __init__(self, client: "DazClient", locator: str):  # noqa: F821
         super().__init__(client, locator)
 
     @property
     def modifier_label(self) -> str | None:
+        """User-visible display label of this modifier (read-only)."""
         script = ScriptBuilder.iife(
             f"var m = {self._locator}; return m ? m.getLabel() : null;"
         )
@@ -19,6 +25,7 @@ class DazModifier(DazElement):
 
     @property
     def enabled(self) -> bool | None:
+        """Whether this modifier is currently active (read/write)."""
         script = ScriptBuilder.iife(
             f"var m = {self._locator}; return m ? m.isEnabled() : null;"
         )

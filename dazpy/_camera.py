@@ -5,8 +5,14 @@ from ._script_builder import ScriptBuilder
 
 
 class DazCamera(DazNode):
+    """Proxy for a ``DzCamera`` node.
+
+    Extends :class:`~dazpy.DazNode` with optical and image-sensor properties.
+    """
+
     @property
     def focal_length(self) -> float | None:
+        """Focal length in millimetres (read/write)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.focalLength;"
@@ -23,6 +29,7 @@ class DazCamera(DazNode):
 
     @property
     def fov(self) -> float | None:
+        """Field of view in degrees (read-only; derived from focal length)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.getFieldOfView();"
@@ -31,6 +38,7 @@ class DazCamera(DazNode):
 
     @property
     def depth_of_field(self) -> bool | None:
+        """Whether depth-of-field simulation is enabled (read/write)."""
         return self.get_property("Depth of Field")
 
     @depth_of_field.setter
@@ -39,6 +47,7 @@ class DazCamera(DazNode):
 
     @property
     def frame_width(self) -> float | None:
+        """Sensor / film-gate width in millimetres (read-only)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.frameWidth;"
@@ -47,6 +56,7 @@ class DazCamera(DazNode):
 
     @property
     def focal_distance(self) -> float | None:
+        """Distance to the focus plane (read/write)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.focalDistance;"
@@ -63,6 +73,7 @@ class DazCamera(DazNode):
 
     @property
     def aspect_width(self) -> float | None:
+        """Render aspect ratio width component (read/write)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.aspectWidth;"
@@ -79,6 +90,7 @@ class DazCamera(DazNode):
 
     @property
     def aspect_height(self) -> float | None:
+        """Render aspect ratio height component (read/write)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.aspectHeight;"
@@ -95,6 +107,7 @@ class DazCamera(DazNode):
 
     @property
     def pixels_width(self) -> int | None:
+        """Render image width in pixels (read/write)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.pixelsWidth;"
@@ -111,6 +124,7 @@ class DazCamera(DazNode):
 
     @property
     def pixels_height(self) -> int | None:
+        """Render image height in pixels (read/write)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.pixelsHeight;"
@@ -127,6 +141,7 @@ class DazCamera(DazNode):
 
     @property
     def near_clipping_plane(self) -> float | None:
+        """Near clipping plane distance (read-only)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.nearClippingPlane;"
@@ -135,6 +150,7 @@ class DazCamera(DazNode):
 
     @property
     def far_clipping_plane(self) -> float | None:
+        """Far clipping plane distance (read-only)."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.farClippingPlane;"
@@ -142,6 +158,13 @@ class DazCamera(DazNode):
         return self._client.execute(script).value
 
     def aim_at(self, x: float, y: float, z: float) -> None:
+        """Point the camera at a world-space coordinate.
+
+        Args:
+            x: Target X coordinate.
+            y: Target Y coordinate.
+            z: Target Z coordinate.
+        """
         script = ScriptBuilder.node_body(
             self._identifier,
             f"_node.aimAt(new DzVec3({float(x)}, {float(y)}, {float(z)}));"
@@ -149,6 +172,7 @@ class DazCamera(DazNode):
         self._client.execute(script)
 
     def focal_point(self) -> dict | None:
+        """Return the world-space focal point as ``{"x", "y", "z"}``."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "var fp = _node.getFocalPoint(); return {x: fp.x, y: fp.y, z: fp.z};"
@@ -156,6 +180,7 @@ class DazCamera(DazNode):
         return self._client.execute(script).value
 
     def is_view_camera(self) -> bool | None:
+        """Return ``True`` if this is the active viewport camera."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.isViewCamera();"

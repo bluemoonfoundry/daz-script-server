@@ -6,6 +6,21 @@ from ._script_builder import ScriptBuilder
 
 
 class DazGeometry(DazElement):
+    """Proxy for the ``DzGeometry`` of a node's current shape.
+
+    Provides chunked access to vertices, faces, normals, UV sets, and face /
+    material groups.  Use :class:`~dazpy.DazNode` or construct directly::
+
+        from dazpy import DazClient, DazGeometry, NodeIdentifier
+
+        geo = DazGeometry(DazClient(), NodeIdentifier("Genesis9"))
+        verts = geo.vertex_positions_all()
+
+    Args:
+        client: The :class:`~dazpy.DazClient` for remote calls.
+        identifier: Identifies the scene node whose geometry to access.
+    """
+
     def __init__(self, client: "DazClient", identifier: NodeIdentifier):  # noqa: F821
         locator = (
             f"(function(){{"
@@ -22,6 +37,7 @@ class DazGeometry(DazElement):
 
     @property
     def vertex_count(self) -> int | None:
+        """Total number of vertices in the mesh (read-only)."""
         script = ScriptBuilder.iife(
             f"var g = {self._locator}; return g ? g.getNumVertices() : null;"
         )
@@ -29,12 +45,22 @@ class DazGeometry(DazElement):
 
     @property
     def facet_count(self) -> int | None:
+        """Total number of faces (triangles + quads, read-only)."""
         script = ScriptBuilder.iife(
             f"var g = {self._locator}; return g ? g.getNumFacets() : null;"
         )
         return self._client.execute(script).value
 
     def vertex_positions(self, start: int = 0, count: int = 5000) -> dict:
+        """Fetch a chunk of vertex positions.
+
+        Args:
+            start: Zero-based index of the first vertex to return.
+            count: Maximum number of vertices to return in this chunk.
+
+        Returns:
+            ``{"total": int, "start": int, "count": int, "vertices": [[x, y, z], ...]}``
+        """
         script = ScriptBuilder.iife(f"""
             var g = {self._locator};
             if (!g) return null;
@@ -50,6 +76,14 @@ class DazGeometry(DazElement):
         return self._client.execute(script).value or {}
 
     def vertex_positions_all(self, chunk_size: int = 5000) -> list[list[float]]:
+        """Return all vertex positions, automatically paginating by *chunk_size*.
+
+        Args:
+            chunk_size: Number of vertices fetched per network round-trip.
+
+        Returns:
+            List of ``[x, y, z]`` coordinates for every vertex.
+        """
         first = self.vertex_positions(0, chunk_size)
         total = first.get("total", 0)
         all_verts = list(first.get("vertices", []))
@@ -102,6 +136,7 @@ class DazGeometry(DazElement):
 
     @property
     def uv_set_count(self) -> int | None:
+        """Number of UV sets on this mesh (read-only)."""
         script = ScriptBuilder.iife(
             f"var g = {self._locator}; return g ? g.getNumUVSets() : null;"
         )
@@ -157,6 +192,7 @@ class DazGeometry(DazElement):
 
     @property
     def subdivision_level(self) -> int | None:
+        """Current subdivision level (0 = base mesh, read-only)."""
         script = ScriptBuilder.iife(
             f"var g = {self._locator};"
             f"return (g && g.getCurrentSubDivisionLevel) ? g.getCurrentSubDivisionLevel() : null;"
@@ -165,6 +201,7 @@ class DazGeometry(DazElement):
 
     @property
     def tris_count(self) -> int | None:
+        """Number of triangular faces (read-only)."""
         script = ScriptBuilder.iife(
             f"var g = {self._locator}; return (g && g.getNumTris) ? g.getNumTris() : null;"
         )
@@ -172,6 +209,7 @@ class DazGeometry(DazElement):
 
     @property
     def quads_count(self) -> int | None:
+        """Number of quad faces (read-only)."""
         script = ScriptBuilder.iife(
             f"var g = {self._locator}; return (g && g.getNumQuads) ? g.getNumQuads() : null;"
         )

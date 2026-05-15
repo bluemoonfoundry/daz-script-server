@@ -1,16 +1,24 @@
 class DazError(Exception):
-    pass
+    """Base class for all dazpy exceptions."""
 
 
 class ConnectionError(DazError):
-    pass
+    """Raised when the SDK cannot reach the DAZ Studio Script Server."""
 
 
 class AuthenticationError(DazError):
-    pass
+    """Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked)."""
 
 
 class ScriptError(DazError):
+    """Base class for errors that originate inside a DazScript execution.
+
+    Attributes:
+        script: The DazScript source that was submitted (may be empty for
+            file-based executions).
+        request_id: The server-assigned request ID, useful for log correlation.
+    """
+
     def __init__(self, message: str, script: str = "", request_id: str = ""):
         super().__init__(message)
         self.script = script
@@ -18,6 +26,7 @@ class ScriptError(DazError):
 
     @property
     def diagnostic(self) -> str:
+        """Return a formatted string with line-numbered source and error details."""
         lines = []
         if self.script:
             numbered = "\n".join(f"{i+1:4d}: {line}" for i, line in enumerate(self.script.splitlines()))
@@ -29,22 +38,28 @@ class ScriptError(DazError):
 
 
 class ScriptSyntaxError(ScriptError):
-    pass
+    """Raised when the DazScript engine reports a parse / syntax error."""
 
 
 class ScriptRuntimeError(ScriptError):
-    pass
+    """Raised when a DazScript execution fails at runtime (TypeError, ReferenceError, etc.)."""
 
 
 class TimeoutError(DazError):
-    pass
+    """Raised when an HTTP request or async poll exceeds its timeout."""
 
 
 class NodeNotFoundError(DazError):
-    pass
+    """Raised when a requested scene node, bone, or skeleton cannot be found."""
 
 
 class AsyncExecutionError(DazError):
+    """Raised when an async request fails, is cancelled, or times out while polling.
+
+    Attributes:
+        request_id: The server-assigned request ID of the failed async job.
+    """
+
     def __init__(self, message: str, request_id: str = ""):
         super().__init__(message)
         self.request_id = request_id

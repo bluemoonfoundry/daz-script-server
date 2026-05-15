@@ -54,6 +54,25 @@ def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult
 
 
 class DazClient:
+    """HTTP client for the DAZ Studio Script Server.
+
+    Handles authentication, request serialisation, and response mapping for
+    all server endpoints.  The token is loaded automatically from
+    ``~/.daz3d/dazscriptserver_token.txt`` when *token* is ``None``.
+
+    Args:
+        host: Hostname or IP address of the Script Server.
+        port: Listening port of the Script Server.
+        token: API token.  Pass an empty string to disable authentication or
+            ``None`` to auto-load from the default token file.
+        timeout: Per-request HTTP timeout in seconds.
+
+    Example::
+
+        client = DazClient()                          # default 127.0.0.1:18811
+        client = DazClient(token="my-secret-token")   # explicit token
+    """
+
     def __init__(
         self,
         host: str = _DEFAULT_HOST,
@@ -99,6 +118,24 @@ class DazClient:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
 
     def execute(self, script: str, args: object = None) -> ExecutionResult:
+        """Execute a DazScript string synchronously.
+
+        Args:
+            script: DazScript source code to execute.
+            args: Optional value passed into the script as ``getArguments()[0]``.
+                Must be JSON-serialisable.
+
+        Returns:
+            The execution result containing the script return value and any
+            console output.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: If the token is invalid or the IP is blocked.
+            ScriptSyntaxError: If the script contains a parse error.
+            ScriptRuntimeError: If the script raises a runtime exception.
+            TimeoutError: If the request exceeds *timeout* seconds.
+        """
         payload: dict = {"script": script}
         if args is not None:
             payload["args"] = args
@@ -106,6 +143,22 @@ class DazClient:
         return _map_response(resp, script=script)
 
     def execute_file(self, script_file: str, args: object = None) -> ExecutionResult:
+        """Execute a ``.dsa`` script file that resides on the DAZ Studio host.
+
+        Args:
+            script_file: Absolute path to the ``.dsa`` file on the server host.
+            args: Optional argument passed to the script.
+
+        Returns:
+            The execution result.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On auth failure.
+            ScriptSyntaxError: On parse error.
+            ScriptRuntimeError: On runtime error.
+            TimeoutError: On HTTP timeout.
+        """
         payload: dict = {"scriptFile": script_file}
         if args is not None:
             payload["args"] = args
@@ -113,6 +166,21 @@ class DazClient:
         return _map_response(resp)
 
     def execute_async_submit(self, script: str, args: object = None) -> str:
+        """Submit a script for asynchronous execution and return immediately.
+
+        Args:
+            script: DazScript source code.
+            args: Optional argument for the script.
+
+        Returns:
+            The server-assigned ``request_id`` string.  Use it with
+            :meth:`get_request_status` or :meth:`get_request_result` to poll
+            for the outcome.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On auth failure.
+        """
         payload: dict = {"script": script}
         if args is not None:
             payload["args"] = args
@@ -122,12 +190,35 @@ class DazClient:
         return resp.json().get("request_id", "")
 
     def get_request_status(self, request_id: str) -> dict:
+        """Return the current status of an async request.
+
+        Args:
+            request_id: The ID returned by :meth:`execute_async_submit`.
+
+        Returns:
+            A dict with at least a ``"status"`` key.  Possible values:
+            ``"queued"``, ``"running"``, ``"completed"``, ``"failed"``,
+            ``"cancelled"``, or ``"not_found"``.
+        """
         resp = self._get(f"/requests/{request_id}/status")
         if resp.status_code == 404:
             return {"status": "not_found"}
         return resp.json()
 
     def get_request_result(self, request_id: str, wait: bool = False, wait_timeout: int = 30) -> dict:
+        """Fetch the result of a completed async request.
+
+        Args:
+            request_id: The ID returned by :meth:`execute_async_submit`.
+            wait: If ``True``, the server will long-poll until the request
+                completes or *wait_timeout* is reached.
+            wait_timeout: Maximum number of seconds the server should wait
+                before returning (only relevant when *wait* is ``True``).
+
+        Returns:
+            A dict containing ``success``, ``result``, ``output``, ``error``,
+            ``duration_ms``, and ``status`` keys.
+        """
         params = {}
         if wait:
             params["wait"] = "true"
@@ -138,6 +229,14 @@ class DazClient:
         return resp.json()
 
     def cancel_request(self, request_id: str) -> bool:
+        """Cancel a queued or running async request.
+
+        Args:
+            request_id: The ID returned by :meth:`execute_async_submit`.
+
+        Returns:
+            ``True`` if the server confirmed cancellation, ``False`` otherwise.
+        """
         try:
             resp = _requests.delete(
                 f"{self._base}/requests/{request_id}",
@@ -149,10 +248,13 @@ class DazClient:
             return False
 
     def status(self) -> dict:
+        """Return the server status dict from ``GET /status``."""
         return self._get("/status").json()
 
     def health(self) -> dict:
+        """Return the health check dict from ``GET /health``."""
         return self._get("/health").json()
 
     def metrics(self) -> dict:
+        """Return the metrics dict from ``GET /metrics``."""
         return self._get("/metrics").json()

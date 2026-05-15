@@ -5,7 +5,13 @@ from ._script_builder import ScriptBuilder
 
 
 class DazSkeleton(DazNode):
+    """Proxy for a ``DzSkeleton`` (a rigged figure such as Genesis 9).
+
+    Extends :class:`~dazpy.DazNode` with bone-access helpers.
+    """
+
     def bones(self) -> list["DazBone"]:  # noqa: F821
+        """Return all bones in this skeleton."""
         from ._bone import DazBone
         script = ScriptBuilder.node_body(
             self._identifier,
@@ -22,6 +28,17 @@ class DazSkeleton(DazNode):
         return [DazBone(self._client, NodeIdentifier(n)) for n in names]
 
     def find_bone(self, name: str) -> "DazBone":  # noqa: F821
+        """Find a bone by its internal name.
+
+        Args:
+            name: The ``getName()`` string of the bone (e.g. ``"rForeArm"``).
+
+        Returns:
+            A :class:`~dazpy.DazBone` proxy.
+
+        Raises:
+            NodeNotFoundError: If no bone with that name exists.
+        """
         from ._bone import DazBone
         from .exceptions import NodeNotFoundError
         script = ScriptBuilder.node_body(
@@ -34,6 +51,17 @@ class DazSkeleton(DazNode):
         return DazBone(self._client, NodeIdentifier(result))
 
     def find_bone_by_label(self, label: str) -> "DazBone":  # noqa: F821
+        """Find a bone by its user-visible label.
+
+        Args:
+            label: The ``getLabel()`` string of the bone.
+
+        Returns:
+            A :class:`~dazpy.DazBone` proxy.
+
+        Raises:
+            NodeNotFoundError: If no bone with that label exists.
+        """
         from ._bone import DazBone
         from .exceptions import NodeNotFoundError
         script = ScriptBuilder.node_body(
@@ -46,6 +74,7 @@ class DazSkeleton(DazNode):
         return DazBone(self._client, NodeIdentifier(result))
 
     def num_bones(self) -> int:
+        """Return the total number of bones in this skeleton."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "return _node.getAllBones().length;"
@@ -53,6 +82,7 @@ class DazSkeleton(DazNode):
         return self._client.execute(script).value or 0
 
     def follow_target(self) -> "DazSkeleton | None":
+        """Return the IK follow-target skeleton, or ``None`` if not set."""
         script = ScriptBuilder.node_body(
             self._identifier,
             "var t = _node.getFollowTarget(); return t ? t.getName() : null;"
