@@ -821,7 +821,8 @@ The repository includes example clients in multiple languages.
 
 **Files:**
 - `test-simple.py` - Basic Python client
-- `tests.py` - Comprehensive test suite
+- `tests.py` - Comprehensive integration test suite (72 tests)
+- `test-performance.py` - Performance benchmarks and load tests
 
 **Usage:**
 ```python
@@ -898,8 +899,15 @@ $response
 
 **Running examples:**
 ```bash
-# Python
+# Python integration tests (requires DAZ Studio running)
+python tests.py
+
+# Python smoke tests
 python test-simple.py
+
+# Performance benchmarks and load tests
+python test-performance.py
+python test-performance.py --quick   # fewer iterations, suitable for CI
 
 # Node.js
 node test-client.js

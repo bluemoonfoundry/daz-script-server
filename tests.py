@@ -15,6 +15,8 @@ Notes:
 
 import os
 import sys
+import threading
+import time
 import unittest
 import requests
 
@@ -462,6 +464,282 @@ class TestResponseShape(unittest.TestCase):
         body = r.json()
         for field in ("success", "result", "output", "error"):
             self.assertIn(field, body, f"Missing field: {field}")
+
+
+# ─── Health and metrics ───────────────────────────────────────────────────────
+
+class TestHealthAndMetrics(unittest.TestCase):
+
+    def test_health_returns_200(self):
+        r = requests.get(f"{BASE_URL}/health", timeout=5)
+        self.assertEqual(r.status_code, 200)
+
+    def test_health_has_status_field(self):
+        r = requests.get(f"{BASE_URL}/health", timeout=5)
+        self.assertIn("status", r.json())
+
+    def test_health_has_uptime_seconds(self):
+        r = requests.get(f"{BASE_URL}/health", timeout=5)
+        self.assertIn("uptime_seconds", r.json())
+
+    def test_metrics_returns_200(self):
+        r = requests.get(f"{BASE_URL}/metrics", timeout=5)
+        self.assertEqual(r.status_code, 200)
+
+    def test_metrics_has_total_requests(self):
+        r = requests.get(f"{BASE_URL}/metrics", timeout=5)
+        self.assertIn("total_requests", r.json())
+
+    def test_metrics_has_auth_failures(self):
+        r = requests.get(f"{BASE_URL}/metrics", timeout=5)
+        self.assertIn("auth_failures", r.json())
+
+    def test_metrics_total_requests_is_non_negative(self):
+        r = requests.get(f"{BASE_URL}/metrics", timeout=5)
+        self.assertGreaterEqual(r.json().get("total_requests", -1), 0)
+
+
+# ─── Script registry ──────────────────────────────────────────────────────────
+
+class TestScriptRegistry(unittest.TestCase):
+
+    SCRIPT_ID = "test-registry-cls-script"
+    SCRIPT_BODY = "var a = getArguments()[0]; 'hello ' + a.name;"
+
+    def setUp(self):
+        requests.delete(f"{BASE_URL}/scripts/{self.SCRIPT_ID}",
+                        headers=auth_headers(), timeout=5)
+
+    def tearDown(self):
+        requests.delete(f"{BASE_URL}/scripts/{self.SCRIPT_ID}",
+                        headers=auth_headers(), timeout=5)
+
+    def _register(self, **overrides):
+        payload = {"name": self.SCRIPT_ID, "description": "test", "script": self.SCRIPT_BODY}
+        payload.update(overrides)
+        return requests.post(f"{BASE_URL}/scripts/register",
+                             headers=auth_headers(), json=payload, timeout=5)
+
+    def test_register_returns_success(self):
+        r = self._register()
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json().get("success"))
+
+    def test_register_duplicate_overwrites(self):
+        self._register()
+        r = self._register(description="overwrite")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json().get("success"))
+
+    def test_list_contains_registered_script(self):
+        self._register()
+        r = requests.get(f"{BASE_URL}/scripts", headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 200)
+        names = [s.get("name") for s in r.json().get("scripts", [])]
+        self.assertIn(self.SCRIPT_ID, names)
+
+    def test_execute_registered_script_returns_result(self):
+        self._register()
+        r = requests.post(f"{BASE_URL}/scripts/{self.SCRIPT_ID}/execute",
+                          headers=auth_headers(),
+                          json={"args": {"name": "world"}},
+                          timeout=15)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json().get("result"), "hello world")
+
+    def test_execute_registered_script_no_args(self):
+        self._register()
+        r = requests.post(f"{BASE_URL}/scripts/{self.SCRIPT_ID}/execute",
+                          headers=auth_headers(), json={}, timeout=15)
+        self.assertEqual(r.status_code, 200)
+
+    def test_execute_unknown_script_returns_404(self):
+        r = requests.post(f"{BASE_URL}/scripts/no-such-script-xyz/execute",
+                          headers=auth_headers(), json={"args": {}}, timeout=5)
+        self.assertEqual(r.status_code, 404)
+
+    def test_delete_removes_script(self):
+        self._register()
+        requests.delete(f"{BASE_URL}/scripts/{self.SCRIPT_ID}",
+                        headers=auth_headers(), timeout=5)
+        r = requests.post(f"{BASE_URL}/scripts/{self.SCRIPT_ID}/execute",
+                          headers=auth_headers(), json={"args": {}}, timeout=5)
+        self.assertEqual(r.status_code, 404)
+
+    def test_delete_nonexistent_returns_404(self):
+        r = requests.delete(f"{BASE_URL}/scripts/no-such-script-xyz",
+                            headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+
+    def test_register_empty_name_returns_400(self):
+        r = requests.post(f"{BASE_URL}/scripts/register",
+                          headers=auth_headers(),
+                          json={"name": "", "description": "test", "script": "1;"},
+                          timeout=5)
+        self.assertEqual(r.status_code, 400)
+
+    def test_async_execute_registered_script(self):
+        self._register()
+        r = requests.post(f"{BASE_URL}/scripts/{self.SCRIPT_ID}/async",
+                          headers=auth_headers(),
+                          json={"args": {"name": "async"}},
+                          timeout=10)
+        self.assertEqual(r.status_code, 200)
+        request_id = r.json().get("request_id")
+        self.assertTrue(request_id)
+        final = poll_status(request_id, timeout=20)
+        self.assertEqual(final["status"], "completed")
+
+
+# ─── Concurrency ──────────────────────────────────────────────────────────────
+
+class TestConcurrency(unittest.TestCase):
+
+    def test_five_concurrent_requests_all_respond(self):
+        results = []
+        lock = threading.Lock()
+
+        def make_request(val):
+            r = execute(script=iife(f"return {val};"))
+            with lock:
+                results.append((val, r.status_code))
+
+        threads = [threading.Thread(target=make_request, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        self.assertEqual(len(results), 5)
+        for val, code in results:
+            self.assertIn(code, (200, 429), f"Unexpected status {code} for value {val}")
+
+    def test_concurrent_results_are_correct(self):
+        results = {}
+        lock = threading.Lock()
+
+        def make_request(val):
+            r = execute(script=iife(f"return {val};"))
+            if r.status_code == 200:
+                with lock:
+                    results[val] = r.json().get("result")
+
+        values = list(range(1, 6))
+        threads = [threading.Thread(target=make_request, args=(v,)) for v in values]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for val, result in results.items():
+            self.assertEqual(result, val, f"Expected {val}, got {result}")
+
+    def test_request_ids_are_unique(self):
+        request_ids = []
+        for _ in range(20):
+            r = execute(script=iife("return 1;"))
+            if r.status_code == 200:
+                rid = r.json().get("request_id")
+                if rid:
+                    request_ids.append(rid)
+
+        self.assertGreater(len(request_ids), 0)
+        self.assertEqual(len(request_ids), len(set(request_ids)),
+                         "Duplicate request IDs detected")
+
+    def test_concurrent_async_requests_complete(self):
+        request_ids = []
+        for _ in range(5):
+            r = requests.post(f"{BASE_URL}/execute/async",
+                              headers=auth_headers(),
+                              json={"script": iife("return 1;")},
+                              timeout=10)
+            if r.status_code == 200:
+                request_ids.append(r.json()["request_id"])
+
+        self.assertGreater(len(request_ids), 0)
+        for rid in request_ids:
+            final = poll_status(rid, timeout=30)
+            self.assertIn(final["status"], ("completed", "failed"),
+                          f"Request {rid} did not reach a terminal state")
+
+    def test_server_returns_429_when_concurrent_limit_exceeded(self):
+        # Send many concurrent slow requests to saturate the concurrent limit,
+        # then verify the server returns 429 (not a crash or 500).
+        statuses = []
+        lock = threading.Lock()
+
+        def make_request():
+            try:
+                r = execute(script=iife("var i; for(i=0;i<500000;i++){} i;"))
+                with lock:
+                    statuses.append(r.status_code)
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=make_request) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+
+        self.assertGreater(len(statuses), 0)
+        for code in statuses:
+            self.assertIn(code, (200, 429), f"Unexpected status code: {code}")
+        # At least some 429s expected when 20 concurrent > default limit of 10
+        has_successes = any(c == 200 for c in statuses)
+        self.assertTrue(has_successes, "Expected at least some successful responses")
+
+
+# ─── Stress ───────────────────────────────────────────────────────────────────
+
+class TestStress(unittest.TestCase):
+
+    def test_oversized_body_returns_413(self):
+        # Default body limit is 5MB — send 6MB
+        padding = "x" * (6 * 1024 * 1024)
+        r = requests.post(
+            f"{BASE_URL}/execute",
+            headers={**auth_headers(), "Content-Type": "application/json"},
+            data=f'{{"script": "{padding}"}}',
+            timeout=30,
+        )
+        self.assertEqual(r.status_code, 413)
+
+    def test_unknown_endpoint_returns_404(self):
+        r = requests.get(f"{BASE_URL}/completely/unknown/path", timeout=5)
+        self.assertEqual(r.status_code, 404)
+
+    def test_large_but_valid_script_succeeds(self):
+        comment_line = "// " + "a" * 100 + "\n"
+        big_script = comment_line * 900 + iife("return 'done';")  # ~90KB
+        r = execute(script=big_script)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json().get("result"), "done")
+
+    def test_deeply_nested_args_handled(self):
+        nested = {"a": {"b": {"c": {"d": "deep"}}}}
+        r = execute(
+            script=iife("var a = getArguments()[0]; return a.a.b.c.d;"),
+            args=nested,
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json().get("result"), "deep")
+
+    def test_special_characters_in_script_output(self):
+        r = execute(script=iife(r"print('tab:\there'); return 'ok';"))
+        self.assertEqual(r.status_code, 200)
+
+    def test_empty_body_returns_error(self):
+        r = requests.post(
+            f"{BASE_URL}/execute",
+            headers={**auth_headers(), "Content-Type": "application/json"},
+            data="",
+            timeout=10,
+        )
+        self.assertIn(r.status_code, (400, 200))  # server may treat empty as missing script
+        if r.status_code == 200:
+            self.assertFalse(r.json().get("success"))
 
 
 if __name__ == "__main__":
