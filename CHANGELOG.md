@@ -10,6 +10,16 @@ All notable changes to DazScript Server are documented here.
   Streams MediaPipe face landmarks to a Genesis 9 figure's FACS morph controls
   at up to 10 fps.  Features EMA smoothing, a live AU bar chart overlay,
   headless (`--no-preview`) mode, and automatic morph reset on exit.
+- **`include/JsonStd.h`** — header-only `JsonStd` namespace consolidating all
+  `std::string` JSON helpers (`escape`, `variantToJson`, `msecToIso`,
+  `currentTime`, `qstrToStd`).  Eliminates five copies of identical helper
+  functions spread across `AsyncRequestManager`, `DzScriptServerPane`,
+  `RequestHandlers`, `IPWhitelistService`, and `RequestValidator`.
+
+### Fixed
+
+- **`dazpy.__version__`** was hardcoded to `"0.1.0"` regardless of the
+  installed package version.  Now correctly returns `"2.1.0"`.
 
 ---
 

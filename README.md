@@ -66,6 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.1.0](#whats-new-in-v210)
 - [What's New in v2.0.0](#whats-new-in-v200)
 - [What's New in v1.3.0](#whats-new-in-v130)
 - [What's New in v1.2.0](#whats-new-in-v120)
@@ -138,6 +139,43 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.1.0
+
+### 🎭 Live Webcam Expression Mirroring
+
+New example: **`docs/examples/webcam_expression_mirror.py`** streams your facial
+expression onto a Genesis 9 figure in real time.
+
+- Captures webcam frames with OpenCV and runs **MediaPipe FaceLandmarker** inference on each one
+- Computes Action Unit (AU) magnitudes from landmark geometry and maps them to Genesis 9 FACS HD morph controls
+- Pushes updates to DAZ Studio over HTTP at a configurable rate (default 10 fps)
+- **EMA smoothing** (`--smooth`) reduces jitter without adding latency
+- **Live preview window** shows landmark dots, a per-AU bar chart, capture fps, and DAZ connection status
+- **Headless mode** (`--no-preview`) for use without a display
+- Zeroes all FACS morphs on exit so the figure returns to neutral
+
+Pairs with DAZ's **Face Transfer 2**: use that product to build a 3D version of yourself,
+then use this script to drive its expressions live from your webcam.
+
+```bash
+pip install mediapipe opencv-python numpy dazpy
+
+python webcam_expression_mirror.py
+python webcam_expression_mirror.py --figure "My Character" --scale 0.8
+python webcam_expression_mirror.py --camera 1 --fps 15 --smooth 0.7
+python webcam_expression_mirror.py --no-preview   # headless
+```
+
+See [`docs/examples/README.md`](docs/examples/README.md) for the full argument reference.
+
+### 🐛 Fix: dazpy version alignment
+
+`dazpy.__version__` previously returned `"0.1.0"` regardless of the installed
+package version.  It now returns the correct version (`"2.1.0"`), matching
+`pyproject.toml` and the wheel filename.
 
 ---
 
