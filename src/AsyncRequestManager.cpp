@@ -1,99 +1,8 @@
 #include "AsyncRequestManager.h"
+#include "JsonStd.h"
 #include "MetricsCollector.h"
 #include <QtCore/qthread.h>
 #include <QtCore/qmetaobject.h>
-#include <ctime>
-#include <vector>
-
-// ─── std::string JSON helpers (no Qt — safe to call from any thread) ──────────
-
-// Safe QString→std::string: see DzScriptServerPane.cpp for explanation.
-static inline std::string qstrToStr(const QString& s)
-{
-    QByteArray ba = s.toUtf8();
-    return std::string(ba.constData(), ba.size());
-}
-
-static std::string jsonEscapeStr(const std::string& s)
-{
-    std::string r;
-    r.reserve(s.size() + 4);
-    for (size_t i = 0; i < s.size(); ++i) {
-        unsigned char c = (unsigned char)s[i];
-        if      (c == '"')  r += "\\\"";
-        else if (c == '\\') r += "\\\\";
-        else if (c == '\n') r += "\\n";
-        else if (c == '\r') r += "\\r";
-        else if (c == '\t') r += "\\t";
-        else if (c < 0x20)  { char esc[8]; std::snprintf(esc, sizeof(esc), "\\u%04x", c); r += esc; }
-        else                r += (char)c;
-    }
-    return r;
-}
-
-static std::string msecToIsoString(long long msec)
-{
-    time_t t = (time_t)(msec / 1000);
-    struct tm tm_val = {};
-#ifdef _WIN32
-    localtime_s(&tm_val, &t);
-#else
-    localtime_r(&t, &tm_val);
-#endif
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_val);
-    return buf;
-}
-
-// Forward declaration for mutual recursion in variantToJson.
-static std::string variantToJson(const QVariant& v);
-
-static std::string variantToJson(const QVariant& v)
-{
-    if (!v.isValid() || v.isNull()) return "null";
-    switch (v.type()) {
-    case QVariant::Bool:
-        return v.toBool() ? "true" : "false";
-    case QVariant::Int:
-    case QVariant::LongLong:
-    case QVariant::UInt:
-    case QVariant::ULongLong:
-        return std::to_string(v.toLongLong());
-    case QVariant::Double: {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.15g", v.toDouble());
-        return buf;
-    }
-    case QVariant::String:
-        return "\"" + jsonEscapeStr(qstrToStr(v.toString())) + "\"";
-    case QVariant::List:
-    case QVariant::StringList: {
-        QVariantList list = v.toList();
-        std::string s = "[";
-        for (int i = 0; i < list.size(); ++i) {
-            if (i > 0) s += ",";
-            s += variantToJson(list.at(i));
-        }
-        s += "]";
-        return s;
-    }
-    case QVariant::Map: {
-        QVariantMap map = v.toMap();
-        std::string s = "{";
-        bool first = true;
-        for (QVariantMap::const_iterator it = map.begin(); it != map.end(); ++it) {
-            if (!first) s += ",";
-            first = false;
-            s += "\"" + jsonEscapeStr(qstrToStr(it.key())) + "\":";
-            s += variantToJson(it.value());
-        }
-        s += "}";
-        return s;
-    }
-    default:
-        return "\"" + jsonEscapeStr(qstrToStr(v.toString())) + "\"";
-    }
-}
 
 // QThread::msleep is protected — access it via a minimal subclass.
 namespace {
@@ -166,7 +75,7 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
     std::snprintf(progBuf, sizeof(progBuf), "%.15g", req.progress);
 
     std::string s = "{\"request_id\":\"";
-    s += jsonEscapeStr(qstrToStr(req.id));
+    s += JsonStd::escape(JsonStd::qstrToStd(req.id));
     s += "\",\"status\":\"" + status + "\"";
     s += ",\"progress\":" + std::string(progBuf);
 
@@ -216,21 +125,21 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
     std::string status = statusToString(req.status);
 
     std::string s = "{\"request_id\":\"";
-    s += jsonEscapeStr(qstrToStr(req.id));
+    s += JsonStd::escape(JsonStd::qstrToStd(req.id));
     s += "\",\"status\":\"" + status + "\"";
 
     if (req.status == REQUEST_COMPLETED) {
         s += ",\"success\":true";
-        s += ",\"result\":" + variantToJson(req.scriptResult);
+        s += ",\"result\":" + JsonStd::variantToJson(req.scriptResult);
         s += ",\"output\":[";
         for (int i = 0; i < req.outputLines.size(); ++i) {
             if (i > 0) s += ",";
-            s += "\"" + jsonEscapeStr(qstrToStr(req.outputLines[i])) + "\"";
+            s += "\"" + JsonStd::escape(JsonStd::qstrToStd(req.outputLines[i])) + "\"";
         }
         s += "],\"error\":null";
     } else if (req.status == REQUEST_FAILED) {
         s += ",\"success\":false,\"result\":null,\"output\":[]";
-        s += ",\"error\":\"" + jsonEscapeStr(qstrToStr(req.error)) + "\"";
+        s += ",\"error\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.error)) + "\"";
     } else if (req.status == REQUEST_CANCELLED) {
         s += ",\"success\":false,\"result\":null,\"output\":[]";
         s += ",\"error\":\"Cancelled\"";
@@ -247,7 +156,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
 
     if (req.completedAt > 0 && req.startedAt > 0) {
         s += ",\"duration_ms\":" + std::to_string((long long)(req.completedAt - req.startedAt));
-        s += ",\"completed_at\":\"" + msecToIsoString((long long)req.completedAt) + "\"";
+        s += ",\"completed_at\":\"" + JsonStd::msecToIso((long long)req.completedAt) + "\"";
     }
     s += "}";
     return {200, s};
@@ -299,10 +208,10 @@ std::pair<int, std::string> AsyncRequestManager::cancelJson(
 
     long long nowMs = (long long)QDateTime::currentMSecsSinceEpoch();
     std::string s = "{\"request_id\":\"";
-    s += jsonEscapeStr(requestId);
+    s += JsonStd::escape(requestId);
     s += "\",\"status\":\"cancelled\"";
     s += ",\"message\":\"Cancellation requested\"";
-    s += ",\"cancelled_at\":\"" + msecToIsoString(nowMs) + "\"";
+    s += ",\"cancelled_at\":\"" + JsonStd::msecToIso(nowMs) + "\"";
     s += "}";
     return {200, s};
 }
@@ -326,10 +235,10 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter) const
         std::snprintf(progBuf, sizeof(progBuf), "%.15g", req.progress);
 
         if (!items.empty()) items += ",";
-        items += "{\"request_id\":\"" + jsonEscapeStr(qstrToStr(req.id)) + "\"";
+        items += "{\"request_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.id)) + "\"";
         items += ",\"status\":\"" + statusStr + "\"";
         items += ",\"progress\":" + std::string(progBuf);
-        items += ",\"submitted_at\":\"" + msecToIsoString((long long)req.submittedAt) + "\"}";
+        items += ",\"submitted_at\":\"" + JsonStd::msecToIso((long long)req.submittedAt) + "\"}";
 
         switch (req.status) {
             case REQUEST_QUEUED:    ++nQueued;    break;

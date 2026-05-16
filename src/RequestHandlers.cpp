@@ -1,41 +1,8 @@
 #include "DzScriptServerPane.h"
+#include "JsonStd.h"
 #include "RequestHandler.h"
 #include "ErrorResponse.h"
 #include <QtCore/qmetaobject.h>
-#include <ctime>
-
-// ─── std::string helpers (no Qt — safe to call from any thread) ──────────────
-
-static std::string jsonEscapeStr(const std::string& s)
-{
-    std::string r;
-    r.reserve(s.size() + 4);
-    for (size_t i = 0; i < s.size(); ++i) {
-        unsigned char c = (unsigned char)s[i];
-        if      (c == '"')  r += "\\\"";
-        else if (c == '\\') r += "\\\\";
-        else if (c == '\n') r += "\\n";
-        else if (c == '\r') r += "\\r";
-        else if (c == '\t') r += "\\t";
-        else if (c < 0x20)  { char esc[8]; std::snprintf(esc, sizeof(esc), "\\u%04x", c); r += esc; }
-        else                r += (char)c;
-    }
-    return r;
-}
-
-static std::string currentTimeStr()
-{
-    time_t t = time(nullptr);
-    struct tm tm_val = {};
-#ifdef _WIN32
-    localtime_s(&tm_val, &t);
-#else
-    localtime_r(&t, &tm_val);
-#endif
-    char buf[16];
-    std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_val);
-    return buf;
-}
 
 // ─── MiddlewareChain ──────────────────────────────────────────────────────────
 
@@ -71,7 +38,7 @@ bool IPWhitelistMiddleware::process(HttpContext& ctx)
 
     ctx.respond(403, ErrorResponse::build(ErrorCode::IP_NOT_WHITELISTED, ctx.remoteAddr));
 
-    std::string logLine = "[" + currentTimeStr() + "] [BLOCKED] " + ctx.remoteAddr + " - IP not whitelisted";
+    std::string logLine = "[" + JsonStd::currentTime() + "] [BLOCKED] " + ctx.remoteAddr + " - IP not whitelisted";
     QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
         Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
     return false;
@@ -88,7 +55,7 @@ bool RateLimitMiddleware::process(HttpContext& ctx)
 
     ctx.respond(429, ErrorResponse::build(ErrorCode::RATE_LIMIT_EXCEEDED, ctx.remoteAddr));
 
-    std::string logLine = "[" + currentTimeStr() + "] [RATE LIMIT] " + ctx.remoteAddr;
+    std::string logLine = "[" + JsonStd::currentTime() + "] [RATE LIMIT] " + ctx.remoteAddr;
     QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
         Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
     return false;
@@ -133,7 +100,7 @@ bool AuthMiddleware::process(HttpContext& ctx)
     ctx.respond(401, ErrorResponse::build(code));
     m_metrics.recordAuthFailure();
 
-    std::string logLine = "[" + currentTimeStr() + "] [AUTH FAILED] " + ctx.remoteAddr;
+    std::string logLine = "[" + JsonStd::currentTime() + "] [AUTH FAILED] " + ctx.remoteAddr;
     QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
         Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
     return false;

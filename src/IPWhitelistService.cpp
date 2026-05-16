@@ -1,12 +1,6 @@
 #include "IPWhitelistService.h"
+#include "JsonStd.h"
 #include <QtCore/qstringlist.h>
-#include <string>
-
-static inline std::string qstrToStr(const QString& s)
-{
-    QByteArray ba = s.toUtf8();
-    return std::string(ba.constData(), ba.size());
-}
 
 IPWhitelistService::IPWhitelistService()
     : m_bEnabled(false)
@@ -25,7 +19,7 @@ void IPWhitelistService::setWhitelist(const QString& csvIPs)
     foreach (const QString& ip, raw) {
         QString trimmed = ip.trimmed();
         if (!trimmed.isEmpty())
-            m_aParsedIPs.push_back(qstrToStr(trimmed));
+            m_aParsedIPs.push_back(JsonStd::qstrToStd(trimmed));
     }
 }
 

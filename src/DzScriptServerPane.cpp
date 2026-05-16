@@ -6,6 +6,7 @@
 
 #include "DzScriptServerPane.h"
 #include "JsonBuilder.h"
+#include "JsonStd.h"
 #include "ErrorResponse.h"
 #include "RequestValidator.h"
 #include "common_version.h"
@@ -568,66 +569,11 @@ void DzScriptServerPane::appendLogBytes(const QByteArray& data)
     appendLog(QString::fromUtf8(data.constData(), data.size()));
 }
 
-// ─── std::string JSON helpers (no Qt — safe to call from any thread) ──────────
-
-static std::string jsonEscapeStr(const std::string& s)
-{
-    std::string r;
-    r.reserve(s.size() + 4);
-    for (size_t i = 0; i < s.size(); ++i) {
-        unsigned char c = (unsigned char)s[i];
-        if      (c == '"')  r += "\\\"";
-        else if (c == '\\') r += "\\\\";
-        else if (c == '\n') r += "\\n";
-        else if (c == '\r') r += "\\r";
-        else if (c == '\t') r += "\\t";
-        else if (c < 0x20)  { char esc[8]; std::snprintf(esc, sizeof(esc), "\\u%04x", c); r += esc; }
-        else                r += (char)c;
-    }
-    return r;
-}
-
-static std::string msecToIsoString(long long msec)
-{
-    time_t t = (time_t)(msec / 1000);
-    struct tm tm_val = {};
-#ifdef _WIN32
-    localtime_s(&tm_val, &t);
-#else
-    localtime_r(&t, &tm_val);
-#endif
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_val);
-    return buf;
-}
-
-static std::string currentTimeStr()
-{
-    time_t t = time(nullptr);
-    struct tm tm_val = {};
-#ifdef _WIN32
-    localtime_s(&tm_val, &t);
-#else
-    localtime_r(&t, &tm_val);
-#endif
-    char buf[16];
-    std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_val);
-    return buf;
-}
-
 // ─── Route setup helpers ─────────────────────────────────────────────────────
 
 static inline QByteArray stdToQBA(const std::string& s)
 {
     return QByteArray(s.c_str(), static_cast<int>(s.size()));
-}
-
-// Safe QString→std::string: routes through QByteArray so the std::string buffer
-// is allocated by our DLL's CRT (ucrtbase), not by QtCore4.dll's (msvcr100).
-static inline std::string qstrToStr(const QString& s)
-{
-    QByteArray ba = s.toUtf8();
-    return std::string(ba.constData(), ba.size());
 }
 
 // RAII guard for the concurrent-request counter.
@@ -830,7 +776,7 @@ std::string DzScriptServerPane::listScriptsJson() const
 		     it != m_scriptRegistry.scripts.end(); ++it) {
 			entries.push_back({
 			    std::string(it.key().constData(), it.key().size()),
-			    qstrToStr(it.value().description),
+			    JsonStd::qstrToStd(it.value().description),
 			    (long long)it.value().registeredAt.toMSecsSinceEpoch()
 			});
 		}
@@ -839,9 +785,9 @@ std::string DzScriptServerPane::listScriptsJson() const
 	std::string items;
 	for (size_t i = 0; i < entries.size(); ++i) {
 		if (i > 0) items += ",";
-		items += "{\"name\":\"" + jsonEscapeStr(entries[i].id) + "\"";
-		items += ",\"description\":\"" + jsonEscapeStr(entries[i].description) + "\"";
-		items += ",\"registered_at\":\"" + msecToIsoString(entries[i].registeredAtMs) + "\"}";
+		items += "{\"name\":\"" + JsonStd::escape(entries[i].id) + "\"";
+		items += ",\"description\":\"" + JsonStd::escape(entries[i].description) + "\"";
+		items += ",\"registered_at\":\"" + JsonStd::msecToIso(entries[i].registeredAtMs) + "\"}";
 	}
 	std::string s = "{\"scripts\":[" + items + "]";
 	s += ",\"count\":" + std::to_string(entries.size()) + "}";
@@ -860,15 +806,15 @@ std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
 
 	if (!removed) {
 		std::string body = "{\"success\":false,\"error\":\"Script not found: '";
-		body += jsonEscapeStr(id) + "'\"}";
+		body += JsonStd::escape(id) + "'\"}";
 		return {404, body};
 	}
 
-	std::string logLine = "[" + currentTimeStr() + "] [" + clientIP + "] [REGISTRY] Deleted script: " + id;
+	std::string logLine = "[" + JsonStd::currentTime() + "] [" + clientIP + "] [REGISTRY] Deleted script: " + id;
 	QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
 	    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
 
-	std::string body = "{\"success\":true,\"id\":\"" + jsonEscapeStr(id) + "\"}";
+	std::string body = "{\"success\":true,\"id\":\"" + JsonStd::escape(id) + "\"}";
 	return {200, body};
 }
 
@@ -878,7 +824,7 @@ bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string
 	QMutexLocker lock(&m_scriptRegistry.mutex);
 	if (!m_scriptRegistry.scripts.contains(key))
 		return false;
-	outScript = qstrToStr(m_scriptRegistry.scripts.value(key).script);
+	outScript = JsonStd::qstrToStd(m_scriptRegistry.scripts.value(key).script);
 	return true;
 }
 
@@ -894,7 +840,7 @@ QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
 	outSubmittedAt = r.submittedAt;
 	outError       = r.error;
 	if (!r.accepted) {
-		std::string msg = "[WARN] Async queue rejected: " + qstrToStr(r.error);
+		std::string msg = "[WARN] Async queue rejected: " + JsonStd::qstrToStd(r.error);
 		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
 		    Q_ARG(QByteArray, QByteArray(msg.c_str(), (int)msg.size())));
 	}
@@ -917,7 +863,7 @@ std::pair<int, std::string> DzScriptServerPane::cancelAsyncRequestJson(const std
 {
 	std::pair<int, std::string> result = m_pAsyncMgr->cancelJson(requestId, clientIP);
 	if (result.first == 200) {
-		std::string logLine = "[" + currentTimeStr() + "] [ASYNC CANCEL] " + requestId;
+		std::string logLine = "[" + JsonStd::currentTime() + "] [ASYNC CANCEL] " + requestId;
 		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
 		    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
 	}
@@ -951,7 +897,7 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 			.arg(clientIPStr).arg(requestId));
 		m_metrics.recordRequest(false);
 		return HttpResult(400,
-			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON, qstrToStr(detail))));
+			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON, JsonStd::qstrToStd(detail))));
 	}
 
 	QVariantMap bodyMap  = parsed.toVariant().toMap();
@@ -997,7 +943,7 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 			m_metrics.recordRequest(false);
 			return HttpResult(400,
 				stdToQBA(ErrorResponse::build(
-					ErrorCode::SCRIPT_FILE_LOAD_FAILED, qstrToStr(scriptFile))));
+					ErrorCode::SCRIPT_FILE_LOAD_FAILED, JsonStd::qstrToStd(scriptFile))));
 		}
 	} else {
 		script->setCode(scriptText);
@@ -1191,9 +1137,9 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 static HttpResult buildQueuedResponse(const QString& requestId, qint64 submittedAt)
 {
 	std::string resp = "{\"request_id\":\"";
-	resp += jsonEscapeStr(qstrToStr(requestId));
+	resp += JsonStd::escape(JsonStd::qstrToStd(requestId));
 	resp += "\",\"status\":\"queued\",\"submitted_at\":\"";
-	resp += msecToIsoString((long long)submittedAt);
+	resp += JsonStd::msecToIso((long long)submittedAt);
 	resp += "\"}";
 	return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
 }
@@ -1221,7 +1167,7 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonB
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
-			ErrorCode::SERVER_UNAVAILABLE, qstrToStr(enqueueError))));
+			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
 
 	return buildQueuedResponse(requestId, submittedAt);
 }
@@ -1250,7 +1196,7 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
-			ErrorCode::SERVER_UNAVAILABLE, qstrToStr(enqueueError))));
+			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
 
 	appendLog(QString("[%1] [ASYNC QUEUED] script:%2 -> %3")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
