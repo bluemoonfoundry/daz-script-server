@@ -247,7 +247,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-0.1.0-py3-none-any.whl
+pip install dazpy-2.1.0-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
