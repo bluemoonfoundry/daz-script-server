@@ -2,6 +2,17 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.1.0] - 2026-05-15
+
+### Added
+
+- **`webcam_expression_mirror.py`** — live webcam expression mirroring example.
+  Streams MediaPipe face landmarks to a Genesis 9 figure's FACS morph controls
+  at up to 10 fps.  Features EMA smoothing, a live AU bar chart overlay,
+  headless (`--no-preview`) mode, and automatic morph reset on exit.
+
+---
+
 ## [2.0.0] - 2026-05-14
 
 ### Summary
