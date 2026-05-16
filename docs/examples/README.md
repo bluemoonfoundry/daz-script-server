@@ -30,6 +30,7 @@ The examples are roughly ordered from simple to complex.  Start with
 | [dataset_generator.py](#dataset_generatorpy) | ML / Data | Generates a randomised render dataset with JSON sidecar for LoRA training | Yes |
 | [pose_interpolation.py](#pose_interpolationpy) | Animation | Interpolates between two saved states with easing curves and renders each step | Yes |
 | [expression_transfer.py](#expression_transferpy) | AI / Vision | Extracts a facial expression from a photo using MediaPipe and applies it to a Genesis 9 figure | No |
+| [webcam_expression_mirror.py](#webcam_expression_mirrorpy) | AI / Vision | Mirrors your live webcam expression onto a Genesis 9 figure in real time | No |
 
 BVH / motion-capture examples (`bvh_import.py`, `bvh_discover.py`,
 `bvh_bone_maps.py`) are under active development and not yet stable.
@@ -345,3 +346,47 @@ python expression_transfer.py photo.jpg --debug
 | `--list-properties` | off | List all numeric properties on the figure and exit |
 | `--search TERM` | — | Filter `--list-properties` output by case-insensitive substring |
 | `--debug` | off | Print which FACS labels matched/missed and suggest candidates |
+
+---
+
+### webcam_expression_mirror.py
+
+Captures frames from your webcam, runs MediaPipe FaceLandmarker on each frame,
+and streams the resulting FACS morph values to a Genesis 9 figure at up to
+`--fps` updates per second.  The figure's expression updates live as your face
+moves.
+
+Pairs naturally with DAZ's **Face Transfer 2**: use that tool to build a 3D
+version of yourself, then use this script to drive its expressions in real time.
+
+Press **Q** in the preview window, or **Ctrl+C**, to stop.  FACS morphs are
+zeroed on exit so the figure returns to a neutral expression.
+
+**Dependencies** (in addition to `dazpy`):
+```bash
+pip install mediapipe opencv-python numpy
+```
+
+The MediaPipe face landmarker model (`face_landmarker.task`, ~1 MB) is
+downloaded automatically to the `docs/examples/` directory on first run.
+
+**FACS label calibration:** Uses the same `FACS_MAP` as `expression_transfer.py`.
+Run `expression_transfer.py --list-properties` to discover labels for your
+installed FACS product if morphs don't apply.
+
+```bash
+python webcam_expression_mirror.py
+python webcam_expression_mirror.py --figure "Genesis 9" --scale 0.8
+python webcam_expression_mirror.py --camera 1 --fps 15
+python webcam_expression_mirror.py --smooth 0.7
+python webcam_expression_mirror.py --no-preview
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--figure LABEL` | `Genesis 9` | Target figure label |
+| `--scale FLOAT` | `1.0` | Global expression scale factor |
+| `--camera N` | `0` | OpenCV camera index (try `1`, `2`, … for external webcams) |
+| `--fps N` | `10` | Max DAZ Studio updates per second |
+| `--smooth FLOAT` | `0.5` | EMA smoothing: `0` = raw/responsive, `0.9` = very smooth |
+| `--no-preview` | off | Run headless with no OpenCV window (Ctrl+C to stop) |
