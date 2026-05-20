@@ -199,6 +199,60 @@ class DazGeometry(DazElement):
         )
         return self._client.execute(script).value
 
+    # ── Section 7c: posed (world-space) positions ─────────────────────────────
+
+    def vertex_positions_posed(self, start: int = 0, count: int = 5000) -> dict:
+        """Fetch a chunk of fully-deformed world-space vertex positions.
+
+        Uses ``DzObject.getCachedGeom()`` which returns the final mesh after
+        morph deformations *and* skeleton skinning have been applied, in
+        world-space coordinates.  Use :meth:`vertex_positions_posed_all` to
+        retrieve all vertices automatically.
+
+        Returns:
+            ``{"total": int, "start": int, "count": int, "vertices": [[x, y, z], ...]}``
+        """
+        script = ScriptBuilder.iife(f"""
+            var n = {ScriptBuilder.find_node_expr(self._identifier)};
+            if (!n) return null;
+            var obj = n.getObject();
+            if (!obj) return null;
+            obj.forceCacheUpdate(n, false);
+            var cached = obj.getCachedGeom();
+            if (!cached) return null;
+            var total = cached.getNumVertices();
+            var end = Math.min({start} + {count}, total);
+            var verts = [];
+            for (var i = {start}; i < end; i++) {{
+                var v = cached.getVertex(i);
+                verts.push([v.x, v.y, v.z]);
+            }}
+            return {{total: total, start: {start}, count: verts.length, vertices: verts}};
+        """)
+        return self._client.execute(script).value or {}
+
+    def vertex_positions_posed_all(self, chunk_size: int = 5000) -> list[list[float]]:
+        """Return all world-space posed+morphed vertex positions.
+
+        The first call triggers :meth:`vertex_positions_posed` which forces a
+        cache update; subsequent chunks reuse the same cached geometry.
+
+        Returns:
+            List of ``[x, y, z]`` world-space coordinates for every vertex,
+            after skeleton skinning and morph deformations.
+        """
+        first = self.vertex_positions_posed(0, chunk_size)
+        total = first.get("total", 0)
+        all_verts = list(first.get("vertices", []))
+        offset = len(all_verts)
+        while offset < total:
+            chunk = self.vertex_positions_posed(offset, chunk_size)
+            all_verts.extend(chunk.get("vertices", []))
+            offset += len(chunk.get("vertices", []) or [])
+            if not chunk.get("vertices"):
+                break
+        return all_verts
+
     @property
     def tris_count(self) -> int | None:
         """Number of triangular faces (read-only)."""

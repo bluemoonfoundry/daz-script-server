@@ -1,28 +1,56 @@
-"""Mirror your facial expression onto a Genesis 9 figure in real time.
+"""DAZ Studio Script Server example: mirror your facial expression onto a Genesis 9 figure in real time.
 
-Captures frames from a webcam, runs MediaPipe FaceLandmarker, computes Action
-Unit (AU) magnitudes from landmark geometry, and pushes FACS property values to
-DAZ Studio over HTTP at a configurable rate.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It captures frames from a webcam, runs MediaPipe FaceLandmarker
+inference on each frame, computes Action Unit (AU) magnitudes from the landmark
+geometry, and pushes FACS property values to a live DAZ Studio figure over HTTP
+at a configurable rate — producing real-time expression mirroring.
+
+It is an *example*, not a production performance-capture tool.  A real system
+would use hardware-accelerated GPU inference, audio sync, and a direct render
+pipeline.  The goal here is to show that the script server's low-latency HTTP
+API is fast enough to drive live facial animation from an external process at
+usable frame rates.
 
 Pairs naturally with DAZ's Face Transfer 2: create a 3D version of yourself
 with that tool, then use this script to drive its expressions live.
 
-What Python does:
-  - Capture and decode webcam frames (OpenCV)
-  - Run MediaPipe Face Mesh inference each frame
-  - Compute AU magnitudes from landmark geometry
-  - Apply temporal smoothing to reduce jitter
-  - Push FACS updates to DAZ Studio at up to --fps times per second
+WHAT IT DEMONSTRATES
+--------------------
+  - Capturing webcam frames with OpenCV and running MediaPipe FaceLandmarker
+    in VIDEO mode for each frame
+  - Computing Action Unit magnitudes from landmark geometry (shared calibration
+    with expression_transfer.py)
+  - Applying exponential moving average (EMA) smoothing to reduce jitter
+  - Rate-limiting DAZ Studio updates to a configurable --fps ceiling
+  - Drawing a live AU bar overlay and landmark dots on the preview window
+  - Zeroing all FACS morphs on exit so the figure returns to neutral
 
-What DAZ Studio does each update:
-  - Receive one batch of FACS property values
-  - Apply them atomically to the live figure
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
 
-Press Q in the preview window, or Ctrl+C, to stop.  FACS morphs are zeroed on
-exit so the figure returns to a neutral expression.
+       curl http://127.0.0.1:18811/health
 
-Dependencies:
-    pip install mediapipe opencv-python numpy dazpy
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests mediapipe opencv-python numpy
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio containing a Genesis 9 figure with FACS HD
+   applied, connect a webcam, then run:
+
+       python docs/examples/webcam_expression_mirror.py
 
 Usage:
     python webcam_expression_mirror.py

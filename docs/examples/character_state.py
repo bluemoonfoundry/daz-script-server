@@ -1,12 +1,48 @@
-"""Save and restore a character's complete state.
+"""DAZ Studio Script Server example: save and restore a character's complete state.
 
-Captures three categories of state:
-  - Shape morphs (geometry modifiers on the figure's mesh object)
-  - Expression / pose controls (numeric node-level properties, e.g. FACS dials)
-  - Bone rotations (the current pose)
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It serialises a live DAZ Studio figure's full state — shape morphs,
+expression/pose node properties, and bone rotations — to a compact JSON file,
+then restores that state on demand.
 
-Only non-default values are stored, so the JSON file stays small even for
-figures with thousands of morphs.
+It is an *example*, not a full scene-preset system.  A production tool would
+handle animation timelines, material states, and nested figure hierarchies.
+The goal here is to show that the script server exposes enough of the DAZ
+figure model for Python to capture and replay character state without any
+plugin-side storage.
+
+WHAT IT DOES
+------------
+  - Reads all non-default DzMorph values from the figure's geometry object
+  - Reads all non-default numeric node-level properties (FACS dials, etc.)
+  - Reads all non-default bone XYZ rotations
+  - Stores only non-zero values so the JSON stays small for morph-heavy figures
+  - Restores morph, property, and bone values in two HTTP calls per direction
+
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio containing the target figure, then run:
+
+       python docs/examples/character_state.py save --figure "Genesis 9" --out state.json
 
 Usage:
     python character_state.py save    --figure "Genesis 9" --out state.json

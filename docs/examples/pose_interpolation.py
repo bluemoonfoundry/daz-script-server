@@ -1,12 +1,50 @@
-"""Interpolate between two saved character states and render each step.
+"""DAZ Studio Script Server example: interpolate between two saved character states and render each step.
 
-Loads two state files produced by character_state.py, interpolates all bone
-rotations, morph values, and FACS properties across N steps using a
-configurable easing curve, then renders each frame.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It loads two character state files produced by character_state.py,
+interpolates all bone rotations, morph values, and FACS node properties across
+N steps using a configurable easing curve, and renders each step to a numbered
+PNG.
 
-Python owns the animation math (easing, lerp).  DAZ Studio applies the
-result at each step — it has no knowledge of the interpolation happening
-outside it.
+It is an *example*, not a production animation tool.  A full system would
+handle multiple keyframes, spline interpolation, and timeline baking.  The
+goal here is to show that Python can own the animation math entirely — easing,
+lerp, step count — while DAZ Studio simply receives and applies the result at
+each frame, with no knowledge of the interpolation loop happening outside it.
+
+WHAT IT DEMONSTRATES
+--------------------
+  - Loading two character state JSON files (produced by character_state.py)
+  - Interpolating bone rotations, shape morphs, and node properties with lerp
+  - Applying several configurable easing curves (linear, ease_in_out, bounce, etc.)
+  - Pushing the full interpolated state to DAZ Studio in a single HTTP call per step
+  - Rendering each interpolated frame and restoring state A on exit
+  - Printing an ffmpeg command to assemble the frames into a video
+
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Produce two state files with character_state.py, then run:
+
+       python docs/examples/pose_interpolation.py --a neutral.json --b smile.json --steps 10
 
 Usage:
     python pose_interpolation.py --a neutral.json --b smile.json --steps 10

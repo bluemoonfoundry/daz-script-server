@@ -1,8 +1,48 @@
-"""Render from every camera in the scene and save each to a named file.
+"""DAZ Studio Script Server example: render from every camera in the scene in one pass.
 
-Iterates scene.cameras(), renders from each one in turn, and saves the
-output to <out>/<camera_label>.png.  Useful for covering multiple angles
-in a single script run (storyboarding, product shots, etc.).
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It iterates all cameras in the live DAZ Studio scene and renders
+from each one in turn, saving the output as <camera_label>.png in a chosen
+directory.
+
+It is an *example*, not a production multi-pass render manager.  A full
+pipeline would also handle render layers, lighting rigs per camera, and
+output EXR compositing.  The goal here is to show that Python can enumerate
+scene cameras and drive the render engine to cover multiple angles in a
+single script run — useful for storyboarding, product shots, or coverage
+renders.
+
+WHAT IT DEMONSTRATES
+--------------------
+  - Listing all cameras in the live scene (DazScene.cameras)
+  - Filtering cameras by label via --cameras
+  - Setting render resolution and triggering a render for each camera
+  - Sanitising camera labels into safe filenames for output
+
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio with one or more cameras, then run:
+
+       python docs/examples/multi_camera_render.py
 
 Usage:
     python multi_camera_render.py

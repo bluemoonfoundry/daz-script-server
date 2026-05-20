@@ -1,11 +1,51 @@
-"""Dump a structured inventory of every node in the scene to JSON.
+"""DAZ Studio Script Server example: dump a structured inventory of every scene node to JSON.
 
-Collects per-node: type, label, world position, visibility, material names,
-vertex count, and (for figures) bone count and morph count.  Everything is
-gathered in a single DazScript call so the report is fast regardless of
-scene size.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It collects rich metadata for every node in a running DAZ Studio
+scene in a single HTTP call and writes the result to JSON, without modifying
+the scene or interacting with any UI element.
 
-Useful for pipeline QC, asset auditing, and debugging scene composition.
+It is an *example*, not a production pipeline QC tool.  A full auditing
+system would also report texture file paths, subdivision levels, simulation
+settings, and scene memory estimates.  The goal here is to show that the
+script server enables Python to extract a machine-readable scene manifest in
+one pass — useful for debugging scene composition, asset auditing, and
+feeding downstream pipeline tools.
+
+WHAT IT DEMONSTRATES
+--------------------
+  - Gathering data for all scene nodes in a single DazScript call (no per-node
+    round-trips regardless of scene size)
+  - Collecting per-node type, label, world position, visibility flags,
+    material names, vertex/face counts
+  - Reporting skeleton-specific metadata: bone count and morph count
+  - Reporting scene hierarchy (parent name and child count per node)
+  - Writing results to stdout or to a file, with optional pretty-printing
+
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open any scene in DAZ Studio, then run:
+
+       python docs/examples/scene_inventory.py
 
 Usage:
     python scene_inventory.py

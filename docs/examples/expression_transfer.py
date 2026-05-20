@@ -1,27 +1,54 @@
-"""Apply a facial expression from a photo to a Genesis 9 figure in DAZ Studio.
+"""DAZ Studio Script Server example: apply a facial expression from a photo to a Genesis 9 figure.
 
-MediaPipe FaceLandmarker extracts 478 landmarks from the source image.  Python
-computes landmark geometry into Action Unit (AU) magnitudes, maps them to
-Genesis 9 FACS HD property values, and sends a single HTTP call to DAZ Studio.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It extracts 478 face landmarks from a source image using MediaPipe
+FaceLandmarker, computes Action Unit (AU) magnitudes from the landmark
+geometry entirely in Python, maps them to Genesis 9 FACS HD property labels,
+and sends a single HTTP call to DAZ Studio to apply the expression.
 
-What Python does that DazScript cannot:
-  - Load and decode the image (any format OpenCV handles)
-  - Run MediaPipe Face Mesh inference
-  - Compute AU magnitudes from landmark geometry
-  - Map AUs to DAZ FACS property labels with per-AU scale factors
+It is an *example*, not a production facial capture tool.  A real system would
+account for head pose, partial occlusion, and per-user AU calibration.  The
+goal here is to show that the script server lets Python use any ML inference
+library and apply the results to a live DAZ figure without any DAZ plugin
+development.
 
-What DAZ Studio does:
-  - Receive one batch of property values
-  - Apply them atomically to the live figure
+WHAT IT DEMONSTRATES
+--------------------
+  - Running MediaPipe FaceLandmarker inference in Python (auto-downloads the
+    model file on first run)
+  - Computing Action Unit magnitudes from pixel-space landmark geometry
+    (eye blink, wide, brow up/down, jaw open, smile, frown)
+  - Mapping AUs to DAZ FACS HD property labels via a configurable FACS_MAP
+  - Applying all FACS values to the live figure in a single HTTP call
+  - Listing available FACS properties on the figure (--list-properties) to
+    help adapt the map to other FACS products (ARKit, etc.)
+  - Debug output showing matched/unmatched property labels
 
-Calibration note: AU magnitudes are computed relative to population-average
-face proportions.  Use --scale to tune overall expressiveness.  Run
---list-properties to see exactly which FACS controls exist on your figure —
-property labels vary between FACS products (FACS HD, ARKit, etc.), so you may
-need to edit FACS_MAP to match what is installed.
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
 
-Dependencies:
-    pip install mediapipe opencv-python numpy
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests mediapipe opencv-python numpy
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio containing a Genesis 9 figure with FACS HD
+   applied, then run:
+
+       python docs/examples/expression_transfer.py photo.jpg
 
 Usage:
     python expression_transfer.py photo.jpg

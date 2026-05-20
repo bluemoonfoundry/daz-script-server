@@ -1,8 +1,49 @@
-"""Generate a randomised render dataset for AI/ML training (e.g. LoRA).
+"""DAZ Studio Script Server example: generate a randomised render dataset for AI/ML training.
 
-Randomises a set of expression morphs on a Genesis 9 figure and renders
-each variation to a numbered PNG file.  Morph values are saved alongside
-the images as a JSON sidecar so the dataset is fully reproducible.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It randomises a set of expression morphs on a Genesis 9 figure
+and renders each variation to a numbered PNG.  The morph values used for
+each image are saved alongside the renders as a JSON sidecar, making the
+dataset fully reproducible.
+
+It is an *example*, not a production LoRA-dataset pipeline.  A real dataset
+tool would add lighting variation, camera angle randomisation, background
+swapping, and metadata in the correct training format.  The goal here is to
+show that Python can drive DAZ Studio's render engine in an automated loop
+to produce training data without any manual UI interaction.
+
+WHAT IT DEMONSTRATES
+--------------------
+  - Finding named expression morphs on a figure by label
+  - Randomising morph values with Python's random module
+  - Setting morph values and triggering a render for each sample
+  - Wrapping each render in an undo step so DAZ Studio stays clean
+  - Writing a JSON metadata sidecar alongside the rendered images
+
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio containing a Genesis 9 figure, then run:
+
+       python docs/examples/dataset_generator.py
 
 Usage:
     python dataset_generator.py [--count 100] [--out C:/dataset] [--size 512]

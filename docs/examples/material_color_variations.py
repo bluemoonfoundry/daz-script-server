@@ -1,10 +1,48 @@
-"""Render a node's material in multiple diffuse colours.
+"""DAZ Studio Script Server example: render a node's material in multiple diffuse colours.
 
-Useful for product shots, clothing swatches, or any scene where you want
-the same composition in different colours without manual material edits.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It changes the diffuse colour of a named material on a scene node
+to each colour in a palette, renders the scene, and saves each result to a
+named PNG file — all without touching the DAZ Studio UI.
 
-The original colour is saved before the loop and restored afterward
-(including if the run is interrupted).
+It is an *example*, not a production swatch-render tool.  A full tool would
+handle PBR maps, surface shader properties beyond diffuse colour, and batch
+node/material combinations.  The goal here is to show that the script server
+gives Python access to DAZ material properties so you can automate colour
+variation renders for product shots or clothing swatches.
+
+WHAT IT DEMONSTRATES
+--------------------
+  - Finding a scene node by label and locating a named material on it
+  - Reading and writing the material diffuse colour property
+  - Iterating over a colour palette (built-in or user-supplied hex colours)
+  - Restoring the original material colour afterward, even if the run is interrupted
+  - Sanitising colour names into safe output filenames
+
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio containing the target node and material, then run:
+
+       python docs/examples/material_color_variations.py --node "Cube" --material "Default"
 
 Usage:
     python material_color_variations.py --node "Cube" --material "Default"

@@ -1,22 +1,62 @@
-"""Dump bone rotations and morph values for every frame in the play range.
+"""DAZ Studio Script Server example: dump bone rotations and morph values for every animation frame.
 
-The entire animation is captured in a single DazScript call — Scene.setFrame()
-works inside DazScript, so the server scrubs through every frame and collects
-data without a Python round-trip per frame.
+PURPOSE
+-------
+This script is a demonstration of what the DAZ Studio Script Server makes
+possible.  It captures the full animation of a DAZ Studio figure — every bone
+rotation and optionally every animated morph — across all frames in the play
+range, and writes the result to a structured JSON file.
+
+It is an *example*, not a production motion-capture export tool.  A real
+exporter would handle multiple figures, finger bones, object-level channels,
+and binary output formats.  The goal here is to show that the script server
+can scrub a DAZ timeline from Python, collecting per-frame data at the speed
+of a single HTTP call.
+
+WHAT IT DEMONSTRATES
+--------------------
+  - Scrubbing through every frame using Scene.setFrame() inside a single
+    DazScript call (no Python round-trip per frame)
+  - Building a compact parallel-list encoding: a bone-name index plus
+    per-frame rotation arrays, keeping payload size proportional to bones
+    rather than bones × frames
+  - Optionally detecting and capturing only the morphs whose values actually
+    vary across the timeline (not just any keyed channel)
+  - Restoring the original timeline frame after the dump
 
 Output format:
     {
       "figure": "Genesis 9",
       "frame_range": {"start": 0, "end": 90},
-      "bones": ["hip", "rForeArm", ...],        # bone name index
+      "bones": ["hip", "rForeArm", ...],
       "frames": [
         {"frame": 0, "rotations": [[x,y,z], ...], "morphs": {"PHMSmile": 0.5}},
         ...
       ]
     }
 
-bone name index is a flat list; "rotations" is a parallel list in the same
-order, keeping the per-frame payload compact.
+ENVIRONMENT SETUP
+-----------------
+1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
+   HTTP server active (default: 127.0.0.1:18811).  You can verify it is
+   responding with:
+
+       curl http://127.0.0.1:18811/health
+
+2. Install the Python dependencies in a virtual environment:
+
+       python -m venv .venv
+       .venv\\Scripts\\activate          # Windows
+       # source .venv/bin/activate     # macOS / Linux
+       pip install requests
+
+3. Install or develop-install the dazpy SDK (from the repo root):
+
+       pip install -e .
+
+4. Open a scene in DAZ Studio with an animated Genesis 9 figure, then run:
+
+       python docs/examples/animation_frame_dump.py --figure "Genesis 9" --out anim.json
 
 Usage:
     python animation_frame_dump.py --figure "Genesis 9" --out anim.json
