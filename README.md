@@ -5,7 +5,7 @@
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
 
-A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
+A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests (or an optional Python library that wraps the interface and adds additional features) with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
 
 ---
 
