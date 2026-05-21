@@ -9,8 +9,8 @@ Typical usage::
 
     client = DazClient()           # connects to 127.0.0.1:18811
     scene  = DazScene(client)
-    figure = scene.find_skeleton("Genesis 9")
-    figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+    figure = scene.find_skeleton_by_label("Genesis 9")
+    figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 """
 
 __version__ = "2.2.0"

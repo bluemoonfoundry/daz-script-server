@@ -13,8 +13,8 @@ manipulate the scene through a type-safe Python API.
    from dazpy import DazClient, DazScene
 
    scene  = DazScene()
-   figure = scene.find_skeleton("Genesis 9")
-   figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+   figure = scene.find_skeleton_by_label("Genesis 9")
+   figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 
 .. toctree::
    :maxdepth: 2

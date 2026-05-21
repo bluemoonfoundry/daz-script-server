@@ -45,8 +45,8 @@ Working with the Scene
    for node in scene.nodes():
        print(node.name, node.label)
 
-   # Find a specific figure
-   figure = scene.find_skeleton("Genesis 9")
+   # Find a specific figure by its Scene-panel label
+   figure = scene.find_skeleton_by_label("Genesis 9")
    print(figure.num_bones(), "bones")
 
 Posing a Figure
@@ -54,8 +54,8 @@ Posing a Figure
 
 .. code-block:: python
 
-   arm = figure.find_bone("rForeArm")
-   arm.set_local_rotation(0, 0, 45)   # 45° on the Z axis
+   arm = figure.find_bone("r_forearm")   # Genesis 9 snake_case naming
+   arm.set_local_rotation(0, 0, 45)      # 45° on the Z axis
 
    # Wrap in an undo group
    with scene.undo("Bend arm"):

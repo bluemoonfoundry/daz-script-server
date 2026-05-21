@@ -21,7 +21,7 @@ class DazScene:
 
         scene = DazScene()
         print(scene.num_nodes(), "nodes in scene")
-        figure = scene.find_skeleton("Genesis 9")
+        figure = scene.find_skeleton_by_label("Genesis 9")
     """
 
     def __init__(self, client: DazClient | None = None):
@@ -159,7 +159,9 @@ class DazScene:
         """Find a skeleton by its internal name.
 
         Args:
-            name: Internal name of the skeleton node.
+            name: Internal name of the skeleton node (e.g. ``"Genesis9"``).
+                  To look up by the user-visible label shown in the Scene panel
+                  (e.g. ``"Genesis 9"``), use :meth:`find_skeleton_by_label`.
 
         Returns:
             A :class:`~dazpy.DazSkeleton` proxy.
@@ -169,11 +171,34 @@ class DazScene:
         """
         from ._skeleton import DazSkeleton
         from .exceptions import NodeNotFoundError
-        exists = ScriptBuilder.iife(
-            f"return !!Scene.findSkeleton({ScriptBuilder.escape_string(name)});"
-        )
-        if not self._client.execute(exists).value:
-            raise NodeNotFoundError(f"Skeleton not found: {name!r}")
+        lookup = ScriptBuilder.iife(f"""
+            var skels = Scene.getSkeletonList();
+            for (var i = 0; i < skels.length; i++) {{
+                if (skels[i].getName() === {ScriptBuilder.escape_string(name)}) return true;
+            }}
+            return false;
+        """)
+        if not self._client.execute(lookup).value:
+            hint = ScriptBuilder.iife("""
+                var info = [];
+                var skels = Scene.getSkeletonList();
+                for (var i = 0; i < skels.length; i++) {
+                    info.push(skels[i].getName() + "|" + skels[i].getLabel());
+                }
+                return info;
+            """)
+            pairs = self._client.execute(hint).value or []
+            if pairs:
+                available = ", ".join(
+                    f"{n!r} (label: {l!r})" for entry in pairs
+                    for n, _, l in [entry.partition("|")]
+                )
+                raise NodeNotFoundError(
+                    f"Skeleton not found: {name!r}. "
+                    f"Available skeletons: {available}. "
+                    f"Tip: use find_skeleton_by_label() to search by the Scene-panel label."
+                )
+            raise NodeNotFoundError(f"Skeleton not found: {name!r} (no skeletons in scene).")
         return DazSkeleton(self._client, NodeIdentifier(name))
 
     def find_skeleton_by_label(self, label: str) -> "DazSkeleton":  # noqa: F821

@@ -457,7 +457,7 @@ figure = scene.find_skeleton_by_label("Genesis 9")
 
 # Bones
 all_bones = figure.bones()              # list[DazBone]
-forearm   = figure.find_bone("rForeArm")
+forearm   = figure.find_bone("r_forearm")      # Genesis 9; use figure.bones() to list names
 forearm   = figure.find_bone_by_label("Right Forearm")
 n         = figure.num_bones()
 

@@ -71,7 +71,12 @@ class DazSkeleton(DazNode):
         """Find a bone by its internal name.
 
         Args:
-            name: The ``getName()`` string of the bone (e.g. ``"rForeArm"``).
+            name: The ``getName()`` string of the bone.
+                  Naming conventions differ by figure generation:
+                  Genesis 9 uses snake_case (e.g. ``"r_forearm"``);
+                  Genesis 3/8 uses ``"rForearmBend"``/``"lForearmBend"``;
+                  Genesis 1/2 uses ``"rForeArm"``/``"lForeArm"``.
+                  Use :meth:`bones` to list every bone name for the loaded figure.
 
         Returns:
             A :class:`~dazpy.DazBone` proxy.
@@ -86,7 +91,12 @@ class DazSkeleton(DazNode):
         )
         result = self._client.execute(script).value
         if result is None:
-            raise NodeNotFoundError(f"Bone not found: {name!r}")
+            raise NodeNotFoundError(
+                f"Bone not found: {name!r}. "
+                f"Bone naming differs by figure generation — e.g. Genesis 9 uses "
+                f"'r_forearm', Genesis 3/8 uses 'rForearmBend', Genesis 1/2 uses 'rForeArm'. "
+                f"Call figure.bones() to list every bone name for this figure."
+            )
         return DazBone._from_locator(self._client, self._bone_locator(result), result)
 
     def find_bone_by_label(self, label: str) -> "DazBone":  # noqa: F821

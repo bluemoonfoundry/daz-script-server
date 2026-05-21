@@ -15,7 +15,7 @@ class UndoGroup:
     Obtain via :meth:`DazScene.undo` rather than constructing directly::
 
         with scene.undo("Rotate arm"):
-            skel.find_bone("rForeArm").set_local_rotation(0, 0, 45)
+            skel.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 
     Args:
         client: The :class:`~dazpy.DazClient` to use.
