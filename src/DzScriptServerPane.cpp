@@ -72,6 +72,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
 	, m_pEventBroker(nullptr)
+	, m_pEventClientsLabel(nullptr)
 {
 	// Register return type for BlockingQueuedConnection on execute/register handlers.
 	qRegisterMetaType<HttpResult>("HttpResult");
@@ -243,6 +244,9 @@ DzScriptServerPane::DzScriptServerPane()
 	m_pActiveRequestsLabel = new QLabel(tr("Active Requests: 0"), this);
 	m_pActiveRequestsLabel->setStyleSheet("QLabel { color: #0066cc; font-weight: bold; }");
 
+	m_pEventClientsLabel = new QLabel(tr("Event Clients: 0"), this);
+	m_pEventClientsLabel->setStyleSheet("QLabel { color: #0066cc; font-weight: bold; }");
+
 	m_pStartBtn = new QPushButton(tr("Start Server"), this);
 	m_pStopBtn  = new QPushButton(tr("Stop Server"),  this);
 	m_pStopBtn->setEnabled(false);
@@ -280,6 +284,7 @@ DzScriptServerPane::DzScriptServerPane()
 	mainLayout->addWidget(limitsGroup);
 	mainLayout->addWidget(m_pStatusLabel);
 	mainLayout->addWidget(m_pActiveRequestsLabel);
+	mainLayout->addWidget(m_pEventClientsLabel);
 	mainLayout->addLayout(btnLayout);
 	mainLayout->addLayout(logHeaderLayout);
 	mainLayout->addWidget(m_pLogView);
@@ -531,6 +536,7 @@ void DzScriptServerPane::stopServer()
 	m_metrics.saveToSettings();
 	updateUI();
 	updateActiveRequestsLabel();
+	updateEventClientsLabel();
 	appendLog("Server stopped.");
 }
 
@@ -851,6 +857,7 @@ void DzScriptServerPane::setupRoutes()
 
 		SubscriberQueue* queue = new SubscriberQueue(filterMask);
 		m_pEventBroker->registerSubscriber(queue);
+		QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
 
 		// The chunked content provider is called repeatedly by httplib on the
 		// HTTP handler thread until it returns false or the client disconnects.
@@ -880,6 +887,7 @@ void DzScriptServerPane::setupRoutes()
 				// joins all request-handler threads via ThreadPool::shutdown()).
 				m_pEventBroker->unregisterSubscriber(queue);
 				delete queue;
+				QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
 			}
 		);
 	});
@@ -1513,6 +1521,14 @@ void DzScriptServerPane::updateActiveRequestsLabel()
 		m_pActiveRequestsLabel->setText(tr("Active Requests: %1 / %2")
 			.arg((int)m_nActiveRequests)
 			.arg(m_nMaxConcurrentRequests));
+	}
+}
+
+void DzScriptServerPane::updateEventClientsLabel()
+{
+	if (m_pEventClientsLabel) {
+		int count = m_pEventBroker ? m_pEventBroker->subscriberCount() : 0;
+		m_pEventClientsLabel->setText(tr("Event Clients: %1").arg(count));
 	}
 }
 

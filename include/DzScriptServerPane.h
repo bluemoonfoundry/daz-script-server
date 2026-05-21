@@ -102,6 +102,7 @@ public slots:
 	// not ::free, so it is safe to construct/destroy on httplib worker threads).
 	void appendLogBytes(const QByteArray& data);
 	void updateActiveRequestsLabel();
+	void updateEventClientsLabel();
 
 public:
 	// Observability — called from HTTP threads (thread-safe; no Qt string ops on worker threads)
@@ -245,6 +246,7 @@ private:
 	QPushButton* m_pStopBtn;
 	QLabel*      m_pStatusLabel;
 	QLabel*      m_pActiveRequestsLabel;
+	QLabel*      m_pEventClientsLabel;
 	QTextEdit*   m_pLogView;
 	QPushButton* m_pClearLogBtn;
 

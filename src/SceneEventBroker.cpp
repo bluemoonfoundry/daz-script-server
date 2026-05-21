@@ -144,6 +144,11 @@ void SceneEventBroker::unregisterSubscriber(SubscriberQueue* queue) {
     m_subscribers.removeAll(queue);
 }
 
+int SceneEventBroker::subscriberCount() const {
+    QMutexLocker lock(&m_subscriberMutex);
+    return m_subscribers.size();
+}
+
 void SceneEventBroker::dispatch(int categoryBit, const QString& event) {
     QMutexLocker lock(&m_subscriberMutex);
     for (int i = 0; i < m_subscribers.size(); ++i) {

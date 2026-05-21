@@ -80,6 +80,9 @@ public:
     void registerSubscriber(SubscriberQueue* queue);
     void unregisterSubscriber(SubscriberQueue* queue);
 
+    // Returns the current number of registered SSE clients.  Thread-safe.
+    int subscriberCount() const;
+
 private slots:
     // Scene lifecycle
     void onSceneLoadStarting();
