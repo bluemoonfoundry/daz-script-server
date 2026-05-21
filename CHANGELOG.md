@@ -2,6 +2,23 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.3.0] - 2026-05-21
+
+### Added
+
+- **`GET /scene/events`** — Server-Sent Events stream that delivers real-time
+  DAZ Studio scene-change notifications to connected clients.  Supported event
+  categories: `node`, `skeleton`, `light`, `camera`, `selection`, `scene`,
+  `time`, `render`.  Use the optional `?filter=` query parameter to subscribe
+  to a subset of categories.
+- **`SceneEventBroker`** — internal Qt class that connects to all `DzScene`
+  signals and dispatches JSON-serialized events to per-client queues.
+  High-frequency signals (`timeChanging`, `nodeSelectionListChanged`) are
+  debounced (150 ms / 50 ms) to prevent flooding during playback or
+  multi-select operations.
+- **Keepalive comments** — a `:keepalive` SSE comment is sent every 3 seconds
+  of idle time so clients can reliably detect disconnects.
+
 ## [2.2.0] - 2026-05-20
 
 ### Added
