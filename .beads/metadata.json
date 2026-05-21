@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "daz_script_server",
+  "project_id": "ddb69153-ff06-48bd-b3c8-255797f4ba5c"
+}
