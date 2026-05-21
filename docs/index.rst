@@ -1,6 +1,8 @@
 dazpy — DAZ Studio Python SDK
 ==============================
 
+**Version** |release|
+
 **dazpy** is a Python SDK for `DAZ Studio Script Server
 <https://github.com/bluemoonfoundry/daz-script-server>`_.  It lets you
 connect to a running DAZ Studio instance, execute DazScript code, and
