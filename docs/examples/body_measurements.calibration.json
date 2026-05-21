@@ -1,0 +1,164 @@
+{
+  "Genesis 9 Female": {
+    "height_cm": 166.9,
+    "bust": {
+      "target_cm": 88.8,
+      "band_below_cm": 7.0,
+      "band_above_cm": 3.0,
+      "fallback_mode": "max"
+    },
+    "underbust": {
+      "target_cm": 75.0,
+      "band_below_cm": 8.0,
+      "band_above_cm": 4.0,
+      "fallback_mode": "min"
+    },
+    "waist": {
+      "target_cm": 61.3,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "min"
+    },
+    "low_hip": {
+      "target_cm": 94.3,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "max"
+    }
+  },
+  "Genesis 9 Male": {
+    "height_cm": null,
+    "bust": {
+      "target_cm": 101.9552,
+      "band_below_cm": 7.0,
+      "band_above_cm": 3.0,
+      "fallback_mode": "max"
+    },
+    "underbust": {
+      "target_cm": null,
+      "band_below_cm": 8.0,
+      "band_above_cm": 4.0,
+      "fallback_mode": "min"
+    },
+    "waist": {
+      "target_cm": 83.1858,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "min"
+    },
+    "low_hip": {
+      "target_cm": 93.5736,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "max"
+    }
+  },
+  "Genesis 8 Male": {
+    "height_cm": 71.3,
+    "bust": {
+      "target_cm": 101.9552,
+      "band_below_cm": 7.0,
+      "band_above_cm": 3.0,
+      "fallback_mode": "max"
+    },
+    "underbust": {
+      "target_cm": null,
+      "band_below_cm": 8.0,
+      "band_above_cm": 4.0,
+      "fallback_mode": "min"
+    },
+    "waist": {
+      "target_cm": 83.1858,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "min"
+    },
+    "low_hip": {
+      "target_cm": 93.5736,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "max"
+    }
+  },
+  "Genesis 8.1 Male": {
+    "height_cm": 71.3,
+    "bust": {
+      "target_cm": 101.9552,
+      "band_below_cm": 7.0,
+      "band_above_cm": 3.0,
+      "fallback_mode": "max"
+    },
+    "underbust": {
+      "target_cm": null,
+      "band_below_cm": 8.0,
+      "band_above_cm": 4.0,
+      "fallback_mode": "min"
+    },
+    "waist": {
+      "target_cm": 83.1858,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "min"
+    },
+    "low_hip": {
+      "target_cm": 93.5736,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "max"
+    }
+  },
+  "Genesis 8 Female": {
+    "height_cm": 70.81,
+    "bust": {
+      "target_cm": 92.6598,
+      "band_below_cm": 7.0,
+      "band_above_cm": 3.0,
+      "fallback_mode": "max"
+    },
+    "underbust": {
+      "target_cm": 77.3684,
+      "band_below_cm": 8.0,
+      "band_above_cm": 4.0,
+      "fallback_mode": "min"
+    },
+    "waist": {
+      "target_cm": 69.7484,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "min"
+    },
+    "low_hip": {
+      "target_cm": 95.885,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "max"
+    }
+  },
+  "Genesis 8.1 Female": {
+    "height_cm": 70.81,
+    "bust": {
+      "target_cm": 92.6598,
+      "band_below_cm": 7.0,
+      "band_above_cm": 3.0,
+      "fallback_mode": "max"
+    },
+    "underbust": {
+      "target_cm": 77.3684,
+      "band_below_cm": 8.0,
+      "band_above_cm": 4.0,
+      "fallback_mode": "min"
+    },
+    "waist": {
+      "target_cm": 69.7484,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "min"
+    },
+    "low_hip": {
+      "target_cm": 95.885,
+      "band_below_cm": 10.0,
+      "band_above_cm": 6.0,
+      "fallback_mode": "max"
+    }
+  }
+}

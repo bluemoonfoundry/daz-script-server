@@ -28,6 +28,7 @@ The examples are roughly ordered from simple to complex.  Start with
 | [animation_mixing.py](#animation_mixingpy) | Animation | Clips, crossfades, concatenates, and applies animation clips offline | No |
 | [pose_interpolation.py](#pose_interpolationpy) | Animation | Interpolates between two saved states with easing curves and renders each step | Yes |
 | [geometry_analysis.py](#geometry_analysispy) | Geometry | Inspects mesh metadata, bounding boxes, face groups, and exports triangulated geometry | No |
+| [body_measurements.py](#body_measurementspy) | Geometry | Computes height and bust / waist / hip circumferences from horizontal mesh slices | No |
 | [scene_to_usd.py](#scene_to_usdpy) | Export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
 | [turntable.py](#turntablepy) | Rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
 | [multi_camera_render.py](#multi_camera_renderpy) | Rendering | Renders from every camera in the scene to separate files | Yes |
@@ -217,6 +218,60 @@ python geometry_analysis.py --figure "Genesis 9" --triangulate --out tris.json
 `DazGeometry.triangulate()`, `DazGeometry.as_vec3()`,
 `BoundingBox.center`, `BoundingBox.size`, `BoundingBox.volume`,
 `BoundingBox.contains()`, `Vec3.distance()`.
+
+---
+
+### body_measurements.py
+
+Computes practical body measurements for a selected figure by pulling the
+posed mesh into Python, slicing it with horizontal planes, and measuring the
+largest closed loop at each slice.  The example targets Genesis 8, Genesis 8.1,
+and Genesis 9 figures, but the same approach works for other figures too.
+Each reported measurement includes both centimeters and inches.
+It also picks generation-specific torso anchors and offers a `--torso-only`
+mode that filters obvious arm-spread outliers from the bust measurement.
+For bust anchoring it prefers left/right pectoral bones when present, then
+falls back to the spine/chest chain.
+Bust is measured from the largest perimeter loop within a narrow band around
+that anchor, which is closer to how tape-style measurements are usually taken.
+The example loads a small calibration table from
+`body_measurements.calibration.json`, with `Genesis 9 Female` seeded from the
+provided Measure Metrics reference values.
+You can edit that JSON file to tune the reference targets without touching the
+measurement code.
+The script detects the figure generation from the skeleton bones and uses the
+scene label to choose a matching calibration entry when it can, so labels like
+`Genesis 9 Male` or `Genesis 9 Female` will select the corresponding table row.
+If you want to override that behavior explicitly, pass `--figure-type` with a
+value like `G9M`, `G9F`, `G8M`, or `G8.1F`.
+If you pass `--clothing` on a female figure, the example also prints heuristic
+bra and dress size estimates in US, UK, and EU sizing.
+Add `--pretty` if you want the summary rendered as compact tables, including a
+small bra sanity-check table with bust, underbust, and difference values.
+
+Best results come from a neutral A-pose or T-pose with the figure standing
+upright in the scene.  The example uses bone heights as anchors when they are
+available and falls back to simple height ratios otherwise.
+
+**Dependency**
+```bash
+pip install trimesh
+```
+
+```bash
+python body_measurements.py --figure "Genesis 9"
+python body_measurements.py --figure "Genesis 8" --out measurements.json
+python body_measurements.py --figure "Genesis 8.1" --sample-step 0.25
+python body_measurements.py --figure "Genesis 9" --torso-only
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--figure LABEL` | `Genesis 9` | Figure label as shown in the Scene panel |
+| `--sample-step CM` | `0.5` | Slice spacing used when searching for local min/max circumferences |
+| `--search-window CM` | `5.0` | Half-width of the bust / underbust / low-hip search window |
+| `--torso-only` | off | Apply a robust bust selector that ignores obvious arm-spread outliers |
+| `--out FILE` | `measurements.json` | Output JSON file for the computed measurements |
 
 ---
 
