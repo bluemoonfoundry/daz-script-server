@@ -17,6 +17,7 @@ add_library(DazScriptServer SHARED
 	ErrorResponse.cpp
 	RequestValidator.cpp
 	SettingsService.cpp
+	SceneEventBroker.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
@@ -33,6 +34,7 @@ add_library(DazScriptServer SHARED
 	../include/dzscriptserver.h
 	../include/SettingsService.h
 	../include/ServerSettings.h
+	../include/SceneEventBroker.h
 )
 
 target_include_directories(DazScriptServer

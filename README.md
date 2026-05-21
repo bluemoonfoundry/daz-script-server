@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.2.0** | DAZ Studio 4.5+ | Windows & macOS
+**Version 2.3.0** | DAZ Studio 4.5+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -66,6 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.3.0](#whats-new-in-v230)
 - [What's New in v2.2.0](#whats-new-in-v220)
 - [What's New in v2.0.0](#whats-new-in-v200)
 - [What's New in v1.3.0](#whats-new-in-v130)
@@ -94,6 +95,7 @@ print(response.json())
 - [API Reference](#-api-reference)
 - [Script Registry](#-script-registry)
 - [Async Operations](#-async-operations)
+- [Scene Events (SSE)](#-scene-events-sse)
 - [Client Examples](#-client-examples)
 
 ### Security & Best Practices
@@ -139,6 +141,39 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.3.0
+
+### 🔔 Scene Events — Real-Time Push Notifications via SSE
+
+Clients can now subscribe to live DAZ Studio scene changes over a persistent HTTP connection using **Server-Sent Events (SSE)**. No more polling for scene state.
+
+```python
+import requests, json
+
+token = open(os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")).read().strip()
+
+with requests.get(
+    "http://127.0.0.1:18811/scene/events",
+    headers={"X-API-Token": token},
+    stream=True
+) as r:
+    for line in r.iter_lines():
+        if line.startswith(b"data: "):
+            event = json.loads(line[6:])
+            print(event["type"], event["data"])
+```
+
+**Event types:** `node.added`, `node.removed`, `skeleton.added/removed`, `light.added/removed`, `camera.added/removed`, `selection.list_changed`, `selection.primary_changed`, `scene.loading`, `scene.loaded`, `scene.saving`, `scene.saved`, `scene.clear_starting`, `scene.cleared`, `time.changed`, `playback.started`, `playback.finished`, `render.started`, `render.finished`
+
+**Filter to only the categories you need:**
+```
+GET /scene/events?filter=node,selection,scene
+```
+
+All auth, IP whitelist, and security checks apply. The connection stays open until the client disconnects or the server stops. See [Scene Events (SSE)](#-scene-events-sse) for full documentation.
 
 ---
 
@@ -1338,6 +1373,272 @@ Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 
 ---
 
+## 🔔 Scene Events (SSE)
+
+`GET /scene/events` opens a persistent HTTP connection and streams DAZ Studio scene-change notifications as **Server-Sent Events**. Each event is a UTF-8 line in the form:
+
+```
+data: {"type":"node.added","ts":1716307200123,"data":{"node_id":"0x1a2b3c4d","node_name":"Genesis 9","node_type":"DzFigure"}}
+
+```
+
+A `:keepalive` comment is sent every 15 seconds so clients can detect disconnects without sending an event:
+
+```
+:keepalive
+
+```
+
+The connection stays open until the client disconnects or the server is stopped. All configured security checks (auth, IP whitelist) apply.
+
+---
+
+### `GET /scene/events`
+
+**Purpose:** Subscribe to real-time scene-change notifications
+**Authentication:** Required (if enabled)
+
+**Query Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `filter` | _(all)_ | Comma-separated list of event categories to receive. Omit to receive all. |
+
+**Filter categories:**
+
+| Value | Events included |
+|-------|----------------|
+| `node` | `node.added`, `node.removed` |
+| `skeleton` | `skeleton.added`, `skeleton.removed` |
+| `light` | `light.added`, `light.removed` |
+| `camera` | `camera.added`, `camera.removed` |
+| `selection` | `selection.list_changed`, `selection.primary_changed` |
+| `scene` | `scene.loading`, `scene.loaded`, `scene.saving`, `scene.saved`, `scene.clear_starting`, `scene.cleared` |
+| `time` | `time.changed` _(debounced 150 ms)_, `playback.started`, `playback.finished` |
+| `render` | `render.started`, `render.finished` |
+
+**Response headers:**
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Transfer-Encoding: chunked
+```
+
+---
+
+### Event reference
+
+Every event shares the same envelope:
+
+```json
+{
+  "type": "node.added",
+  "ts": 1716307200123,
+  "data": { ... }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Dot-namespaced event name (see table below) |
+| `ts` | integer | Unix timestamp in milliseconds |
+| `data` | object | Event-specific payload (see below) |
+
+**Node payload** (for `node.*`, `skeleton.*`, `light.*`, `camera.*`):
+
+```json
+{
+  "node_id":   "0x1a2b3c4d",
+  "node_name": "Genesis 9",
+  "node_type": "DzFigure"
+}
+```
+
+`node_id` is a session-stable hex pointer. Use it to correlate add/remove events for the same node within a session.
+
+**Scene-save payload** (`scene.saving`, `scene.saved`):
+
+```json
+{ "filename": "/Users/me/Documents/MyScene.duf" }
+```
+
+**Time payload** (`time.changed`):
+
+```json
+{ "time_ticks": 4800, "time_secs": 1.0 }
+```
+
+`time.changed` is debounced — during playback it fires at most once per 150 ms regardless of frame rate.
+
+**Empty payload** — all other events (`node.removed`, `selection.*`, `scene.loading`, `scene.loaded`, `scene.cleared`, `playback.*`, `render.*`):
+
+```json
+{}
+```
+
+**Full event type table:**
+
+| `type` | Category | Payload fields |
+|--------|----------|----------------|
+| `node.added` | `node` | `node_id`, `node_name`, `node_type` |
+| `node.removed` | `node` | `node_id`, `node_name`, `node_type` |
+| `skeleton.added` | `skeleton` | `node_id`, `node_name`, `node_type` |
+| `skeleton.removed` | `skeleton` | `node_id`, `node_name`, `node_type` |
+| `light.added` | `light` | `node_id`, `node_name`, `node_type` |
+| `light.removed` | `light` | `node_id`, `node_name`, `node_type` |
+| `camera.added` | `camera` | `node_id`, `node_name`, `node_type` |
+| `camera.removed` | `camera` | `node_id`, `node_name`, `node_type` |
+| `selection.list_changed` | `selection` | _(empty)_ |
+| `selection.primary_changed` | `selection` | `node_id`, `node_name`, `node_type` (or `{}` if deselected) |
+| `scene.loading` | `scene` | _(empty)_ |
+| `scene.loaded` | `scene` | _(empty)_ |
+| `scene.saving` | `scene` | `filename` |
+| `scene.saved` | `scene` | `filename` |
+| `scene.clear_starting` | `scene` | _(empty)_ |
+| `scene.cleared` | `scene` | _(empty)_ |
+| `time.changed` | `time` | `time_ticks`, `time_secs` |
+| `playback.started` | `time` | _(empty)_ |
+| `playback.finished` | `time` | _(empty)_ |
+| `render.started` | `render` | _(empty)_ |
+| `render.finished` | `render` | _(empty)_ |
+
+---
+
+### Scene Events — Client Examples
+
+#### curl
+
+```bash
+TOKEN=$(cat ~/.daz3d/dazscriptserver_token.txt)
+
+# All events
+curl -N -H "X-API-Token: $TOKEN" http://127.0.0.1:18811/scene/events
+
+# Node and scene events only
+curl -N -H "X-API-Token: $TOKEN" \
+  "http://127.0.0.1:18811/scene/events?filter=node,scene"
+```
+
+#### Python — requests (no extra dependencies)
+
+```python
+import requests, json, os
+
+token = open(os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")).read().strip()
+
+with requests.get(
+    "http://127.0.0.1:18811/scene/events",
+    headers={"X-API-Token": token},
+    stream=True,
+    timeout=None,
+) as resp:
+    resp.raise_for_status()
+    for raw in resp.iter_lines():
+        if not raw or raw.startswith(b":"):  # skip keepalives and blank lines
+            continue
+        if raw.startswith(b"data: "):
+            event = json.loads(raw[6:])
+            print(f"{event['type']}: {event['data']}")
+```
+
+#### Python — sseclient (cleaner API)
+
+```bash
+pip install sseclient-py
+```
+
+```python
+import sseclient, requests, os
+
+token = open(os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")).read().strip()
+
+response = requests.get(
+    "http://127.0.0.1:18811/scene/events?filter=node,selection,scene",
+    headers={"X-API-Token": token},
+    stream=True,
+)
+client = sseclient.SSEClient(response)
+
+for event in client.events():
+    import json
+    data = json.loads(event.data)
+    print(data["type"], data["data"])
+```
+
+#### JavaScript — EventSource (browser)
+
+The browser's built-in `EventSource` does not support custom headers, so pass the token as a query parameter instead (requires auth to accept it — which DazScriptServer does not currently support). Use `fetch` with `ReadableStream` for authenticated SSE from a browser:
+
+```javascript
+const token = "your-token-here";
+
+const response = await fetch(
+  "http://127.0.0.1:18811/scene/events?filter=node,scene",
+  { headers: { "X-API-Token": token } }
+);
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+
+  const lines = buffer.split("\n");
+  buffer = lines.pop();               // keep incomplete last line
+
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      const event = JSON.parse(line.slice(6));
+      console.log(event.type, event.data);
+    }
+  }
+}
+```
+
+#### Node.js
+
+```javascript
+const http = require("http");
+const fs   = require("fs");
+const os   = require("os");
+
+const token = fs.readFileSync(`${os.homedir()}/.daz3d/dazscriptserver_token.txt`, "utf8").trim();
+
+const req = http.request(
+  { hostname: "127.0.0.1", port: 18811, path: "/scene/events", method: "GET",
+    headers: { "X-API-Token": token, Accept: "text/event-stream" } },
+  (res) => {
+    let buf = "";
+    res.on("data", (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const event = JSON.parse(line.slice(6));
+          console.log(event.type, event.data);
+        }
+      }
+    });
+  }
+);
+req.end();
+```
+
+---
+
+### Notes
+
+- **Multiple concurrent subscribers** are supported — each `GET /scene/events` request is independent.
+- **High-frequency signals** (`timeChanging` during playback, `nodeSelectionListChanged` during multi-select) are debounced before dispatch so clients are not flooded.
+- **Server stop** closes all open SSE connections cleanly; clients should reconnect automatically.
+- **Reverse proxy:** If using nginx in front of the server, add `proxy_buffering off` and `proxy_http_version 1.1` to the SSE location block (see [Reverse Proxy Setup](#reverse-proxy-setup-https)).
+
+---
+
 ## 🔒 Security Features
 
 ### Built-In Security
@@ -1983,6 +2284,18 @@ server {
     ssl_certificate /path/to/cert.pem;
     ssl_certificate_key /path/to/key.pem;
 
+    # SSE event stream — must disable buffering so events reach clients immediately
+    location /scene/events {
+        proxy_pass http://127.0.0.1:18811;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;        # required for chunked transfer encoding
+        proxy_buffering off;           # disable buffering for SSE
+        proxy_cache off;
+        proxy_read_timeout 3600s;      # keep connection alive for long-lived streams
+        chunked_transfer_encoding on;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:18811;
         proxy_set_header Host $host;
@@ -2024,7 +2337,8 @@ Contributions are welcome! See areas for improvement:
 - Token expiration and automatic rotation
 
 **Features:**
-- WebSocket support for long-running scripts with progress updates
+- Per-node property/transform change events in SSE stream (currently scene-level only)
+- Webhook callbacks — register a URL to receive HTTP POST on scene events (alternative to persistent SSE connection)
 - Script result caching
 - Request queueing with priorities
 - Multiple API tokens with labels

@@ -71,6 +71,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_rateLimiter(ServerConfig::DEFAULT_RATE_LIMIT_MAX, ServerConfig::DEFAULT_RATE_LIMIT_WINDOW)
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
+	, m_pEventBroker(nullptr)
 {
 	// Register return type for BlockingQueuedConnection on execute/register handlers.
 	qRegisterMetaType<HttpResult>("HttpResult");
@@ -400,6 +401,10 @@ void DzScriptServerPane::startServer()
 
 	m_pServer = new httplib::Server();
 	m_pServer->set_read_timeout(m_nTimeoutSec, 0);
+	// SSE connections are long-lived; the write timeout must exceed the
+	// content-provider pop timeout (3 s) plus some slack.  5 s is the httplib
+	// default but we set it explicitly so the intent is clear.
+	m_pServer->set_write_timeout(5, 0);
 
 	// Limit concurrent connections to prevent resource exhaustion
 	// cpp-httplib spawns a thread per request; limit keep-alive to reduce thread buildup
@@ -456,6 +461,10 @@ void DzScriptServerPane::startServer()
 	}
 
 	m_bRunning = true;
+
+	m_pEventBroker = new SceneEventBroker(this);
+	m_pEventBroker->start();
+
 	updateUI();
 	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -474,11 +483,27 @@ void DzScriptServerPane::stopServer()
 	// Stop async cleanup timer
 	m_pCleanupTimer->stop();
 
+	// 1. Stop the event broker: disconnects DzScene signals and closes all
+	//    SubscriberQueues so that SSE content-provider callbacks unblock their
+	//    pop() calls and start draining quickly.
+	if (m_pEventBroker) {
+		m_pEventBroker->stop();
+		// Do NOT delete yet — SSE resource-releaser lambdas still hold a
+		// raw pointer to the broker (captured as `broker`).  We delete below,
+		// after all handler threads have been joined.
+	}
+
+	// 2. Stop the HTTP server: sets is_shutting_down = true so the chunked
+	//    write loops exit on their next iteration.
 	if (m_pServer) {
 		m_pServer->stop();
-		delete m_pServer;  // FIX: Delete server object to prevent memory leak
+		delete m_pServer;
 		m_pServer = nullptr;
 	}
+
+	// 3. Join the listen thread.  httplib's ThreadPool::shutdown() joins every
+	//    request-handler thread before listen() returns, so by the time wait()
+	//    completes ALL SSE resource-releaser lambdas have already run.
 	if (m_pServerThread) {
 		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
 			appendLog("[WARN] Server thread did not stop within timeout; forcing termination.");
@@ -487,6 +512,12 @@ void DzScriptServerPane::stopServer()
 		}
 		delete m_pServerThread;
 		m_pServerThread = nullptr;
+	}
+
+	// 4. Now safe to delete the broker — all resource releasers have run.
+	if (m_pEventBroker) {
+		delete m_pEventBroker;
+		m_pEventBroker = nullptr;
 	}
 
 	// Clear rate limit state
@@ -760,6 +791,97 @@ void DzScriptServerPane::setupRoutes()
 		auto ctx = toContext(req);
 		if (m_pAuthChain->run(ctx)) m_pAsyncListHandler->handle(ctx);
 		applyContext(ctx, res);
+	});
+
+	// ── Scene event stream (SSE) ──────────────────────────────────────────────
+	//
+	// GET /scene/events[?filter=node,selection,scene,time,render,light,camera,skeleton]
+	//
+	// Streams DAZ scene-change notifications as Server-Sent Events.  The
+	// connection is kept open indefinitely; a ":keepalive" comment is sent
+	// every 15 seconds so clients can detect disconnects.
+	//
+	// Each event frame:   data: {"type":"...","ts":<ms>,"data":{...}}\n\n
+	// Keepalive frame:    :keepalive\n\n
+
+	m_pServer->Get("/scene/events", [this](const httplib::Request& req, httplib::Response& res) {
+		// Auth check — run the chain synchronously before entering streaming mode.
+		// We cannot call applyContext() here (it would finalize the response body),
+		// so on failure we set status/content directly.
+		{
+			auto ctx = toContext(req);
+			if (!m_pAuthChain->run(ctx)) {
+				res.status = ctx.responseStatus;
+				res.set_content(ctx.responseBody, "application/json");
+				return;
+			}
+		}
+
+		// Parse ?filter= into a bitmask.  Absent or empty → all categories.
+		int filterMask = SceneEventFilter::All;
+		if (req.has_param("filter") && !req.get_param_value("filter").empty()) {
+			filterMask = SceneEventFilter::None;
+			std::string filterStr = req.get_param_value("filter");
+			// Split on commas and map each token to its bitmask.
+			std::string token;
+			filterStr += ','; // sentinel
+			for (size_t i = 0; i < filterStr.size(); ++i) {
+				char c = filterStr[i];
+				if (c == ',') {
+					if      (token == "node")      filterMask |= SceneEventFilter::Node;
+					else if (token == "skeleton")  filterMask |= SceneEventFilter::Skeleton;
+					else if (token == "light")     filterMask |= SceneEventFilter::Light;
+					else if (token == "camera")    filterMask |= SceneEventFilter::Camera;
+					else if (token == "selection") filterMask |= SceneEventFilter::Selection;
+					else if (token == "scene")     filterMask |= SceneEventFilter::Scene;
+					else if (token == "time")      filterMask |= SceneEventFilter::Time;
+					else if (token == "render")    filterMask |= SceneEventFilter::Render;
+					token.clear();
+				} else {
+					token += c;
+				}
+			}
+			if (filterMask == SceneEventFilter::None)
+				filterMask = SceneEventFilter::All; // unknown tokens → default to all
+		}
+
+		res.set_header("Cache-Control", "no-cache");
+		res.set_header("Connection",    "keep-alive");
+		res.set_header("X-Accel-Buffering", "no"); // disable nginx proxy buffering
+
+		SubscriberQueue* queue = new SubscriberQueue(filterMask);
+		m_pEventBroker->registerSubscriber(queue);
+
+		// The chunked content provider is called repeatedly by httplib on the
+		// HTTP handler thread until it returns false or the client disconnects.
+		// Pop timeout (3 s) is kept well under the server's default 5 s write
+		// timeout so that each iteration writes a keepalive before the loop's
+		// wait_writable() check can time out.
+		res.set_chunked_content_provider("text/event-stream",
+			[queue](size_t /*offset*/, httplib::DataSink& sink) -> bool {
+				QString event = queue->pop(3000 /*ms*/);
+
+				if (event.isEmpty()) {
+					// Timeout or closed queue — send keepalive to prove the
+					// connection is live.  A closed queue returns "" every call,
+					// so on server shutdown this unblocks quickly and the next
+					// is_shutting_down() check ends the loop.
+					static const char ka[] = ":keepalive\n\n";
+					return sink.write(ka, sizeof(ka) - 1);
+				}
+
+				QByteArray payload = ("data: " + event + "\n\n").toUtf8();
+				return sink.write(payload.constData(), static_cast<size_t>(payload.size()));
+			},
+			[this, queue](bool /*success*/) {
+				// Resource releaser — called exactly once when the stream closes.
+				// stopServer() guarantees the broker outlives all releasers by
+				// deleting it only after m_pServerThread->wait() returns (which
+				// joins all request-handler threads via ThreadPool::shutdown()).
+				m_pEventBroker->unregisterSubscriber(queue);
+				delete queue;
+			}
+		);
 	});
 }
 

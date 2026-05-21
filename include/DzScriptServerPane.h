@@ -29,6 +29,7 @@
 #include "AsyncRequestManager.h"
 #include "SettingsService.h"
 #include "ServerSettings.h"
+#include "SceneEventBroker.h"
 
 // Required for BlockingQueuedConnection return from execute/register handlers.
 typedef QPair<int, QByteArray> HttpResult;
@@ -213,6 +214,7 @@ private:
 
 	AsyncRequestManager* m_pAsyncMgr;
 	QTimer*              m_pCleanupTimer; // Fires every 5 min to purge TTL-expired requests
+	SceneEventBroker*    m_pEventBroker;  // SSE scene-change notification broker
 
 	// ── Middleware chains (created in setupRoutes) ────────────────────────────
 	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only
