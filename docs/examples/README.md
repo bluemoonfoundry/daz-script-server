@@ -18,6 +18,7 @@ The examples are roughly ordered from simple to complex.  Start with
 | Script | Category | What Python does | Renders? |
 |---|---|---|---|
 | [raw_script.py](#raw_scriptpy) | Fundamentals | Executes arbitrary DazScript and prints the result | No |
+| [scene_event_monitor.py](#scene_event_monitorpy) | Fundamentals | Streams real-time scene-change events via SSE (monitor / log / wait-for) | No |
 | [scene_introspection.py](#scene_introspectionpy) | Fundamentals | Dumps the full scene hierarchy and transforms as JSON | No |
 | [scene_inventory.py](#scene_inventorypy) | Fundamentals | Structured per-node audit (type, materials, vertex count, etc.) | No |
 | [batch_operations.py](#batch_operationspy) | Fundamentals | Reads multiple properties in one HTTP call using `Batch` | No |
@@ -44,6 +45,57 @@ BVH / motion-capture examples (`bvh_import.py`, `bvh_discover.py`,
 ---
 
 ## Fundamentals
+
+### scene_event_monitor.py
+
+Connects to the `GET /scene/events` SSE stream and reacts to live DAZ Studio
+activity — node additions, selection changes, time scrubs, scene loads, renders
+starting/finishing — without polling or modifying the scene.
+
+Three subcommands cover the most common patterns:
+
+**monitor** — pretty-print events to the terminal as they arrive.  Each line
+shows the local time, event type (colour-coded by category), and a short
+payload summary.
+
+```bash
+python scene_event_monitor.py monitor
+python scene_event_monitor.py monitor --filter node,selection
+python scene_event_monitor.py monitor --filter render --quiet
+```
+
+**log** — append every event as a JSON object to a JSONL file.  Useful for
+capturing a work session and replaying or analysing it offline.
+
+```bash
+python scene_event_monitor.py log --out session.jsonl
+python scene_event_monitor.py log --out renders.jsonl --filter render
+```
+
+**wait-for** — block until one matching event arrives, print its data, and
+exit 0.  Exits 1 on timeout.  Designed for shell scripts that need to
+synchronise with DAZ Studio — for example, waiting for `render.finished`
+before post-processing the output file.
+
+```bash
+python scene_event_monitor.py wait-for --type render.finished
+python scene_event_monitor.py wait-for --type scene.loaded --timeout 60
+```
+
+| Argument | Subcommand | Default | Description |
+|---|---|---|---|
+| `--filter CATEGORIES` | monitor, log | all | Comma-separated category subset: `node`, `skeleton`, `light`, `camera`, `selection`, `scene`, `time`, `render` |
+| `--quiet` | monitor | off | Print only event type names, not full formatted lines |
+| `--out FILE` | log | *(required)* | Output JSONL file (appended, not overwritten) |
+| `--type EVENT_TYPE` | wait-for | *(required)* | Exact event type to wait for, e.g. `render.finished`, `node.added` |
+| `--timeout SECS` | wait-for | `300` | Give up after this many seconds |
+
+All subcommands share `--host` (default `127.0.0.1`) and `--port` (default `18811`).
+
+The API token is read automatically from `~/.daz3d/dazscriptserver_token.txt`
+if authentication is enabled on the server.
+
+---
 
 ### raw_script.py
 
