@@ -32,6 +32,9 @@ from ._property import DazProperty
 from ._element import DazElement
 from ._batch import Batch, BatchFuture
 from ._undo import UndoGroup
+from ._pose import DazPose
+from ._animation import DazAnimation
+from .math3 import Vec3, Quat, BoundingBox
 from ._result import ExecutionResult
 from ._polling import execute_long
 from . import exceptions
@@ -56,6 +59,11 @@ __all__ = [
     "Batch",
     "BatchFuture",
     "UndoGroup",
+    "DazPose",
+    "DazAnimation",
+    "Vec3",
+    "Quat",
+    "BoundingBox",
     "ExecutionResult",
     "execute_long",
     "exceptions",

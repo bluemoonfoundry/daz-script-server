@@ -430,3 +430,16 @@ def detect_convention(bone_names: list[str]) -> str | None:
     if {"Hips", "LeftArm", "RightArm"}.issubset(name_set):
         return "cmu"
     return None
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.parse_args()
+    print("Available BVH conventions :", sorted(BVH_TO_CANONICAL))
+    print("Available DAZ generations  :", sorted(CANONICAL_TO_DAZ))
+    print()
+    print("This module is intended to be imported by bvh_import.py and bvh_discover.py.")
+    print("Run those scripts directly to apply BVH motion capture to a DAZ figure.")

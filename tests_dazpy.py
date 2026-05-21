@@ -670,6 +670,250 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
         target = skel.follow_target()
         self.assertIsNone(target)
 
+    # ── bulk bone/morph fetch ─────────────────────────────────────────────────
+
+    def test_bone_rotations_single_call(self):
+        payload = {"hip": [1.0, 2.0, 3.0], "rForeArm": [0.0, 45.0, 0.0]}
+        skel, client = self._make_skeleton(payload)
+        result = skel.bone_rotations()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result["hip"], (1.0, 2.0, 3.0))
+        self.assertEqual(result["rForeArm"], (0.0, 45.0, 0.0))
+
+    def test_bone_rotations_script_uses_getAllBones(self):
+        skel, client = self._make_skeleton({"hip": [0, 0, 0]})
+        skel.bone_rotations()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getYRotControl", script)
+        self.assertIn("getZRotControl", script)
+
+    def test_bone_rotations_returns_tuples(self):
+        skel, client = self._make_skeleton({"hip": [10.0, 20.0, 30.0]})
+        result = skel.bone_rotations()
+        self.assertIsInstance(result["hip"], tuple)
+
+    def test_bone_rotations_empty_skeleton(self):
+        skel, client = self._make_skeleton({})
+        result = skel.bone_rotations()
+        self.assertEqual(result, {})
+
+    def test_bone_rotations_null_returns_empty(self):
+        skel, client = self._make_skeleton(None)
+        result = skel.bone_rotations()
+        self.assertEqual(result, {})
+
+    def test_set_bone_rotations_single_call(self):
+        skel, client = self._make_skeleton(None)
+        skel.set_bone_rotations({"hip": (10, 20, 30), "rForeArm": (0, 45, 0)})
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_set_bone_rotations_script_injects_data(self):
+        skel, client = self._make_skeleton(None)
+        skel.set_bone_rotations({"hip": [5.0, 10.0, 15.0]})
+        script = client.execute.call_args[0][0]
+        self.assertIn("hip", script)
+        self.assertIn("5.0", script)
+        self.assertIn("getAllBones", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("setValue", script)
+
+    def test_set_bone_rotations_accepts_tuples_and_lists(self):
+        skel, client = self._make_skeleton(None)
+        skel.set_bone_rotations({"hip": (1, 2, 3), "lForeArm": [4, 5, 6]})
+        script = client.execute.call_args[0][0]
+        self.assertIn("hip", script)
+        self.assertIn("lForeArm", script)
+
+    def test_morph_values_single_call(self):
+        payload = {"PHMSmile": 0.75, "PHMFrown": 0.0}
+        skel, client = self._make_skeleton(payload)
+        result = skel.morph_values()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertAlmostEqual(result["PHMSmile"], 0.75)
+
+    def test_morph_values_script_checks_DzMorph(self):
+        skel, client = self._make_skeleton({})
+        skel.morph_values()
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzMorph", script)
+        self.assertIn("getNumModifiers", script)
+        self.assertIn("getValueChannel", script)
+
+    def test_morph_values_nonzero_only_injects_true(self):
+        skel, client = self._make_skeleton({})
+        skel.morph_values(nonzero_only=True)
+        script = client.execute.call_args[0][0]
+        self.assertIn("true", script)
+        self.assertIn("0.0001", script)
+
+    def test_morph_values_all_injects_false(self):
+        skel, client = self._make_skeleton({})
+        skel.morph_values(nonzero_only=False)
+        script = client.execute.call_args[0][0]
+        self.assertIn("false", script)
+
+    def test_morph_values_null_returns_empty(self):
+        skel, client = self._make_skeleton(None)
+        result = skel.morph_values()
+        self.assertEqual(result, {})
+
+    def test_set_morph_values_single_call(self):
+        skel, client = self._make_skeleton(None)
+        skel.set_morph_values({"PHMSmile": 0.5, "PHMFrown": 0.25})
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_set_morph_values_script_injects_data(self):
+        skel, client = self._make_skeleton(None)
+        skel.set_morph_values({"PHMSmile": 0.8})
+        script = client.execute.call_args[0][0]
+        self.assertIn("PHMSmile", script)
+        self.assertIn("0.8", script)
+        self.assertIn("DzMorph", script)
+        self.assertIn("setValue", script)
+
+    def test_set_morph_values_empty_dict(self):
+        skel, client = self._make_skeleton(None)
+        skel.set_morph_values({})
+        self.assertEqual(client.execute.call_count, 1)
+
+    # ── keyframe baking ───────────────────────────────────────────────────────
+
+    def test_bake_bone_rotations_single_call(self):
+        skel, client = self._make_skeleton({"frames_baked": 10, "bones_baked": 50})
+        result = skel.bake_bone_rotations()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result["frames_baked"], 10)
+        self.assertEqual(result["bones_baked"], 50)
+
+    def test_bake_bone_rotations_script_uses_insertKey(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1})
+        skel.bake_bone_rotations()
+        script = client.execute.call_args[0][0]
+        self.assertIn("insertKey", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getYRotControl", script)
+        self.assertIn("getZRotControl", script)
+
+    def test_bake_bone_rotations_script_scrubs_timeline(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1})
+        skel.bake_bone_rotations()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getTimeStep", script)
+        self.assertIn("getPlayRange", script)
+        self.assertIn("setFrame", script)
+
+    def test_bake_bone_rotations_restores_original_frame(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1})
+        skel.bake_bone_rotations()
+        script = client.execute.call_args[0][0]
+        self.assertIn("_origFrame", script)
+        self.assertIn("Scene.setFrame(_origFrame)", script)
+
+    def test_bake_bone_rotations_injects_start_end(self):
+        skel, client = self._make_skeleton({"frames_baked": 5, "bones_baked": 1})
+        skel.bake_bone_rotations(start=10, end=14)
+        script = client.execute.call_args[0][0]
+        self.assertIn("10", script)
+        self.assertIn("14", script)
+
+    def test_bake_bone_rotations_null_uses_play_range(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1})
+        skel.bake_bone_rotations()
+        script = client.execute.call_args[0][0]
+        self.assertIn("null", script)
+        self.assertIn("_prStart", script)
+
+    def test_bake_bone_rotations_bone_names_filter(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 2})
+        skel.bake_bone_rotations(bone_names=["hip", "rForeArm"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("hip", script)
+        self.assertIn("rForeArm", script)
+        self.assertIn("hasOwnProperty", script)
+
+    def test_bake_bone_rotations_none_filter_includes_all(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 5})
+        skel.bake_bone_rotations(bone_names=None)
+        script = client.execute.call_args[0][0]
+        # null filter means all bones
+        self.assertIn("_filter === null", script)
+
+    def test_bake_morphs_single_call(self):
+        skel, client = self._make_skeleton({"frames_baked": 5, "morphs_baked": 3})
+        result = skel.bake_morphs()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result["morphs_baked"], 3)
+
+    def test_bake_morphs_script_uses_DzMorph_insertKey(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "morphs_baked": 1})
+        skel.bake_morphs()
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzMorph", script)
+        self.assertIn("getValueChannel", script)
+        self.assertIn("insertKey", script)
+
+    def test_bake_morphs_restores_original_frame(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "morphs_baked": 0})
+        skel.bake_morphs()
+        script = client.execute.call_args[0][0]
+        self.assertIn("_origFrame", script)
+
+    def test_bake_morphs_morph_names_filter(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "morphs_baked": 1})
+        skel.bake_morphs(morph_names=["PHMSmile"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("PHMSmile", script)
+        self.assertIn("hasOwnProperty", script)
+
+    def test_bake_morphs_injects_start_end(self):
+        skel, client = self._make_skeleton({"frames_baked": 3, "morphs_baked": 1})
+        skel.bake_morphs(start=5, end=7)
+        script = client.execute.call_args[0][0]
+        self.assertIn("5", script)
+        self.assertIn("7", script)
+
+    def test_bake_single_call_combined(self):
+        payload = {"frames_baked": 10, "bones_baked": 50, "morphs_baked": 0}
+        skel, client = self._make_skeleton(payload)
+        result = skel.bake()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertIn("bones_baked", result)
+        self.assertIn("morphs_baked", result)
+
+    def test_bake_without_morphs_guard_is_false(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1, "morphs_baked": 0})
+        skel.bake(include_morphs=False)
+        script = client.execute.call_args[0][0]
+        self.assertIn("false", script)  # _withMorphs = false
+
+    def test_bake_with_morphs_guard_is_true(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1, "morphs_baked": 5})
+        skel.bake(include_morphs=True)
+        script = client.execute.call_args[0][0]
+        self.assertIn("true", script)   # _withMorphs = true
+        self.assertIn("DzMorph", script)
+
+    def test_bake_scrubs_timeline_once(self):
+        """bake() iterates frames once for both bones and morphs."""
+        skel, client = self._make_skeleton({"frames_baked": 5, "bones_baked": 3, "morphs_baked": 2})
+        skel.bake(start=0, end=4, include_morphs=True)
+        # One HTTP call regardless of bone/morph count
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_bake_bone_filter_and_morph_filter_both_injected(self):
+        skel, client = self._make_skeleton({"frames_baked": 1, "bones_baked": 1, "morphs_baked": 1})
+        skel.bake(bone_names=["hip"], include_morphs=True, morph_names=["PHMSmile"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("hip", script)
+        self.assertIn("PHMSmile", script)
+
+    def test_bake_returns_empty_dict_on_null(self):
+        skel, client = self._make_skeleton(None)
+        result = skel.bake()
+        self.assertEqual(result, {})
+
 
 class TestDazBoneScriptGeneration(unittest.TestCase):
     def setUp(self):
@@ -1509,6 +1753,1212 @@ class TestDazGeometryScriptGeneration(unittest.TestCase):
         self.assertEqual(count, 8000)
         script = client.execute.call_args[0][0]
         self.assertIn("getNumQuads", script)
+
+    # ── mesh_info ─────────────────────────────────────────────────────────────
+
+    def test_mesh_info_single_call(self):
+        payload = {
+            "vertex_count": 100, "facet_count": 50,
+            "tris_count": 10, "quads_count": 40,
+            "subdivision_level": 0, "uv_set_count": 1,
+            "face_group_names": ["Body"], "material_group_names": ["Skin"],
+        }
+        geo, client = self._geo(payload)
+        info = geo.mesh_info()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(info["vertex_count"], 100)
+        self.assertEqual(info["face_group_names"], ["Body"])
+
+    def test_mesh_info_script_queries_all_counts(self):
+        geo, client = self._geo(None)
+        geo.mesh_info()
+        script = client.execute.call_args[0][0]
+        for token in ("getNumVertices", "getNumFacets", "getNumTris",
+                      "getNumQuads", "getCurrentSubDivisionLevel",
+                      "getNumUVSets", "getNumFaceGroups", "getNumMaterialGroups"):
+            self.assertIn(token, script, msg=f"missing {token}")
+
+    def test_mesh_info_returns_none_when_no_geometry(self):
+        geo, client = self._geo(None)
+        self.assertIsNone(geo.mesh_info())
+
+    # ── bounding_box ──────────────────────────────────────────────────────────
+
+    def test_bounding_box_returns_bounding_box_instance(self):
+        from dazpy import BoundingBox
+        payload = {"min": {"x": -1.0, "y": 0.0, "z": -1.0},
+                   "max": {"x":  1.0, "y": 2.0, "z":  1.0}}
+        geo, client = self._geo(payload)
+        bb = geo.bounding_box()
+        self.assertIsInstance(bb, BoundingBox)
+        self.assertAlmostEqual(bb.min.x, -1.0)
+        self.assertAlmostEqual(bb.max.y,  2.0)
+
+    def test_bounding_box_single_call(self):
+        payload = {"min": {"x": 0, "y": 0, "z": 0}, "max": {"x": 1, "y": 1, "z": 1}}
+        geo, client = self._geo(payload)
+        geo.bounding_box()
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_bounding_box_script_iterates_vertices(self):
+        geo, client = self._geo(None)
+        geo.bounding_box()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumVertices", script)
+        self.assertIn("getVertex", script)
+
+    def test_bounding_box_returns_none_when_no_geometry(self):
+        geo, client = self._geo(None)
+        self.assertIsNone(geo.bounding_box())
+
+    def test_bounding_box_posed_uses_getCachedGeom(self):
+        geo, client = self._geo(None)
+        geo.bounding_box_posed()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getCachedGeom", script)
+        self.assertIn("forceCacheUpdate", script)
+
+    def test_bounding_box_posed_returns_bounding_box(self):
+        from dazpy import BoundingBox
+        payload = {"min": {"x": -2, "y": 0, "z": -2}, "max": {"x": 2, "y": 3, "z": 2}}
+        geo, client = self._geo(payload)
+        bb = geo.bounding_box_posed()
+        self.assertIsInstance(bb, BoundingBox)
+        self.assertAlmostEqual(bb.max.y, 3.0)
+
+    def test_bounding_box_posed_returns_none_when_no_geometry(self):
+        geo, client = self._geo(None)
+        self.assertIsNone(geo.bounding_box_posed())
+
+    # ── paginated _all() wrappers ─────────────────────────────────────────────
+
+    def test_face_vertex_indices_all_single_page(self):
+        payload = {"total": 2, "start": 0, "facets": [[0, 1, 2], [0, 2, 3]]}
+        geo, client = self._geo(payload)
+        result = geo.face_vertex_indices_all()
+        self.assertEqual(result, [[0, 1, 2], [0, 2, 3]])
+
+    def test_face_vertex_indices_all_paginates(self):
+        from unittest.mock import MagicMock
+        from dazpy._geometry import DazGeometry
+        from dazpy._result import ExecutionResult
+        geo, _ = self._geo()
+        # Two pages: 2 faces total, chunk_size=1
+        responses = [
+            {"total": 2, "start": 0, "facets": [[0, 1, 2]]},
+            {"total": 2, "start": 1, "facets": [[0, 2, 3]]},
+        ]
+        geo._client.execute.side_effect = [
+            ExecutionResult(value=r, output=[], request_id="x") for r in responses
+        ]
+        result = geo.face_vertex_indices_all(chunk_size=1)
+        self.assertEqual(len(result), 2)
+
+    def test_normals_all_single_page(self):
+        payload = {"total": 2, "start": 0, "normals": [[0, 1, 0], [0, -1, 0]]}
+        geo, client = self._geo(payload)
+        result = geo.normals_all()
+        self.assertEqual(len(result), 2)
+
+    def test_normals_all_paginates(self):
+        responses = [
+            {"total": 2, "start": 0, "normals": [[0, 1, 0]]},
+            {"total": 2, "start": 1, "normals": [[0, -1, 0]]},
+        ]
+        from dazpy._result import ExecutionResult
+        geo, _ = self._geo()
+        geo._client.execute.side_effect = [
+            ExecutionResult(value=r, output=[], request_id="x") for r in responses
+        ]
+        result = geo.normals_all(chunk_size=1)
+        self.assertEqual(len(result), 2)
+
+    def test_uv_positions_all_single_page(self):
+        payload = {"total": 3, "start": 0, "uvs": [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]}
+        geo, client = self._geo(payload)
+        result = geo.uv_positions_all()
+        self.assertEqual(len(result), 3)
+
+    def test_uv_positions_all_paginates(self):
+        responses = [
+            {"total": 2, "start": 0, "uvs": [[0.0, 0.0]]},
+            {"total": 2, "start": 1, "uvs": [[1.0, 1.0]]},
+        ]
+        from dazpy._result import ExecutionResult
+        geo, _ = self._geo()
+        geo._client.execute.side_effect = [
+            ExecutionResult(value=r, output=[], request_id="x") for r in responses
+        ]
+        result = geo.uv_positions_all(chunk_size=1)
+        self.assertEqual(len(result), 2)
+
+    # ── group membership ──────────────────────────────────────────────────────
+
+    def test_face_group_faces_single_call(self):
+        geo, client = self._geo([0, 1, 4, 7])
+        result = geo.face_group_faces("Body")
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result, [0, 1, 4, 7])
+
+    def test_face_group_faces_script_uses_group_name(self):
+        geo, client = self._geo([])
+        geo.face_group_faces("Head")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Head", script)
+        self.assertIn("getFaceGroup", script)
+        self.assertIn("getIndexAt", script)
+
+    def test_face_group_faces_returns_empty_when_not_found(self):
+        geo, client = self._geo(None)
+        self.assertEqual(geo.face_group_faces("Missing"), [])
+
+    def test_material_group_faces_single_call(self):
+        geo, client = self._geo([2, 3, 5])
+        result = geo.material_group_faces("Skin")
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result, [2, 3, 5])
+
+    def test_material_group_faces_script_uses_group_name(self):
+        geo, client = self._geo([])
+        geo.material_group_faces("Eyes")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Eyes", script)
+        self.assertIn("getMaterialGroup", script)
+        self.assertIn("getIndexAt", script)
+
+    def test_material_group_faces_returns_empty_when_not_found(self):
+        geo, client = self._geo(None)
+        self.assertEqual(geo.material_group_faces("Missing"), [])
+
+    # ── triangulate ───────────────────────────────────────────────────────────
+
+    def test_triangulate_tri_passthrough(self):
+        from dazpy._geometry import DazGeometry
+        faces = [[0, 1, 2], [3, 4, 5]]
+        result = DazGeometry.triangulate(faces)
+        self.assertEqual(result, [[0, 1, 2], [3, 4, 5]])
+
+    def test_triangulate_quad_splits_to_two_tris(self):
+        from dazpy._geometry import DazGeometry
+        result = DazGeometry.triangulate([[0, 1, 2, 3]])
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], [0, 1, 2])
+        self.assertEqual(result[1], [0, 2, 3])
+
+    def test_triangulate_mixed_faces(self):
+        from dazpy._geometry import DazGeometry
+        faces = [[0, 1, 2], [0, 1, 2, 3]]
+        result = DazGeometry.triangulate(faces)
+        self.assertEqual(len(result), 3)
+
+    def test_triangulate_unknown_face_size_skipped(self):
+        from dazpy._geometry import DazGeometry
+        result = DazGeometry.triangulate([[0, 1]])  # 2-vertex "face"
+        self.assertEqual(result, [])
+
+    def test_triangulate_empty_input(self):
+        from dazpy._geometry import DazGeometry
+        self.assertEqual(DazGeometry.triangulate([]), [])
+
+    # ── as_vec3 ───────────────────────────────────────────────────────────────
+
+    def test_as_vec3_returns_vec3_instances(self):
+        from dazpy import Vec3
+        from dazpy._geometry import DazGeometry
+        verts = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        result = DazGeometry.as_vec3(verts)
+        self.assertEqual(len(result), 2)
+        self.assertIsInstance(result[0], Vec3)
+
+    def test_as_vec3_preserves_coordinates(self):
+        from dazpy import Vec3
+        from dazpy._geometry import DazGeometry
+        result = DazGeometry.as_vec3([[1.5, 2.5, 3.5]])
+        self.assertAlmostEqual(result[0].x, 1.5)
+        self.assertAlmostEqual(result[0].y, 2.5)
+        self.assertAlmostEqual(result[0].z, 3.5)
+
+    def test_as_vec3_empty_input(self):
+        from dazpy._geometry import DazGeometry
+        self.assertEqual(DazGeometry.as_vec3([]), [])
+
+
+class TestDazAnimation(unittest.TestCase):
+    """Unit tests for DazAnimation — no server required."""
+
+    def _make_skeleton(self, capture_result=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(capture_result)
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    def _sample_result(self, n_frames=3, n_bones=2, with_morphs=False):
+        bones = ["hip", "spine"][:n_bones]
+        frames = []
+        for f in range(n_frames):
+            frame = {
+                "frame": f,
+                "rotations": [[0.0, float(f), 0.0]] * n_bones,
+                "morphs": {"PHMSmile": 0.5} if with_morphs else {},
+            }
+            frames.append(frame)
+        return {
+            "figure": "Genesis 9",
+            "frame_range": {"start": 0, "end": n_frames - 1},
+            "bones": bones,
+            "frames": frames,
+        }
+
+    # ── capture script generation ─────────────────────────────────────────────
+
+    def test_capture_executes_single_call(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result())
+        DazAnimation.capture(skel)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_capture_single_call_also_with_morphs(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result(with_morphs=True))
+        DazAnimation.capture(skel, include_morphs=True)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_capture_script_contains_getAllBones(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result())
+        DazAnimation.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+
+    def test_capture_script_scrubs_frames(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result())
+        DazAnimation.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setFrame", script)
+        self.assertIn("getPlayRange", script)
+
+    def test_capture_script_restores_original_frame(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result())
+        DazAnimation.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("_origFrame", script)
+        self.assertIn("Scene.setFrame(_origFrame)", script)
+
+    def test_capture_script_morph_detection_disabled_by_default(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result())
+        DazAnimation.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("if (false)", script)
+
+    def test_capture_script_morph_detection_enabled(self):
+        from dazpy import DazAnimation
+        skel, client = self._make_skeleton(self._sample_result(with_morphs=True))
+        DazAnimation.capture(skel, include_morphs=True)
+        script = client.execute.call_args[0][0]
+        self.assertIn("if (true)", script)
+        self.assertIn("isVaryingMorph", script)
+        self.assertIn("getValueChannel", script)
+
+    def test_capture_raises_on_null_result(self):
+        from dazpy import DazAnimation
+        from dazpy.exceptions import NodeNotFoundError
+        skel, _ = self._make_skeleton(None)
+        with self.assertRaises(NodeNotFoundError):
+            DazAnimation.capture(skel)
+
+    def test_capture_returns_animation_with_correct_attributes(self):
+        from dazpy import DazAnimation
+        skel, _ = self._make_skeleton(self._sample_result(n_frames=5, n_bones=2))
+        anim = DazAnimation.capture(skel)
+        self.assertEqual(anim.figure, "Genesis 9")
+        self.assertEqual(anim.frame_count, 5)
+        self.assertEqual(anim.bone_count, 2)
+        self.assertEqual(anim.frame_range, {"start": 0, "end": 4})
+
+    # ── serialisation ─────────────────────────────────────────────────────────
+
+    def test_to_dict_round_trip(self):
+        from dazpy import DazAnimation
+        skel, _ = self._make_skeleton(self._sample_result())
+        anim = DazAnimation.capture(skel)
+        d = anim.to_dict()
+        self.assertIn("figure", d)
+        self.assertIn("bones", d)
+        self.assertIn("frames", d)
+        self.assertIn("frame_range", d)
+
+    def test_save_load_round_trip(self):
+        import os, tempfile
+        from dazpy import DazAnimation
+        skel, _ = self._make_skeleton(self._sample_result(n_frames=4, n_bones=2))
+        anim = DazAnimation.capture(skel)
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            anim.save(path)
+            loaded = DazAnimation.load(path)
+            self.assertEqual(loaded.figure, anim.figure)
+            self.assertEqual(loaded.bones, anim.bones)
+            self.assertEqual(loaded.frame_count, anim.frame_count)
+            self.assertEqual(loaded.frame_range, anim.frame_range)
+        finally:
+            os.unlink(path)
+
+    def test_load_tolerates_missing_keys(self):
+        import json, tempfile, os
+        from dazpy import DazAnimation
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            json.dump({"figure": "MyFig"}, f)
+            path = f.name
+        try:
+            anim = DazAnimation.load(path)
+            self.assertEqual(anim.figure, "MyFig")
+            self.assertEqual(anim.bones, [])
+            self.assertEqual(anim.frames, [])
+        finally:
+            os.unlink(path)
+
+    # ── properties ───────────────────────────────────────────────────────────
+
+    def test_frame_count(self):
+        from dazpy import DazAnimation
+        skel, _ = self._make_skeleton(self._sample_result(n_frames=7))
+        anim = DazAnimation.capture(skel)
+        self.assertEqual(anim.frame_count, 7)
+
+    def test_bone_count(self):
+        from dazpy import DazAnimation
+        skel, _ = self._make_skeleton(self._sample_result(n_bones=2))
+        anim = DazAnimation.capture(skel)
+        self.assertEqual(anim.bone_count, 2)
+
+    def test_repr(self):
+        from dazpy import DazAnimation
+        skel, _ = self._make_skeleton(self._sample_result(n_frames=3, n_bones=2))
+        anim = DazAnimation.capture(skel)
+        r = repr(anim)
+        self.assertIn("Genesis 9", r)
+        self.assertIn("frames=3", r)
+        self.assertIn("bones=2", r)
+
+
+class TestDazAnimationClipOps(unittest.TestCase):
+    """Tests for clip, blend, as_pose, apply, append, __len__, __getitem__."""
+
+    def _make_anim(self, num_frames=3, start=0, bones=None, morph_sequence=None):
+        from dazpy import DazAnimation
+        bones = bones or ["hip", "rForeArm"]
+        frames = []
+        for i in range(num_frames):
+            rotations = [[float(i), 0.0, 0.0] for _ in bones]
+            morphs = morph_sequence[i] if morph_sequence else {}
+            frames.append({"frame": start + i, "rotations": rotations, "morphs": morphs})
+        return DazAnimation(
+            figure="Genesis 9",
+            frame_range={"start": start, "end": start + num_frames - 1},
+            bones=bones,
+            frames=frames,
+        )
+
+    # ── clip ─────────────────────────────────────────────────────────────────
+
+    def test_clip_returns_frames_in_range(self):
+        anim = self._make_anim(5, start=0)
+        c = anim.clip(1, 3)
+        self.assertEqual(len(c.frames), 3)
+        self.assertEqual(c.frames[0]["frame"], 1)
+        self.assertEqual(c.frames[-1]["frame"], 3)
+
+    def test_clip_updates_frame_range(self):
+        anim = self._make_anim(5, start=0)
+        c = anim.clip(2, 4)
+        self.assertEqual(c.frame_range["start"], 2)
+        self.assertEqual(c.frame_range["end"], 4)
+
+    def test_clip_preserves_bones(self):
+        anim = self._make_anim(5)
+        c = anim.clip(0, 2)
+        self.assertEqual(c.bones, anim.bones)
+
+    def test_clip_empty_when_out_of_range(self):
+        anim = self._make_anim(3, start=0)
+        c = anim.clip(10, 20)
+        self.assertEqual(len(c.frames), 0)
+
+    def test_clip_full_range_equals_original_count(self):
+        anim = self._make_anim(4, start=0)
+        c = anim.clip(0, 3)
+        self.assertEqual(len(c.frames), 4)
+
+    def test_clip_figure_preserved(self):
+        anim = self._make_anim(3)
+        c = anim.clip(0, 1)
+        self.assertEqual(c.figure, anim.figure)
+
+    # ── blend ─────────────────────────────────────────────────────────────────
+
+    def test_blend_t0_equals_self_rotations(self):
+        from dazpy import DazAnimation
+        a = self._make_anim(2, bones=["hip"])
+        b = DazAnimation("Genesis 9", {"start": 0, "end": 1}, ["hip"],
+                         [{"frame": 0, "rotations": [[100.0, 0.0, 0.0]], "morphs": {}},
+                          {"frame": 1, "rotations": [[200.0, 0.0, 0.0]], "morphs": {}}])
+        blended = a.blend(b, 0.0)
+        self.assertAlmostEqual(blended.frames[0]["rotations"][0][0],
+                               a.frames[0]["rotations"][0][0])
+
+    def test_blend_t1_equals_other_rotations(self):
+        from dazpy import DazAnimation
+        a = self._make_anim(2, bones=["hip"])
+        b = DazAnimation("Genesis 9", {"start": 0, "end": 1}, ["hip"],
+                         [{"frame": 0, "rotations": [[100.0, 0.0, 0.0]], "morphs": {}},
+                          {"frame": 1, "rotations": [[200.0, 0.0, 0.0]], "morphs": {}}])
+        blended = a.blend(b, 1.0)
+        self.assertAlmostEqual(blended.frames[0]["rotations"][0][0], 100.0)
+
+    def test_blend_midpoint_averages_rotations(self):
+        from dazpy import DazAnimation
+        a = DazAnimation("G9", {"start": 0, "end": 0}, ["hip"],
+                         [{"frame": 0, "rotations": [[0.0, 0.0, 0.0]], "morphs": {}}])
+        b = DazAnimation("G9", {"start": 0, "end": 0}, ["hip"],
+                         [{"frame": 0, "rotations": [[20.0, 0.0, 0.0]], "morphs": {}}])
+        blended = a.blend(b, 0.5)
+        self.assertAlmostEqual(blended.frames[0]["rotations"][0][0], 10.0)
+
+    def test_blend_morph_union_of_keys(self):
+        from dazpy import DazAnimation
+        a = DazAnimation("G9", {"start": 0, "end": 0}, ["hip"],
+                         [{"frame": 0, "rotations": [[0.0, 0.0, 0.0]], "morphs": {"smile": 1.0}}])
+        b = DazAnimation("G9", {"start": 0, "end": 0}, ["hip"],
+                         [{"frame": 0, "rotations": [[0.0, 0.0, 0.0]], "morphs": {"frown": 1.0}}])
+        blended = a.blend(b, 0.5)
+        self.assertAlmostEqual(blended.frames[0]["morphs"].get("smile", 0.0), 0.5)
+        self.assertAlmostEqual(blended.frames[0]["morphs"].get("frown", 0.0), 0.5)
+
+    def test_blend_different_bones_raises(self):
+        a = self._make_anim(2, bones=["hip"])
+        b = self._make_anim(2, bones=["rForeArm"])
+        with self.assertRaises(ValueError):
+            a.blend(b, 0.5)
+
+    def test_blend_truncates_to_shorter_clip(self):
+        a = self._make_anim(3, bones=["hip"])
+        b = self._make_anim(2, bones=["hip"])
+        blended = a.blend(b, 0.5)
+        self.assertEqual(len(blended.frames), 2)
+
+    def test_blend_frame_numbers_from_self(self):
+        a = self._make_anim(2, start=10, bones=["hip"])
+        b = self._make_anim(2, start=0, bones=["hip"])
+        blended = a.blend(b, 0.5)
+        self.assertEqual(blended.frames[0]["frame"], 10)
+
+    # ── as_pose ───────────────────────────────────────────────────────────────
+
+    def test_as_pose_returns_daz_pose(self):
+        from dazpy import DazPose
+        pose = self._make_anim(3).as_pose(1)
+        self.assertIsInstance(pose, DazPose)
+
+    def test_as_pose_figure_matches(self):
+        anim = self._make_anim(2)
+        self.assertEqual(anim.as_pose(0).figure, anim.figure)
+
+    def test_as_pose_sparse_bones_zero_excluded(self):
+        from dazpy import DazAnimation
+        anim = DazAnimation(
+            "G9", {"start": 0, "end": 0}, ["hip", "rForeArm"],
+            [{"frame": 0, "rotations": [[0.0, 0.0, 0.0], [45.0, 0.0, 0.0]], "morphs": {}}]
+        )
+        pose = anim.as_pose(0)
+        self.assertNotIn("hip", pose.bones)
+        self.assertIn("rForeArm", pose.bones)
+
+    def test_as_pose_includes_morphs(self):
+        from dazpy import DazAnimation
+        anim = DazAnimation(
+            "G9", {"start": 0, "end": 0}, ["hip"],
+            [{"frame": 0, "rotations": [[0.0, 0.0, 0.0]], "morphs": {"smile": 0.8}}]
+        )
+        self.assertAlmostEqual(anim.as_pose(0).morphs.get("smile"), 0.8)
+
+    def test_as_pose_default_index_zero(self):
+        anim = self._make_anim(3)
+        pose = anim.as_pose()
+        self.assertEqual(pose.figure, anim.figure)
+
+    def test_as_pose_props_empty(self):
+        anim = self._make_anim(2)
+        self.assertEqual(anim.as_pose(0).props, {})
+
+    # ── apply ─────────────────────────────────────────────────────────────────
+
+    def test_apply_calls_skeleton_client_once(self):
+        from dazpy._skeleton import DazSkeleton
+        anim = self._make_anim(2)
+        client = _make_client(True)
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
+        anim.apply(skel, frame_index=0)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_apply_script_contains_bone_names(self):
+        from dazpy import DazAnimation
+        from dazpy._skeleton import DazSkeleton
+        anim = DazAnimation(
+            "G9", {"start": 0, "end": 0}, ["rForeArm"],
+            [{"frame": 0, "rotations": [[45.0, 0.0, 0.0]], "morphs": {}}]
+        )
+        client = _make_client(True)
+        skel = DazSkeleton(client, NodeIdentifier("G9"))
+        anim.apply(skel, frame_index=0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("rForeArm", script)
+        self.assertIn("45.0", script)
+
+    # ── append ────────────────────────────────────────────────────────────────
+
+    def test_append_total_frame_count(self):
+        a = self._make_anim(3, start=0)
+        b = self._make_anim(2, start=0)
+        self.assertEqual(len(a.append(b).frames), 5)
+
+    def test_append_renumbers_b_frames(self):
+        a = self._make_anim(3, start=0)  # frames 0,1,2
+        b = self._make_anim(2, start=5)  # frames 5,6 → should become 3,4
+        result = a.append(b)
+        self.assertEqual(result.frames[3]["frame"], 3)
+        self.assertEqual(result.frames[4]["frame"], 4)
+
+    def test_append_frame_range_updated(self):
+        a = self._make_anim(3, start=0)  # end=2
+        b = self._make_anim(2, start=0)  # end=1 → becomes 3,4
+        result = a.append(b)
+        self.assertEqual(result.frame_range["start"], 0)
+        self.assertEqual(result.frame_range["end"], 4)
+
+    def test_append_different_bones_raises(self):
+        a = self._make_anim(2, bones=["hip"])
+        b = self._make_anim(2, bones=["rForeArm"])
+        with self.assertRaises(ValueError):
+            a.append(b)
+
+    def test_append_preserves_self_figure(self):
+        a = self._make_anim(2)
+        b = self._make_anim(2)
+        self.assertEqual(a.append(b).figure, a.figure)
+
+    def test_append_empty_self_returns_other(self):
+        from dazpy import DazAnimation
+        empty = DazAnimation("G9", {"start": 0, "end": 0}, ["hip"], [])
+        b = self._make_anim(2, bones=["hip"])
+        result = empty.append(b)
+        self.assertEqual(len(result.frames), 2)
+
+    # ── __len__ / __getitem__ ─────────────────────────────────────────────────
+
+    def test_len(self):
+        self.assertEqual(len(self._make_anim(5)), 5)
+
+    def test_getitem_returns_frame_dict(self):
+        anim = self._make_anim(3)
+        frame = anim[0]
+        self.assertIn("rotations", frame)
+        self.assertIn("frame", frame)
+
+    def test_getitem_negative_index(self):
+        anim = self._make_anim(3, start=0)
+        self.assertEqual(anim[-1]["frame"], 2)
+
+    def test_getitem_out_of_range_raises(self):
+        anim = self._make_anim(2)
+        with self.assertRaises(IndexError):
+            _ = anim[99]
+
+
+class TestDazPose(unittest.TestCase):
+    """Unit tests for DazPose — no server required."""
+
+    def _make_skeleton(self, capture_result=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(capture_result)
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    # ── lerp (pure Python) ────────────────────────────────────────────────────
+
+    def test_lerp_midpoint_bones(self):
+        from dazpy import DazPose
+        a = DazPose("fig", bones={"hip": [0.0, 0.0, 0.0]}, morphs={}, props={})
+        b = DazPose("fig", bones={"hip": [10.0, 20.0, 30.0]}, morphs={}, props={})
+        mid = a.lerp(b, 0.5)
+        self.assertAlmostEqual(mid.bones["hip"][0], 5.0)
+        self.assertAlmostEqual(mid.bones["hip"][1], 10.0)
+        self.assertAlmostEqual(mid.bones["hip"][2], 15.0)
+
+    def test_lerp_missing_key_treated_as_zero(self):
+        from dazpy import DazPose
+        a = DazPose("fig", bones={}, morphs={}, props={})
+        b = DazPose("fig", bones={"rForeArm": [0.0, 0.0, -45.0]}, morphs={}, props={})
+        mid = a.lerp(b, 0.5)
+        self.assertAlmostEqual(mid.bones["rForeArm"][2], -22.5)
+
+    def test_lerp_t0_equals_self(self):
+        from dazpy import DazPose
+        a = DazPose("fig", bones={"hip": [1.0, 2.0, 3.0]}, morphs={"smile": 0.8}, props={})
+        b = DazPose("fig", bones={"hip": [9.0, 8.0, 7.0]}, morphs={"smile": 0.0}, props={})
+        result = a.lerp(b, 0.0)
+        self.assertAlmostEqual(result.bones["hip"][0], 1.0)
+        self.assertAlmostEqual(result.morphs["smile"], 0.8)
+
+    def test_lerp_t1_equals_other(self):
+        from dazpy import DazPose
+        a = DazPose("fig", bones={"hip": [0.0, 0.0, 0.0]}, morphs={"smile": 0.0}, props={})
+        b = DazPose("fig", bones={"hip": [9.0, 8.0, 7.0]}, morphs={"smile": 1.0}, props={})
+        result = a.lerp(b, 1.0)
+        self.assertAlmostEqual(result.bones["hip"][0], 9.0)
+        self.assertAlmostEqual(result.morphs["smile"], 1.0)
+
+    def test_lerp_morphs_union_of_keys(self):
+        from dazpy import DazPose
+        a = DazPose("fig", bones={}, morphs={"morphA": 1.0}, props={})
+        b = DazPose("fig", bones={}, morphs={"morphB": 1.0}, props={})
+        mid = a.lerp(b, 0.5)
+        self.assertIn("morphA", mid.morphs)
+        self.assertIn("morphB", mid.morphs)
+        self.assertAlmostEqual(mid.morphs["morphA"], 0.5)
+        self.assertAlmostEqual(mid.morphs["morphB"], 0.5)
+
+    def test_lerp_preserves_figure_label_from_self(self):
+        from dazpy import DazPose
+        a = DazPose("FigureA", bones={}, morphs={}, props={})
+        b = DazPose("FigureB", bones={}, morphs={}, props={})
+        result = a.lerp(b, 0.5)
+        self.assertEqual(result.figure, "FigureA")
+
+    # ── serialisation ─────────────────────────────────────────────────────────
+
+    def test_to_dict_round_trip(self):
+        from dazpy import DazPose
+        pose = DazPose("fig", {"hip": [1.0, 2.0, 3.0]}, {"smile": 0.5}, {"facs": 0.3})
+        d = pose.to_dict()
+        restored = DazPose(d["figure"], d["bones"], d["morphs"], d["props"])
+        self.assertEqual(restored.bones, pose.bones)
+        self.assertEqual(restored.morphs, pose.morphs)
+        self.assertEqual(restored.props, pose.props)
+
+    def test_save_load_round_trip(self):
+        import os, tempfile
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"hip": [0.0, 5.0, 0.0]}, {"PHMSmile": 0.7}, {"facs": 0.2})
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            pose.save(path)
+            loaded = DazPose.load(path)
+            self.assertEqual(loaded.figure, "Genesis 9")
+            self.assertAlmostEqual(loaded.morphs["PHMSmile"], 0.7)
+            self.assertEqual(loaded.bones["hip"], [0.0, 5.0, 0.0])
+        finally:
+            os.unlink(path)
+
+    def test_load_tolerates_missing_keys(self):
+        import json, tempfile, os
+        from dazpy import DazPose
+        data = {"figure": "MyFig"}
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            json.dump(data, f)
+            path = f.name
+        try:
+            pose = DazPose.load(path)
+            self.assertEqual(pose.figure, "MyFig")
+            self.assertEqual(pose.bones, {})
+            self.assertEqual(pose.morphs, {})
+            self.assertEqual(pose.props, {})
+        finally:
+            os.unlink(path)
+
+    # ── capture script generation ─────────────────────────────────────────────
+
+    def test_capture_executes_single_call(self):
+        from dazpy import DazPose
+        skel, client = self._make_skeleton({"bones": {}, "morphs": {}, "props": {}})
+        DazPose.capture(skel)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_capture_script_contains_getAllBones(self):
+        from dazpy import DazPose
+        skel, client = self._make_skeleton({"bones": {}, "morphs": {}, "props": {}})
+        DazPose.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+
+    def test_capture_script_reads_morphs(self):
+        from dazpy import DazPose
+        skel, client = self._make_skeleton({"bones": {}, "morphs": {}, "props": {}})
+        DazPose.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getValueChannel", script)
+        self.assertIn("DzMorph", script)
+
+    def test_capture_raises_on_null_result(self):
+        from dazpy import DazPose
+        from dazpy.exceptions import NodeNotFoundError
+        skel, _ = self._make_skeleton(None)
+        with self.assertRaises(NodeNotFoundError):
+            DazPose.capture(skel)
+
+    def test_capture_returns_pose_with_correct_figure(self):
+        from dazpy import DazPose
+        skel, _ = self._make_skeleton({"bones": {"hip": [0, 5, 0]}, "morphs": {}, "props": {}})
+        pose = DazPose.capture(skel)
+        self.assertEqual(pose.figure, "Genesis 9")
+        self.assertIn("hip", pose.bones)
+
+    # ── apply script generation ───────────────────────────────────────────────
+
+    def test_apply_executes_single_call(self):
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"hip": [0, 5, 0]}, {"smile": 0.5}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply(skel)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_apply_script_contains_bone_data(self):
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"rForeArm": [0.0, 0.0, -45.0]}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("rForeArm", script)
+        self.assertIn("-45", script)
+        self.assertIn("getXRotControl", script)
+
+    def test_apply_script_contains_morph_data(self):
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {}, {"PHMSmile": 0.75}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("PHMSmile", script)
+        self.assertIn("0.75", script)
+
+    def test_apply_script_uses_json_injection(self):
+        """apply() should inject bone/morph data as JSON dicts, not inline per-bone JS."""
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"hip": [1, 2, 3], "spine": [4, 5, 6]}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply(skel)
+        script = client.execute.call_args[0][0]
+        # Should loop over getAllBones(), not call findBone() per bone
+        self.assertIn("getAllBones", script)
+
+    def test_apply_full_zeroes_absent_bones(self):
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        # Should set 0 for bones not in the pose
+        self.assertIn("setValue(0)", script)
+
+    # ── repr ──────────────────────────────────────────────────────────────────
+
+    def test_repr(self):
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"hip": [0, 0, 0]}, {"smile": 0.5}, {})
+        r = repr(pose)
+        self.assertIn("Genesis 9", r)
+        self.assertIn("bones=1", r)
+        self.assertIn("morphs=1", r)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# math3 — Vec3, Quat, BoundingBox
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestVec3(unittest.TestCase):
+
+    def _v(self, x=1.0, y=2.0, z=3.0):
+        from dazpy import Vec3
+        return Vec3(x, y, z)
+
+    def test_construction_and_components(self):
+        v = self._v(1, 2, 3)
+        self.assertAlmostEqual(v.x, 1.0)
+        self.assertAlmostEqual(v.y, 2.0)
+        self.assertAlmostEqual(v.z, 3.0)
+
+    def test_immutable(self):
+        from dazpy import Vec3
+        v = Vec3(1, 2, 3)
+        with self.assertRaises(AttributeError):
+            v.x = 9
+
+    def test_from_dict(self):
+        from dazpy import Vec3
+        v = Vec3.from_dict({"x": 1, "y": 2, "z": 3})
+        self.assertEqual(v, Vec3(1, 2, 3))
+
+    def test_from_list(self):
+        from dazpy import Vec3
+        v = Vec3.from_list([4, 5, 6])
+        self.assertEqual(v, Vec3(4, 5, 6))
+
+    def test_zero(self):
+        from dazpy import Vec3
+        v = Vec3.zero()
+        self.assertEqual(v, Vec3(0, 0, 0))
+
+    def test_to_dict(self):
+        v = self._v(1, 2, 3)
+        self.assertEqual(v.to_dict(), {"x": 1.0, "y": 2.0, "z": 3.0})
+
+    def test_to_list(self):
+        v = self._v(1, 2, 3)
+        self.assertEqual(v.to_list(), [1.0, 2.0, 3.0])
+
+    def test_add(self):
+        from dazpy import Vec3
+        r = Vec3(1, 2, 3) + Vec3(4, 5, 6)
+        self.assertEqual(r, Vec3(5, 7, 9))
+
+    def test_sub(self):
+        from dazpy import Vec3
+        r = Vec3(4, 5, 6) - Vec3(1, 2, 3)
+        self.assertEqual(r, Vec3(3, 3, 3))
+
+    def test_mul_scalar(self):
+        from dazpy import Vec3
+        r = Vec3(1, 2, 3) * 2.0
+        self.assertEqual(r, Vec3(2, 4, 6))
+
+    def test_rmul_scalar(self):
+        from dazpy import Vec3
+        r = 3.0 * Vec3(1, 2, 3)
+        self.assertEqual(r, Vec3(3, 6, 9))
+
+    def test_div_scalar(self):
+        from dazpy import Vec3
+        r = Vec3(2, 4, 6) / 2.0
+        self.assertEqual(r, Vec3(1, 2, 3))
+
+    def test_neg(self):
+        from dazpy import Vec3
+        r = -Vec3(1, 2, 3)
+        self.assertEqual(r, Vec3(-1, -2, -3))
+
+    def test_dot(self):
+        from dazpy import Vec3
+        r = Vec3(1, 0, 0).dot(Vec3(0, 1, 0))
+        self.assertAlmostEqual(r, 0.0)
+        r2 = Vec3(1, 2, 3).dot(Vec3(4, 5, 6))
+        self.assertAlmostEqual(r2, 32.0)
+
+    def test_cross_orthogonal(self):
+        from dazpy import Vec3
+        r = Vec3(1, 0, 0).cross(Vec3(0, 1, 0))
+        self.assertAlmostEqual(r.x, 0.0)
+        self.assertAlmostEqual(r.y, 0.0)
+        self.assertAlmostEqual(r.z, 1.0)
+
+    def test_length(self):
+        from dazpy import Vec3
+        import math
+        self.assertAlmostEqual(Vec3(3, 4, 0).length(), 5.0)
+
+    def test_normalize(self):
+        from dazpy import Vec3
+        n = Vec3(3, 0, 0).normalize()
+        self.assertAlmostEqual(n.x, 1.0)
+        self.assertAlmostEqual(n.length(), 1.0)
+
+    def test_normalize_zero_vector(self):
+        from dazpy import Vec3
+        n = Vec3(0, 0, 0).normalize()
+        self.assertEqual(n, Vec3(0, 0, 0))
+
+    def test_distance(self):
+        from dazpy import Vec3
+        self.assertAlmostEqual(Vec3(0, 0, 0).distance(Vec3(3, 4, 0)), 5.0)
+
+    def test_lerp_midpoint(self):
+        from dazpy import Vec3
+        r = Vec3(0, 0, 0).lerp(Vec3(2, 4, 6), 0.5)
+        self.assertAlmostEqual(r.x, 1.0)
+        self.assertAlmostEqual(r.y, 2.0)
+        self.assertAlmostEqual(r.z, 3.0)
+
+    def test_lerp_identity(self):
+        from dazpy import Vec3
+        v = Vec3(1, 2, 3)
+        self.assertEqual(v.lerp(Vec3(4, 5, 6), 0.0), v)
+
+    def test_reflect(self):
+        from dazpy import Vec3
+        incoming = Vec3(1, -1, 0).normalize()
+        normal   = Vec3(0, 1, 0)
+        r = incoming.reflect(normal)
+        self.assertAlmostEqual(r.y, -incoming.y, places=5)
+
+    def test_repr(self):
+        from dazpy import Vec3
+        s = repr(Vec3(1, 2, 3))
+        self.assertIn("Vec3", s)
+
+
+class TestQuat(unittest.TestCase):
+
+    def _approx_quat(self, q1, q2, places=5):
+        """Assert two quats are equal (allowing sign flip)."""
+        d = abs(q1.x*q2.x + q1.y*q2.y + q1.z*q2.z + q1.w*q2.w)
+        self.assertAlmostEqual(d, 1.0, places=places)
+
+    def test_identity(self):
+        from dazpy import Quat
+        q = Quat.identity()
+        self.assertAlmostEqual(q.w, 1.0)
+        self.assertAlmostEqual(q.x, 0.0)
+
+    def test_immutable(self):
+        from dazpy import Quat
+        q = Quat.identity()
+        with self.assertRaises(AttributeError):
+            q.w = 0
+
+    def test_from_dict(self):
+        from dazpy import Quat
+        q = Quat.from_dict({"x": 0, "y": 0, "z": 0, "w": 1})
+        self.assertEqual(q, Quat.identity())
+
+    def test_to_dict(self):
+        from dazpy import Quat
+        q = Quat(0, 0, 0, 1)
+        d = q.to_dict()
+        self.assertIn("w", d)
+        self.assertAlmostEqual(d["w"], 1.0)
+
+    def test_normalize_unit(self):
+        from dazpy import Quat
+        q = Quat(1, 0, 0, 0).normalize()
+        self.assertAlmostEqual(q.length(), 1.0)
+
+    def test_conjugate(self):
+        from dazpy import Quat
+        q = Quat(1, 2, 3, 4).normalize()
+        c = q.conjugate()
+        self.assertAlmostEqual(c.x, -q.x)
+        self.assertAlmostEqual(c.w, q.w)
+
+    def test_multiply_identity(self):
+        from dazpy import Quat
+        q = Quat.from_axis_angle
+        qi = Quat.identity()
+        from dazpy import Vec3
+        ax = Quat.from_axis_angle(Vec3(0, 1, 0), 45)
+        self.assertAlmostEqual((ax.multiply(qi)).x, ax.x, places=6)
+
+    def test_from_axis_angle_90_x(self):
+        from dazpy import Quat, Vec3
+        import math
+        q = Quat.from_axis_angle(Vec3(1, 0, 0), 90)
+        self.assertAlmostEqual(q.x, math.sin(math.radians(45)), places=6)
+        self.assertAlmostEqual(q.w, math.cos(math.radians(45)), places=6)
+
+    def test_rotate_x_axis(self):
+        from dazpy import Quat, Vec3
+        q = Quat.from_axis_angle(Vec3(0, 0, 1), 90)
+        v = q.rotate(Vec3(1, 0, 0))
+        self.assertAlmostEqual(v.x, 0.0, places=5)
+        self.assertAlmostEqual(v.y, 1.0, places=5)
+        self.assertAlmostEqual(v.z, 0.0, places=5)
+
+    def test_slerp_t0_identity(self):
+        from dazpy import Quat, Vec3
+        a = Quat.identity()
+        b = Quat.from_axis_angle(Vec3(0, 1, 0), 90)
+        r = a.slerp(b, 0.0)
+        self._approx_quat(r, a)
+
+    def test_slerp_t1_target(self):
+        from dazpy import Quat, Vec3
+        a = Quat.identity()
+        b = Quat.from_axis_angle(Vec3(0, 1, 0), 90)
+        r = a.slerp(b, 1.0)
+        self._approx_quat(r, b)
+
+    def test_slerp_midpoint_half_angle(self):
+        from dazpy import Quat, Vec3
+        a = Quat.identity()
+        b = Quat.from_axis_angle(Vec3(0, 1, 0), 90)
+        mid = a.slerp(b, 0.5)
+        expected = Quat.from_axis_angle(Vec3(0, 1, 0), 45)
+        self._approx_quat(mid, expected)
+
+    def test_slerp_identical_quats(self):
+        from dazpy import Quat, Vec3
+        q = Quat.from_axis_angle(Vec3(1, 0, 0), 30)
+        r = q.slerp(q, 0.5)
+        self._approx_quat(r, q)
+
+    def test_to_matrix_identity(self):
+        from dazpy import Quat
+        m = Quat.identity().to_matrix()
+        for r in range(3):
+            for c in range(3):
+                expected = 1.0 if r == c else 0.0
+                self.assertAlmostEqual(m[r][c], expected, places=6)
+
+    # ── Euler round-trip for all 6 orders ─────────────────────────────────────
+
+    def _euler_roundtrip(self, x, y, z, order):
+        from dazpy import Quat
+        q = Quat.from_euler(x, y, z, order)
+        x2, y2, z2 = q.to_euler(order)
+        q2 = Quat.from_euler(x2, y2, z2, order)
+        self._approx_quat(q, q2)
+
+    def test_euler_roundtrip_XYZ(self):
+        self._euler_roundtrip(10, 20, 30, "XYZ")
+
+    def test_euler_roundtrip_XZY(self):
+        self._euler_roundtrip(10, 20, 30, "XZY")
+
+    def test_euler_roundtrip_YXZ(self):
+        self._euler_roundtrip(10, 20, 30, "YXZ")
+
+    def test_euler_roundtrip_YZX(self):
+        self._euler_roundtrip(10, 20, 30, "YZX")
+
+    def test_euler_roundtrip_ZXY(self):
+        self._euler_roundtrip(10, 20, 30, "ZXY")
+
+    def test_euler_roundtrip_ZYX(self):
+        self._euler_roundtrip(10, 20, 30, "ZYX")
+
+    def test_euler_identity_is_no_rotation(self):
+        from dazpy import Quat
+        q = Quat.from_euler(0, 0, 0, "XYZ")
+        self._approx_quat(q, Quat.identity())
+
+    def test_from_euler_invalid_order(self):
+        from dazpy import Quat
+        with self.assertRaises(ValueError):
+            Quat.from_euler(10, 20, 30, "ABC")
+
+    def test_repr(self):
+        from dazpy import Quat
+        self.assertIn("Quat", repr(Quat.identity()))
+
+
+class TestBoundingBox(unittest.TestCase):
+
+    def _box(self):
+        from dazpy import BoundingBox, Vec3
+        return BoundingBox(Vec3(0, 0, 0), Vec3(2, 4, 6))
+
+    def test_from_dict(self):
+        from dazpy import BoundingBox
+        d = {"min": {"x": 0, "y": 0, "z": 0}, "max": {"x": 1, "y": 1, "z": 1}}
+        bb = BoundingBox.from_dict(d)
+        self.assertAlmostEqual(bb.max.x, 1.0)
+
+    def test_to_dict_roundtrip(self):
+        bb = self._box()
+        d = bb.to_dict()
+        from dazpy import BoundingBox
+        bb2 = BoundingBox.from_dict(d)
+        self.assertAlmostEqual(bb2.min.x, bb.min.x)
+        self.assertAlmostEqual(bb2.max.z, bb.max.z)
+
+    def test_from_points(self):
+        from dazpy import BoundingBox, Vec3
+        pts = [Vec3(1, 2, 3), Vec3(-1, 5, 0), Vec3(3, 0, 7)]
+        bb = BoundingBox.from_points(pts)
+        self.assertAlmostEqual(bb.min.x, -1.0)
+        self.assertAlmostEqual(bb.max.z, 7.0)
+
+    def test_from_points_single(self):
+        from dazpy import BoundingBox, Vec3
+        bb = BoundingBox.from_points([Vec3(1, 2, 3)])
+        self.assertAlmostEqual(bb.min.x, bb.max.x)
+
+    def test_from_points_empty_raises(self):
+        from dazpy import BoundingBox
+        with self.assertRaises(ValueError):
+            BoundingBox.from_points([])
+
+    def test_immutable(self):
+        bb = self._box()
+        with self.assertRaises(AttributeError):
+            bb.min = None
+
+    def test_center(self):
+        from dazpy import Vec3
+        bb = self._box()
+        c = bb.center
+        self.assertAlmostEqual(c.x, 1.0)
+        self.assertAlmostEqual(c.y, 2.0)
+        self.assertAlmostEqual(c.z, 3.0)
+
+    def test_size(self):
+        bb = self._box()
+        s = bb.size
+        self.assertAlmostEqual(s.x, 2.0)
+        self.assertAlmostEqual(s.y, 4.0)
+        self.assertAlmostEqual(s.z, 6.0)
+
+    def test_volume(self):
+        bb = self._box()
+        self.assertAlmostEqual(bb.volume, 48.0)
+
+    def test_contains_inside(self):
+        from dazpy import Vec3
+        bb = self._box()
+        self.assertTrue(bb.contains(Vec3(1, 2, 3)))
+
+    def test_contains_outside(self):
+        from dazpy import Vec3
+        bb = self._box()
+        self.assertFalse(bb.contains(Vec3(3, 2, 3)))
+
+    def test_contains_surface(self):
+        from dazpy import Vec3
+        bb = self._box()
+        self.assertTrue(bb.contains(Vec3(2, 4, 6)))
+
+    def test_overlaps_true(self):
+        from dazpy import BoundingBox, Vec3
+        a = BoundingBox(Vec3(0, 0, 0), Vec3(2, 2, 2))
+        b = BoundingBox(Vec3(1, 1, 1), Vec3(3, 3, 3))
+        self.assertTrue(a.overlaps(b))
+        self.assertTrue(b.overlaps(a))
+
+    def test_overlaps_false(self):
+        from dazpy import BoundingBox, Vec3
+        a = BoundingBox(Vec3(0, 0, 0), Vec3(1, 1, 1))
+        b = BoundingBox(Vec3(2, 2, 2), Vec3(3, 3, 3))
+        self.assertFalse(a.overlaps(b))
+
+    def test_expand(self):
+        from dazpy import Vec3
+        bb = self._box()
+        e = bb.expand(1.0)
+        self.assertAlmostEqual(e.min.x, -1.0)
+        self.assertAlmostEqual(e.max.x, 3.0)
+
+    def test_union(self):
+        from dazpy import BoundingBox, Vec3
+        a = BoundingBox(Vec3(0, 0, 0), Vec3(1, 1, 1))
+        b = BoundingBox(Vec3(-1, -1, -1), Vec3(0.5, 0.5, 0.5))
+        u = a.union(b)
+        self.assertAlmostEqual(u.min.x, -1.0)
+        self.assertAlmostEqual(u.max.x, 1.0)
+
+    def test_repr(self):
+        self.assertIn("BoundingBox", repr(self._box()))
 
 
 if __name__ == "__main__":

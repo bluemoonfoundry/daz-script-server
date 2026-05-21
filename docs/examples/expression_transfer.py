@@ -400,59 +400,62 @@ def extract_landmarks(image_path: str) -> list[tuple[float, float]]:
     return [(lm.x * w, lm.y * h) for lm in lms]
 
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    # ── CLI ────────────────────────────────────────────────────────────────────────
 
-parser = argparse.ArgumentParser(
-    description=__doc__,
-    formatter_class=argparse.RawDescriptionHelpFormatter,
-)
-parser.add_argument("image", nargs="?", help="Path to source image")
-parser.add_argument("--figure",   default="Genesis 9",
-                    help="DAZ figure label (default: 'Genesis 9')")
-parser.add_argument("--scale",    type=float, default=1.0,
-                    help="Global expression scale factor (default: 1.0)")
-parser.add_argument("--no-reset", dest="reset", action="store_false",
-                    help="Blend onto existing expression instead of zeroing first")
-parser.add_argument("--list-properties", action="store_true",
-                    help="List numeric properties on the figure and exit")
-parser.add_argument("--search", metavar="TERM",
-                    help="Filter --list-properties output (case-insensitive substring)")
-parser.add_argument("--debug", action="store_true",
-                    help="Print which FACS labels matched/missed and all skeleton property labels")
-args = parser.parse_args()
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("image", nargs="?", help="Path to source image")
+    parser.add_argument("--figure",   default="Genesis 9",
+                        help="DAZ figure label (default: 'Genesis 9')")
+    parser.add_argument("--scale",    type=float, default=1.0,
+                        help="Global expression scale factor (default: 1.0)")
+    parser.add_argument("--no-reset", dest="reset", action="store_false",
+                        help="Blend onto existing expression instead of zeroing first")
+    parser.add_argument("--list-properties", action="store_true",
+                        help="List numeric properties on the figure and exit")
+    parser.add_argument("--search", metavar="TERM",
+                        help="Filter --list-properties output (case-insensitive substring)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Print which FACS labels matched/missed and all skeleton property labels")
+    args = parser.parse_args()
 
-client = DazClient()
+    client = DazClient()
 
-if args.list_properties:
-    props = list_properties(client, args.figure)
-    if props is None:
-        sys.exit(f"Figure {args.figure!r} not found in scene.")
-    if args.search:
-        term = args.search.lower()
-        props = [p for p in props if term in p["label"].lower()]
-        print(f"{len(props)} properties matching {args.search!r} on {args.figure!r}:\n")
-    else:
-        print(f"{len(props)} numeric properties on {args.figure!r}:\n")
-    for p in sorted(props, key=lambda x: x["label"]):
-        print(f"  {p['label']!r:40s}  ({p['name']})")
-    sys.exit(0)
+    if args.list_properties:
+        props = list_properties(client, args.figure)
+        if props is None:
+            sys.exit(f"Figure {args.figure!r} not found in scene.")
+        if args.search:
+            term = args.search.lower()
+            props = [p for p in props if term in p["label"].lower()]
+            print(f"{len(props)} properties matching {args.search!r} on {args.figure!r}:\n")
+        else:
+            print(f"{len(props)} numeric properties on {args.figure!r}:\n")
+        for p in sorted(props, key=lambda x: x["label"]):
+            print(f"  {p['label']!r:40s}  ({p['name']})")
+        sys.exit(0)
 
-if not args.image:
-    parser.error("image path required (or use --list-properties)")
+    if not args.image:
+        parser.error("image path required (or use --list-properties)")
 
-landmarks = extract_landmarks(args.image)
-aus = compute_aus(landmarks)
+    landmarks = extract_landmarks(args.image)
+    aus = compute_aus(landmarks)
 
-print(f"Action units from {args.image!r}:")
-for k, v in aus.items():
-    bar = "#" * int(v * 20)
-    print(f"  {k:20s}  {v:.3f}  {bar}")
+    print(f"Action units from {args.image!r}:")
+    for k, v in aus.items():
+        bar = "#" * int(v * 20)
+        print(f"  {k:20s}  {v:.3f}  {bar}")
 
-applied = apply_expression(client, args.figure, aus, scale=args.scale, reset=args.reset, debug=args.debug)
+    applied = apply_expression(
+        client, args.figure, aus, scale=args.scale, reset=args.reset, debug=args.debug
+    )
 
-active = {label: v for label, v in applied.items() if v > 0.005}
-print(f"\nApplied {len(active)} active FACS properties to {args.figure!r}:")
-for label, value in active.items():
-    print(f"  {label}: {value:.3f}")
-if not active:
-    print("  (no active properties — try a more expressive photo or increase --scale)")
+    active = {label: v for label, v in applied.items() if v > 0.005}
+    print(f"\nApplied {len(active)} active FACS properties to {args.figure!r}:")
+    for label, value in active.items():
+        print(f"  {label}: {value:.3f}")
+    if not active:
+        print("  (no active properties — try a more expressive photo or increase --scale)")

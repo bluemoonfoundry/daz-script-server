@@ -20,15 +20,20 @@ The examples are roughly ordered from simple to complex.  Start with
 | [raw_script.py](#raw_scriptpy) | Fundamentals | Executes arbitrary DazScript and prints the result | No |
 | [scene_introspection.py](#scene_introspectionpy) | Fundamentals | Dumps the full scene hierarchy and transforms as JSON | No |
 | [scene_inventory.py](#scene_inventorypy) | Fundamentals | Structured per-node audit (type, materials, vertex count, etc.) | No |
+| [batch_operations.py](#batch_operationspy) | Fundamentals | Reads multiple properties in one HTTP call using `Batch` | No |
 | [character_state.py](#character_statepy) | Character | Saves and restores morphs, expression controls, and bone rotations | No |
 | [pose_transfer.py](#pose_transferpy) | Character | Copies a pose from one figure to another in a single undo step | No |
 | [animation_frame_dump.py](#animation_frame_dumppy) | Character | Exports bone rotations and morph values for every animation frame | No |
+| [keyframe_baking.py](#keyframe_bakingpy) | Animation | Bakes constraint-driven or IK-driven animation to explicit keyframes | No |
+| [animation_mixing.py](#animation_mixingpy) | Animation | Clips, crossfades, concatenates, and applies animation clips offline | No |
+| [pose_interpolation.py](#pose_interpolationpy) | Animation | Interpolates between two saved states with easing curves and renders each step | Yes |
+| [geometry_analysis.py](#geometry_analysispy) | Geometry | Inspects mesh metadata, bounding boxes, face groups, and exports triangulated geometry | No |
+| [scene_to_usd.py](#scene_to_usdpy) | Export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
 | [turntable.py](#turntablepy) | Rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
 | [multi_camera_render.py](#multi_camera_renderpy) | Rendering | Renders from every camera in the scene to separate files | Yes |
 | [material_color_variations.py](#material_color_variationspy) | Rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
 | [batch_render_morph_variations.py](#batch_render_morph_variationspy) | Rendering | Renders a matrix of morph value combinations | Yes |
 | [dataset_generator.py](#dataset_generatorpy) | ML / Data | Generates a randomised render dataset with JSON sidecar for LoRA training | Yes |
-| [pose_interpolation.py](#pose_interpolationpy) | Animation | Interpolates between two saved states with easing curves and renders each step | Yes |
 | [expression_transfer.py](#expression_transferpy) | AI / Vision | Extracts a facial expression from a photo using MediaPipe and applies it to a Genesis 9 figure | No |
 | [webcam_expression_mirror.py](#webcam_expression_mirrorpy) | AI / Vision | Mirrors your live webcam expression onto a Genesis 9 figure in real time | No |
 
@@ -84,6 +89,29 @@ python scene_inventory.py --out inventory.json --pretty
 |---|---|---|
 | `--out FILE` | stdout | Write JSON to this file instead of stdout |
 | `--pretty` | off | Pretty-print the JSON output |
+
+---
+
+### batch_operations.py
+
+Shows how `Batch` bundles multiple independent DazScript reads into a single
+HTTP round-trip.  Reading label, bone count, and morph count for N figures
+normally costs 3N calls; with `Batch` it costs 1.
+
+Includes an optional `--compare` mode that runs the same reads the naive way
+and prints the speedup ratio.
+
+```bash
+python batch_operations.py
+python batch_operations.py --compare
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--compare` | off | Also run the per-call version and print the call-count comparison |
+
+**SDK features demonstrated:** `Batch`, `Batch.add()`, `BatchFuture.value`,
+context-manager usage, `DazScene.skeletons()`.
 
 ---
 
@@ -153,6 +181,78 @@ python animation_frame_dump.py --figure "Genesis 9" --out anim.json --morphs
 | `--figure LABEL` | `Genesis 9` | Figure label |
 | `--out FILE` | `anim.json` | Output JSON file |
 | `--morphs` | off | Also capture non-zero morph values per frame |
+
+---
+
+## Geometry
+
+### geometry_analysis.py
+
+Retrieves a figure's mesh metadata, computes axis-aligned bounding boxes for
+both the rest and posed mesh, lists face and material groups with their face
+counts, and demonstrates Python-side utilities such as quad-to-triangle
+conversion and `Vec3`-wrapped vertex access.
+
+All metadata is fetched in a single HTTP call.  Bounding boxes are computed
+server-side (no vertex transfer needed).  `triangulate()` and `as_vec3()` are
+pure Python — zero additional HTTP calls.
+
+```bash
+python geometry_analysis.py --figure "Genesis 9"
+python geometry_analysis.py --figure "Genesis 9" --groups
+python geometry_analysis.py --figure "Genesis 9" --triangulate --out tris.json
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--figure LABEL` | `Genesis 9` | Figure label |
+| `--groups` | off | Print face group and material group details with face counts |
+| `--triangulate` | off | Fetch all faces and export an all-triangle mesh |
+| `--out FILE` | `triangles.json` | Output path when `--triangulate` is used |
+
+**SDK features demonstrated:** `DazGeometry.mesh_info()`,
+`DazGeometry.bounding_box()`, `DazGeometry.bounding_box_posed()`,
+`DazGeometry.face_group_faces()`, `DazGeometry.material_group_faces()`,
+`DazGeometry.face_vertex_indices_all()`, `DazGeometry.vertex_positions_all()`,
+`DazGeometry.triangulate()`, `DazGeometry.as_vec3()`,
+`BoundingBox.center`, `BoundingBox.size`, `BoundingBox.volume`,
+`BoundingBox.contains()`, `Vec3.distance()`.
+
+---
+
+## Export
+
+### scene_to_usd.py
+
+Interrogates the live DAZ Studio scene through the HTTP API and writes a
+Pixar USD file — without touching the DAZ Studio UI, loading extra plugins,
+or modifying the scene.
+
+Exports posed mesh vertices (skinning + morphs already applied), polygon
+topology, the primary UV set, UsdPreviewSurface materials, strand-based hair
+as `UsdGeom.BasisCurves`, cameras, and lights.  With `--morphs` the script
+additionally exports active shape morphs as `UsdSkel` blend shapes.
+
+**Dependencies** (in addition to `dazpy`):
+```bash
+pip install usd-core
+```
+
+```bash
+python scene_to_usd.py --out scene.usda
+python scene_to_usd.py --out scene.usda --morphs
+python scene_to_usd.py --out scene.usdc --figure "Genesis 9"
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--out FILE` | `scene.usda` | Output USD file (`.usda` = ASCII, `.usdc` = binary) |
+| `--morphs` | off | Export active shape morphs as UsdSkel blend shapes |
+| `--figure LABEL` | all figures | Export only the named figure |
+
+**SDK features demonstrated:** `DazGeometry.bounding_box_posed()`,
+`DazGeometry.face_vertex_indices_all()`, `DazGeometry.vertex_positions_all()`,
+`DazGeometry.uv_positions_all()`, `DazScene.skeletons()`.
 
 ---
 
@@ -267,6 +367,90 @@ python dataset_generator.py --count 100 --out C:/dataset --size 512
 ---
 
 ## Animation
+
+### keyframe_baking.py
+
+Reads the evaluated bone rotations and morph values of an animated figure
+at the current frame, then bakes the full play range to explicit keyframes in
+one HTTP call.  After baking, the animation no longer depends on IK rigs,
+expression controllers, or other drivers — useful before FBX/BVH export or
+after pushing a captured clip back to the timeline.
+
+```bash
+python keyframe_baking.py --figure "Genesis 9"
+python keyframe_baking.py --figure "Genesis 9" --morphs
+python keyframe_baking.py --figure "Genesis 9" --start 10 --end 90 --morphs
+python keyframe_baking.py --figure "Genesis 9" --preview
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--figure LABEL` | `Genesis 9` | Figure label |
+| `--start N` | play range start | First frame to bake |
+| `--end N` | play range end | Last frame to bake |
+| `--morphs` | off | Also bake morph channels alongside bone rotations |
+| `--preview` | off | Print current bone/morph state without writing any keyframes |
+
+**SDK features demonstrated:** `DazSkeleton.bone_rotations()`,
+`DazSkeleton.morph_values(nonzero_only=True)`,
+`DazSkeleton.bake_bone_rotations()`, `DazSkeleton.bake_morphs()`,
+`DazSkeleton.bake()`, `DazScene.play_range()`.
+
+---
+
+### animation_mixing.py
+
+Treats captured animation files (from `animation_frame_dump.py`) as editable
+clips.  All operations — clipping, crossfading, concatenation — run entirely
+in Python with no HTTP calls.  The result can be pushed back to a live figure
+in a single call when needed.
+
+```bash
+python animation_mixing.py clip   --anim walk.json --start 10 --end 40 --out walk_loop.json
+python animation_mixing.py blend  --a walk.json --b run.json --t 0.5 --out trot.json
+python animation_mixing.py append --a intro.json --b main.json --out full.json
+python animation_mixing.py apply  --anim walk.json --frame 0 --figure "Genesis 9"
+```
+
+**clip** — extract a sub-range of frames (inclusive, by scene frame number)
+
+| Argument | Default | Description |
+|---|---|---|
+| `--anim FILE` | *(required)* | Source animation JSON |
+| `--start N` | *(required)* | First scene frame to keep |
+| `--end N` | *(required)* | Last scene frame to keep |
+| `--out FILE` | *(required)* | Output JSON path |
+
+**blend** — crossfade between two clips frame-by-frame (`t=0` → A, `t=1` → B)
+
+| Argument | Default | Description |
+|---|---|---|
+| `--a FILE` | *(required)* | Clip A (t=0) |
+| `--b FILE` | *(required)* | Clip B (t=1) |
+| `--t FLOAT` | `0.5` | Blend weight 0.0–1.0 |
+| `--out FILE` | *(required)* | Output JSON path |
+
+**append** — concatenate two clips end-to-end (B's frames renumbered to follow A)
+
+| Argument | Default | Description |
+|---|---|---|
+| `--a FILE` | *(required)* | First clip |
+| `--b FILE` | *(required)* | Second clip (appended after A) |
+| `--out FILE` | *(required)* | Output JSON path |
+
+**apply** — apply a single frame from a clip to a live figure (one HTTP call)
+
+| Argument | Default | Description |
+|---|---|---|
+| `--anim FILE` | *(required)* | Animation JSON |
+| `--frame N` | `0` | Python index into the clip (0 = first frame) |
+| `--figure LABEL` | *(from file)* | Target figure label |
+
+**SDK features demonstrated:** `DazAnimation.load()`, `DazAnimation.clip()`,
+`DazAnimation.blend()`, `DazAnimation.append()`, `DazAnimation.as_pose()`,
+`DazAnimation.apply()`, `len(anim)`, `anim[i]`, `DazPose.apply()`.
+
+---
 
 ### pose_interpolation.py
 

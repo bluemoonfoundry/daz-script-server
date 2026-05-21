@@ -46,14 +46,22 @@ Usage:
     python scene_introspection.py | jq '.tree[0]'
 """
 
+import argparse
 import json
+
 from dazpy import DazScene
 
-scene = DazScene()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.parse_args()
 
-output = {
-    "tree":       scene.node_tree(),
-    "transforms": scene.all_node_transforms(),
-}
+    scene = DazScene()
 
-print(json.dumps(output, indent=2))
+    output = {
+        "tree":       scene.node_tree(),
+        "transforms": scene.all_node_transforms(),
+    }
+
+    print(json.dumps(output, indent=2))

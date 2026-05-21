@@ -268,3 +268,280 @@ class DazGeometry(DazElement):
             f"var g = {self._locator}; return (g && g.getNumQuads) ? g.getNumQuads() : null;"
         )
         return self._client.execute(script).value
+
+    # ── bulk metadata ─────────────────────────────────────────────────────────
+
+    def mesh_info(self) -> dict | None:
+        """Fetch all mesh metadata in a single HTTP call.
+
+        Consolidates what would otherwise be 7+ separate property reads.
+
+        Returns:
+            ``{vertex_count, facet_count, tris_count, quads_count,
+            subdivision_level, uv_set_count, face_group_names,
+            material_group_names}`` or ``None`` if the geometry is unavailable.
+        """
+        script = ScriptBuilder.iife(f"""
+            var g = {self._locator};
+            if (!g) return null;
+            var fgNames = [];
+            if (g.getNumFaceGroups) {{
+                for (var i = 0; i < g.getNumFaceGroups(); i++) {{
+                    var fg = g.getFaceGroup(i);
+                    fgNames.push(fg ? fg.getName() : null);
+                }}
+            }}
+            var mgNames = [];
+            if (g.getNumMaterialGroups) {{
+                for (var i = 0; i < g.getNumMaterialGroups(); i++) {{
+                    var mg = g.getMaterialGroup(i);
+                    mgNames.push(mg ? mg.getName() : null);
+                }}
+            }}
+            return {{
+                vertex_count:         g.getNumVertices(),
+                facet_count:          g.getNumFacets(),
+                tris_count:           g.getNumTris           ? g.getNumTris()                  : null,
+                quads_count:          g.getNumQuads          ? g.getNumQuads()                 : null,
+                subdivision_level:    g.getCurrentSubDivisionLevel ? g.getCurrentSubDivisionLevel() : null,
+                uv_set_count:         g.getNumUVSets         ? g.getNumUVSets()                : null,
+                face_group_names:     fgNames,
+                material_group_names: mgNames,
+            }};
+        """)
+        return self._client.execute(script).value
+
+    # ── bounding box ──────────────────────────────────────────────────────────
+
+    def bounding_box(self) -> "BoundingBox | None":  # noqa: F821
+        """Axis-aligned bounding box of the base mesh in one HTTP call.
+
+        Iterates all vertices server-side, avoiding the need to transfer every
+        position to Python just to compute an AABB.
+
+        Returns:
+            A :class:`~dazpy.math3.BoundingBox`, or ``None`` if the geometry
+            is unavailable or empty.
+        """
+        script = ScriptBuilder.iife(f"""
+            var g = {self._locator};
+            if (!g || g.getNumVertices() === 0) return null;
+            var v = g.getVertex(0);
+            var mnX = v.x, mnY = v.y, mnZ = v.z;
+            var mxX = v.x, mxY = v.y, mxZ = v.z;
+            var n = g.getNumVertices();
+            for (var i = 1; i < n; i++) {{
+                v = g.getVertex(i);
+                if (v.x < mnX) mnX = v.x; else if (v.x > mxX) mxX = v.x;
+                if (v.y < mnY) mnY = v.y; else if (v.y > mxY) mxY = v.y;
+                if (v.z < mnZ) mnZ = v.z; else if (v.z > mxZ) mxZ = v.z;
+            }}
+            return {{min: {{x:mnX, y:mnY, z:mnZ}}, max: {{x:mxX, y:mxY, z:mxZ}}}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            return None
+        from .math3 import BoundingBox
+        return BoundingBox.from_dict(result)
+
+    def bounding_box_posed(self) -> "BoundingBox | None":  # noqa: F821
+        """AABB of the world-space posed-and-morphed mesh in one HTTP call.
+
+        Uses ``DzObject.getCachedGeom()`` after forcing a cache update, so the
+        result reflects the current bone pose and all active morphs.
+
+        Returns:
+            A :class:`~dazpy.math3.BoundingBox` in world space, or ``None``.
+        """
+        script = ScriptBuilder.iife(f"""
+            var _nd = {ScriptBuilder.find_node_expr(self._identifier)};
+            if (!_nd) return null;
+            var obj = _nd.getObject();
+            if (!obj) return null;
+            obj.forceCacheUpdate(_nd, false);
+            var g = obj.getCachedGeom();
+            if (!g || g.getNumVertices() === 0) return null;
+            var v = g.getVertex(0);
+            var mnX = v.x, mnY = v.y, mnZ = v.z;
+            var mxX = v.x, mxY = v.y, mxZ = v.z;
+            var n = g.getNumVertices();
+            for (var i = 1; i < n; i++) {{
+                v = g.getVertex(i);
+                if (v.x < mnX) mnX = v.x; else if (v.x > mxX) mxX = v.x;
+                if (v.y < mnY) mnY = v.y; else if (v.y > mxY) mxY = v.y;
+                if (v.z < mnZ) mnZ = v.z; else if (v.z > mxZ) mxZ = v.z;
+            }}
+            return {{min: {{x:mnX, y:mnY, z:mnZ}}, max: {{x:mxX, y:mxY, z:mxZ}}}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            return None
+        from .math3 import BoundingBox
+        return BoundingBox.from_dict(result)
+
+    # ── paginated _all() wrappers ─────────────────────────────────────────────
+
+    def face_vertex_indices_all(self, chunk_size: int = 1000) -> list[list[int]]:
+        """Return all face vertex indices, paginating automatically.
+
+        Args:
+            chunk_size: Faces fetched per network round-trip.
+
+        Returns:
+            List of faces; each face is ``[v0, v1, v2]`` (tri) or
+            ``[v0, v1, v2, v3]`` (quad).
+        """
+        first = self.face_vertex_indices(0, chunk_size)
+        total = first.get("total", 0)
+        all_faces = list(first.get("facets", []))
+        offset = len(all_faces)
+        while offset < total:
+            chunk = self.face_vertex_indices(offset, chunk_size)
+            batch = chunk.get("facets") or []
+            if not batch:
+                break
+            all_faces.extend(batch)
+            offset += len(batch)
+        return all_faces
+
+    def normals_all(self, chunk_size: int = 5000) -> list[list[float]]:
+        """Return all face normals, paginating automatically.
+
+        Args:
+            chunk_size: Normals fetched per network round-trip.
+
+        Returns:
+            List of ``[x, y, z]`` unit normals.
+        """
+        first = self.normals(0, chunk_size)
+        total = first.get("total", 0)
+        all_norms = list(first.get("normals", []))
+        offset = len(all_norms)
+        while offset < total:
+            chunk = self.normals(offset, chunk_size)
+            batch = chunk.get("normals") or []
+            if not batch:
+                break
+            all_norms.extend(batch)
+            offset += len(batch)
+        return all_norms
+
+    def uv_positions_all(self, uv_set: int = 0, chunk_size: int = 5000) -> list[list[float]]:
+        """Return all UV coordinates for *uv_set*, paginating automatically.
+
+        Args:
+            uv_set:     UV set index (0 = primary).
+            chunk_size: UV pairs fetched per network round-trip.
+
+        Returns:
+            List of ``[u, v]`` pairs.
+        """
+        first = self.uv_positions(uv_set, 0, chunk_size)
+        total = first.get("total", 0)
+        all_uvs = list(first.get("uvs", []))
+        offset = len(all_uvs)
+        while offset < total:
+            chunk = self.uv_positions(uv_set, offset, chunk_size)
+            batch = chunk.get("uvs") or []
+            if not batch:
+                break
+            all_uvs.extend(batch)
+            offset += len(batch)
+        return all_uvs
+
+    # ── group membership ──────────────────────────────────────────────────────
+
+    def face_group_faces(self, name: str) -> list[int]:
+        """Return the face indices belonging to the named face group.
+
+        Args:
+            name: Face group name as returned by :meth:`face_group_names`.
+
+        Returns:
+            List of 0-based face indices, or ``[]`` if the group doesn't exist.
+        """
+        name_js = ScriptBuilder.escape_string(name)
+        script = ScriptBuilder.iife(f"""
+            var g = {self._locator};
+            if (!g || !g.getNumFaceGroups) return [];
+            for (var i = 0; i < g.getNumFaceGroups(); i++) {{
+                var grp = g.getFaceGroup(i);
+                if (grp && grp.getName() === {name_js}) {{
+                    var idx = [];
+                    for (var j = 0; j < grp.count(); j++) idx.push(grp.getIndexAt(j));
+                    return idx;
+                }}
+            }}
+            return [];
+        """)
+        return self._client.execute(script).value or []
+
+    def material_group_faces(self, name: str) -> list[int]:
+        """Return the face indices belonging to the named material group.
+
+        Args:
+            name: Material group name as returned by :meth:`material_group_names`.
+
+        Returns:
+            List of 0-based face indices, or ``[]`` if the group doesn't exist.
+        """
+        name_js = ScriptBuilder.escape_string(name)
+        script = ScriptBuilder.iife(f"""
+            var g = {self._locator};
+            if (!g || !g.getNumMaterialGroups) return [];
+            for (var i = 0; i < g.getNumMaterialGroups(); i++) {{
+                var grp = g.getMaterialGroup(i);
+                if (grp && grp.getName() === {name_js}) {{
+                    var idx = [];
+                    for (var j = 0; j < grp.count(); j++) idx.push(grp.getIndexAt(j));
+                    return idx;
+                }}
+            }}
+            return [];
+        """)
+        return self._client.execute(script).value or []
+
+    # ── pure-Python mesh utilities ────────────────────────────────────────────
+
+    @staticmethod
+    def triangulate(faces: list) -> list[list[int]]:
+        """Convert a list of face index arrays (tris or quads) to all-triangles.
+
+        Quads are split along the 0→2 diagonal:
+        ``[v0, v1, v2, v3]`` → ``[v0, v1, v2]`` + ``[v0, v2, v3]``.
+        Triangles are passed through unchanged.  Faces with any other vertex
+        count are silently skipped.
+
+        This is a pure-Python operation — no HTTP round-trip.
+
+        Args:
+            faces: List of faces, each a list/tuple of vertex indices, as
+                returned by :meth:`face_vertex_indices_all`.
+
+        Returns:
+            All-triangle face list.
+        """
+        result = []
+        for f in faces:
+            if len(f) == 3:
+                result.append(list(f))
+            elif len(f) == 4:
+                result.append([f[0], f[1], f[2]])
+                result.append([f[0], f[2], f[3]])
+        return result
+
+    @staticmethod
+    def as_vec3(vertices: list) -> list:
+        """Wrap ``[[x, y, z], ...]`` vertex data in :class:`~dazpy.math3.Vec3` objects.
+
+        This is a pure-Python operation — no HTTP round-trip.
+
+        Args:
+            vertices: List of ``[x, y, z]`` arrays, as returned by
+                :meth:`vertex_positions_all` or :meth:`vertex_positions_posed_all`.
+
+        Returns:
+            List of :class:`~dazpy.math3.Vec3`.
+        """
+        from .math3 import Vec3
+        return [Vec3.from_list(v) for v in vertices]

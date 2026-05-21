@@ -48,24 +48,69 @@ Usage:
     python batch_render_morph_variations.py
 """
 
-import sys
-import time
-import os
-import json
+import argparse
+
 from dazpy import DazClient, DazScene, DazRenderSettings
 
-scene  = DazScene()
-render = DazRenderSettings()
-figure = scene.find_skeleton_by_label("Genesis 9")
+VARIANTS = [
+    # (Smile Full Face, SO Fear Worry)
+    (0.0, 0.0),   # neutral
+    (0.5, 0.3),   # mild smile with slight worry
+    (1.0, 0.8),   # full smile with strong worry
+]
 
-smile = figure.find_property_by_label("Smile Full Face")
-brow  = figure.find_property_by_label("SO Fear Worry")
+OUT_DIR = "y:/tmp"
 
-render.set_resolution(1920, 1080)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.parse_args()
 
-for i, (s, b) in enumerate([(0.0, 0.0), (0.5, 0.3), (1.0, 0.8)]):
-    smile.value = s
-    brow.value  = b
-    render.output_path = f"y:/tmp/variant_{i:03d}.png"
-    render.render()
+    # ── connect ───────────────────────────────────────────────────────────────────
 
+    print("Connecting to DAZ Studio…")
+    scene  = DazScene()
+    render = DazRenderSettings()
+    figure = scene.find_skeleton_by_label("Genesis 9")
+    print(f"  Found figure: {figure.label!r}")
+
+    # ── locate morphs ─────────────────────────────────────────────────────────────
+
+    smile = figure.find_property_by_label("Smile Full Face")
+    brow  = figure.find_property_by_label("SO Fear Worry")
+
+    if smile is None:
+        raise SystemExit("Error: morph 'Smile Full Face' not found on figure.")
+    if brow is None:
+        raise SystemExit("Error: morph 'SO Fear Worry' not found on figure.")
+
+    print(f"  Morphs located: 'Smile Full Face', 'SO Fear Worry'")
+
+    # ── render setup ──────────────────────────────────────────────────────────────
+
+    render.set_resolution(1920, 1080)
+    print(f"  Render resolution: 1920 × 1080")
+    print(f"  Output directory : {OUT_DIR}")
+    print(f"\nRendering {len(VARIANTS)} variant(s)…\n")
+
+    # ── render loop ───────────────────────────────────────────────────────────────
+
+    for i, (s, b) in enumerate(VARIANTS):
+        out_path = f"{OUT_DIR}/variant_{i:03d}.png"
+
+        print(f"[{i+1}/{len(VARIANTS)}] Setting morphs:")
+        print(f"  Smile Full Face = {s:.1f}")
+        print(f"  SO Fear Worry   = {b:.1f}")
+
+        smile.value = s
+        brow.value  = b
+
+        print(f"  Rendering → {out_path}")
+        render.output_path = out_path
+        render.render()
+        print(f"  Done.\n")
+
+    print(f"All {len(VARIANTS)} variants written to {OUT_DIR}/")
+    for i in range(len(VARIANTS)):
+        print(f"  {OUT_DIR}/variant_{i:03d}.png")

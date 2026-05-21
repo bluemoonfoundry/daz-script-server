@@ -45,23 +45,34 @@ ENVIRONMENT SETUP
 
 Usage:
     python pose_transfer.py
+    python pose_transfer.py --src "Genesis 9" --dst "Genesis 9-2"
 """
+
+import argparse
 
 from dazpy import DazScene
 
-scene = DazScene()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--src", default="Genesis 9",   help="Source figure label")
+    parser.add_argument("--dst", default="Genesis 9-2", help="Destination figure label")
+    args = parser.parse_args()
 
-src = scene.find_skeleton_by_label("Genesis 9")
-dst = scene.find_skeleton_by_label("Genesis 9-2")
+    scene = DazScene()
 
-# Capture pose — local_euler returns (x, y, z) in degrees, the same values
-# written by set_local_rotation, so round-tripping is lossless.
-pose = {bone.name: bone.local_euler for bone in src.bones()}
+    src = scene.find_skeleton_by_label(args.src)
+    dst = scene.find_skeleton_by_label(args.dst)
 
-with scene.undo("Transfer pose"):
-    for bone in dst.bones():
-        angles = pose.get(bone.name)
-        if angles:
-            bone.set_local_rotation(*angles)
+    # Capture pose — local_euler returns (x, y, z) in degrees, the same values
+    # written by set_local_rotation, so round-tripping is lossless.
+    pose = {bone.name: bone.local_euler for bone in src.bones()}
 
-print(f"Transferred {len(pose)} bone rotations from {src.label!r} to {dst.label!r}")
+    with scene.undo("Transfer pose"):
+        for bone in dst.bones():
+            angles = pose.get(bone.name)
+            if angles:
+                bone.set_local_rotation(*angles)
+
+    print(f"Transferred {len(pose)} bone rotations from {src.label!r} to {dst.label!r}")

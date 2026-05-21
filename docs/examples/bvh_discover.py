@@ -107,85 +107,91 @@ def _detect_generation(bone_set: set[str]) -> str | None:
             return gen
     return None
 
-# ── main ───────────────────────────────────────────────────────────────────────
 
-parser = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--figure",     default=None, help="Figure label (default: primary selection)")
-parser.add_argument("--dump",       action="store_true", help="Print all bone names before the mapping")
-parser.add_argument("--generation", default=None,
-                    choices=list(CANONICAL_TO_DAZ), help="Override generation auto-detection")
-args = parser.parse_args()
+if __name__ == "__main__":
+    # ── main ───────────────────────────────────────────────────────────────────────
 
-client = DazClient()
-scene  = DazScene(client)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--figure",     default=None,
+                        help="Figure label (default: primary selection)")
+    parser.add_argument("--dump",       action="store_true",
+                        help="Print all bone names before the mapping")
+    parser.add_argument("--generation", default=None,
+                        choices=list(CANONICAL_TO_DAZ),
+                        help="Override generation auto-detection")
+    args = parser.parse_args()
 
-figure_label = args.figure or _primary_label(client)
-if not figure_label:
-    sys.exit("No figure label — use --figure or select a figure in DAZ Studio.")
+    client = DazClient()
+    scene  = DazScene(client)
 
-bones = _all_bones(client, figure_label)
-if not bones:
-    sys.exit(f"Figure {figure_label!r} not found or has no bones.")
+    figure_label = args.figure or _primary_label(client)
+    if not figure_label:
+        sys.exit("No figure label — use --figure or select a figure in DAZ Studio.")
 
-bone_names  = [b["name"]  for b in bones]
-bone_labels = {b["name"]: b["label"] for b in bones}
-bone_set    = set(bone_names)
+    bones = _all_bones(client, figure_label)
+    if not bones:
+        sys.exit(f"Figure {figure_label!r} not found or has no bones.")
 
-# ── detect generation ──────────────────────────────────────────────────────────
+    bone_names  = [b["name"]  for b in bones]
+    bone_labels = {b["name"]: b["label"] for b in bones}
+    bone_set    = set(bone_names)
 
-generation = args.generation or _detect_generation(bone_set)
-if not generation:
-    print("Could not auto-detect generation. Known probe bones not found.")
-    print("Use --generation to specify, or check --dump output.")
-    generation = "UNKNOWN"
+    # ── detect generation ──────────────────────────────────────────────────────────
 
-print(f"Figure : {figure_label}")
-print(f"Bones  : {len(bones)}")
-print(f"Generation detected: {generation}\n")
+    generation = args.generation or _detect_generation(bone_set)
+    if not generation:
+        print("Could not auto-detect generation. Known probe bones not found.")
+        print("Use --generation to specify, or check --dump output.")
+        generation = "UNKNOWN"
 
-# ── optional full dump ─────────────────────────────────────────────────────────
+    print(f"Figure : {figure_label}")
+    print(f"Bones  : {len(bones)}")
+    print(f"Generation detected: {generation}\n")
 
-if args.dump:
-    print("── All bones (name → label) ──────────────────────────────────────")
-    for b in bones:
-        label_suffix = f"  # label: {b['label']}" if b["label"] != b["name"] else ""
-        print(f"    {b['name']!r}{label_suffix}")
-    print()
+    # ── optional full dump ─────────────────────────────────────────────────────────
 
-# ── check each canonical joint against the live figure ────────────────────────
+    if args.dump:
+        print("── All bones (name → label) ──────────────────────────────────────")
+        for b in bones:
+            label_suffix = f"  # label: {b['label']}" if b["label"] != b["name"] else ""
+            print(f"    {b['name']!r}{label_suffix}")
+        print()
 
-reference = CANONICAL_TO_DAZ.get(generation, {})
-found:   list[tuple[str, str]] = []
-missing: list[tuple[str, str]] = []
+    # ── check each canonical joint against the live figure ────────────────────────
 
-for canonical in CANONICAL:
-    expected = reference.get(canonical)
-    if expected is None:
-        found.append((canonical, "None"))
-        continue
-    if _bone_exists(bone_set, expected):
-        found.append((canonical, repr(expected)))
-    else:
-        missing.append((canonical, expected))
+    reference = CANONICAL_TO_DAZ.get(generation, {})
+    found:   list[tuple[str, str]] = []
+    missing: list[tuple[str, str]] = []
 
-# ── report ─────────────────────────────────────────────────────────────────────
+    for canonical in CANONICAL:
+        expected = reference.get(canonical)
+        if expected is None:
+            found.append((canonical, "None"))
+            continue
+        if _bone_exists(bone_set, expected):
+            found.append((canonical, repr(expected)))
+        else:
+            missing.append((canonical, expected))
 
-if missing:
-    print("── MISSING bones (in map but not in figure) ──────────────────────")
+    # ── report ─────────────────────────────────────────────────────────────────────
+
+    if missing:
+        print("── MISSING bones (in map but not in figure) ──────────────────────")
+        for canonical, expected in missing:
+            print(f"  canonical={canonical!r}  expected DAZ name={expected!r}")
+        print()
+
+    # ── emit ready-to-paste CANONICAL_TO_DAZ block ────────────────────────────────
+
+    gen_key = generation.lower().replace(" ", "")
+    print(f'    # {figure_label} — verified by bvh_discover.py')
+    print(f'    "{gen_key}": {{')
+    for canonical, daz_repr in found:
+        pad = " " * max(1, 34 - len(canonical))
+        print(f'        "{canonical}":{pad}{daz_repr},')
     for canonical, expected in missing:
-        print(f"  canonical={canonical!r}  expected DAZ name={expected!r}")
-    print()
-
-# ── emit ready-to-paste CANONICAL_TO_DAZ block ────────────────────────────────
-
-gen_key = generation.lower().replace(" ", "")
-print(f'    # {figure_label} — verified by bvh_discover.py')
-print(f'    "{gen_key}": {{')
-for canonical, daz_repr in found:
-    pad = " " * max(1, 34 - len(canonical))
-    print(f'        "{canonical}":{pad}{daz_repr},')
-for canonical, expected in missing:
-    pad = " " * max(1, 34 - len(canonical))
-    print(f'        "{canonical}":{pad}None,  # MISSING: expected {expected!r}')
-print("    },")
+        pad = " " * max(1, 34 - len(canonical))
+        print(f'        "{canonical}":{pad}None,  # MISSING: expected {expected!r}')
+    print("    },")

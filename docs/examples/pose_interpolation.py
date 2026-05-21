@@ -23,6 +23,27 @@ WHAT IT DEMONSTRATES
   - Rendering each interpolated frame and restoring state A on exit
   - Printing an ffmpeg command to assemble the frames into a video
 
+SIMPLIFICATION NOTE
+-------------------
+An earlier version of this script implemented the interpolation loop by hand:
+a lerp() scalar helper, a lerp_state() function that manually merged two raw
+JSON dicts (iterating bone/morph/prop keys and computing weighted averages), and
+an apply_state() function that built a DazScript string at runtime — one inline
+findBone() / findModifier() call per channel, joined with string concatenation,
+then sent as a single HTTP payload.
+
+That approach mixed interpolation math with script-generation concerns and
+duplicated logic already present in character_state.py.
+
+The three helpers are now replaced by two DazPose methods:
+    pose_a.lerp(pose_b, t)   →  was: lerp() + lerp_state() operating on raw dicts
+    blended.apply(figure)    →  was: apply_state() building per-channel DazScript
+
+The apply() call still sends exactly one HTTP request per rendered frame; the
+script it generates inside DazPose injects bone/morph data as a JSON object and
+loops server-side, which is both cleaner and immune to script-length blowup on
+figures with many active morphs.
+
 ENVIRONMENT SETUP
 -----------------
 1. DAZ Studio must be running with the DazScriptServer plugin loaded and its
@@ -53,22 +74,21 @@ Usage:
 """
 
 import argparse
-import json
-import math
 import os
+import sys
 
-from dazpy import DazClient, DazRenderSettings
+from dazpy import DazPose, DazRenderSettings, DazScene
 
 # ── easing functions ───────────────────────────────────────────────────────────
 # All take t in [0, 1] and return a value in [0, 1].
 
 EASING = {
-    "linear":         lambda t: t,
-    "ease_in":        lambda t: t ** 2,
-    "ease_out":       lambda t: 1 - (1 - t) ** 2,
-    "ease_in_out":    lambda t: 3*t**2 - 2*t**3,          # smoothstep
-    "ease_in_cubic":  lambda t: t ** 3,
-    "ease_out_cubic": lambda t: 1 - (1 - t) ** 3,
+    "linear":            lambda t: t,
+    "ease_in":           lambda t: t ** 2,
+    "ease_out":          lambda t: 1 - (1 - t) ** 2,
+    "ease_in_out":       lambda t: 3*t**2 - 2*t**3,
+    "ease_in_cubic":     lambda t: t ** 3,
+    "ease_out_cubic":    lambda t: 1 - (1 - t) ** 3,
     "ease_in_out_cubic": lambda t: 4*t**3 if t < 0.5 else 1 - (-2*t + 2)**3 / 2,
     "bounce_out": lambda t: (
         7.5625*t*t if t < 1/2.75 else
@@ -78,139 +98,71 @@ EASING = {
     ),
 }
 
-# ── interpolation helpers ──────────────────────────────────────────────────────
+if __name__ == "__main__":
+    # ── CLI ────────────────────────────────────────────────────────────────────────
 
-def lerp(a: float, b: float, t: float) -> float:
-    return a + (b - a) * t
-
-def lerp_state(state_a: dict, state_b: dict, t: float):
-    """Return (morphs, props, bones) interpolated at position t."""
-    a_morphs = state_a.get("morphs", {})
-    b_morphs = state_b.get("morphs", {})
-    morphs = {
-        k: lerp(a_morphs.get(k, 0.0), b_morphs.get(k, 0.0), t)
-        for k in set(a_morphs) | set(b_morphs)
-    }
-
-    a_props = state_a.get("props", {})
-    b_props = state_b.get("props", {})
-    props = {
-        k: lerp(a_props.get(k, 0.0), b_props.get(k, 0.0), t)
-        for k in set(a_props) | set(b_props)
-    }
-
-    a_bones = state_a.get("bones", {})
-    b_bones = state_b.get("bones", {})
-    bones = {
-        k: [lerp(a_bones.get(k, [0.0, 0.0, 0.0])[i],
-                 b_bones.get(k, [0.0, 0.0, 0.0])[i], t)
-            for i in range(3)]
-        for k in set(a_bones) | set(b_bones)
-    }
-
-    return morphs, props, bones
-
-# ── DAZ Studio apply ───────────────────────────────────────────────────────────
-
-def _skel_lookup(label: str) -> str:
-    escaped = json.dumps(label)
-    return (
-        f"var _skel=null,_skels=Scene.getSkeletonList();"
-        f"for(var _i=0;_i<_skels.length;_i++){{"
-        f"if(_skels[_i].getLabel()==={escaped}){{_skel=_skels[_i];break;}}}}"
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--a",     required=True, help="State A JSON file (start pose)")
+    parser.add_argument("--b",     required=True, help="State B JSON file (end pose)")
+    parser.add_argument("--steps", type=int, default=10,
+                        help="Number of frames to render (includes A and B)")
+    parser.add_argument("--ease",  default="ease_in_out", choices=sorted(EASING),
+                        help="Easing function (default: ease_in_out)")
+    parser.add_argument("--out",   default="y:/tmp/interpolation")
+    parser.add_argument("--width",  type=int, default=1920)
+    parser.add_argument("--height", type=int, default=1080)
+    parser.add_argument("--figure", default=None,
+                        help="Override figure label (default: taken from state A file)")
+    args = parser.parse_args()
 
-def apply_state(client: DazClient, figure_label: str,
-                morphs: dict, props: dict, bones: dict) -> None:
-    """Push an interpolated state to DAZ Studio in a single HTTP call."""
-    morph_lines = " ".join(
-        f"var _m=obj.findModifier({json.dumps(n)});"
-        f"if(_m)_m.getValueChannel().setValue({round(v, 6)});"
-        for n, v in morphs.items()
-    )
-    prop_lines = " ".join(
-        f"var _p=_skel.findProperty({json.dumps(n)});"
-        f"if(_p&&_p.setValue)_p.setValue({round(v, 6)});"
-        for n, v in props.items()
-    )
-    bone_lines = " ".join(
-        f"var _b=_skel.findBone({json.dumps(n)});"
-        f"if(_b){{"
-        f"_b.getXRotControl().setValue({round(xyz[0], 6)});"
-        f"_b.getYRotControl().setValue({round(xyz[1], 6)});"
-        f"_b.getZRotControl().setValue({round(xyz[2], 6)});}}"
-        for n, xyz in bones.items()
-    )
+    if args.steps < 2:
+        raise SystemExit("--steps must be at least 2 (start and end).")
 
-    client.execute(f"""(function(){{
-        {_skel_lookup(figure_label)}
-        if (!_skel) return;
-        var obj = _skel.getObject();
-        if (obj) {{ {morph_lines} }}
-        {prop_lines}
-        {bone_lines}
-    }})()""")
+    pose_a = DazPose.load(args.a)
+    pose_b = DazPose.load(args.b)
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
+    figure_label = args.figure or pose_a.figure
+    if not figure_label:
+        raise SystemExit("Could not determine figure label — use --figure.")
 
-parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--a",     required=True, help="State A JSON file (start pose)")
-parser.add_argument("--b",     required=True, help="State B JSON file (end pose)")
-parser.add_argument("--steps", type=int, default=10, help="Number of frames to render (includes A and B)")
-parser.add_argument("--ease",  default="ease_in_out", choices=sorted(EASING),
-                    help="Easing function (default: ease_in_out)")
-parser.add_argument("--out",   default="y:/tmp/interpolation")
-parser.add_argument("--width",  type=int, default=1920)
-parser.add_argument("--height", type=int, default=1080)
-parser.add_argument("--figure", default=None,
-                    help="Override figure label (default: taken from state A file)")
-args = parser.parse_args()
+    scene = DazScene()
+    try:
+        figure = scene.find_skeleton_by_label(figure_label)
+    except Exception:
+        sys.exit(f"Error: figure {figure_label!r} not found in scene.")
 
-with open(args.a, encoding="utf-8") as f:
-    state_a = json.load(f)
-with open(args.b, encoding="utf-8") as f:
-    state_b = json.load(f)
+    os.makedirs(args.out, exist_ok=True)
 
-figure_label = args.figure or state_a.get("figure")
-if not figure_label:
-    raise SystemExit("Could not determine figure label — use --figure.")
+    render = DazRenderSettings(scene._client)
+    render.set_resolution(args.width, args.height)
 
-if args.steps < 2:
-    raise SystemExit("--steps must be at least 2 (start and end).")
+    ease_fn = EASING[args.ease]
 
-os.makedirs(args.out, exist_ok=True)
+    print(f"Interpolating {args.steps} steps ({args.ease}) → {args.out}")
+    print(f"  A: {args.a}  ({len(pose_a.bones)} bones, "
+          f"{len(pose_a.morphs)} morphs, {len(pose_a.props)} props)")
+    print(f"  B: {args.b}  ({len(pose_b.bones)} bones, "
+          f"{len(pose_b.morphs)} morphs, {len(pose_b.props)} props)\n")
 
-client = DazClient()
-render = DazRenderSettings(client)
-render.set_resolution(args.width, args.height)
+    try:
+        for i in range(args.steps):
+            t_linear = i / (args.steps - 1)
+            t_eased  = ease_fn(t_linear)
 
-ease_fn = EASING[args.ease]
+            pose_a.lerp(pose_b, t_eased).apply(figure)
 
-print(f"Interpolating {args.steps} steps ({args.ease}) → {args.out}")
-print(f"  A: {args.a}  ({len(state_a.get('bones', {}))} bones, "
-      f"{len(state_a.get('morphs', {}))} morphs, {len(state_a.get('props', {}))} props)")
-print(f"  B: {args.b}  ({len(state_b.get('bones', {}))} bones, "
-      f"{len(state_b.get('morphs', {}))} morphs, {len(state_b.get('props', {}))} props)\n")
+            out_path = os.path.join(args.out, f"frame_{i:03d}.png")
+            render.output_path = out_path
+            render.render()
+            print(f"  [{i+1}/{args.steps}] t={t_linear:.3f} → eased={t_eased:.3f}  {out_path}")
 
-try:
-    for i in range(args.steps):
-        t_linear = i / (args.steps - 1)
-        t_eased  = ease_fn(t_linear)
+    finally:
+        # Restore state A so DAZ Studio is left at the starting pose.
+        pose_a.apply(figure)
+        print("\nRestored state A.")
 
-        morphs, props, bones = lerp_state(state_a, state_b, t_eased)
-        apply_state(client, figure_label, morphs, props, bones)
-
-        out_path = os.path.join(args.out, f"frame_{i:03d}.png")
-        render.output_path = out_path
-        render.render()
-        print(f"  [{i+1}/{args.steps}] t={t_linear:.3f} → eased={t_eased:.3f}  {out_path}")
-
-finally:
-    # Restore state A so DAZ Studio is left at the starting pose.
-    morphs, props, bones = lerp_state(state_a, state_b, 0.0)
-    apply_state(client, figure_label, morphs, props, bones)
-    print("\nRestored state A.")
-
-print(f"\nDone. {args.steps} frames in {args.out}")
-print (f"If you have ffmpeg installed and want to create an animation, copy and paste this command:\n")
-print(f"ffmpeg -framerate 24 -i \"{os.path.join(args.out, 'frame_%03d.png')}\" interpolation.mp4")
+    print(f"\nDone. {args.steps} frames in {args.out}")
+    print(f"If you have ffmpeg installed and want to create an animation, copy and paste this command:\n")
+    print(f"ffmpeg -framerate 24 -i \"{os.path.join(args.out, 'frame_%03d.png')}\" interpolation.mp4")

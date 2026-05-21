@@ -480,188 +480,190 @@ def _primary_label(client: DazClient) -> str | None:
     script = "(function(){var n=Scene.getPrimarySelection();return n?n.getLabel():null;})()"
     return client.execute(script).value
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
 
-parser = argparse.ArgumentParser(
-    description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-)
-parser.add_argument("bvh",         help="Path to .bvh file")
-parser.add_argument("--figure",    default=None,
-                    help="Figure label in DAZ Studio (default: primary selection)")
-parser.add_argument("--generation", default=None, choices=list(CANONICAL_TO_DAZ),
-                    help="DAZ generation key (default: auto-detect from live scene)")
-parser.add_argument("--convention", default=None, choices=list(BVH_TO_CANONICAL),
-                    help="BVH naming convention (default: auto-detect from file)")
-parser.add_argument("--frames",    default=None,
-                    help="Frame range as START:END, e.g. 0:60 (default: all frames)")
-parser.add_argument("--render",    action="store_true",
-                    help="Render each frame to disk")
-parser.add_argument("--out",       default="y:/tmp/bvh_render",
-                    help="Output directory for rendered frames (default: y:/tmp/bvh_render)")
-parser.add_argument("--width",     type=int, default=1920)
-parser.add_argument("--height",    type=int, default=1080)
-parser.add_argument("--root-translation", action="store_true",
-                    help="Apply root bone translation to figure position")
-parser.add_argument("--root-scale", type=float, default=1.0,
-                    help="Scale factor for root translation (e.g. 0.1 if BVH is in mm)")
-parser.add_argument("--no-zero-unmapped", action="store_true",
-                    help="Skip zeroing DAZ bones that have no BVH counterpart each frame")
-parser.add_argument("--debug-frame", action="store_true",
-                    help="Print BVH angles and converted DAZ angles for the first frame")
-args = parser.parse_args()
+if __name__ == "__main__":
+    # ── CLI ────────────────────────────────────────────────────────────────────────
 
-# ── parse BVH ──────────────────────────────────────────────────────────────────
-
-bvh = parse_bvh(args.bvh)
-
-# auto-detect convention from BVH bone names
-convention = args.convention or detect_convention([j.name for j in bvh.joints])
-if convention is None:
-    raise SystemExit(
-        "Could not auto-detect BVH convention. "
-        f"Use --convention ({', '.join(BVH_TO_CANONICAL)})."
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("bvh",         help="Path to .bvh file")
+    parser.add_argument("--figure",    default=None,
+                        help="Figure label in DAZ Studio (default: primary selection)")
+    parser.add_argument("--generation", default=None, choices=list(CANONICAL_TO_DAZ),
+                        help="DAZ generation key (default: auto-detect from live scene)")
+    parser.add_argument("--convention", default=None, choices=list(BVH_TO_CANONICAL),
+                        help="BVH naming convention (default: auto-detect from file)")
+    parser.add_argument("--frames",    default=None,
+                        help="Frame range as START:END, e.g. 0:60 (default: all frames)")
+    parser.add_argument("--render",    action="store_true",
+                        help="Render each frame to disk")
+    parser.add_argument("--out",       default="y:/tmp/bvh_render",
+                        help="Output directory for rendered frames (default: y:/tmp/bvh_render)")
+    parser.add_argument("--width",     type=int, default=1920)
+    parser.add_argument("--height",    type=int, default=1080)
+    parser.add_argument("--root-translation", action="store_true",
+                        help="Apply root bone translation to figure position")
+    parser.add_argument("--root-scale", type=float, default=1.0,
+                        help="Scale factor for root translation (e.g. 0.1 if BVH is in mm)")
+    parser.add_argument("--no-zero-unmapped", action="store_true",
+                        help="Skip zeroing DAZ bones that have no BVH counterpart each frame")
+    parser.add_argument("--debug-frame", action="store_true",
+                        help="Print BVH angles and converted DAZ angles for the first frame")
+    args = parser.parse_args()
 
-# frame range
-if args.frames:
-    parts = args.frames.split(":")
-    frame_start, frame_end = int(parts[0]), int(parts[1])
-else:
-    frame_start, frame_end = 0, bvh.frame_count - 1
+    # ── parse BVH ──────────────────────────────────────────────────────────────────
 
-frame_end = min(frame_end, bvh.frame_count - 1)
-frame_indices = range(frame_start, frame_end + 1)
-n_frames = len(frame_indices)
+    bvh = parse_bvh(args.bvh)
 
-# ── connect to DAZ Studio ──────────────────────────────────────────────────────
+    # auto-detect convention from BVH bone names
+    convention = args.convention or detect_convention([j.name for j in bvh.joints])
+    if convention is None:
+        raise SystemExit(
+            "Could not auto-detect BVH convention. "
+            f"Use --convention ({', '.join(BVH_TO_CANONICAL)})."
+        )
 
-client = DazClient()
-
-figure_label = args.figure or _primary_label(client)
-if not figure_label:
-    raise SystemExit("No figure found — use --figure or select one in DAZ Studio.")
-
-generation = args.generation or _detect_generation(client, figure_label)
-if generation is None:
-    raise SystemExit(
-        f"Could not detect generation for {figure_label!r}. "
-        f"Use --generation ({', '.join(CANONICAL_TO_DAZ)})."
-    )
-
-# ── build joint map ────────────────────────────────────────────────────────────
-# Maps BVH joint name → (BvhJoint, daz_bone_name) for every bone that has
-# a counterpart in this generation. Built once, reused for every frame.
-
-bvh_to_daz = build_bvh_to_daz(convention, generation)
-joint_by_name = {j.name: j for j in bvh.joints}
-
-joint_map: dict[str, tuple[BvhJoint, str]] = {}
-unmapped: list[str] = []
-for bvh_name, daz_bone in bvh_to_daz.items():
-    if bvh_name in joint_by_name:
-        joint_map[bvh_name] = (joint_by_name[bvh_name], daz_bone)
+    # frame range
+    if args.frames:
+        parts = args.frames.split(":")
+        frame_start, frame_end = int(parts[0]), int(parts[1])
     else:
-        unmapped.append(bvh_name)
+        frame_start, frame_end = 0, bvh.frame_count - 1
 
-root_joint = joint_by_name.get(bvh.root_name)
+    frame_end = min(frame_end, bvh.frame_count - 1)
+    frame_indices = range(frame_start, frame_end + 1)
+    n_frames = len(frame_indices)
 
-# ── query DAZ bone rotation orders ─────────────────────────────────────────────
-# One HTTP call returns the rotation order string for each mapped bone so
-# apply_frame() can convert BVH Euler angles to the correct DAZ order.
+    # ── connect to DAZ Studio ──────────────────────────────────────────────────────
 
-mapped_daz_bones = [daz_bone for (_, daz_bone) in joint_map.values()]
-daz_bone_orders = _query_bone_rotation_orders(client, figure_label, mapped_daz_bones)
+    client = DazClient()
 
-# Diagnostic: show a compact summary of queried rotation orders.
-order_summary: dict[str, list[str]] = {}
-for bone, ord_ in daz_bone_orders.items():
-    order_summary.setdefault(ord_, []).append(bone)
-print("DAZ bone rotation orders:")
-for ord_, bones in sorted(order_summary.items()):
-    print(f"  {ord_}: {', '.join(sorted(bones))}")
+    figure_label = args.figure or _primary_label(client)
+    if not figure_label:
+        raise SystemExit("No figure found — use --figure or select one in DAZ Studio.")
 
-# Warn if any bone returned an unexpected value (helps diagnose DAZ API changes).
-unknown = [b for b in mapped_daz_bones if b not in daz_bone_orders]
-if unknown:
-    print(f"WARNING: Could not query rotation order for: {', '.join(unknown)}  (defaulting to XYZ)")
+    generation = args.generation or _detect_generation(client, figure_label)
+    if generation is None:
+        raise SystemExit(
+            f"Could not detect generation for {figure_label!r}. "
+            f"Use --generation ({', '.join(CANONICAL_TO_DAZ)})."
+        )
 
-# ── build zero_bones ───────────────────────────────────────────────────────────
-# DAZ bones that exist in this generation but have no BVH counterpart (twist
-# helpers, extra spine segments, etc.) are zeroed each frame so residual values
-# from ERC formulas or prior frames don't accumulate.
+    # ── build joint map ────────────────────────────────────────────────────────────
+    # Maps BVH joint name → (BvhJoint, daz_bone_name) for every bone that has
+    # a counterpart in this generation. Built once, reused for every frame.
 
-if args.no_zero_unmapped:
-    zero_bones: list[str] = []
-else:
-    mapped_daz_set = set(mapped_daz_bones)
-    gen_all_daz = {b for b in CANONICAL_TO_DAZ[generation].values() if b is not None}
-    zero_bones = sorted(gen_all_daz - mapped_daz_set)
+    bvh_to_daz = build_bvh_to_daz(convention, generation)
+    joint_by_name = {j.name: j for j in bvh.joints}
 
-# ── summary ────────────────────────────────────────────────────────────────────
+    joint_map: dict[str, tuple[BvhJoint, str]] = {}
+    unmapped: list[str] = []
+    for bvh_name, daz_bone in bvh_to_daz.items():
+        if bvh_name in joint_by_name:
+            joint_map[bvh_name] = (joint_by_name[bvh_name], daz_bone)
+        else:
+            unmapped.append(bvh_name)
 
-print(f"BVH file   : {args.bvh}")
-print(f"Convention : {convention}")
-print(f"Figure     : {figure_label}  ({generation})")
-print(f"Frames     : {frame_start}–{frame_end}  ({n_frames} frames @ {bvh.fps:.1f} fps)")
-print(f"Bones mapped: {len(joint_map)} of {len(bvh_to_daz)} expected")
-if unmapped:
-    print(f"  Not in BVH: {', '.join(unmapped)}")
-if zero_bones:
-    print(f"Zeroing {len(zero_bones)} unmapped DAZ bones each frame: {', '.join(zero_bones)}")
-if args.render:
-    print(f"Rendering  : {args.out}  ({args.width}×{args.height})")
-print()
+    root_joint = joint_by_name.get(bvh.root_name)
 
-# ── render setup ──────────────────────────────────────────────────────────────
+    # ── query DAZ bone rotation orders ─────────────────────────────────────────────
+    # One HTTP call returns the rotation order string for each mapped bone so
+    # apply_frame() can convert BVH Euler angles to the correct DAZ order.
 
-render: DazRenderSettings | None = None
-if args.render:
-    os.makedirs(args.out, exist_ok=True)
-    render = DazRenderSettings(client)
-    render.set_resolution(args.width, args.height)
+    mapped_daz_bones = [daz_bone for (_, daz_bone) in joint_map.values()]
+    daz_bone_orders = _query_bone_rotation_orders(client, figure_label, mapped_daz_bones)
 
-# ── main loop ─────────────────────────────────────────────────────────────────
+    # Diagnostic: show a compact summary of queried rotation orders.
+    order_summary: dict[str, list[str]] = {}
+    for bone, ord_ in daz_bone_orders.items():
+        order_summary.setdefault(ord_, []).append(bone)
+    print("DAZ bone rotation orders:")
+    for ord_, bones in sorted(order_summary.items()):
+        print(f"  {ord_}: {', '.join(sorted(bones))}")
 
-t_start = time.perf_counter()
+    # Warn if any bone returned an unexpected value (helps diagnose DAZ API changes).
+    unknown = [b for b in mapped_daz_bones if b not in daz_bone_orders]
+    if unknown:
+        print(f"WARNING: Could not query rotation order for: {', '.join(unknown)}  (defaulting to XYZ)")
 
-for seq, fi in enumerate(frame_indices):
-    frame_data = bvh.frames[fi]
+    # ── build zero_bones ───────────────────────────────────────────────────────────
+    # DAZ bones that exist in this generation but have no BVH counterpart (twist
+    # helpers, extra spine segments, etc.) are zeroed each frame so residual values
+    # from ERC formulas or prior frames don't accumulate.
 
-    if args.debug_frame and seq == 0:
-        print("Frame 0 rotation conversions (only bones where values changed):")
-    apply_frame(
-        client,
-        figure_label,
-        frame_data,
-        joint_map,
-        daz_bone_orders,
-        zero_bones,
-        root_joint=root_joint,
-        root_translation=args.root_translation,
-        root_scale=args.root_scale,
-        debug=(args.debug_frame and seq == 0),
-    )
+    if args.no_zero_unmapped:
+        zero_bones: list[str] = []
+    else:
+        mapped_daz_set = set(mapped_daz_bones)
+        gen_all_daz = {b for b in CANONICAL_TO_DAZ[generation].values() if b is not None}
+        zero_bones = sorted(gen_all_daz - mapped_daz_set)
+
+    # ── summary ────────────────────────────────────────────────────────────────────
+
+    print(f"BVH file   : {args.bvh}")
+    print(f"Convention : {convention}")
+    print(f"Figure     : {figure_label}  ({generation})")
+    print(f"Frames     : {frame_start}–{frame_end}  ({n_frames} frames @ {bvh.fps:.1f} fps)")
+    print(f"Bones mapped: {len(joint_map)} of {len(bvh_to_daz)} expected")
+    if unmapped:
+        print(f"  Not in BVH: {', '.join(unmapped)}")
+    if zero_bones:
+        print(f"Zeroing {len(zero_bones)} unmapped DAZ bones each frame: {', '.join(zero_bones)}")
+    if args.render:
+        print(f"Rendering  : {args.out}  ({args.width}×{args.height})")
+    print()
+
+    # ── render setup ──────────────────────────────────────────────────────────────
+
+    render: DazRenderSettings | None = None
+    if args.render:
+        os.makedirs(args.out, exist_ok=True)
+        render = DazRenderSettings(client)
+        render.set_resolution(args.width, args.height)
+
+    # ── main loop ─────────────────────────────────────────────────────────────────
+
+    t_start = time.perf_counter()
+
+    for seq, fi in enumerate(frame_indices):
+        frame_data = bvh.frames[fi]
+
+        if args.debug_frame and seq == 0:
+            print("Frame 0 rotation conversions (only bones where values changed):")
+        apply_frame(
+            client,
+            figure_label,
+            frame_data,
+            joint_map,
+            daz_bone_orders,
+            zero_bones,
+            root_joint=root_joint,
+            root_translation=args.root_translation,
+            root_scale=args.root_scale,
+            debug=(args.debug_frame and seq == 0),
+        )
+
+        if render is not None:
+            out_path = os.path.join(args.out, f"frame_{seq:04d}.png")
+            render.output_path = out_path
+            render.render()
+
+        elapsed = time.perf_counter() - t_start
+        rate = (seq + 1) / elapsed
+        eta = (n_frames - seq - 1) / rate if rate > 0 else 0
+        suffix = f"  rendered → {out_path}" if render else ""
+        print(
+            f"  [{seq + 1:>{len(str(n_frames))}}/{n_frames}]"
+            f"  BVH frame {fi:04d}"
+            f"  {elapsed:.1f}s elapsed  ETA {eta:.0f}s"
+            f"{suffix}"
+        )
+
+    total = time.perf_counter() - t_start
+    print(f"\nDone. {n_frames} frames in {total:.1f}s ({n_frames/total:.1f} frames/s)")
 
     if render is not None:
-        out_path = os.path.join(args.out, f"frame_{seq:04d}.png")
-        render.output_path = out_path
-        render.render()
-
-    elapsed = time.perf_counter() - t_start
-    rate = (seq + 1) / elapsed
-    eta = (n_frames - seq - 1) / rate if rate > 0 else 0
-    suffix = f"  rendered → {out_path}" if render else ""
-    print(
-        f"  [{seq + 1:>{len(str(n_frames))}}/{n_frames}]"
-        f"  BVH frame {fi:04d}"
-        f"  {elapsed:.1f}s elapsed  ETA {eta:.0f}s"
-        f"{suffix}"
-    )
-
-total = time.perf_counter() - t_start
-print(f"\nDone. {n_frames} frames in {total:.1f}s ({n_frames/total:.1f} frames/s)")
-
-if render is not None:
-    pattern = os.path.join(args.out, "frame_%04d.png")
-    print(f"\nTo create a video:")
-    print(f'  ffmpeg -framerate {bvh.fps:.0f} -i "{pattern}" bvh_output.mp4')
+        pattern = os.path.join(args.out, "frame_%04d.png")
+        print(f"\nTo create a video:")
+        print(f'  ffmpeg -framerate {bvh.fps:.0f} -i "{pattern}" bvh_output.mp4')

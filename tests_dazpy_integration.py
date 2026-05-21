@@ -23,6 +23,7 @@ from dazpy import (
     DazModifier,
     DazMorph,
     DazNode,
+    DazPose,
     DazRenderSettings,
     DazScene,
     DazSkeleton,
@@ -1323,6 +1324,104 @@ class TestDazNodeAdditionalQueries(unittest.TestCase):
         for key in ("x", "y", "z"):
             self.assertGreaterEqual(bb["max"][key], bb["min"][key])
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DazPose
+# ══════════════════════════════════════════════════════════════════════════════
+
+@skip_no_daz
+class TestDazPose(unittest.TestCase):
+    """Integration tests for DazPose capture / apply / lerp."""
+
+    def setUp(self):
+        from dazpy import DazPose, DazScene
+        self.client = _client()
+        self.scene = DazScene(self.client)
+        self.DazPose = DazPose
+        skeletons = self.scene.skeletons()
+        if not skeletons:
+            self.skipTest("No skeletons in scene")
+        self.skel = skeletons[0]
+
+    def test_capture_returns_pose(self):
+        pose = self.DazPose.capture(self.skel)
+        self.assertIsInstance(pose.bones, dict)
+        self.assertIsInstance(pose.morphs, dict)
+        self.assertIsInstance(pose.props, dict)
+        self.assertIsInstance(pose.figure, str)
+
+    def test_capture_bones_are_float_triples(self):
+        pose = self.DazPose.capture(self.skel)
+        for name, xyz in pose.bones.items():
+            with self.subTest(bone=name):
+                self.assertEqual(len(xyz), 3)
+                for v in xyz:
+                    self.assertIsInstance(v, float)
+
+    def test_capture_morph_values_are_floats(self):
+        pose = self.DazPose.capture(self.skel)
+        for name, v in pose.morphs.items():
+            with self.subTest(morph=name):
+                self.assertIsInstance(v, float)
+
+    def test_apply_round_trips_bone_rotation(self):
+        # Set a known rotation, capture it, change to something else, restore.
+        from dazpy import DazPose
+        bones = self.skel.bones()
+        if not bones:
+            self.skipTest("Skeleton has no bones")
+        bone = bones[0]
+        bone.set_local_rotation(0.0, 7.5, 0.0)
+
+        captured = DazPose.capture(self.skel)
+
+        bone.set_local_rotation(0.0, 0.0, 0.0)
+        captured.apply(self.skel)
+
+        after = bone.local_euler
+        self.assertIsNotNone(after)
+        self.assertAlmostEqual(after[1], 7.5, places=3)
+
+    def test_apply_full_resets_rotation_to_zero(self):
+        bones = self.skel.bones()
+        if not bones:
+            self.skipTest("Skeleton has no bones")
+        bone = bones[0]
+        bone.set_local_rotation(5.0, 5.0, 5.0)
+
+        empty_pose = self.DazPose(self.skel._identifier.value, {}, {}, {})
+        empty_pose.apply_full(self.skel)
+
+        after = bone.local_euler
+        self.assertIsNotNone(after)
+        self.assertAlmostEqual(after[0], 0.0, places=3)
+        self.assertAlmostEqual(after[1], 0.0, places=3)
+        self.assertAlmostEqual(after[2], 0.0, places=3)
+
+    def test_lerp_apply_is_single_call(self):
+        from unittest.mock import patch
+        from dazpy import DazPose
+        a = DazPose.capture(self.skel)
+        b = DazPose.capture(self.skel)
+        mid = a.lerp(b, 0.5)
+        with patch.object(self.client, "execute", wraps=self.client.execute) as mock_exec:
+            mid.apply(self.skel)
+            self.assertEqual(mock_exec.call_count, 1)
+
+    def test_save_load_preserves_data(self):
+        import os, tempfile
+        pose = self.DazPose.capture(self.skel)
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            pose.save(path)
+            loaded = self.DazPose.load(path)
+            self.assertEqual(loaded.figure, pose.figure)
+            self.assertEqual(loaded.bones, pose.bones)
+            self.assertEqual(loaded.morphs, pose.morphs)
+        finally:
+            os.unlink(path)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

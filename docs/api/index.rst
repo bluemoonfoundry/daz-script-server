@@ -9,10 +9,13 @@ API Reference
    scene
    nodes
    skeleton
+   pose
+   animation
    camera
    light
    materials
    geometry
+   math3
    render
    timeline
    batch

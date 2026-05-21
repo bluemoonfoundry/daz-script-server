@@ -81,54 +81,58 @@ def parse_hex(hex_color: str) -> tuple[int, int, int]:
 def safe_filename(s: str) -> str:
     return re.sub(r"[^\w\-]", "_", s).strip("_") or "color"
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
 
-parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--node",     required=True, help="Node label in the Scene panel")
-parser.add_argument("--material", required=True, help="Material name on the node")
-parser.add_argument("--colors",   nargs="+", metavar="HEX",
-                    help="Hex colours to render e.g. '#FF0000' '#00FF00'. Default: built-in palette.")
-parser.add_argument("--out",      default="y:/tmp/swatches")
-parser.add_argument("--width",    type=int, default=1920)
-parser.add_argument("--height",   type=int, default=1080)
-args = parser.parse_args()
+if __name__ == "__main__":
+    # ── CLI ────────────────────────────────────────────────────────────────────────
 
-os.makedirs(args.out, exist_ok=True)
-
-scene  = DazScene()
-render = DazRenderSettings()
-
-node = scene.find_node_by_label(args.node)
-mat  = node.find_material(args.material)
-if mat is None:
-    available = [m.material_name for m in node.materials()]
-    raise SystemExit(
-        f"Material {args.material!r} not found on {args.node!r}.\n"
-        f"Available: {available}"
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--node",     required=True, help="Node label in the Scene panel")
+    parser.add_argument("--material", required=True, help="Material name on the node")
+    parser.add_argument("--colors",   nargs="+", metavar="HEX",
+                        help="Hex colours to render e.g. '#FF0000' '#00FF00'. Default: built-in palette.")
+    parser.add_argument("--out",      default="y:/tmp/swatches")
+    parser.add_argument("--width",    type=int, default=1920)
+    parser.add_argument("--height",   type=int, default=1080)
+    args = parser.parse_args()
 
-if args.colors:
-    swatches = [(c, safe_filename(c)) for c in args.colors]
-else:
-    swatches = DEFAULT_COLORS
+    os.makedirs(args.out, exist_ok=True)
 
-render.set_resolution(args.width, args.height)
+    scene  = DazScene()
+    render = DazRenderSettings()
 
-original_color = mat.diffuse_color
-print(f"Original colour: {original_color}")
-print(f"Rendering {len(swatches)} variation(s) → {args.out}\n")
+    node = scene.find_node_by_label(args.node)
+    mat  = node.find_material(args.material)
+    if mat is None:
+        available = [m.material_name for m in node.materials()]
+        raise SystemExit(
+            f"Material {args.material!r} not found on {args.node!r}.\n"
+            f"Available: {available}"
+        )
 
-try:
-    for hex_color, name in swatches:
-        r, g, b = parse_hex(hex_color)
-        mat.diffuse_color = (r, g, b)
-        out_path = os.path.join(args.out, f"{safe_filename(name)}.png")
-        render.output_path = out_path
-        render.render()
-        print(f"  {hex_color}  {name:20s} → {out_path}")
-finally:
-    if original_color:
-        mat.diffuse_color = original_color
-        print(f"\nRestored original colour: {original_color}")
+    if args.colors:
+        swatches = [(c, safe_filename(c)) for c in args.colors]
+    else:
+        swatches = DEFAULT_COLORS
 
-print("Done.")
+    render.set_resolution(args.width, args.height)
+
+    original_color = mat.diffuse_color
+    print(f"Original colour: {original_color}")
+    print(f"Rendering {len(swatches)} variation(s) → {args.out}\n")
+
+    try:
+        for hex_color, name in swatches:
+            r, g, b = parse_hex(hex_color)
+            mat.diffuse_color = (r, g, b)
+            out_path = os.path.join(args.out, f"{safe_filename(name)}.png")
+            render.output_path = out_path
+            render.render()
+            print(f"  {hex_color}  {name:20s} → {out_path}")
+    finally:
+        if original_color:
+            mat.diffuse_color = original_color
+            print(f"\nRestored original colour: {original_color}")
+
+    print("Done.")

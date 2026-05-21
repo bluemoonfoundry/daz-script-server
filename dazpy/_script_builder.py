@@ -43,3 +43,22 @@ class ScriptBuilder:
             f"if (!_node) return null;\n"
             f"{body}"
         )
+
+    @staticmethod
+    def skeleton_lookup(identifier: "NodeIdentifier") -> str:  # noqa: F821
+        """Return a JS snippet that finds a skeleton and binds it to ``_skel``.
+
+        The snippet does not wrap itself in an IIFE — embed it at the top of
+        a larger script body and follow it with ``if (!_skel) return null;``.
+        """
+        value = json.dumps(identifier.value)
+        match = (
+            f"_skels[_i].getLabel() === {value}"
+            if identifier.kind == "label"
+            else f"_skels[_i].getName() === {value}"
+        )
+        return (
+            f"var _skel=null,_skels=Scene.getSkeletonList();"
+            f"for(var _i=0;_i<_skels.length;_i++){{"
+            f"if({match}){{_skel=_skels[_i];break;}}}}"
+        )
