@@ -13,7 +13,7 @@ Typical usage::
     figure.find_bone("rForeArm").set_local_rotation(0, 0, 45)
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 from ._client import DazClient
 from ._scene import DazScene

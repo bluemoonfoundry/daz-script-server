@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.1.0** | DAZ Studio 4.5+ | Windows & macOS
+**Version 2.2.0** | DAZ Studio 4.5+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -66,7 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.1.0](#whats-new-in-v210)
+- [What's New in v2.2.0](#whats-new-in-v220)
 - [What's New in v2.0.0](#whats-new-in-v200)
 - [What's New in v1.3.0](#whats-new-in-v130)
 - [What's New in v1.2.0](#whats-new-in-v120)
@@ -142,7 +142,7 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
-## What's New in v2.1.0
+## What's New in v2.2.0
 
 ### 🎭 Live Webcam Expression Mirroring
 
@@ -285,7 +285,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.1.0-py3-none-any.whl
+pip install dazpy-2.2.0-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
