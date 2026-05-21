@@ -2,6 +2,50 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.2.0] - 2026-05-20
+
+### Added
+
+- **`dazpy._pose` — `DazPose`** — snapshot and restore full skeleton poses in
+  one call.  Supports named save slots, linear interpolation between poses, and
+  local/world-space round-tripping.
+- **`dazpy._animation` — `DazAnimation`** — read and write keyframe animation
+  data.  Covers per-bone rotation/translation tracks, timeline range queries,
+  frame stepping, and baking sampled poses to keyframes.
+- **`dazpy.math3` — `Vec3`, `Quat`, `BoundingBox`** — lightweight value types
+  for 3-D math returned by the SDK (bone positions, bounding volumes, rotations).
+- **`DazGeometry.vertex_positions_posed()`** and
+  **`DazGeometry.vertex_positions_posed_all()`** — fetch world-space deformed
+  vertex positions from the object's cached geometry pipeline (skinning + morphs
+  already applied).
+- **`docs/examples/scene_to_usd.py`** — export a live DAZ Studio scene to
+  Pixar USD.  Captures fully posed mesh vertices, cameras, lights, PBR materials,
+  and strand hair as `UsdGeom.BasisCurves`.  Optional `--morphs` flag writes
+  blend shapes as `UsdSkel` targets.
+- **`docs/examples/bvh_import.py`** — parse a BVH motion-capture file and apply
+  each frame to a DAZ skeleton, with automatic bone-name mapping.
+- **`docs/examples/bvh_discover.py`** — inspect a loaded DAZ figure and print
+  its bone hierarchy to help build BVH-to-DAZ bone maps.
+- **`docs/examples/bvh_bone_maps.py`** — canonical BVH ↔ DAZ bone-name tables
+  for Genesis 8 / Genesis 9; importable by other scripts.
+- **`docs/examples/animation_mixing.py`** — blend two stored poses at a
+  configurable weight and apply the result to a live figure.
+- **`docs/examples/batch_operations.py`** — run a sequence of scene mutations
+  (morph dials, material swaps, camera moves) as a single batched HTTP request.
+- **`docs/examples/geometry_analysis.py`** — query mesh vertex count, bounding
+  box, and posed vertex positions for a named figure.
+- **`docs/examples/keyframe_baking.py`** — sample a figure's pose at every frame
+  and write explicit rotation keyframes, replacing any procedural animation.
+- **API docs** — new Sphinx pages for `DazPose`, `DazAnimation`, `Vec3`, `Quat`,
+  and `BoundingBox`; updated `docs/api/index.rst` toctree.
+- **Test suite** — `tests_dazpy.py` (unit) and `tests_dazpy_integration.py`
+  (integration, requires a live DAZ Studio instance).
+- **`__main__` guards and `--help`** — every script in `docs/examples/` now has
+  an `if __name__ == "__main__":` guard and an argparse `--help` entry, making
+  the examples safe to import as modules and self-documenting at the command line.
+
+---
+
 ## [2.1.0] - 2026-05-15
 
 ### Added

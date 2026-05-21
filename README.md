@@ -144,38 +144,88 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ## What's New in v2.2.0
 
-### 🎭 Live Webcam Expression Mirroring
+### 🦴 DazPose — Snapshot and Restore Poses
 
-New example: **`docs/examples/webcam_expression_mirror.py`** streams your facial
-expression onto a Genesis 9 figure in real time.
+New module **`dazpy.DazPose`** captures a full skeleton pose in one call and
+restores it later, with linear interpolation between any two stored poses.
 
-- Captures webcam frames with OpenCV and runs **MediaPipe FaceLandmarker** inference on each one
-- Computes Action Unit (AU) magnitudes from landmark geometry and maps them to Genesis 9 FACS HD morph controls
-- Pushes updates to DAZ Studio over HTTP at a configurable rate (default 10 fps)
-- **EMA smoothing** (`--smooth`) reduces jitter without adding latency
-- **Live preview window** shows landmark dots, a per-AU bar chart, capture fps, and DAZ connection status
-- **Headless mode** (`--no-preview`) for use without a display
-- Zeroes all FACS morphs on exit so the figure returns to neutral
+```python
+from dazpy import DazScene, DazPose
 
-Pairs with DAZ's **Face Transfer 2**: use that product to build a 3D version of yourself,
-then use this script to drive its expressions live from your webcam.
+scene  = DazScene()
+figure = scene.find_skeleton_by_label("Genesis 9")
 
-```bash
-pip install mediapipe opencv-python numpy dazpy
-
-python webcam_expression_mirror.py
-python webcam_expression_mirror.py --figure "My Character" --scale 0.8
-python webcam_expression_mirror.py --camera 1 --fps 15 --smooth 0.7
-python webcam_expression_mirror.py --no-preview   # headless
+neutral = DazPose.capture(figure)        # snapshot current pose
+# ... dial morphs, animate, etc. ...
+DazPose.blend(neutral, other_pose, t=0.5).apply(figure)  # 50 % mix
 ```
 
-See [`docs/examples/README.md`](docs/examples/README.md) for the full argument reference.
+### 🎞 DazAnimation — Keyframe Read / Write
 
-### 🐛 Fix: dazpy version alignment
+New module **`dazpy.DazAnimation`** exposes per-bone rotation and translation
+tracks, timeline range queries, frame stepping, and pose baking.
 
-`dazpy.__version__` previously returned `"0.1.0"` regardless of the installed
-package version.  It now returns the correct version (`"2.1.0"`), matching
-`pyproject.toml` and the wheel filename.
+```python
+from dazpy import DazAnimation
+
+anim = DazAnimation(figure)
+print(anim.frame_range())          # (start, end)
+anim.bake_pose_to_keyframes(start=0, end=60)
+```
+
+### 📐 math3 — Vec3, Quat, BoundingBox
+
+New module **`dazpy.math3`** provides lightweight value types returned throughout
+the SDK: `Vec3` (positions, translations), `Quat` (rotations), and `BoundingBox`
+(geometry bounds).  All support arithmetic operators and round-trip through JSON.
+
+### 🌐 Posed Vertex Export & USD Scene Export
+
+**`DazGeometry.vertex_positions_posed()`** returns world-space deformed vertex
+positions with skinning and morphs already applied — enabling downstream export
+pipelines to read the final mesh without re-solving the rig.
+
+New example **`docs/examples/scene_to_usd.py`** uses this to export a full live
+DAZ Studio scene to Pixar USD: posed meshes, cameras, lights, PBR materials, and
+strand-based hair as `UsdGeom.BasisCurves`.  Pass `--morphs` to write blend
+shapes as `UsdSkel` targets.
+
+```bash
+python scene_to_usd.py --output scene.usda
+python scene_to_usd.py --output scene.usda --morphs
+```
+
+### 🏃 BVH Motion Capture Support
+
+Three new interoperable example scripts:
+
+| Script | Purpose |
+|---|---|
+| `bvh_import.py` | Parse a `.bvh` file and apply each frame to a DAZ skeleton |
+| `bvh_discover.py` | Print a figure's bone hierarchy to help build bone maps |
+| `bvh_bone_maps.py` | Canonical BVH ↔ DAZ bone-name tables for G8 / G9 |
+
+### 🗂 New Examples
+
+Four additional examples expanding SDK coverage:
+
+| Script | What it shows |
+|---|---|
+| `animation_mixing.py` | Blend two stored poses at a configurable weight |
+| `batch_operations.py` | Morph dials, material swaps, and camera moves in one batched request |
+| `geometry_analysis.py` | Mesh vertex count, bounding box, and posed positions |
+| `keyframe_baking.py` | Sample procedural animation and write explicit rotation keyframes |
+
+### 🧪 Test Suite
+
+`tests_dazpy.py` (unit) and `tests_dazpy_integration.py` (requires a live DAZ
+Studio instance) now ship in the repo root.
+
+### 📖 Docs & Ergonomics
+
+- API reference pages for `DazPose`, `DazAnimation`, `Vec3`, `Quat`, and `BoundingBox`
+- Every script in `docs/examples/` has an `if __name__ == "__main__":` guard and
+  argparse `--help`, making all examples safe to import and self-documenting
 
 ---
 
