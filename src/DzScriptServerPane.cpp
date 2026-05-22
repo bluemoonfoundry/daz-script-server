@@ -693,6 +693,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pAsyncResultHandler.reset(new AsyncResultHandler(this));
 	m_pAsyncCancelHandler.reset(new AsyncCancelHandler(this));
 	m_pAsyncListHandler.reset(new AsyncListHandler(this));
+	m_pRenderHandler.reset(new RenderHandler(this));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -796,6 +797,14 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Get("/requests", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (m_pAuthChain->run(ctx)) m_pAsyncListHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	// ── Render endpoint ───────────────────────────────────────────────────────
+
+	m_pServer->Post("/render", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pRenderHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1334,6 +1343,287 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 
 	return buildQueuedResponse(requestId, submittedAt);
 }
+
+// ─── Render script generation ─────────────────────────────────────────────────
+
+namespace {
+
+struct FigureSpec {
+    QString     name;
+    QVariantMap morphs;
+};
+
+// Builds the DazScript that applies morphs and triggers the render.
+// The script runs on the main thread via processNextAsyncRequest().
+//
+// Structure:
+//   1. Re-validate figure refs (belt-and-suspenders; scene may have changed since enqueue).
+//   2. Optionally reset all float properties on each figure to default (reset_morphs).
+//   3. Apply morphs dict via findPropertyByLabel(); unknown keys are silently skipped.
+//   4. Configure render options and call App.getRenderMgr().render(opts).
+//   5. Return {success:true, output_path:"..."} as a JS object.
+//
+// NOTE: DAZ DazScript render options method names (setImageFile, setAspectWidth,
+// setAspectHeight, setActiveCamera) need to be verified against a running DAZ Studio
+// instance. The names used here are based on the DAZ SDK docs and existing examples.
+static QString buildRenderScript(
+    const QString& outputPath,
+    int width, int height,
+    const QString& camera,
+    const QString& engine,
+    int iraySamples,
+    bool resetMorphs,
+    const QList<FigureSpec>& figures)
+{
+    // Embed figure specs as a JSON array literal — valid JS object literal syntax.
+    QString figureJson = "[";
+    for (int i = 0; i < figures.size(); ++i) {
+        if (i > 0) figureJson += ",";
+        figureJson += "{\"name\":\"";
+        figureJson += QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(figures[i].name)));
+        figureJson += "\",\"morphs\":";
+        figureJson += QString::fromStdString(JsonStd::variantToJson(QVariant(figures[i].morphs)));
+        figureJson += "}";
+    }
+    figureJson += "]";
+
+    QString outputPathEsc = QString::fromStdString(
+        JsonStd::escape(JsonStd::qstrToStd(outputPath)));
+    QString cameraEsc = camera.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(camera))) + "\"";
+    QString engineEsc = engine.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(engine))) + "\"";
+
+    QString script;
+    script += "(function() {\n";
+
+    // ── Figure specs ──────────────────────────────────────────────────────
+    script += "  var figures = " + figureJson + ";\n";
+    script += "  var outputPath = \"" + outputPathEsc + "\";\n";
+    script += "  var cameraName = " + cameraEsc + ";\n";
+    script += "  var engineName = " + engineEsc + ";\n";
+    script += "  var width = " + QString::number(width) + ";\n";
+    script += "  var height = " + QString::number(height) + ";\n";
+    script += "  var iraySamples = " + QString::number(iraySamples) + ";\n";
+    script += "  var resetMorphs = " + QString(resetMorphs ? "true" : "false") + ";\n\n";
+
+    // ── Pre-flight: validate all figure references ────────────────────────
+    script +=
+        "  for (var i = 0; i < figures.length; i++) {\n"
+        "    if (!Scene.findNodeByLabel(figures[i].name))\n"
+        "      return {success: false, error: 'Figure not found: ' + figures[i].name};\n"
+        "  }\n\n";
+
+    // ── Reset morphs ──────────────────────────────────────────────────────
+    // Resets all DzFloatProperty values to their defaults on each figure.
+    // This gives a clean morph baseline before applying the variant's morph dict.
+    script +=
+        "  if (resetMorphs) {\n"
+        "    for (var i = 0; i < figures.length; i++) {\n"
+        "      var node = Scene.findNodeByLabel(figures[i].name);\n"
+        "      var props = node.getPropertyList();\n"
+        "      for (var j = 0; j < props.length; j++) {\n"
+        "        if (props[j].inherits('DzFloatProperty'))\n"
+        "          props[j].setValue(props[j].getDefaultValue());\n"
+        "      }\n"
+        "    }\n"
+        "  }\n\n";
+
+    // ── Apply morphs ──────────────────────────────────────────────────────
+    // Unknown morph names are silently skipped (non-fatal per design decision).
+    script +=
+        "  for (var i = 0; i < figures.length; i++) {\n"
+        "    var node = Scene.findNodeByLabel(figures[i].name);\n"
+        "    var morphDict = figures[i].morphs;\n"
+        "    for (var k in morphDict) {\n"
+        "      if (morphDict.hasOwnProperty(k)) {\n"
+        "        var prop = node.findPropertyByLabel(k);\n"
+        "        if (prop) prop.setValue(morphDict[k]);\n"
+        "      }\n"
+        "    }\n"
+        "  }\n\n";
+
+    // ── Configure render options ──────────────────────────────────────────
+    // SDK-verified method names (dzrenderoptions.h / dzrendermgr.h / dzscene.h):
+    //   renderImgFilename   Q_PROPERTY WRITE setRenderImgFilename
+    //   renderImgToId       Q_PROPERTY WRITE setRenderImgToId  (2 = DirectToFile)
+    //   imageSize           Q_PROPERTY WRITE setImageSize (QSize)
+    //   Scene.findCameraByLabel()  confirmed in dzscene.h
+    //   App.getViewportMgr().setActiveCamera()  confirmed in dzviewportmgr.h
+    //   renderMgr.doRender(opts)  confirmed in dzrendermgr.h
+    //   Engine switching: renderMgr.setActiveRenderer(DzRenderer*) — requires
+    //     renderer lookup by class name; names are runtime-registered so not in
+    //     the SDK headers. Left as a TODO until tested against a live instance.
+    //   iray_samples: not a DzRenderOptions property — it lives in iray's own
+    //     render settings, accessible via the iray renderer object. TODO.
+    script +=
+        "  var renderMgr = App.getRenderMgr();\n"
+        "  var opts = renderMgr.getRenderOptions();\n"
+        "  opts.renderImgFilename = outputPath;\n"
+        "  opts.renderImgToId = 2;\n";  // DirectToFile
+
+    // QSize constructor confirmed in DAZ DazScript: new QSize(w, h)
+    // Qt.size() is NOT available — Qt global is undefined in this engine.
+    script +=
+        "  if (width > 0) opts.imageSize = new QSize(width, height);\n";
+
+    script +=
+        "  if (cameraName) {\n"
+        "    var cam = Scene.findCameraByLabel(cameraName);\n"
+        "    if (cam) App.getViewportMgr().setActiveCamera(cam);\n"
+        "  }\n";
+
+    // Engine class name map — confirmed: iray="DzIrayRenderer".
+    // 3Delight and Filament class names follow the same Dz*Renderer pattern but
+    // need verification on a system with those plugins installed.
+    script +=
+        "  if (engineName) {\n"
+        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"3delight\": \"Dz3DelightRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
+        "    var engineClass = engineMap[engineName.toLowerCase()];\n"
+        "    if (engineClass) {\n"
+        "      var renderer = renderMgr.findRenderer(engineClass);\n"
+        "      if (renderer) renderMgr.setActiveRenderer(renderer);\n"
+        "    }\n"
+        "  }\n";
+
+    // iray_samples: not exposed on DzRenderOptions or the DzIrayRenderer object
+    // in DazScript. DAZ stores iray-specific settings outside the standard render
+    // options API; the access path is not yet determined. Field is accepted but
+    // silently ignored until resolved.
+    script += "\n";
+
+    // ── Render ────────────────────────────────────────────────────────────
+    script +=
+        "  renderMgr.doRender(opts);\n"
+        "  return {success: true, output_path: outputPath};\n"
+        "})();\n";
+
+    return script;
+}
+
+} // namespace
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBody)
+{
+    // ── Parse body ────────────────────────────────────────────────────────
+    QScriptEngine parseEngine;
+    QScriptValue  parsed = parseEngine.evaluate(
+        "(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+    if (parseEngine.hasUncaughtException())
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
+
+    QVariantMap body = parsed.toVariant().toMap();
+
+    // ── Required fields ───────────────────────────────────────────────────
+    QString outputPath = body.value("output_path").toString().trimmed();
+    {
+        ValidationResult vr = RequestValidator::validateRequiredField(outputPath, "output_path");
+        if (!vr.valid)
+            return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
+    }
+
+    // ── Optional fields ───────────────────────────────────────────────────
+    int  width       = body.contains("width")        ? body.value("width").toInt()        : 0;
+    int  height      = body.contains("height")       ? body.value("height").toInt()       : 0;
+    int  iraySamples = body.contains("iray_samples") ? body.value("iray_samples").toInt() : 0;
+    bool resetMorphs = body.value("reset_morphs").toBool();
+    QString camera   = body.value("camera").toString().trimmed();
+    QString engine   = body.value("engine").toString().trimmed();
+
+    if ((width > 0) != (height > 0))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "width and height must both be provided or both omitted")));
+
+    if (width < 0 || height < 0)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "width and height must be positive integers")));
+
+    if (!engine.isEmpty()
+            && engine != "iray" && engine != "3delight" && engine != "filament")
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "engine must be one of: iray, 3delight, filament")));
+
+    // ── Normalise figure list ─────────────────────────────────────────────
+    // Accept {figure, morphs} single-figure shorthand or {figures:[{name,morphs},...]}
+    QList<FigureSpec> figureSpecs;
+
+    if (body.contains("figures")) {
+        QVariantList figs = body.value("figures").toList();
+        for (int i = 0; i < figs.size(); ++i) {
+            QVariantMap fig = figs[i].toMap();
+            QString name = fig.value("name").toString().trimmed();
+            if (name.isEmpty())
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD,
+                    "figures[" + std::to_string(i) + "].name")));
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = fig.value("morphs").toMap();
+            figureSpecs.append(spec);
+        }
+    } else if (body.contains("figure")) {
+        QString name = body.value("figure").toString().trimmed();
+        if (!name.isEmpty()) {
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = body.value("morphs").toMap();
+            figureSpecs.append(spec);
+        }
+    }
+
+    // ── Pre-flight: validate figure names against the current scene ───────
+    // Runs a minimal DazScript on the main thread before enqueuing so that
+    // bad figure references surface immediately (not after render queue wait).
+    if (!figureSpecs.isEmpty()) {
+        QString validateScript = "(function() {\n  var names = [";
+        for (int i = 0; i < figureSpecs.size(); ++i) {
+            if (i > 0) validateScript += ",";
+            validateScript += "\"";
+            validateScript += QString::fromStdString(
+                JsonStd::escape(JsonStd::qstrToStd(figureSpecs[i].name)));
+            validateScript += "\"";
+        }
+        validateScript +=
+            "];\n"
+            "  for (var i = 0; i < names.length; i++) {\n"
+            "    if (!Scene.findNodeByLabel(names[i])) return 'NOT_FOUND:' + names[i];\n"
+            "  }\n"
+            "  return 'OK';\n"
+            "})()";
+
+        QScopedPointer<DzScript> valScript(new DzScript());
+        valScript->setCode(validateScript);
+        if (valScript->execute(QVariantList())) {
+            QString valResult = valScript->result().toString();
+            if (valResult.startsWith("NOT_FOUND:")) {
+                QString missing = valResult.mid(10);
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                    "Figure not found in scene: " + JsonStd::qstrToStd(missing))));
+            }
+        }
+        // If the validation script itself fails to parse/execute (e.g. Scene API
+        // unavailable at startup), proceed — the render script will surface the
+        // error at execution time rather than blocking enqueue.
+    }
+
+    // ── Generate and enqueue render job ───────────────────────────────────
+    QString renderScript = buildRenderScript(
+        outputPath, width, height, camera, engine, iraySamples, resetMorphs, figureSpecs);
+
+    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd");
+    if (!sr.accepted)
+        return HttpResult(503, stdToQBA(ErrorResponse::build(
+            ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
+
+    appendLog(QString("[%1] [RENDER QUEUED] output:%2 -> %3")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+        .arg(outputPath).arg(sr.id));
+
+    return buildQueuedResponse(sr.id, sr.submittedAt);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 void DzScriptServerPane::onMessagePosted(const QString& msg)
 {

@@ -55,10 +55,16 @@ public:
         QString error; // set only when !accepted
     };
 
+    enum RequestType { REQUEST_TYPE_SCRIPT, REQUEST_TYPE_RENDER };
+
     // Enqueue a new async request. Returns SubmitResult::accepted=false when
     // the queue is at capacity or too many requests are tracked.
     SubmitResult        submit(const QString& scriptText, const QVariantMap& args,
                                const QString& idPrefix);
+
+    // Enqueue a render job. Same as submit() but tags the request as
+    // REQUEST_TYPE_RENDER so cancel dispatch calls killRender() correctly.
+    SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix);
 
     // All four methods below are safe to call from HTTP threads (no Qt string ops).
     std::pair<int, std::string> getStatusJson(const std::string& requestId) const;
@@ -114,12 +120,14 @@ private:
 
     struct AsyncRequest {
         AsyncRequest()
-            : status(REQUEST_QUEUED), scriptExecuted(false), progress(0.0)
+            : status(REQUEST_QUEUED), requestType(REQUEST_TYPE_SCRIPT)
+            , scriptExecuted(false), progress(0.0)
             , submittedAt(0), startedAt(0), completedAt(0), cancelRequested(0)
         {}
 
         QString       id;
         RequestStatus status;
+        RequestType   requestType;
         QString       scriptText;
         QVariantMap   args;
         QVariant      scriptResult;

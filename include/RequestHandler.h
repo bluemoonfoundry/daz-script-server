@@ -221,3 +221,11 @@ public:
 private:
     DzScriptServerPane* m_pPane;
 };
+
+class RenderHandler : public IRequestHandler {
+public:
+    explicit RenderHandler(DzScriptServerPane* pane);
+    void handle(HttpContext& ctx) override;
+private:
+    DzScriptServerPane* m_pPane;
+};
