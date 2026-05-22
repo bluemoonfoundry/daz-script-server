@@ -13,6 +13,7 @@
 #include <QtCore/qdatetime.h>
 #include <QtCore/qtimer.h>
 #include <QtCore/qmetatype.h>
+#include <QtCore/qpointer.h>
 #include <QtGui/qspinbox.h>
 #include <QtGui/qlineedit.h>
 #include <QtGui/qpushbutton.h>
@@ -79,6 +80,13 @@ public:
 	Q_INVOKABLE void    setHost(const QString& h) { m_sHost = h; }
 	Q_INVOKABLE bool    isRunning() const { return m_bRunning; }
 
+	// Plugin route registration — called by companion plugins loaded in the same process.
+	// Registers method+path on the httplib server; takes effect at the next server start.
+	// receiver must expose slotName as Q_INVOKABLE with signature HttpResult(QByteArray,QByteArray).
+	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
+	                                     QObject* receiver, const QString& slotName);
+	Q_INVOKABLE void unregisterPluginRoute(const QString& method, const QString& path);
+
 public slots:
 	Q_INVOKABLE void startServer();
 	Q_INVOKABLE void stopServer();
@@ -144,6 +152,7 @@ private slots:
 
 private:
 	void   setupRoutes();
+	void   applyPluginRoutes();
 	void   updateUI();
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
@@ -213,6 +222,17 @@ private:
 	// intentional — DAZ Studio's API is single-threaded.  Status queries are
 	// served directly from AsyncRequestManager's mutex-protected map without
 	// needing the main thread, so polling always returns promptly.
+
+	// Plugin route registry — populated by companion plugins via registerPluginRoute().
+	// Applied in setupRoutes() each time the server starts.
+	struct PluginRoute {
+		QString          method;    // "GET", "POST", "PUT", "DELETE", "PATCH"
+		QString          path;
+		QPointer<QObject> receiver;
+		QString          slotName;  // Q_INVOKABLE: HttpResult slotName(QByteArray, QByteArray)
+	};
+	QList<PluginRoute> m_pluginRoutes;
+	mutable QMutex     m_pluginRoutesMutex;
 
 	AsyncRequestManager* m_pAsyncMgr;
 	QTimer*              m_pCleanupTimer; // Fires every 5 min to purge TTL-expired requests

@@ -900,6 +900,85 @@ void DzScriptServerPane::setupRoutes()
 			}
 		);
 	});
+
+	applyPluginRoutes();
+}
+
+// ─── Plugin Route Registration ────────────────────────────────────────────────
+
+bool DzScriptServerPane::registerPluginRoute(const QString& method, const QString& path,
+                                              QObject* receiver, const QString& slotName)
+{
+	if (!receiver || path.isEmpty() || slotName.isEmpty())
+		return false;
+
+	const QString m = method.toUpper();
+	if (m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "PATCH")
+		return false;
+
+	PluginRoute r;
+	r.method    = m;
+	r.path      = path;
+	r.receiver  = receiver;
+	r.slotName  = slotName;
+
+	QMutexLocker lock(&m_pluginRoutesMutex);
+	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+		if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
+			m_pluginRoutes[i] = r;
+			return true;
+		}
+	}
+	m_pluginRoutes.append(r);
+	return true;
+}
+
+void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QString& path)
+{
+	const QString m = method.toUpper();
+	QMutexLocker lock(&m_pluginRoutesMutex);
+	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+		if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
+			m_pluginRoutes.removeAt(i);
+			return;
+		}
+	}
+}
+
+void DzScriptServerPane::applyPluginRoutes()
+{
+	QMutexLocker lock(&m_pluginRoutesMutex);
+	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+		const PluginRoute& r = m_pluginRoutes[i];
+		QPointer<QObject> receiver = r.receiver;
+		QByteArray slotBytes       = r.slotName.toLatin1();
+
+		auto handler = [receiver, slotBytes](const httplib::Request& req, httplib::Response& res) {
+			if (!receiver) {
+				res.status = 503;
+				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
+				return;
+			}
+			QByteArray body(req.body.c_str(), (int)req.body.size());
+			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
+			HttpResult result;
+			QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
+			                          Qt::BlockingQueuedConnection,
+			                          Q_RETURN_ARG(HttpResult, result),
+			                          Q_ARG(QByteArray, body),
+			                          Q_ARG(QByteArray, ip));
+			res.status = result.first;
+			if (!result.second.isEmpty())
+				res.set_content(result.second.constData(), "application/json");
+		};
+
+		std::string path = r.path.toStdString();
+		if      (r.method == "GET")    m_pServer->Get(path, handler);
+		else if (r.method == "POST")   m_pServer->Post(path, handler);
+		else if (r.method == "PUT")    m_pServer->Put(path, handler);
+		else if (r.method == "DELETE") m_pServer->Delete(path, handler);
+		else if (r.method == "PATCH")  m_pServer->Patch(path, handler);
+	}
 }
 
 // ─── Script Registry public API (called from HTTP threads) ───────────────────
