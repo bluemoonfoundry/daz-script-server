@@ -268,6 +268,65 @@ else:
     skip("Job reaches terminal state",        "no job_id from submission")
     skip("Terminal status body has completedAt", "no job_id from submission")
 
+# -- 6. Output file verification -----------------------------------------------
+
+section("6. Output file verification (end-to-end)")
+
+export_completed = (job_id is not None
+                    and 'final' in dir()
+                    and final.get("status") == "completed")
+
+if export_completed:
+    output_file = final.get("outputPath", EXPORT_OUT)
+
+    check("Output file exists", os.path.isfile(output_file),
+          f"path={output_file}")
+
+    if os.path.isfile(output_file):
+        file_size = os.path.getsize(output_file)
+        check("Output file is non-empty", file_size > 0,
+              f"size={file_size}")
+
+        # Detect format by extension and validate header bytes.
+        if output_file.lower().endswith(".usda"):
+            with open(output_file, "r", encoding="utf-8", errors="replace") as fh:
+                first_line = fh.readline().strip()
+            check("USDA file has '#usda 1.0' header",
+                  first_line == "#usda 1.0",
+                  f"first_line={first_line!r}")
+        elif output_file.lower().endswith(".usdc"):
+            with open(output_file, "rb") as fh:
+                magic = fh.read(8)
+            check("USDC file has PXR-USDC magic",
+                  magic[:8] == b"PXR-USDC",
+                  f"magic={magic!r}")
+        else:
+            skip("USD header check", f"unknown extension: {output_file}")
+
+        # For USDA, do a quick sanity scan: look for at least one 'def' prim.
+        if output_file.lower().endswith(".usda"):
+            with open(output_file, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read(65536)  # read first 64 KB
+            has_root = "def Xform" in content or "def Mesh" in content
+            check("USDA contains at least one prim definition", has_root,
+                  "no 'def Xform' or 'def Mesh' found in first 64 KB")
+
+        print(f"  (output file: {output_file}, size: {file_size:,} bytes)")
+
+    # Clean up test output files.
+    for f in [EXPORT_OUT, EXPORT_OUT + ".opt.usda"]:
+        try:
+            if os.path.isfile(f):
+                os.remove(f)
+        except OSError:
+            pass
+else:
+    reason = "export did not complete" if job_id else "no job_id from submission"
+    skip("Output file exists",                    reason)
+    skip("Output file is non-empty",              reason)
+    skip("USDA file has '#usda 1.0' header",      reason)
+    skip("USDA contains at least one prim definition", reason)
+
 # -----------------------------------------------------------------------------
 
 ok = summary()
