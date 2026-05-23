@@ -63,3 +63,15 @@ class AsyncExecutionError(DazError):
     def __init__(self, message: str, request_id: str = ""):
         super().__init__(message)
         self.request_id = request_id
+
+
+class UsdExportError(DazError):
+    """Raised when a USD export job fails on the DAZ Studio side.
+
+    Attributes:
+        job_id: The server-assigned export job ID.
+    """
+
+    def __init__(self, message: str, job_id: str = ""):
+        super().__init__(message)
+        self.job_id = job_id

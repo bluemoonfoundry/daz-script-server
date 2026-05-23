@@ -37,6 +37,8 @@ from ._animation import DazAnimation
 from .math3 import Vec3, Quat, BoundingBox
 from ._result import ExecutionResult
 from ._polling import execute_long
+from ._usd import UsdExportJob, export_usd
+from .exceptions import UsdExportError
 from . import exceptions
 
 __all__ = [
@@ -66,5 +68,8 @@ __all__ = [
     "BoundingBox",
     "ExecutionResult",
     "execute_long",
+    "UsdExportJob",
+    "UsdExportError",
+    "export_usd",
     "exceptions",
 ]

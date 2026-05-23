@@ -247,6 +247,76 @@ class DazClient:
         except _requests.exceptions.RequestException:
             return False
 
+    # ── USD export ────────────────────────────────────────────────────────────
+
+    def export_usd_submit(
+        self,
+        output_path: str,
+        *,
+        include_geometry: bool = True,
+        include_materials: bool = True,
+        include_skeleton: bool = False,
+        include_morphs: bool = False,
+        include_lights: bool = False,
+        include_camera: bool = False,
+    ) -> dict:
+        """Submit a USD export job and return immediately.
+
+        Args:
+            output_path: Absolute path on the DAZ Studio host where the
+                ``.usda`` file should be written.
+            include_geometry: Export mesh geometry (default ``True``).
+            include_materials: Export PBR material prims (default ``True``).
+            include_skeleton: Export UsdSkel armature and skin weights.
+            include_morphs: Export active morphs as UsdSkelBlendShape prims.
+            include_lights: Export scene lights using UsdLux prims.
+            include_camera: Export the active render camera as UsdGeomCamera.
+
+        Returns:
+            A dict with ``job_id``, ``status`` (``"queued"``), and
+            ``submittedAt`` keys.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On HTTP 401/403.
+        """
+        payload = {
+            "outputPath": output_path,
+            "includeGeometry": include_geometry,
+            "includeMaterials": include_materials,
+            "includeSkeleton": include_skeleton,
+            "includeMorphs": include_morphs,
+            "includeLights": include_lights,
+            "includeCamera": include_camera,
+        }
+        resp = self._post("/export/usd", payload)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
+    def get_usd_export_status(self, job_id: str) -> dict:
+        """Poll the status of a USD export job.
+
+        Args:
+            job_id: The ID returned by :meth:`export_usd_submit`.
+
+        Returns:
+            A dict with ``job_id``, ``status``, and (on completion)
+            ``outputPath`` or ``error`` keys.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get(f"/export/usd/{job_id}")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code == 404:
+            return {"job_id": job_id, "status": "not_found"}
+        return resp.json()
+
+    # ── Server health ─────────────────────────────────────────────────────────
+
     def status(self) -> dict:
         """Return the server status dict from ``GET /status``."""
         return self._get("/status").json()
