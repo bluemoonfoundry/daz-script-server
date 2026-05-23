@@ -14,3 +14,9 @@ CMakeFiles/
 .dolt/
 *.db
 .beads-credential-key
+
+# Test export output
+measurements.json
+scene.usda
+*.usda
+*.usdc
