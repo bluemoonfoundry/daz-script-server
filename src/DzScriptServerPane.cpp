@@ -22,6 +22,7 @@
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qregexp.h>
+#include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
 #include <QtCore/qscopedpointer.h>
 #include <QtGui/qboxlayout.h>
@@ -1049,7 +1050,7 @@ void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QStr
 // Fills `params` with captured segment values keyed by the param name (no colon).
 // Returns true on match.  Both arguments must start with '/'.
 static bool matchPluginPath(const QString& pattern, const QString& path,
-                             std::map<std::string, std::string>& params)
+                             QMap<QString, QString>& params)
 {
 	const QStringList patParts  = pattern.split('/');
 	const QStringList pathParts = path.split('/');
@@ -1057,7 +1058,7 @@ static bool matchPluginPath(const QString& pattern, const QString& path,
 	params.clear();
 	for (int i = 0; i < patParts.size(); ++i) {
 		if (patParts[i].startsWith(':'))
-			params[patParts[i].mid(1).toStdString()] = pathParts[i].toStdString();
+			params[patParts[i].mid(1)] = pathParts[i];
 		else if (patParts[i] != pathParts[i])
 			return false;
 	}
@@ -1076,7 +1077,7 @@ void DzScriptServerPane::applyPluginRoutes()
 	auto makeHandler = [this](const QString& method) {
 		return [this, method](const httplib::Request& req, httplib::Response& res) {
 			const QString qpath = QString::fromStdString(req.path);
-			std::map<std::string, std::string> params;
+			QMap<QString, QString> params;
 
 			QPointer<QObject> receiver;
 			QByteArray        slotBytes;
@@ -1107,20 +1108,21 @@ void DzScriptServerPane::applyPluginRoutes()
 
 			// Wrap path params + body into a single JSON envelope so the slot can
 			// access both without a separate signature.
+			// All string operations use QByteArray (Qt CRT) to avoid a heap mismatch
+			// between Qt's msvcr100 and DazScriptServer's ucrtbase.
 			QByteArray body;
-			if (!params.empty()) {
-				std::string paramsJson = "{";
+			if (!params.isEmpty()) {
+				QByteArray paramsJson = "{";
 				bool first = true;
 				for (auto it = params.begin(); it != params.end(); ++it) {
 					if (!first) paramsJson += ",";
 					first = false;
-					paramsJson += "\"" + it->first + "\":\"" + it->second + "\"";
+					paramsJson += "\"" + it.key().toUtf8() + "\":\"" + it.value().toUtf8() + "\"";
 				}
 				paramsJson += "}";
-				const std::string& rawBody = req.body;
-				body = QByteArray(
-					("{\"_pathParams\":" + paramsJson + ",\"_body\":" +
-					 (rawBody.empty() ? "null" : rawBody) + "}").c_str());
+				QByteArray rawBody(req.body.c_str(), (int)req.body.size());
+				body = "{\"_pathParams\":" + paramsJson + ",\"_body\":" +
+				       (rawBody.isEmpty() ? QByteArray("null") : rawBody) + "}";
 			} else {
 				body = QByteArray(req.body.c_str(), (int)req.body.size());
 			}
