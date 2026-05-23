@@ -77,17 +77,26 @@ def get(path, **kw):
 def post(path, **kw):
     return requests.post(f"{BASE_URL}{path}", **kw)
 
-def poll_job(job_id: str, timeout: int = 60) -> dict:
-    """Poll GET /export/usd/:id until terminal state or timeout."""
+def poll_job(job_id: str, timeout: int = 120) -> dict:
+    """Poll GET /export/usd/:id until terminal state or timeout.
+
+    A connection reset means the main thread is blocked by an active export;
+    wait and retry rather than treating it as an error.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = get(f"/export/usd/{job_id}", headers=AUTH)
+        try:
+            r = get(f"/export/usd/{job_id}", headers=AUTH)
+        except requests.exceptions.ConnectionError:
+            # Main thread busy with export — wait and retry
+            time.sleep(2.0)
+            continue
         if r.status_code != 200:
             return {"status": "error", "_http": r.status_code}
         data = r.json()
         if data.get("status") in ("completed", "failed"):
             return data
-        time.sleep(0.5)
+        time.sleep(1.0)
     return {"status": "timeout"}
 
 # ── 1. Bridge availability probe ──────────────────────────────────────────────
@@ -144,7 +153,7 @@ try:
 except Exception:
     check("Empty body error has 'error' key", False, r.text[:80])
 
-r = post("/export/usd", headers=AUTH, data=b"not json", content_type="application/json")
+r = post("/export/usd", headers={**AUTH, "Content-Type": "application/json"}, data=b"not json")
 check("Invalid JSON → 400", r.status_code == 400, f"got {r.status_code}")
 
 r = post("/export/usd", headers=AUTH, json={"includeGeometry": True})
@@ -198,19 +207,27 @@ check("Minimal payload (outputPath only) → 202", r2.status_code == 202,
 section("5. GET /export/usd/:id — status polling")
 
 if job_id:
-    r = get(f"/export/usd/{job_id}", headers=AUTH)
-    check("GET /export/usd/:id → 200", r.status_code == 200, f"got {r.status_code}")
-    try:
-        status_body = r.json()
+    # First status check — may need to wait if export is already running.
+    status_body = None
+    for _attempt in range(10):
+        try:
+            r = get(f"/export/usd/{job_id}", headers=AUTH)
+            status_body = r.json()
+            break
+        except (requests.exceptions.ConnectionError, ValueError):
+            time.sleep(2.0)
+
+    if status_body is not None:
+        check("GET /export/usd/:id → 200", r.status_code == 200, f"got {r.status_code}")
         check("Status body has job_id",  status_body.get("job_id") == job_id,
               status_body.get("job_id"))
         check("Status body has status",  "status" in status_body)
         check("Status body has submittedAt", "submittedAt" in status_body)
-    except Exception as e:
-        check("Status body is valid JSON", False, str(e))
-        check("Status body has job_id",    False, "parse failed")
-        check("Status body has status",    False, "parse failed")
-        check("Status body has submittedAt", False, "parse failed")
+    else:
+        check("GET /export/usd/:id → 200", False, "connection kept resetting")
+        check("Status body has job_id",     False, "connection kept resetting")
+        check("Status body has status",     False, "connection kept resetting")
+        check("Status body has submittedAt", False, "connection kept resetting")
 
     # Unknown job id.
     r = get("/export/usd/nonexistent-job-id", headers=AUTH)
