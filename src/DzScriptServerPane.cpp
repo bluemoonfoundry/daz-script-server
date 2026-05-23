@@ -72,6 +72,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
 	, m_pEventBroker(nullptr)
+	, m_pRenderProgress(nullptr)
 	, m_pEventClientsLabel(nullptr)
 {
 	// Register return type for BlockingQueuedConnection on execute/register handlers.
@@ -470,6 +471,8 @@ void DzScriptServerPane::startServer()
 	m_pEventBroker = new SceneEventBroker(this);
 	m_pEventBroker->start();
 
+	m_pRenderProgress = new RenderProgressBroker();
+
 	updateUI();
 	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -488,9 +491,11 @@ void DzScriptServerPane::stopServer()
 	// Stop async cleanup timer
 	m_pCleanupTimer->stop();
 
-	// 1. Stop the event broker: disconnects DzScene signals and closes all
-	//    SubscriberQueues so that SSE content-provider callbacks unblock their
-	//    pop() calls and start draining quickly.
+	// 1. Stop the event and progress brokers: unblocks all SSE pop() calls so
+	//    content-provider callbacks drain quickly before the server is torn down.
+	if (m_pRenderProgress) {
+		m_pRenderProgress->stopAll();
+	}
 	if (m_pEventBroker) {
 		m_pEventBroker->stop();
 		// Do NOT delete yet — SSE resource-releaser lambdas still hold a
@@ -519,7 +524,11 @@ void DzScriptServerPane::stopServer()
 		m_pServerThread = nullptr;
 	}
 
-	// 4. Now safe to delete the broker — all resource releasers have run.
+	// 4. Now safe to delete brokers — all resource releasers have run.
+	if (m_pRenderProgress) {
+		delete m_pRenderProgress;
+		m_pRenderProgress = nullptr;
+	}
 	if (m_pEventBroker) {
 		delete m_pEventBroker;
 		m_pEventBroker = nullptr;
@@ -895,6 +904,71 @@ void DzScriptServerPane::setupRoutes()
 				// deleting it only after m_pServerThread->wait() returns (which
 				// joins all request-handler threads via ThreadPool::shutdown()).
 				m_pEventBroker->unregisterSubscriber(queue);
+				delete queue;
+				QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
+			}
+		);
+	});
+
+	// GET /render/:id/progress
+	//
+	// SSE stream: emits a single "progress" event (percent:0) when the render
+	// starts executing, then a terminal "complete" or "error" event when done.
+	// DAZ SDK exposes no per-frame progress signal, so no intermediate percent
+	// updates are possible. Clients connecting after completion receive the
+	// stored terminal event immediately.
+	m_pServer->Get("/render/([^/]+)/progress", [this](const httplib::Request& req, httplib::Response& res) {
+		{
+			auto ctx = toContext(req);
+			if (!m_pAuthChain->run(ctx)) {
+				res.status = ctx.responseStatus;
+				res.set_content(ctx.responseBody, "application/json");
+				return;
+			}
+		}
+
+		QString requestId = QString::fromStdString(req.matches[1].str());
+		if (!requestId.startsWith("rnd-")) {
+			res.status = 404;
+			res.set_content("{\"error\":\"Not a render request\"}", "application/json");
+			return;
+		}
+
+		auto statusPair = m_pAsyncMgr->getStatusJson(requestId.toStdString());
+		if (statusPair.first == 404) {
+			res.status = 404;
+			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			return;
+		}
+
+		SubscriberQueue* queue = new SubscriberQueue();
+		if (!m_pRenderProgress->watchRequest(requestId, queue)) {
+			delete queue;
+			res.status = 404;
+			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			return;
+		}
+
+		res.set_header("Cache-Control",    "no-cache");
+		res.set_header("Connection",       "keep-alive");
+		res.set_header("X-Accel-Buffering","no");
+		QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
+
+		RenderProgressBroker* broker = m_pRenderProgress;
+		res.set_chunked_content_provider("text/event-stream",
+			[queue](size_t, httplib::DataSink& sink) -> bool {
+				QString event = queue->pop(3000);
+				if (event.isEmpty()) {
+					if (queue->isClosed()) return false;
+					static const char ka[] = ":keepalive\n\n";
+					return sink.write(ka, sizeof(ka) - 1);
+				}
+				QByteArray payload = event.toUtf8();
+				bool ok = sink.write(payload.constData(), payload.size());
+				return ok && !queue->isClosed();
+			},
+			[this, broker, requestId, queue](bool) {
+				broker->unwatchRequest(requestId, queue);
 				delete queue;
 				QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
 			}
@@ -1695,6 +1769,8 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
         return HttpResult(503, stdToQBA(ErrorResponse::build(
             ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
 
+    m_pRenderProgress->setOutputPath(sr.id, outputPath);
+
     appendLog(QString("[%1] [RENDER QUEUED] output:%2 -> %3")
         .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
         .arg(outputPath).arg(sr.id));
@@ -1979,6 +2055,10 @@ void DzScriptServerPane::processNextAsyncRequest()
 	m_pAsyncMgr->markRunning(id);
 	QTime wallClock = QTime::currentTime();
 
+	const bool isRender = id.startsWith("rnd-");
+	if (isRender && m_pRenderProgress)
+		m_pRenderProgress->notifyStarted(id);
+
 	// Execute the script on the main thread (same path as sync handler)
 	m_aCapturedLogLines.clear();
 	m_bCapturingLog = true;
@@ -2015,6 +2095,13 @@ void DzScriptServerPane::processNextAsyncRequest()
 	bool wasCancelled = false;
 	m_pAsyncMgr->markCompleted(id, executed, scriptResult, capturedOutput, errorMsg, wasCancelled);
 	m_pAsyncMgr->clearCurrent();
+
+	if (isRender && m_pRenderProgress) {
+		if (executed && !wasCancelled)
+			m_pRenderProgress->notifyCompleted(id, durationMs);
+		else
+			m_pRenderProgress->notifyFailed(id, errorMsg, durationMs);
+	}
 
 	m_metrics.recordRequest(executed && !wasCancelled);
 

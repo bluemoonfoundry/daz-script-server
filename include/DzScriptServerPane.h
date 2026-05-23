@@ -31,6 +31,7 @@
 #include "SettingsService.h"
 #include "ServerSettings.h"
 #include "SceneEventBroker.h"
+#include "RenderProgressBroker.h"
 
 // Required for BlockingQueuedConnection return from execute/register handlers.
 typedef QPair<int, QByteArray> HttpResult;
@@ -234,9 +235,10 @@ private:
 	QList<PluginRoute> m_pluginRoutes;
 	mutable QMutex     m_pluginRoutesMutex;
 
-	AsyncRequestManager* m_pAsyncMgr;
-	QTimer*              m_pCleanupTimer; // Fires every 5 min to purge TTL-expired requests
-	SceneEventBroker*    m_pEventBroker;  // SSE scene-change notification broker
+	AsyncRequestManager*  m_pAsyncMgr;
+	QTimer*               m_pCleanupTimer;    // Fires every 5 min to purge TTL-expired requests
+	SceneEventBroker*     m_pEventBroker;     // SSE scene-change notification broker
+	RenderProgressBroker* m_pRenderProgress;  // SSE render progress notification broker
 
 	// ── Middleware chains (created in setupRoutes) ────────────────────────────
 	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only

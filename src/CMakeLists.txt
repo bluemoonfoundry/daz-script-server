@@ -6,6 +6,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../i
 add_library(DazScriptServer SHARED
 	pluginmain.cpp
 	DzScriptServerPane.cpp
+	RenderProgressBroker.cpp
 	AsyncRequestManager.cpp
 	AuthenticationService.cpp
 	RateLimiterService.cpp
@@ -35,6 +36,7 @@ add_library(DazScriptServer SHARED
 	../include/SettingsService.h
 	../include/ServerSettings.h
 	../include/SceneEventBroker.h
+	../include/RenderProgressBroker.h
 )
 
 target_include_directories(DazScriptServer
