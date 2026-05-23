@@ -317,9 +317,13 @@ DzScriptServerPane::DzScriptServerPane()
 	// Register this pane on the application object so companion plugins can find
 	// it without walking the widget tree (which may fail across DLL boundaries).
 	// Bridge plugins look up: qApp->property("DzScriptServerPane").value<QObject*>()
-	if (QCoreApplication::instance())
+	if (QCoreApplication::instance()) {
 		QCoreApplication::instance()->setProperty("DzScriptServerPane",
 		                                          QVariant::fromValue<QObject*>(this));
+		appendLog("[INFO] DzScriptServerPane registered on qApp for companion plugin discovery.");
+	} else {
+		appendLog("[WARN] QCoreApplication not available — companion plugins may not find this pane.");
+	}
 
 	// Auto-start server if enabled
 	if (m_bAutoStart) {
@@ -1025,6 +1029,7 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
 		if (!found)
 			m_pluginRoutes.append(r);
 	}
+	appendLog(QString("[INFO] Plugin route registered: %1 %2").arg(m).arg(path));
 	return true;
 }
 
