@@ -247,6 +247,107 @@ class DazClient:
         except _requests.exceptions.RequestException:
             return False
 
+    # ── Render ────────────────────────────────────────────────────────────────
+
+    def render_submit(
+        self,
+        output_path: str,
+        *,
+        figure: str | None = None,
+        morphs: dict | None = None,
+        figures: list | None = None,
+        width: int = 0,
+        height: int = 0,
+        camera: str = "",
+        engine: str = "",
+        iray_samples: int = 0,
+        reset_morphs: bool = False,
+    ) -> dict:
+        """Submit a render job and return immediately.
+
+        Args:
+            output_path: Absolute path on the DAZ Studio host to write the image.
+            figure: Label of the figure to configure morphs on.
+            morphs: Morph values to apply ``{label: value}``.
+            figures: List of ``{"name": ..., "morphs": {...}}`` dicts for multi-figure scenes.
+            width: Image width in pixels (must be paired with *height*).
+            height: Image height in pixels (must be paired with *width*).
+            camera: Camera label to render from.
+            engine: Render engine (``"iray"``, ``"3delight"``, ``"filament"``).
+            iray_samples: iRay sample count (0 = use scene default).
+            reset_morphs: If ``True``, reset all morphs to defaults before applying.
+
+        Returns:
+            A dict with ``request_id``, ``status`` (``"queued"``), and
+            ``submitted_at`` keys.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On HTTP 401/403.
+        """
+        payload: dict = {"output_path": output_path}
+        if width and height:
+            payload["width"] = width
+            payload["height"] = height
+        if camera:
+            payload["camera"] = camera
+        if engine:
+            payload["engine"] = engine
+        if iray_samples:
+            payload["iray_samples"] = iray_samples
+        if reset_morphs:
+            payload["reset_morphs"] = True
+        if figures is not None:
+            payload["figures"] = figures
+        elif figure:
+            payload["figure"] = figure
+            if morphs:
+                payload["morphs"] = morphs
+        resp = self._post("/render", payload)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
+    def render_batch_submit(self, variants: list, base: dict | None = None) -> dict:
+        """Submit a batch render job and return immediately.
+
+        Args:
+            variants: List of variant dicts, each with at least ``output_path``.
+                Supported keys mirror :meth:`render_submit` optional fields.
+            base: Optional shared defaults applied to all variants.
+
+        Returns:
+            A dict with ``batch_id``, ``request_ids`` (list), and ``total`` keys.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On HTTP 401/403.
+        """
+        payload: dict = {"variants": variants}
+        if base:
+            payload["base"] = base
+        resp = self._post("/render/batch", payload)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
+    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "object | None":
+        """Open the SSE progress stream for a render request.
+
+        Returns a streaming :class:`requests.Response` on success, or ``None``
+        if the endpoint is unavailable.  Callers must close the response when done.
+        """
+        try:
+            resp = _requests.get(
+                f"{self._base}/render/{request_id}/progress",
+                headers=self._headers,
+                stream=True,
+                timeout=stream_timeout,
+            )
+            return resp if resp.status_code == 200 else None
+        except _requests.exceptions.RequestException:
+            return None
+
     # ── USD export ────────────────────────────────────────────────────────────
 
     def export_usd_submit(

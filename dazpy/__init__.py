@@ -38,7 +38,15 @@ from .math3 import Vec3, Quat, BoundingBox
 from ._result import ExecutionResult
 from ._polling import execute_long
 from ._usd import UsdExportJob, export_usd
-from .exceptions import UsdExportError
+from ._render_api import (
+    FigureMorphs,
+    RenderVariant,
+    RenderBase,
+    RenderResult,
+    render,
+    render_variants,
+)
+from .exceptions import UsdExportError, RenderError
 from . import exceptions
 
 __all__ = [
@@ -71,5 +79,12 @@ __all__ = [
     "UsdExportJob",
     "UsdExportError",
     "export_usd",
+    "FigureMorphs",
+    "RenderVariant",
+    "RenderBase",
+    "RenderResult",
+    "RenderError",
+    "render",
+    "render_variants",
     "exceptions",
 ]
