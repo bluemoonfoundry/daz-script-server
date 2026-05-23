@@ -229,3 +229,11 @@ public:
 private:
     DzScriptServerPane* m_pPane;
 };
+
+class RenderBatchHandler : public IRequestHandler {
+public:
+    explicit RenderBatchHandler(DzScriptServerPane* pane);
+    void handle(HttpContext& ctx) override;
+private:
+    DzScriptServerPane* m_pPane;
+};

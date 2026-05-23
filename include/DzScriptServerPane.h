@@ -106,6 +106,7 @@ public slots:
 	                                                const QByteArray& scriptIdBytes,
 	                                                const QByteArray& bodyBytes);
 	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
+	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
 
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
@@ -261,6 +262,7 @@ private:
 	std::unique_ptr<AsyncCancelHandler>   m_pAsyncCancelHandler;
 	std::unique_ptr<AsyncListHandler>     m_pAsyncListHandler;
 	std::unique_ptr<RenderHandler>        m_pRenderHandler;
+	std::unique_ptr<RenderBatchHandler>   m_pRenderBatchHandler;
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;

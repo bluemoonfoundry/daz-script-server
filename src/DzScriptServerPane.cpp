@@ -703,6 +703,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pAsyncCancelHandler.reset(new AsyncCancelHandler(this));
 	m_pAsyncListHandler.reset(new AsyncListHandler(this));
 	m_pRenderHandler.reset(new RenderHandler(this));
+	m_pRenderBatchHandler.reset(new RenderBatchHandler(this));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -809,11 +810,17 @@ void DzScriptServerPane::setupRoutes()
 		applyContext(ctx, res);
 	});
 
-	// ── Render endpoint ───────────────────────────────────────────────────────
+	// ── Render endpoints ──────────────────────────────────────────────────────
 
 	m_pServer->Post("/render", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (m_pBaseExecuteChain->run(ctx)) m_pRenderHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	m_pServer->Post("/render/batch", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1776,6 +1783,223 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
         .arg(outputPath).arg(sr.id));
 
     return buildQueuedResponse(sr.id, sr.submittedAt);
+}
+
+HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody)
+{
+    // ── Parse body ────────────────────────────────────────────────────────
+    QScriptEngine parseEngine;
+    QScriptValue  parsed = parseEngine.evaluate(
+        "(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+    if (parseEngine.hasUncaughtException())
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
+
+    QVariantMap body = parsed.toVariant().toMap();
+
+    // ── Parse base (all fields optional — provides defaults for variants) ─
+    QVariantMap base = body.value("base").toMap();
+
+    int     baseWidth       = base.contains("width")        ? base.value("width").toInt()        : 0;
+    int     baseHeight      = base.contains("height")       ? base.value("height").toInt()       : 0;
+    int     baseIraySamples = base.contains("iray_samples") ? base.value("iray_samples").toInt() : 0;
+    bool    baseResetMorphs = base.value("reset_morphs").toBool();
+    QString baseCamera      = base.value("camera").toString().trimmed();
+    QString baseEngine      = base.value("engine").toString().trimmed();
+
+    // Resolve base figures (single-figure shorthand or explicit list)
+    QList<FigureSpec> baseFigures;
+    if (base.contains("figures")) {
+        QVariantList figs = base.value("figures").toList();
+        for (int i = 0; i < figs.size(); ++i) {
+            QVariantMap fig = figs[i].toMap();
+            QString name = fig.value("name").toString().trimmed();
+            if (name.isEmpty())
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD,
+                    "base.figures[" + std::to_string(i) + "].name")));
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = fig.value("morphs").toMap();
+            baseFigures.append(spec);
+        }
+    } else if (base.contains("figure")) {
+        QString name = base.value("figure").toString().trimmed();
+        if (!name.isEmpty()) {
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = base.value("morphs").toMap();
+            baseFigures.append(spec);
+        }
+    }
+
+    // ── Validate variants array ───────────────────────────────────────────
+    if (!body.contains("variants"))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD, "variants")));
+
+    QVariantList variants = body.value("variants").toList();
+    if (variants.isEmpty())
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "variants must be a non-empty array")));
+
+    static const int MAX_BATCH_VARIANTS = 100;
+    if (variants.size() > MAX_BATCH_VARIANTS)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "variants exceeds maximum of " + std::to_string(MAX_BATCH_VARIANTS))));
+
+    // ── Validate + pre-flight all variants before enqueuing any ──────────
+    struct VariantSpec {
+        QString           outputPath;
+        int               width, height, iraySamples;
+        bool              resetMorphs;
+        QString           camera, engine;
+        QList<FigureSpec> figures;
+        QString           renderScript;
+    };
+    QList<VariantSpec> specs;
+    specs.reserve(variants.size());
+
+    for (int vi = 0; vi < variants.size(); ++vi) {
+        QVariantMap v = variants[vi].toMap();
+        const std::string viStr = "variants[" + std::to_string(vi) + "]";
+
+        // output_path required per variant
+        QString outputPath = v.value("output_path").toString().trimmed();
+        {
+            ValidationResult vr = RequestValidator::validateRequiredField(outputPath,
+                viStr + ".output_path");
+            if (!vr.valid)
+                return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
+        }
+
+        // Merge scalar fields: variant overrides base
+        int     width       = v.contains("width")        ? v.value("width").toInt()        : baseWidth;
+        int     height      = v.contains("height")       ? v.value("height").toInt()       : baseHeight;
+        int     iraySamples = v.contains("iray_samples") ? v.value("iray_samples").toInt() : baseIraySamples;
+        bool    resetMorphs = v.contains("reset_morphs") ? v.value("reset_morphs").toBool(): baseResetMorphs;
+        QString camera      = v.contains("camera")       ? v.value("camera").toString().trimmed() : baseCamera;
+        QString engine      = v.contains("engine")       ? v.value("engine").toString().trimmed() : baseEngine;
+
+        if ((width > 0) != (height > 0))
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ": width and height must both be provided or both omitted")));
+        if (width < 0 || height < 0)
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ": width and height must be positive integers")));
+        if (!engine.isEmpty()
+                && engine != "iray" && engine != "3delight" && engine != "filament")
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ".engine must be one of: iray, 3delight, filament")));
+
+        // Merge figures: variant wins if it specifies figures/figure;
+        // if variant only has morphs and base has one figure, override its morphs.
+        QList<FigureSpec> figures;
+        if (v.contains("figures")) {
+            QVariantList figs = v.value("figures").toList();
+            for (int i = 0; i < figs.size(); ++i) {
+                QVariantMap fig = figs[i].toMap();
+                QString name = fig.value("name").toString().trimmed();
+                if (name.isEmpty())
+                    return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD,
+                        viStr + ".figures[" + std::to_string(i) + "].name")));
+                FigureSpec spec;
+                spec.name   = name;
+                spec.morphs = fig.value("morphs").toMap();
+                figures.append(spec);
+            }
+        } else if (v.contains("figure")) {
+            FigureSpec spec;
+            spec.name   = v.value("figure").toString().trimmed();
+            spec.morphs = v.value("morphs").toMap();
+            figures.append(spec);
+        } else if (v.contains("morphs") && baseFigures.size() == 1) {
+            // Shorthand: apply morph overrides on top of the single base figure's morphs
+            QVariantMap merged = baseFigures[0].morphs;
+            QVariantMap overrides = v.value("morphs").toMap();
+            for (QVariantMap::const_iterator it = overrides.begin(); it != overrides.end(); ++it)
+                merged[it.key()] = it.value();
+            FigureSpec spec;
+            spec.name   = baseFigures[0].name;
+            spec.morphs = merged;
+            figures.append(spec);
+        } else {
+            figures = baseFigures;
+        }
+
+        // Pre-flight: validate figure names against the current scene
+        if (!figures.isEmpty()) {
+            QString validateScript = "(function() {\n  var names = [";
+            for (int i = 0; i < figures.size(); ++i) {
+                if (i > 0) validateScript += ",";
+                validateScript += "\"";
+                validateScript += QString::fromStdString(
+                    JsonStd::escape(JsonStd::qstrToStd(figures[i].name)));
+                validateScript += "\"";
+            }
+            validateScript +=
+                "];\n"
+                "  for (var i = 0; i < names.length; i++) {\n"
+                "    if (!Scene.findNodeByLabel(names[i])) return 'NOT_FOUND:' + names[i];\n"
+                "  }\n"
+                "  return 'OK';\n"
+                "})()";
+            QScopedPointer<DzScript> valScript(new DzScript());
+            valScript->setCode(validateScript);
+            if (valScript->execute(QVariantList())) {
+                QString valResult = valScript->result().toString();
+                if (valResult.startsWith("NOT_FOUND:")) {
+                    QString missing = valResult.mid(10);
+                    return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                        viStr + ": Figure not found in scene: " + JsonStd::qstrToStd(missing))));
+                }
+            }
+        }
+
+        VariantSpec vs;
+        vs.outputPath   = outputPath;
+        vs.width        = width;
+        vs.height       = height;
+        vs.iraySamples  = iraySamples;
+        vs.resetMorphs  = resetMorphs;
+        vs.camera       = camera;
+        vs.engine       = engine;
+        vs.figures      = figures;
+        vs.renderScript = buildRenderScript(
+            outputPath, width, height, camera, engine, iraySamples, resetMorphs, figures);
+        specs.append(vs);
+    }
+
+    // ── Enqueue all variants ──────────────────────────────────────────────
+    QString batchId = MetricsCollector::generateAsyncId("bat");
+    QStringList requestIds;
+
+    for (int vi = 0; vi < specs.size(); ++vi) {
+        AsyncRequestManager::SubmitResult sr =
+            m_pAsyncMgr->submitRender(specs[vi].renderScript, "rnd");
+        if (!sr.accepted) {
+            // Queue full mid-batch — return 503 with how many were accepted.
+            // Already-enqueued variants will still execute.
+            std::string msg = "Queue full after accepting " + std::to_string(requestIds.size())
+                + " of " + std::to_string(specs.size()) + " variants: " + JsonStd::qstrToStd(sr.error);
+            return HttpResult(503, stdToQBA(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE, msg)));
+        }
+        m_pRenderProgress->setOutputPath(sr.id, specs[vi].outputPath);
+        requestIds.append(sr.id);
+    }
+
+    // ── Build response ────────────────────────────────────────────────────
+    std::string resp = "{\"batch_id\":\"" + JsonStd::qstrToStd(batchId) + "\""
+        + ",\"request_ids\":[";
+    for (int i = 0; i < requestIds.size(); ++i) {
+        if (i > 0) resp += ",";
+        resp += "\"" + JsonStd::qstrToStd(requestIds[i]) + "\"";
+    }
+    resp += "],\"total\":" + std::to_string(requestIds.size()) + "}";
+
+    appendLog(QString("[%1] [BATCH QUEUED] batch:%2 variants:%3")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+        .arg(batchId)
+        .arg(requestIds.size()));
+
+    return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
