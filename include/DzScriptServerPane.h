@@ -82,7 +82,8 @@ public:
 	Q_INVOKABLE bool    isRunning() const { return m_bRunning; }
 
 	// Plugin route registration — called by companion plugins loaded in the same process.
-	// Registers method+path on the httplib server; takes effect at the next server start.
+	// Registers method+path on the httplib server immediately (or at next server start if
+	// the server is not yet running).
 	// receiver must expose slotName as Q_INVOKABLE with signature HttpResult(QByteArray,QByteArray).
 	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
 	                                     QObject* receiver, const QString& slotName);
@@ -155,6 +156,7 @@ private slots:
 private:
 	void   setupRoutes();
 	void   applyPluginRoutes();
+	void   applyOnePluginRoute(const PluginRoute& r);
 	void   updateUI();
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,

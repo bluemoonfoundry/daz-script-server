@@ -1003,14 +1003,23 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
 	r.receiver  = receiver;
 	r.slotName  = slotName;
 
-	QMutexLocker lock(&m_pluginRoutesMutex);
-	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-		if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
-			m_pluginRoutes[i] = r;
-			return true;
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		bool found = false;
+		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
+				m_pluginRoutes[i] = r;
+				found = true;
+				break;
+			}
 		}
+		if (!found)
+			m_pluginRoutes.append(r);
 	}
-	m_pluginRoutes.append(r);
+	// Wire the route into the running httplib server immediately so it takes
+	// effect without requiring a server restart.
+	if (m_pServer)
+		applyOnePluginRoute(r);
 	return true;
 }
 
@@ -1026,59 +1035,68 @@ void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QStr
 	}
 }
 
+void DzScriptServerPane::applyOnePluginRoute(const PluginRoute& r)
+{
+	// Must be called without m_pluginRoutesMutex held (httplib route registration
+	// is separate from the plugin route list).
+	QPointer<QObject> receiver = r.receiver;
+	QByteArray slotBytes       = r.slotName.toLatin1();
+
+	auto handler = [receiver, slotBytes](const httplib::Request& req, httplib::Response& res) {
+		if (!receiver) {
+			res.status = 503;
+			res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
+			return;
+		}
+		// When path params are present (e.g. /:id), wrap them with the body so
+		// the slot can extract both without a separate signature.
+		QByteArray body;
+		if (!req.path_params.empty()) {
+			std::string params = "{";
+			bool first = true;
+			for (auto it = req.path_params.begin(); it != req.path_params.end(); ++it) {
+				if (!first) params += ",";
+				first = false;
+				// Minimal escaping — param names/values from route patterns are safe.
+				params += "\"" + it->first + "\":\"" + it->second + "\"";
+			}
+			params += "}";
+			std::string rawBody = req.body;
+			body = QByteArray(
+				("{\"_pathParams\":" + params + ",\"_body\":" +
+				 (rawBody.empty() ? "null" : rawBody) + "}").c_str());
+		} else {
+			body = QByteArray(req.body.c_str(), (int)req.body.size());
+		}
+		QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
+		HttpResult result;
+		QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
+		                          Qt::BlockingQueuedConnection,
+		                          Q_RETURN_ARG(HttpResult, result),
+		                          Q_ARG(QByteArray, body),
+		                          Q_ARG(QByteArray, ip));
+		res.status = result.first;
+		if (!result.second.isEmpty())
+			res.set_content(result.second.constData(), "application/json");
+	};
+
+	std::string path = r.path.toStdString();
+	if      (r.method == "GET")    m_pServer->Get(path, handler);
+	else if (r.method == "POST")   m_pServer->Post(path, handler);
+	else if (r.method == "PUT")    m_pServer->Put(path, handler);
+	else if (r.method == "DELETE") m_pServer->Delete(path, handler);
+	else if (r.method == "PATCH")  m_pServer->Patch(path, handler);
+}
+
 void DzScriptServerPane::applyPluginRoutes()
 {
-	QMutexLocker lock(&m_pluginRoutesMutex);
-	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-		const PluginRoute& r = m_pluginRoutes[i];
-		QPointer<QObject> receiver = r.receiver;
-		QByteArray slotBytes       = r.slotName.toLatin1();
-
-		auto handler = [receiver, slotBytes](const httplib::Request& req, httplib::Response& res) {
-			if (!receiver) {
-				res.status = 503;
-				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
-				return;
-			}
-			// When path params are present (e.g. /:id), wrap them with the body so
-			// the slot can extract both without a separate signature.
-			QByteArray body;
-			if (!req.path_params.empty()) {
-				std::string params = "{";
-				bool first = true;
-				for (auto it = req.path_params.begin(); it != req.path_params.end(); ++it) {
-					if (!first) params += ",";
-					first = false;
-					// Minimal escaping — param names/values from route patterns are safe.
-					params += "\"" + it->first + "\":\"" + it->second + "\"";
-				}
-				params += "}";
-				std::string rawBody = req.body;
-				body = QByteArray(
-					("{\"_pathParams\":" + params + ",\"_body\":" +
-					 (rawBody.empty() ? "null" : rawBody) + "}").c_str());
-			} else {
-				body = QByteArray(req.body.c_str(), (int)req.body.size());
-			}
-			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
-			HttpResult result;
-			QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
-			                          Qt::BlockingQueuedConnection,
-			                          Q_RETURN_ARG(HttpResult, result),
-			                          Q_ARG(QByteArray, body),
-			                          Q_ARG(QByteArray, ip));
-			res.status = result.first;
-			if (!result.second.isEmpty())
-				res.set_content(result.second.constData(), "application/json");
-		};
-
-		std::string path = r.path.toStdString();
-		if      (r.method == "GET")    m_pServer->Get(path, handler);
-		else if (r.method == "POST")   m_pServer->Post(path, handler);
-		else if (r.method == "PUT")    m_pServer->Put(path, handler);
-		else if (r.method == "DELETE") m_pServer->Delete(path, handler);
-		else if (r.method == "PATCH")  m_pServer->Patch(path, handler);
+	QList<PluginRoute> snapshot;
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		snapshot = m_pluginRoutes;
 	}
+	for (int i = 0; i < snapshot.size(); ++i)
+		applyOnePluginRoute(snapshot[i]);
 }
 
 // ─── Script Registry public API (called from HTTP threads) ───────────────────
