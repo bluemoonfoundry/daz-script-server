@@ -1016,10 +1016,6 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
 		if (!found)
 			m_pluginRoutes.append(r);
 	}
-	// Wire the route into the running httplib server immediately so it takes
-	// effect without requiring a server restart.
-	if (m_pServer)
-		applyOnePluginRoute(r);
 	return true;
 }
 
@@ -1035,68 +1031,106 @@ void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QStr
 	}
 }
 
-void DzScriptServerPane::applyOnePluginRoute(const PluginRoute& r)
+// Match a path-pattern (e.g. "/export/usd/:id") against a concrete path.
+// Fills `params` with captured segment values keyed by the param name (no colon).
+// Returns true on match.  Both arguments must start with '/'.
+static bool matchPluginPath(const QString& pattern, const QString& path,
+                             std::map<std::string, std::string>& params)
 {
-	// Must be called without m_pluginRoutesMutex held (httplib route registration
-	// is separate from the plugin route list).
-	QPointer<QObject> receiver = r.receiver;
-	QByteArray slotBytes       = r.slotName.toLatin1();
-
-	auto handler = [receiver, slotBytes](const httplib::Request& req, httplib::Response& res) {
-		if (!receiver) {
-			res.status = 503;
-			res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
-			return;
-		}
-		// When path params are present (e.g. /:id), wrap them with the body so
-		// the slot can extract both without a separate signature.
-		QByteArray body;
-		if (!req.path_params.empty()) {
-			std::string params = "{";
-			bool first = true;
-			for (auto it = req.path_params.begin(); it != req.path_params.end(); ++it) {
-				if (!first) params += ",";
-				first = false;
-				// Minimal escaping — param names/values from route patterns are safe.
-				params += "\"" + it->first + "\":\"" + it->second + "\"";
-			}
-			params += "}";
-			std::string rawBody = req.body;
-			body = QByteArray(
-				("{\"_pathParams\":" + params + ",\"_body\":" +
-				 (rawBody.empty() ? "null" : rawBody) + "}").c_str());
-		} else {
-			body = QByteArray(req.body.c_str(), (int)req.body.size());
-		}
-		QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
-		HttpResult result;
-		QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
-		                          Qt::BlockingQueuedConnection,
-		                          Q_RETURN_ARG(HttpResult, result),
-		                          Q_ARG(QByteArray, body),
-		                          Q_ARG(QByteArray, ip));
-		res.status = result.first;
-		if (!result.second.isEmpty())
-			res.set_content(result.second.constData(), "application/json");
-	};
-
-	std::string path = r.path.toStdString();
-	if      (r.method == "GET")    m_pServer->Get(path, handler);
-	else if (r.method == "POST")   m_pServer->Post(path, handler);
-	else if (r.method == "PUT")    m_pServer->Put(path, handler);
-	else if (r.method == "DELETE") m_pServer->Delete(path, handler);
-	else if (r.method == "PATCH")  m_pServer->Patch(path, handler);
+	const QStringList patParts  = pattern.split('/');
+	const QStringList pathParts = path.split('/');
+	if (patParts.size() != pathParts.size()) return false;
+	params.clear();
+	for (int i = 0; i < patParts.size(); ++i) {
+		if (patParts[i].startsWith(':'))
+			params[patParts[i].mid(1).toStdString()] = pathParts[i].toStdString();
+		else if (patParts[i] != pathParts[i])
+			return false;
+	}
+	return true;
 }
 
 void DzScriptServerPane::applyPluginRoutes()
 {
-	QList<PluginRoute> snapshot;
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		snapshot = m_pluginRoutes;
-	}
-	for (int i = 0; i < snapshot.size(); ++i)
-		applyOnePluginRoute(snapshot[i]);
+	// Register a single catch-all handler per HTTP method.  Each handler scans
+	// m_pluginRoutes at request time (mutex-protected) so that routes registered
+	// after server start — and routes that change dynamically — are always
+	// visible without ever touching httplib's handler vectors post-startup.
+	// This avoids the data race that would occur if we called m_pServer->Get/Post
+	// from registerPluginRoute() while the listen thread is dispatching requests.
+
+	auto makeHandler = [this](const QString& method) {
+		return [this, method](const httplib::Request& req, httplib::Response& res) {
+			const QString qpath = QString::fromStdString(req.path);
+			std::map<std::string, std::string> params;
+
+			QPointer<QObject> receiver;
+			QByteArray        slotBytes;
+			bool              found = false;
+			{
+				QMutexLocker lock(&m_pluginRoutesMutex);
+				for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+					const PluginRoute& r = m_pluginRoutes[i];
+					if (r.method != method) continue;
+					if (!matchPluginPath(r.path, qpath, params)) continue;
+					receiver  = r.receiver;
+					slotBytes = r.slotName.toLatin1();
+					found     = true;
+					break;
+				}
+			}
+
+			if (!found) {
+				res.status = 404;
+				res.set_content("{\"error\":\"not found\"}", "application/json");
+				return;
+			}
+			if (!receiver) {
+				res.status = 503;
+				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
+				return;
+			}
+
+			// Wrap path params + body into a single JSON envelope so the slot can
+			// access both without a separate signature.
+			QByteArray body;
+			if (!params.empty()) {
+				std::string paramsJson = "{";
+				bool first = true;
+				for (auto it = params.begin(); it != params.end(); ++it) {
+					if (!first) paramsJson += ",";
+					first = false;
+					paramsJson += "\"" + it->first + "\":\"" + it->second + "\"";
+				}
+				paramsJson += "}";
+				const std::string& rawBody = req.body;
+				body = QByteArray(
+					("{\"_pathParams\":" + paramsJson + ",\"_body\":" +
+					 (rawBody.empty() ? "null" : rawBody) + "}").c_str());
+			} else {
+				body = QByteArray(req.body.c_str(), (int)req.body.size());
+			}
+
+			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
+			HttpResult result;
+			QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
+			                          Qt::BlockingQueuedConnection,
+			                          Q_RETURN_ARG(HttpResult, result),
+			                          Q_ARG(QByteArray, body),
+			                          Q_ARG(QByteArray, ip));
+			res.status = result.first;
+			if (!result.second.isEmpty())
+				res.set_content(result.second.constData(), "application/json");
+		};
+	};
+
+	// The catch-alls must be registered AFTER all specific routes so httplib
+	// matches specific paths first (httplib tries handlers in registration order).
+	m_pServer->Get   ("/(.*)", makeHandler("GET"));
+	m_pServer->Post  ("/(.*)", makeHandler("POST"));
+	m_pServer->Put   ("/(.*)", makeHandler("PUT"));
+	m_pServer->Delete("/(.*)", makeHandler("DELETE"));
+	m_pServer->Patch ("/(.*)", makeHandler("PATCH"));
 }
 
 // ─── Script Registry public API (called from HTTP threads) ───────────────────

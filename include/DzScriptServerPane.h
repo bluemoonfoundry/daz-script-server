@@ -156,7 +156,6 @@ private slots:
 private:
 	void   setupRoutes();
 	void   applyPluginRoutes();
-	void   applyOnePluginRoute(const PluginRoute& r);
 	void   updateUI();
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
