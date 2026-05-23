@@ -314,6 +314,13 @@ DzScriptServerPane::DzScriptServerPane()
 
 	updateUI();
 
+	// Register this pane on the application object so companion plugins can find
+	// it without walking the widget tree (which may fail across DLL boundaries).
+	// Bridge plugins look up: qApp->property("DzScriptServerPane").value<QObject*>()
+	if (QCoreApplication::instance())
+		QCoreApplication::instance()->setProperty("DzScriptServerPane",
+		                                          QVariant::fromValue<QObject*>(this));
+
 	// Auto-start server if enabled
 	if (m_bAutoStart) {
 		appendLog("[INFO] Auto-starting server...");
@@ -323,6 +330,8 @@ DzScriptServerPane::DzScriptServerPane()
 
 DzScriptServerPane::~DzScriptServerPane()
 {
+	if (QCoreApplication::instance())
+		QCoreApplication::instance()->setProperty("DzScriptServerPane", QVariant());
 	stopServer();
 	saveSettings();
 }
