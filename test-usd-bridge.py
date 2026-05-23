@@ -19,7 +19,7 @@ import sys
 import time
 import requests
 
-# ── Setup ─────────────────────────────────────────────────────────────────────
+# -- Setup ---------------------------------------------------------------------
 
 token_file = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
 api_token = ""
@@ -37,7 +37,7 @@ AUTH     = {"X-API-Token": api_token}
 # Temp output path for test exports.
 EXPORT_OUT = os.path.join(os.environ.get("TEMP", "C:/Temp"), "daz_usd_test_export.usda")
 
-# ── Test Harness ──────────────────────────────────────────────────────────────
+# -- Test Harness --------------------------------------------------------------
 
 _passed  = 0
 _failed  = 0
@@ -60,15 +60,15 @@ def skip(label: str, reason: str = ""):
     print(f"  SKIP  {label}{suffix}")
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'-' * 60}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'-' * 60}")
 
 def summary():
     total = _passed + _failed + _skipped
     print(f"\n{'=' * 60}")
-    print(f"  Results: {_passed} passed, {_failed} failed, {_skipped} skipped  ({total} total)")
-    print(f"{'=' * 60}")
+    print(f"  Results: {_passed} passed, {_failed} failed, {_skipped} skipped  ({total} total)")  # noqa
+    print(f"{'=' * 60}")  # noqa
     return _failed == 0
 
 def get(path, **kw):
@@ -77,29 +77,31 @@ def get(path, **kw):
 def post(path, **kw):
     return requests.post(f"{BASE_URL}{path}", **kw)
 
-def poll_job(job_id: str, timeout: int = 120) -> dict:
+def poll_job(job_id: str, timeout: int = 600) -> dict:
     """Poll GET /export/usd/:id until terminal state or timeout.
 
-    A connection reset means the main thread is blocked by an active export;
-    wait and retry rather than treating it as an error.
+    A connection reset or request timeout means the main thread is blocked by
+    an active export; wait and retry rather than treating it as an error.
+    USD exports of complex scenes can take several minutes.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = get(f"/export/usd/{job_id}", headers=AUTH)
-        except requests.exceptions.ConnectionError:
+            r = get(f"/export/usd/{job_id}", headers=AUTH, timeout=30)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout):
             # Main thread busy with export — wait and retry
-            time.sleep(2.0)
+            time.sleep(3.0)
             continue
         if r.status_code != 200:
             return {"status": "error", "_http": r.status_code}
         data = r.json()
         if data.get("status") in ("completed", "failed"):
             return data
-        time.sleep(1.0)
+        time.sleep(2.0)
     return {"status": "timeout"}
 
-# ── 1. Bridge availability probe ──────────────────────────────────────────────
+# -- 1. Bridge availability probe ----------------------------------------------
 
 section("1. Bridge availability (catch-all dispatcher)")
 
@@ -109,7 +111,7 @@ bridge_available = (
     and "error" in r.text
     and "probe" in r.text
 )
-check("GET /export/usd/probe → 404 (routes registered)", bridge_available,
+check("GET /export/usd/probe -> 404 (routes registered)", bridge_available,
       f"status={r.status_code} body={r.text[:120]}")
 
 if not bridge_available:
@@ -127,12 +129,12 @@ except Exception as e:
     check("Probe 404 body is valid JSON", False, str(e))
     check("Probe 404 body has 'error' key", False, "parse failed")
 
-# ── 2. Catch-all dispatcher — unknown paths ───────────────────────────────────
+# -- 2. Catch-all dispatcher — unknown paths -----------------------------------
 
 section("2. Catch-all dispatcher (unknown paths)")
 
 r = get("/totally/unknown/path", headers=AUTH)
-check("Unknown path → 404", r.status_code == 404, f"got {r.status_code}")
+check("Unknown path -> 404", r.status_code == 404, f"got {r.status_code}")
 try:
     body = r.json()
     check("Unknown path 404 body is JSON", isinstance(body, dict))
@@ -140,24 +142,24 @@ except Exception:
     check("Unknown path 404 body is JSON", False, r.text[:80])
 
 r = post("/also/unknown", headers=AUTH, json={})
-check("Unknown POST path → 404", r.status_code == 404, f"got {r.status_code}")
+check("Unknown POST path -> 404", r.status_code == 404, f"got {r.status_code}")
 
-# ── 3. POST /export/usd — validation ──────────────────────────────────────────
+# -- 3. POST /export/usd — validation ------------------------------------------
 
 section("3. POST /export/usd — request validation")
 
 r = post("/export/usd", headers=AUTH)
-check("Empty body → 400", r.status_code == 400, f"got {r.status_code}")
+check("Empty body -> 400", r.status_code == 400, f"got {r.status_code}")
 try:
     check("Empty body error has 'error' key", "error" in r.json())
 except Exception:
     check("Empty body error has 'error' key", False, r.text[:80])
 
 r = post("/export/usd", headers={**AUTH, "Content-Type": "application/json"}, data=b"not json")
-check("Invalid JSON → 400", r.status_code == 400, f"got {r.status_code}")
+check("Invalid JSON -> 400", r.status_code == 400, f"got {r.status_code}")
 
 r = post("/export/usd", headers=AUTH, json={"includeGeometry": True})
-check("Missing outputPath → 400", r.status_code == 400, f"got {r.status_code}")
+check("Missing outputPath -> 400", r.status_code == 400, f"got {r.status_code}")
 try:
     body = r.json()
     check("Missing outputPath error mentions 'outputPath'",
@@ -165,7 +167,7 @@ try:
 except Exception:
     check("Missing outputPath error mentions 'outputPath'", False, r.text[:80])
 
-# ── 4. POST /export/usd — successful submission ───────────────────────────────
+# -- 4. POST /export/usd — successful submission -------------------------------
 
 section("4. POST /export/usd — job submission")
 
@@ -179,7 +181,7 @@ payload = {
     "includeCamera":    False,
 }
 r = post("/export/usd", headers=AUTH, json=payload)
-check("POST /export/usd → 202", r.status_code == 202, f"got {r.status_code}")
+check("POST /export/usd -> 202", r.status_code == 202, f"got {r.status_code}")
 
 job_id = None
 try:
@@ -199,39 +201,40 @@ except Exception as e:
 
 # Optional fields submission (no validation errors expected).
 r2 = post("/export/usd", headers=AUTH, json={"outputPath": EXPORT_OUT + ".opt.usda"})
-check("Minimal payload (outputPath only) → 202", r2.status_code == 202,
+check("Minimal payload (outputPath only) -> 202", r2.status_code == 202,
       f"got {r2.status_code}")
 
-# ── 5. GET /export/usd/:id ────────────────────────────────────────────────────
+# -- 5. GET /export/usd/:id ----------------------------------------------------
 
 section("5. GET /export/usd/:id — status polling")
 
 if job_id:
     # First status check — may need to wait if export is already running.
     status_body = None
-    for _attempt in range(10):
+    for _attempt in range(20):
         try:
-            r = get(f"/export/usd/{job_id}", headers=AUTH)
+            r = get(f"/export/usd/{job_id}", headers=AUTH, timeout=30)
             status_body = r.json()
             break
-        except (requests.exceptions.ConnectionError, ValueError):
-            time.sleep(2.0)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout, ValueError):
+            time.sleep(3.0)
 
     if status_body is not None:
-        check("GET /export/usd/:id → 200", r.status_code == 200, f"got {r.status_code}")
+        check("GET /export/usd/:id -> 200", r.status_code == 200, f"got {r.status_code}")
         check("Status body has job_id",  status_body.get("job_id") == job_id,
               status_body.get("job_id"))
         check("Status body has status",  "status" in status_body)
         check("Status body has submittedAt", "submittedAt" in status_body)
     else:
-        check("GET /export/usd/:id → 200", False, "connection kept resetting")
+        check("GET /export/usd/:id -> 200", False, "connection kept resetting")
         check("Status body has job_id",     False, "connection kept resetting")
         check("Status body has status",     False, "connection kept resetting")
         check("Status body has submittedAt", False, "connection kept resetting")
 
     # Unknown job id.
     r = get("/export/usd/nonexistent-job-id", headers=AUTH)
-    check("Unknown job id → 404", r.status_code == 404, f"got {r.status_code}")
+    check("Unknown job id -> 404", r.status_code == 404, f"got {r.status_code}")
     try:
         err = r.json()
         check("Unknown job error has 'error' key", "error" in err)
@@ -242,8 +245,8 @@ if job_id:
         check("Unknown job error mentions id",      False, "parse failed")
 
     # Poll to terminal state.
-    print(f"\n  Waiting for job {job_id} to complete (up to 60s)...")
-    final = poll_job(job_id, timeout=60)
+    print(f"\n  Waiting for job {job_id} to complete (up to 300s)...")
+    final = poll_job(job_id, timeout=300)
     terminal = final.get("status") in ("completed", "failed")
     check("Job reaches terminal state", terminal, f"status={final.get('status')}")
 
@@ -255,17 +258,17 @@ if job_id:
             check("Failed job has error field", "error" in final, str(final))
             print(f"  (export failed — error: {final.get('error', '')[:120]})")
 else:
-    skip("GET /export/usd/:id → 200",         "no job_id from submission")
+    skip("GET /export/usd/:id -> 200",         "no job_id from submission")
     skip("Status body has job_id",            "no job_id from submission")
     skip("Status body has status",            "no job_id from submission")
     skip("Status body has submittedAt",       "no job_id from submission")
-    skip("Unknown job id → 404",             "no job_id from submission")
+    skip("Unknown job id -> 404",             "no job_id from submission")
     skip("Unknown job error has 'error' key", "no job_id from submission")
     skip("Unknown job error mentions id",     "no job_id from submission")
     skip("Job reaches terminal state",        "no job_id from submission")
     skip("Terminal status body has completedAt", "no job_id from submission")
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 ok = summary()
 sys.exit(0 if ok else 1)
