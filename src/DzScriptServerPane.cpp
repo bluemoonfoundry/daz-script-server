@@ -1040,7 +1040,26 @@ void DzScriptServerPane::applyPluginRoutes()
 				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
 				return;
 			}
-			QByteArray body(req.body.c_str(), (int)req.body.size());
+			// When path params are present (e.g. /:id), wrap them with the body so
+			// the slot can extract both without a separate signature.
+			QByteArray body;
+			if (!req.path_params.empty()) {
+				std::string params = "{";
+				bool first = true;
+				for (auto it = req.path_params.begin(); it != req.path_params.end(); ++it) {
+					if (!first) params += ",";
+					first = false;
+					// Minimal escaping — param names/values from route patterns are safe.
+					params += "\"" + it->first + "\":\"" + it->second + "\"";
+				}
+				params += "}";
+				std::string rawBody = req.body;
+				body = QByteArray(
+					("{\"_pathParams\":" + params + ",\"_body\":" +
+					 (rawBody.empty() ? "null" : rawBody) + "}").c_str());
+			} else {
+				body = QByteArray(req.body.c_str(), (int)req.body.size());
+			}
 			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
 			HttpResult result;
 			QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
