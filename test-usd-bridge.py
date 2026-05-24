@@ -35,7 +35,7 @@ BASE_URL = "http://127.0.0.1:18811"
 AUTH     = {"X-API-Token": api_token}
 
 # Temp output path for test exports.
-EXPORT_OUT = os.path.join(os.environ.get("TEMP", "C:/Temp"), "daz_usd_test_export.usda")
+EXPORT_OUT = os.path.join(os.environ.get("TEMP", "C:/Temp"), "daz_usd_test_export.usdc")
 
 # -- Test Harness --------------------------------------------------------------
 
@@ -43,15 +43,22 @@ _passed  = 0
 _failed  = 0
 _skipped = 0
 
+def _safe_print(text: str) -> None:
+    """Print to stdout, replacing unencodable characters so cp1252 consoles don't crash."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write((text + "\n").encode(sys.stdout.encoding, errors="replace"))
+
 def check(label: str, condition: bool, detail: str = ""):
     global _passed, _failed
     if condition:
         _passed += 1
-        print(f"  PASS  {label}")
+        _safe_print(f"  PASS  {label}")
     else:
         _failed += 1
         suffix = f" | {detail}" if detail else ""
-        print(f"  FAIL  {label}{suffix}")
+        _safe_print(f"  FAIL  {label}{suffix}")
 
 def skip(label: str, reason: str = ""):
     global _skipped
@@ -314,7 +321,7 @@ if export_completed:
         print(f"  (output file: {output_file}, size: {file_size:,} bytes)")
 
     # Clean up test output files.
-    for f in [EXPORT_OUT, EXPORT_OUT + ".opt.usda"]:
+    for f in [EXPORT_OUT]:
         try:
             if os.path.isfile(f):
                 os.remove(f)
@@ -322,10 +329,9 @@ if export_completed:
             pass
 else:
     reason = "export did not complete" if job_id else "no job_id from submission"
-    skip("Output file exists",                    reason)
-    skip("Output file is non-empty",              reason)
-    skip("USDA file has '#usda 1.0' header",      reason)
-    skip("USDA contains at least one prim definition", reason)
+    skip("Output file exists",              reason)
+    skip("Output file is non-empty",        reason)
+    skip("USDC file has PXR-USDC magic",    reason)
 
 # -----------------------------------------------------------------------------
 
