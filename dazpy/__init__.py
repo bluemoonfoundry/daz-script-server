@@ -13,7 +13,7 @@ Typical usage::
     figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 """
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 from ._client import DazClient
 from ._scene import DazScene
@@ -37,7 +37,6 @@ from ._animation import DazAnimation
 from .math3 import Vec3, Quat, BoundingBox
 from ._result import ExecutionResult
 from ._polling import execute_long
-from ._usd import UsdExportJob, export_usd
 from ._render_api import (
     FigureMorphs,
     RenderVariant,
@@ -46,7 +45,7 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import UsdExportError, RenderError
+from .exceptions import RenderError
 from . import exceptions
 
 __all__ = [
@@ -76,9 +75,6 @@ __all__ = [
     "BoundingBox",
     "ExecutionResult",
     "execute_long",
-    "UsdExportJob",
-    "UsdExportError",
-    "export_usd",
     "FigureMorphs",
     "RenderVariant",
     "RenderBase",

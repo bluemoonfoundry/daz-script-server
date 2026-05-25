@@ -2,6 +2,41 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.4.0] - 2026-05-25
+
+### Added
+
+- **`POST /render`** — submit a DAZ Studio render job and receive a `request_id`
+  for async tracking. Accepts `width`, `height`, `output_path`, and optional
+  per-figure morph overrides (`figure_morphs`).
+- **`GET /render/:id/progress`** — Server-Sent Events stream that delivers
+  real-time render progress for a job: `stage`, `progress` (0–1), `elapsed_ms`,
+  and `output_path` on completion.
+- **`POST /render/batch`** — submit multiple render variants in a single request.
+  Each variant can override morphs and output path; renders execute sequentially
+  on the DAZ Studio main thread.
+- **Plugin route registration interface** — companion plugins can register their
+  own HTTP routes into the running server via a `DzScriptServerPane` pointer
+  published on `qApp`. Supports path parameters (e.g. `/export/:id/status`).
+- **`dazpy` render API** — `render()`, `render_variants()`, `RenderVariant`, and
+  `FigureMorphs` — high-level Python wrappers around the new render endpoints with
+  SSE progress streaming and result polling.
+- **`docs/examples/vn_render_workflow.py`** — four visual-novel render patterns
+  (basic, batch morphs, interleaved scene setup, multi-figure) with full inline
+  documentation.
+- **`docs/examples/README.md`** — index and usage guide for all example scripts.
+
+### Fixed
+
+- CRT heap mismatch crash when the catch-all route dispatcher forwarded to a
+  companion plugin compiled against a different MSVC runtime (`msvcr100` vs
+  `ucrtbase`). Route data now flows through `QByteArray`/`QMap<QString,QString>`
+  instead of `std::string`.
+- Companion plugin routes were silently dropped when the route was registered
+  after the server had already started listening.
+- Data race in the catch-all dispatcher under concurrent requests.
+- Increased job-completion poll timeout to 300 s for long-running export jobs.
+
 ## [2.3.0] - 2026-05-21
 
 ### Added
