@@ -6,6 +6,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../i
 add_library(DazScriptServer SHARED
 	pluginmain.cpp
 	DzScriptServerPane.cpp
+	RenderProgressBroker.cpp
 	AsyncRequestManager.cpp
 	AuthenticationService.cpp
 	RateLimiterService.cpp
@@ -35,6 +36,7 @@ add_library(DazScriptServer SHARED
 	../include/SettingsService.h
 	../include/ServerSettings.h
 	../include/SceneEventBroker.h
+	../include/RenderProgressBroker.h
 )
 
 target_include_directories(DazScriptServer
@@ -54,6 +56,9 @@ target_link_libraries(DazScriptServer
 
 if(WIN32)
 	target_link_libraries(DazScriptServer PRIVATE ws2_32 advapi32)
+	# Emit a PDB for every build config so VS Code / WinDbg can resolve symbols.
+	target_compile_options(DazScriptServer PRIVATE /Zi)
+	target_link_options(DazScriptServer PRIVATE /DEBUG /OPT:REF /OPT:ICF)
 endif()
 
 target_compile_definitions(DazScriptServer PRIVATE CPPHTTPLIB_NO_COMPRESS)
@@ -69,5 +74,10 @@ if(INSTALL_TO_DAZ AND DAZ_STUDIO_EXE_DIR)
 	install(TARGETS DazScriptServer
 		RUNTIME DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
 		LIBRARY DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
+	)
+	install(FILES
+		$<TARGET_PDB_FILE:DazScriptServer>
+		DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
+		OPTIONAL
 	)
 endif()

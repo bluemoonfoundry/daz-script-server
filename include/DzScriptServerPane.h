@@ -13,6 +13,7 @@
 #include <QtCore/qdatetime.h>
 #include <QtCore/qtimer.h>
 #include <QtCore/qmetatype.h>
+#include <QtCore/qpointer.h>
 #include <QtGui/qspinbox.h>
 #include <QtGui/qlineedit.h>
 #include <QtGui/qpushbutton.h>
@@ -30,6 +31,7 @@
 #include "SettingsService.h"
 #include "ServerSettings.h"
 #include "SceneEventBroker.h"
+#include "RenderProgressBroker.h"
 
 // Required for BlockingQueuedConnection return from execute/register handlers.
 typedef QPair<int, QByteArray> HttpResult;
@@ -79,6 +81,14 @@ public:
 	Q_INVOKABLE void    setHost(const QString& h) { m_sHost = h; }
 	Q_INVOKABLE bool    isRunning() const { return m_bRunning; }
 
+	// Plugin route registration — called by companion plugins loaded in the same process.
+	// Registers method+path on the httplib server immediately (or at next server start if
+	// the server is not yet running).
+	// receiver must expose slotName as Q_INVOKABLE with signature HttpResult(QByteArray,QByteArray).
+	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
+	                                     QObject* receiver, const QString& slotName);
+	Q_INVOKABLE void unregisterPluginRoute(const QString& method, const QString& path);
+
 public slots:
 	Q_INVOKABLE void startServer();
 	Q_INVOKABLE void stopServer();
@@ -96,6 +106,8 @@ public slots:
 	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
 	                                                const QByteArray& scriptIdBytes,
 	                                                const QByteArray& bodyBytes);
+	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
+	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
 
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
@@ -143,6 +155,7 @@ private slots:
 
 private:
 	void   setupRoutes();
+	void   applyPluginRoutes();
 	void   updateUI();
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
@@ -213,9 +226,21 @@ private:
 	// served directly from AsyncRequestManager's mutex-protected map without
 	// needing the main thread, so polling always returns promptly.
 
-	AsyncRequestManager* m_pAsyncMgr;
-	QTimer*              m_pCleanupTimer; // Fires every 5 min to purge TTL-expired requests
-	SceneEventBroker*    m_pEventBroker;  // SSE scene-change notification broker
+	// Plugin route registry — populated by companion plugins via registerPluginRoute().
+	// Applied in setupRoutes() each time the server starts.
+	struct PluginRoute {
+		QString          method;    // "GET", "POST", "PUT", "DELETE", "PATCH"
+		QString          path;
+		QPointer<QObject> receiver;
+		QString          slotName;  // Q_INVOKABLE: HttpResult slotName(QByteArray, QByteArray)
+	};
+	QList<PluginRoute> m_pluginRoutes;
+	mutable QMutex     m_pluginRoutesMutex;
+
+	AsyncRequestManager*  m_pAsyncMgr;
+	QTimer*               m_pCleanupTimer;    // Fires every 5 min to purge TTL-expired requests
+	SceneEventBroker*     m_pEventBroker;     // SSE scene-change notification broker
+	RenderProgressBroker* m_pRenderProgress;  // SSE render progress notification broker
 
 	// ── Middleware chains (created in setupRoutes) ────────────────────────────
 	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only
@@ -237,6 +262,8 @@ private:
 	std::unique_ptr<AsyncResultHandler>   m_pAsyncResultHandler;
 	std::unique_ptr<AsyncCancelHandler>   m_pAsyncCancelHandler;
 	std::unique_ptr<AsyncListHandler>     m_pAsyncListHandler;
+	std::unique_ptr<RenderHandler>        m_pRenderHandler;
+	std::unique_ptr<RenderBatchHandler>   m_pRenderBatchHandler;
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;

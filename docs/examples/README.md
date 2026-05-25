@@ -35,6 +35,7 @@ The examples are roughly ordered from simple to complex.  Start with
 | [multi_camera_render.py](#multi_camera_renderpy) | Rendering | Renders from every camera in the scene to separate files | Yes |
 | [material_color_variations.py](#material_color_variationspy) | Rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
 | [batch_render_morph_variations.py](#batch_render_morph_variationspy) | Rendering | Renders a matrix of morph value combinations | Yes |
+| [vn_render_workflow.py](#vn_render_workflowpy) | Rendering | Four VN pipeline patterns: single render, batch variants, interleaved scene setup, multi-figure | Yes |
 | [dataset_generator.py](#dataset_generatorpy) | ML / Data | Generates a randomised render dataset with JSON sidecar for LoRA training | Yes |
 | [expression_transfer.py](#expression_transferpy) | AI / Vision | Extracts a facial expression from a photo using MediaPipe and applies it to a Genesis 9 figure | No |
 | [webcam_expression_mirror.py](#webcam_expression_mirrorpy) | AI / Vision | Mirrors your live webcam expression onto a Genesis 9 figure in real time | No |
@@ -448,6 +449,170 @@ python batch_render_morph_variations.py
 ```
 
 No command-line arguments.
+
+---
+
+### vn_render_workflow.py
+
+Four patterns for VN (visual novel) render pipelines.  VN production
+generates many renders of the same characters in different expressions,
+costumes, or compositions.  Run `--pattern 0|A|B|C` to execute just one
+pattern, or omit it to run all four in sequence.
+
+```bash
+python vn_render_workflow.py
+python vn_render_workflow.py --pattern A
+python vn_render_workflow.py --pattern B --figure "Hero" --out C:/vn/renders
+python vn_render_workflow.py --pattern C --figure "Alice" --figure2 "Bob"
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--pattern {0,A,B,C}` | all | Run only this pattern |
+| `--out DIR` | `y:/tmp/vn` | Output directory |
+| `--figure LABEL` | `Genesis 9` | Primary figure label |
+| `--figure2 LABEL` | `Genesis 9.1` | Second figure (Pattern C only) |
+| `--width PX` | `1920` | Render width |
+| `--height PX` | `1080` | Render height |
+
+#### Pattern 0 — Basic single render
+
+The simplest case: render the scene as-is with no scene modifications.
+
+```python
+from dazpy import DazClient
+from dazpy._render_api import render
+
+client = DazClient()
+result = render(client, r"C:\renders\frame.png", width=1920, height=1080)
+print(result.output_path, result.file_size_bytes, result.duration_ms)
+```
+
+`render()` submits to `POST /render`, waits via the SSE progress stream
+(`GET /render/:id/progress`), and falls back to long-poll if SSE is
+unavailable.  The `RenderResult` dataclass carries `success`,
+`output_path`, `file_size_bytes`, `duration_ms`, and `error`.
+
+#### Pattern A — Batch morph variants
+
+Use when all variants differ only in morph values.  A single
+`POST /render/batch` submits the whole set; the server executes renders
+sequentially in the async queue.
+
+```python
+from dazpy._render_api import FigureMorphs, RenderBase, RenderVariant, render_variants
+
+variants = [
+    RenderVariant(r"C:\vn\neutral.png",   figure="Genesis 9"),
+    RenderVariant(r"C:\vn\smile.png",     figure="Genesis 9", morphs={"Smile Full Face": 1.0}),
+    RenderVariant(r"C:\vn\sad.png",       figure="Genesis 9", morphs={"Mouth Frown": 0.8, "Brow Inner Up": 0.6}),
+    RenderVariant(r"C:\vn\surprised.png", figure="Genesis 9", morphs={"Eyes Wide": 0.9, "Mouth Open": 0.5}),
+]
+base = RenderBase(width=1920, height=1080, engine="iray")
+
+results = render_variants(
+    client, variants, base,
+    on_progress=lambda done, total: print(f"{done}/{total}"),
+)
+```
+
+`render_variants()` returns a `list[RenderResult]` in the same order as
+`variants`.  If one render fails its result has `success=False`; subsequent
+variants are still attempted.
+
+#### Pattern B — Interleaved scene setup
+
+Use when variants differ in ways the render payload cannot express —
+lighting intensity, prop visibility, backdrop colour, material properties,
+environment settings, and so on.
+
+```python
+for out_path, light_intensity in variants:
+    # Apply scene-level changes for this render.
+    client.execute(f"""
+        var fill = Scene.findNodeByLabel("Fill Light");
+        var p = fill && fill.findPropertyByLabel("Intensity");
+        if (p) p.setValue({light_intensity});
+    """)
+
+    # Render with morphs specified in the payload.
+    result = render(client, out_path, figure="Genesis 9",
+                    morphs={"Smile Full Face": 0.3},
+                    width=1920, height=1080)
+```
+
+**Why this is safe — the sequential queue guarantee**
+
+The render queue is sequential: render N+1 only starts after render N
+completes.  When a render is executing on the main thread, any
+`client.execute()` call you make from Python is queued and runs *after*
+the current render finishes and *before* the next render starts.
+
+```
+[Python thread]                 [DAZ Studio main thread]
+execute(setup for render N) --> apply setup N
+render(out_N, ...)          --> (queued)  run render N → doRender()
+execute(setup for N+1)      --> (blocked until render N completes)
+                                apply setup N+1   ← runs here
+render(out_N1, ...)         --> (queued)  run render N+1 → doRender()
+```
+
+Because `render()` blocks until completion by default, the loop body
+always runs setup → render → next setup in the correct order.
+
+**Transparent backgrounds**
+
+The render API does not manipulate backdrop nodes.  Use `client.execute()`
+to toggle environment visibility before each render:
+
+```python
+client.execute("""
+    var env = Scene.findNodeByLabel("Environment");
+    if (env) env.setVisible(false);
+""")
+result = render(client, out_path, ...)
+client.execute("""
+    var env = Scene.findNodeByLabel("Environment");
+    if (env) env.setVisible(true);
+""")
+```
+
+For iRay, set the backdrop mode to "Scene Only" (no environment sphere) via
+the iRay render settings DazScript API to avoid per-render toggling.
+
+#### Pattern C — Multi-figure scene
+
+Use `FigureMorphs` to configure multiple characters in a single render
+submission.  No extra scene changes are required.
+
+```python
+from dazpy._render_api import FigureMorphs, RenderBase, RenderVariant, render_variants
+
+variants = [
+    RenderVariant(
+        r"C:\vn\both_neutral.png",
+        figures=[
+            FigureMorphs("Alice", morphs={}),
+            FigureMorphs("Bob",   morphs={}),
+        ],
+    ),
+    RenderVariant(
+        r"C:\vn\alice_happy_bob_angry.png",
+        figures=[
+            FigureMorphs("Alice", morphs={"Smile Full Face": 1.0}),
+            FigureMorphs("Bob",   morphs={"Anger": 0.8, "Brow Lower": 0.6}),
+        ],
+    ),
+]
+base = RenderBase(width=1920, height=1080, engine="iray")
+results = render_variants(client, variants, base)
+```
+
+`FigureMorphs.name` must match the figure's label in the Scene panel.
+Unknown morph labels are silently skipped by the server.
+
+**SDK features demonstrated:** `render`, `render_variants`, `RenderVariant`,
+`RenderBase`, `FigureMorphs`, `RenderResult`, `DazClient.execute`.
 
 ---
 

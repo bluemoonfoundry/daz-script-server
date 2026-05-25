@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.3.0** | DAZ Studio 4.5+ | Windows & macOS
+**Version 2.4.0** | DAZ Studio 4.5+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -66,6 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
 - [What's New in v2.2.0](#whats-new-in-v220)
 - [What's New in v2.0.0](#whats-new-in-v200)
@@ -141,6 +142,66 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.4.0
+
+### 🎬 Render Endpoints — Trigger and Track DAZ Studio Renders
+
+Three new HTTP endpoints let you submit renders, stream live progress, and batch
+render variants — all without blocking the server.
+
+**`POST /render`** — submit a render job and get back a `request_id`:
+
+```python
+from dazpy import DazClient, render, RenderVariant, FigureMorphs
+
+client = DazClient()
+
+# Simple render with default settings
+result = render(client, width=1920, height=1080)
+print(result.output_path)
+
+# Render with morph overrides
+result = render(client, width=1920, height=1080,
+                figure_morphs=[FigureMorphs("Genesis 9", {"eCTRLSmileSimple": 1.0})])
+```
+
+**`POST /render/batch`** — submit multiple variants in one request:
+
+```python
+from dazpy import render_variants, RenderVariant, FigureMorphs
+
+variants = [
+    RenderVariant(label="neutral", figure_morphs=[FigureMorphs("Genesis 9", {})]),
+    RenderVariant(label="smile",   figure_morphs=[FigureMorphs("Genesis 9", {"eCTRLSmileSimple": 1.0})]),
+    RenderVariant(label="frown",   figure_morphs=[FigureMorphs("Genesis 9", {"eCTRLFrownSimple": 0.8})]),
+]
+results = render_variants(client, variants, width=1920, height=1080)
+```
+
+**`GET /render/:id/progress`** — SSE stream of render progress events:
+
+```
+data: {"stage":"rendering","progress":0.42,"elapsed_ms":4200}
+data: {"stage":"complete","progress":1.0,"output_path":"/path/to/render.png","elapsed_ms":9800}
+```
+
+### 🔌 Companion Plugin Route Registration
+
+Third-party plugins can now register their own HTTP routes into the DazScript
+Server. Routes are resolved via a `DzScriptServerPane` pointer published on
+`qApp`, so companion plugins discovered at DAZ Studio startup are automatically
+wired in. Registered routes support path parameters (e.g. `/export/:id/status`).
+
+### 🐛 Bug Fixes
+
+- Fixed CRT heap mismatch crash when a catch-all dispatcher routed to a
+  companion plugin (mixed MSVC runtime allocator boundary).
+- Fixed companion plugin routes silently dropped when registered after the
+  server had already started listening.
+- Fixed data race in the catch-all route dispatcher under concurrent requests.
 
 ---
 
@@ -370,7 +431,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.3.0-py3-none-any.whl
+pip install dazpy-2.4.0-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:

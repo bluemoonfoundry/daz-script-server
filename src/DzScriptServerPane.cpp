@@ -22,6 +22,7 @@
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qregexp.h>
+#include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
 #include <QtCore/qscopedpointer.h>
 #include <QtGui/qboxlayout.h>
@@ -72,6 +73,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
 	, m_pEventBroker(nullptr)
+	, m_pRenderProgress(nullptr)
 	, m_pEventClientsLabel(nullptr)
 {
 	// Register return type for BlockingQueuedConnection on execute/register handlers.
@@ -313,6 +315,17 @@ DzScriptServerPane::DzScriptServerPane()
 
 	updateUI();
 
+	// Register this pane on the application object so companion plugins can find
+	// it without walking the widget tree (which may fail across DLL boundaries).
+	// Bridge plugins look up: qApp->property("DzScriptServerPane").value<QObject*>()
+	if (QCoreApplication::instance()) {
+		QCoreApplication::instance()->setProperty("DzScriptServerPane",
+		                                          QVariant::fromValue<QObject*>(this));
+		appendLog("[INFO] DzScriptServerPane registered on qApp for companion plugin discovery.");
+	} else {
+		appendLog("[WARN] QCoreApplication not available — companion plugins may not find this pane.");
+	}
+
 	// Auto-start server if enabled
 	if (m_bAutoStart) {
 		appendLog("[INFO] Auto-starting server...");
@@ -322,6 +335,8 @@ DzScriptServerPane::DzScriptServerPane()
 
 DzScriptServerPane::~DzScriptServerPane()
 {
+	if (QCoreApplication::instance())
+		QCoreApplication::instance()->setProperty("DzScriptServerPane", QVariant());
 	stopServer();
 	saveSettings();
 }
@@ -470,6 +485,8 @@ void DzScriptServerPane::startServer()
 	m_pEventBroker = new SceneEventBroker(this);
 	m_pEventBroker->start();
 
+	m_pRenderProgress = new RenderProgressBroker();
+
 	updateUI();
 	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -488,9 +505,11 @@ void DzScriptServerPane::stopServer()
 	// Stop async cleanup timer
 	m_pCleanupTimer->stop();
 
-	// 1. Stop the event broker: disconnects DzScene signals and closes all
-	//    SubscriberQueues so that SSE content-provider callbacks unblock their
-	//    pop() calls and start draining quickly.
+	// 1. Stop the event and progress brokers: unblocks all SSE pop() calls so
+	//    content-provider callbacks drain quickly before the server is torn down.
+	if (m_pRenderProgress) {
+		m_pRenderProgress->stopAll();
+	}
 	if (m_pEventBroker) {
 		m_pEventBroker->stop();
 		// Do NOT delete yet — SSE resource-releaser lambdas still hold a
@@ -519,7 +538,11 @@ void DzScriptServerPane::stopServer()
 		m_pServerThread = nullptr;
 	}
 
-	// 4. Now safe to delete the broker — all resource releasers have run.
+	// 4. Now safe to delete brokers — all resource releasers have run.
+	if (m_pRenderProgress) {
+		delete m_pRenderProgress;
+		m_pRenderProgress = nullptr;
+	}
 	if (m_pEventBroker) {
 		delete m_pEventBroker;
 		m_pEventBroker = nullptr;
@@ -693,6 +716,8 @@ void DzScriptServerPane::setupRoutes()
 	m_pAsyncResultHandler.reset(new AsyncResultHandler(this));
 	m_pAsyncCancelHandler.reset(new AsyncCancelHandler(this));
 	m_pAsyncListHandler.reset(new AsyncListHandler(this));
+	m_pRenderHandler.reset(new RenderHandler(this));
+	m_pRenderBatchHandler.reset(new RenderBatchHandler(this));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -799,6 +824,20 @@ void DzScriptServerPane::setupRoutes()
 		applyContext(ctx, res);
 	});
 
+	// ── Render endpoints ──────────────────────────────────────────────────────
+
+	m_pServer->Post("/render", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pRenderHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	m_pServer->Post("/render/batch", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
 	// ── Scene event stream (SSE) ──────────────────────────────────────────────
 	//
 	// GET /scene/events[?filter=node,selection,scene,time,render,light,camera,skeleton]
@@ -891,6 +930,223 @@ void DzScriptServerPane::setupRoutes()
 			}
 		);
 	});
+
+	// GET /render/:id/progress
+	//
+	// SSE stream: emits a single "progress" event (percent:0) when the render
+	// starts executing, then a terminal "complete" or "error" event when done.
+	// DAZ SDK exposes no per-frame progress signal, so no intermediate percent
+	// updates are possible. Clients connecting after completion receive the
+	// stored terminal event immediately.
+	m_pServer->Get("/render/([^/]+)/progress", [this](const httplib::Request& req, httplib::Response& res) {
+		{
+			auto ctx = toContext(req);
+			if (!m_pAuthChain->run(ctx)) {
+				res.status = ctx.responseStatus;
+				res.set_content(ctx.responseBody, "application/json");
+				return;
+			}
+		}
+
+		QString requestId = QString::fromStdString(req.matches[1].str());
+		if (!requestId.startsWith("rnd-")) {
+			res.status = 404;
+			res.set_content("{\"error\":\"Not a render request\"}", "application/json");
+			return;
+		}
+
+		auto statusPair = m_pAsyncMgr->getStatusJson(requestId.toStdString());
+		if (statusPair.first == 404) {
+			res.status = 404;
+			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			return;
+		}
+
+		SubscriberQueue* queue = new SubscriberQueue();
+		if (!m_pRenderProgress->watchRequest(requestId, queue)) {
+			delete queue;
+			res.status = 404;
+			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			return;
+		}
+
+		res.set_header("Cache-Control",    "no-cache");
+		res.set_header("Connection",       "keep-alive");
+		res.set_header("X-Accel-Buffering","no");
+		QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
+
+		RenderProgressBroker* broker = m_pRenderProgress;
+		res.set_chunked_content_provider("text/event-stream",
+			[queue](size_t, httplib::DataSink& sink) -> bool {
+				QString event = queue->pop(3000);
+				if (event.isEmpty()) {
+					if (queue->isClosed()) return false;
+					static const char ka[] = ":keepalive\n\n";
+					return sink.write(ka, sizeof(ka) - 1);
+				}
+				QByteArray payload = event.toUtf8();
+				bool ok = sink.write(payload.constData(), payload.size());
+				return ok && !queue->isClosed();
+			},
+			[this, broker, requestId, queue](bool) {
+				broker->unwatchRequest(requestId, queue);
+				delete queue;
+				QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
+			}
+		);
+	});
+
+	applyPluginRoutes();
+}
+
+// ─── Plugin Route Registration ────────────────────────────────────────────────
+
+bool DzScriptServerPane::registerPluginRoute(const QString& method, const QString& path,
+                                              QObject* receiver, const QString& slotName)
+{
+	if (!receiver || path.isEmpty() || slotName.isEmpty())
+		return false;
+
+	const QString m = method.toUpper();
+	if (m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "PATCH")
+		return false;
+
+	PluginRoute r;
+	r.method    = m;
+	r.path      = path;
+	r.receiver  = receiver;
+	r.slotName  = slotName;
+
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		bool found = false;
+		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
+				m_pluginRoutes[i] = r;
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			m_pluginRoutes.append(r);
+	}
+	appendLog(QString("[INFO] Plugin route registered: %1 %2").arg(m).arg(path));
+	return true;
+}
+
+void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QString& path)
+{
+	const QString m = method.toUpper();
+	QMutexLocker lock(&m_pluginRoutesMutex);
+	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+		if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
+			m_pluginRoutes.removeAt(i);
+			return;
+		}
+	}
+}
+
+// Match a path-pattern (e.g. "/export/usd/:id") against a concrete path.
+// Fills `params` with captured segment values keyed by the param name (no colon).
+// Returns true on match.  Both arguments must start with '/'.
+static bool matchPluginPath(const QString& pattern, const QString& path,
+                             QMap<QString, QString>& params)
+{
+	const QStringList patParts  = pattern.split('/');
+	const QStringList pathParts = path.split('/');
+	if (patParts.size() != pathParts.size()) return false;
+	params.clear();
+	for (int i = 0; i < patParts.size(); ++i) {
+		if (patParts[i].startsWith(':'))
+			params[patParts[i].mid(1)] = pathParts[i];
+		else if (patParts[i] != pathParts[i])
+			return false;
+	}
+	return true;
+}
+
+void DzScriptServerPane::applyPluginRoutes()
+{
+	// Register a single catch-all handler per HTTP method.  Each handler scans
+	// m_pluginRoutes at request time (mutex-protected) so that routes registered
+	// after server start — and routes that change dynamically — are always
+	// visible without ever touching httplib's handler vectors post-startup.
+	// This avoids the data race that would occur if we called m_pServer->Get/Post
+	// from registerPluginRoute() while the listen thread is dispatching requests.
+
+	auto makeHandler = [this](const QString& method) {
+		return [this, method](const httplib::Request& req, httplib::Response& res) {
+			const QString qpath = QString::fromStdString(req.path);
+			QMap<QString, QString> params;
+
+			QPointer<QObject> receiver;
+			QByteArray        slotBytes;
+			bool              found = false;
+			{
+				QMutexLocker lock(&m_pluginRoutesMutex);
+				for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+					const PluginRoute& r = m_pluginRoutes[i];
+					if (r.method != method) continue;
+					if (!matchPluginPath(r.path, qpath, params)) continue;
+					receiver  = r.receiver;
+					slotBytes = r.slotName.toLatin1();
+					found     = true;
+					break;
+				}
+			}
+
+			if (!found) {
+				res.status = 404;
+				res.set_content("{\"error\":\"not found\"}", "application/json");
+				return;
+			}
+			if (!receiver) {
+				res.status = 503;
+				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
+				return;
+			}
+
+			// Wrap path params + body into a single JSON envelope so the slot can
+			// access both without a separate signature.
+			// All string operations use QByteArray (Qt CRT) to avoid a heap mismatch
+			// between Qt's msvcr100 and DazScriptServer's ucrtbase.
+			QByteArray body;
+			if (!params.isEmpty()) {
+				QByteArray paramsJson = "{";
+				bool first = true;
+				for (auto it = params.begin(); it != params.end(); ++it) {
+					if (!first) paramsJson += ",";
+					first = false;
+					paramsJson += "\"" + it.key().toUtf8() + "\":\"" + it.value().toUtf8() + "\"";
+				}
+				paramsJson += "}";
+				QByteArray rawBody(req.body.c_str(), (int)req.body.size());
+				body = "{\"_pathParams\":" + paramsJson + ",\"_body\":" +
+				       (rawBody.isEmpty() ? QByteArray("null") : rawBody) + "}";
+			} else {
+				body = QByteArray(req.body.c_str(), (int)req.body.size());
+			}
+
+			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
+			HttpResult result;
+			QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
+			                          Qt::BlockingQueuedConnection,
+			                          Q_RETURN_ARG(HttpResult, result),
+			                          Q_ARG(QByteArray, body),
+			                          Q_ARG(QByteArray, ip));
+			res.status = result.first;
+			if (!result.second.isEmpty())
+				res.set_content(result.second.constData(), "application/json");
+		};
+	};
+
+	// The catch-alls must be registered AFTER all specific routes so httplib
+	// matches specific paths first (httplib tries handlers in registration order).
+	m_pServer->Get   ("/(.*)", makeHandler("GET"));
+	m_pServer->Post  ("/(.*)", makeHandler("POST"));
+	m_pServer->Put   ("/(.*)", makeHandler("PUT"));
+	m_pServer->Delete("/(.*)", makeHandler("DELETE"));
+	m_pServer->Patch ("/(.*)", makeHandler("PATCH"));
 }
 
 // ─── Script Registry public API (called from HTTP threads) ───────────────────
@@ -1335,6 +1591,506 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 	return buildQueuedResponse(requestId, submittedAt);
 }
 
+// ─── Render script generation ─────────────────────────────────────────────────
+
+namespace {
+
+struct FigureSpec {
+    QString     name;
+    QVariantMap morphs;
+};
+
+// Builds the DazScript that applies morphs and triggers the render.
+// The script runs on the main thread via processNextAsyncRequest().
+//
+// Structure:
+//   1. Re-validate figure refs (belt-and-suspenders; scene may have changed since enqueue).
+//   2. Optionally reset all float properties on each figure to default (reset_morphs).
+//   3. Apply morphs dict via findPropertyByLabel(); unknown keys are silently skipped.
+//   4. Configure render options and call App.getRenderMgr().render(opts).
+//   5. Return {success:true, output_path:"..."} as a JS object.
+//
+// NOTE: DAZ DazScript render options method names (setImageFile, setAspectWidth,
+// setAspectHeight, setActiveCamera) need to be verified against a running DAZ Studio
+// instance. The names used here are based on the DAZ SDK docs and existing examples.
+static QString buildRenderScript(
+    const QString& outputPath,
+    int width, int height,
+    const QString& camera,
+    const QString& engine,
+    int iraySamples,
+    bool resetMorphs,
+    const QList<FigureSpec>& figures)
+{
+    // Embed figure specs as a JSON array literal — valid JS object literal syntax.
+    QString figureJson = "[";
+    for (int i = 0; i < figures.size(); ++i) {
+        if (i > 0) figureJson += ",";
+        figureJson += "{\"name\":\"";
+        figureJson += QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(figures[i].name)));
+        figureJson += "\",\"morphs\":";
+        figureJson += QString::fromStdString(JsonStd::variantToJson(QVariant(figures[i].morphs)));
+        figureJson += "}";
+    }
+    figureJson += "]";
+
+    QString outputPathEsc = QString::fromStdString(
+        JsonStd::escape(JsonStd::qstrToStd(outputPath)));
+    QString cameraEsc = camera.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(camera))) + "\"";
+    QString engineEsc = engine.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(engine))) + "\"";
+
+    QString script;
+    script += "(function() {\n";
+
+    // ── Figure specs ──────────────────────────────────────────────────────
+    script += "  var figures = " + figureJson + ";\n";
+    script += "  var outputPath = \"" + outputPathEsc + "\";\n";
+    script += "  var cameraName = " + cameraEsc + ";\n";
+    script += "  var engineName = " + engineEsc + ";\n";
+    script += "  var width = " + QString::number(width) + ";\n";
+    script += "  var height = " + QString::number(height) + ";\n";
+    script += "  var iraySamples = " + QString::number(iraySamples) + ";\n";
+    script += "  var resetMorphs = " + QString(resetMorphs ? "true" : "false") + ";\n\n";
+
+    // ── Pre-flight: validate all figure references ────────────────────────
+    script +=
+        "  for (var i = 0; i < figures.length; i++) {\n"
+        "    if (!Scene.findNodeByLabel(figures[i].name))\n"
+        "      return {success: false, error: 'Figure not found: ' + figures[i].name};\n"
+        "  }\n\n";
+
+    // ── Reset morphs ──────────────────────────────────────────────────────
+    // Resets all DzFloatProperty values to their defaults on each figure.
+    // This gives a clean morph baseline before applying the variant's morph dict.
+    script +=
+        "  if (resetMorphs) {\n"
+        "    for (var i = 0; i < figures.length; i++) {\n"
+        "      var node = Scene.findNodeByLabel(figures[i].name);\n"
+        "      var props = node.getPropertyList();\n"
+        "      for (var j = 0; j < props.length; j++) {\n"
+        "        if (props[j].inherits('DzFloatProperty'))\n"
+        "          props[j].setValue(props[j].getDefaultValue());\n"
+        "      }\n"
+        "    }\n"
+        "  }\n\n";
+
+    // ── Apply morphs ──────────────────────────────────────────────────────
+    // Unknown morph names are silently skipped (non-fatal per design decision).
+    script +=
+        "  for (var i = 0; i < figures.length; i++) {\n"
+        "    var node = Scene.findNodeByLabel(figures[i].name);\n"
+        "    var morphDict = figures[i].morphs;\n"
+        "    for (var k in morphDict) {\n"
+        "      if (morphDict.hasOwnProperty(k)) {\n"
+        "        var prop = node.findPropertyByLabel(k);\n"
+        "        if (prop) prop.setValue(morphDict[k]);\n"
+        "      }\n"
+        "    }\n"
+        "  }\n\n";
+
+    // ── Configure render options ──────────────────────────────────────────
+    // SDK-verified method names (dzrenderoptions.h / dzrendermgr.h / dzscene.h):
+    //   renderImgFilename   Q_PROPERTY WRITE setRenderImgFilename
+    //   renderImgToId       Q_PROPERTY WRITE setRenderImgToId  (2 = DirectToFile)
+    //   imageSize           Q_PROPERTY WRITE setImageSize (QSize)
+    //   Scene.findCameraByLabel()  confirmed in dzscene.h
+    //   App.getViewportMgr().setActiveCamera()  confirmed in dzviewportmgr.h
+    //   renderMgr.doRender(opts)  confirmed in dzrendermgr.h
+    //   Engine switching: renderMgr.setActiveRenderer(DzRenderer*) — requires
+    //     renderer lookup by class name; names are runtime-registered so not in
+    //     the SDK headers. Left as a TODO until tested against a live instance.
+    //   iray_samples: not a DzRenderOptions property — it lives in iray's own
+    //     render settings, accessible via the iray renderer object. TODO.
+    script +=
+        "  var renderMgr = App.getRenderMgr();\n"
+        "  var opts = renderMgr.getRenderOptions();\n"
+        "  opts.renderImgFilename = outputPath;\n"
+        "  opts.renderImgToId = 2;\n";  // DirectToFile
+
+    // QSize constructor confirmed in DAZ DazScript: new QSize(w, h)
+    // Qt.size() is NOT available — Qt global is undefined in this engine.
+    script +=
+        "  if (width > 0) opts.imageSize = new QSize(width, height);\n";
+
+    script +=
+        "  if (cameraName) {\n"
+        "    var cam = Scene.findCameraByLabel(cameraName);\n"
+        "    if (cam) App.getViewportMgr().setActiveCamera(cam);\n"
+        "  }\n";
+
+    // Engine class name map — confirmed: iray="DzIrayRenderer".
+    // 3Delight and Filament class names follow the same Dz*Renderer pattern but
+    // need verification on a system with those plugins installed.
+    script +=
+        "  if (engineName) {\n"
+        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"3delight\": \"Dz3DelightRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
+        "    var engineClass = engineMap[engineName.toLowerCase()];\n"
+        "    if (engineClass) {\n"
+        "      var renderer = renderMgr.findRenderer(engineClass);\n"
+        "      if (renderer) renderMgr.setActiveRenderer(renderer);\n"
+        "    }\n"
+        "  }\n";
+
+    // iray_samples: not exposed on DzRenderOptions or the DzIrayRenderer object
+    // in DazScript. DAZ stores iray-specific settings outside the standard render
+    // options API; the access path is not yet determined. Field is accepted but
+    // silently ignored until resolved.
+    script += "\n";
+
+    // ── Render ────────────────────────────────────────────────────────────
+    script +=
+        "  renderMgr.doRender(opts);\n"
+        "  return {success: true, output_path: outputPath};\n"
+        "})();\n";
+
+    return script;
+}
+
+} // namespace
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBody)
+{
+    // ── Parse body ────────────────────────────────────────────────────────
+    QScriptEngine parseEngine;
+    QScriptValue  parsed = parseEngine.evaluate(
+        "(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+    if (parseEngine.hasUncaughtException())
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
+
+    QVariantMap body = parsed.toVariant().toMap();
+
+    // ── Required fields ───────────────────────────────────────────────────
+    QString outputPath = body.value("output_path").toString().trimmed();
+    {
+        ValidationResult vr = RequestValidator::validateRequiredField(outputPath, "output_path");
+        if (!vr.valid)
+            return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
+    }
+
+    // ── Optional fields ───────────────────────────────────────────────────
+    int  width       = body.contains("width")        ? body.value("width").toInt()        : 0;
+    int  height      = body.contains("height")       ? body.value("height").toInt()       : 0;
+    int  iraySamples = body.contains("iray_samples") ? body.value("iray_samples").toInt() : 0;
+    bool resetMorphs = body.value("reset_morphs").toBool();
+    QString camera   = body.value("camera").toString().trimmed();
+    QString engine   = body.value("engine").toString().trimmed();
+
+    if ((width > 0) != (height > 0))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "width and height must both be provided or both omitted")));
+
+    if (width < 0 || height < 0)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "width and height must be positive integers")));
+
+    if (!engine.isEmpty()
+            && engine != "iray" && engine != "3delight" && engine != "filament")
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "engine must be one of: iray, 3delight, filament")));
+
+    // ── Normalise figure list ─────────────────────────────────────────────
+    // Accept {figure, morphs} single-figure shorthand or {figures:[{name,morphs},...]}
+    QList<FigureSpec> figureSpecs;
+
+    if (body.contains("figures")) {
+        QVariantList figs = body.value("figures").toList();
+        for (int i = 0; i < figs.size(); ++i) {
+            QVariantMap fig = figs[i].toMap();
+            QString name = fig.value("name").toString().trimmed();
+            if (name.isEmpty())
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD,
+                    "figures[" + std::to_string(i) + "].name")));
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = fig.value("morphs").toMap();
+            figureSpecs.append(spec);
+        }
+    } else if (body.contains("figure")) {
+        QString name = body.value("figure").toString().trimmed();
+        if (!name.isEmpty()) {
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = body.value("morphs").toMap();
+            figureSpecs.append(spec);
+        }
+    }
+
+    // ── Pre-flight: validate figure names against the current scene ───────
+    // Runs a minimal DazScript on the main thread before enqueuing so that
+    // bad figure references surface immediately (not after render queue wait).
+    if (!figureSpecs.isEmpty()) {
+        QString validateScript = "(function() {\n  var names = [";
+        for (int i = 0; i < figureSpecs.size(); ++i) {
+            if (i > 0) validateScript += ",";
+            validateScript += "\"";
+            validateScript += QString::fromStdString(
+                JsonStd::escape(JsonStd::qstrToStd(figureSpecs[i].name)));
+            validateScript += "\"";
+        }
+        validateScript +=
+            "];\n"
+            "  for (var i = 0; i < names.length; i++) {\n"
+            "    if (!Scene.findNodeByLabel(names[i])) return 'NOT_FOUND:' + names[i];\n"
+            "  }\n"
+            "  return 'OK';\n"
+            "})()";
+
+        QScopedPointer<DzScript> valScript(new DzScript());
+        valScript->setCode(validateScript);
+        if (valScript->execute(QVariantList())) {
+            QString valResult = valScript->result().toString();
+            if (valResult.startsWith("NOT_FOUND:")) {
+                QString missing = valResult.mid(10);
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                    "Figure not found in scene: " + JsonStd::qstrToStd(missing))));
+            }
+        }
+        // If the validation script itself fails to parse/execute (e.g. Scene API
+        // unavailable at startup), proceed — the render script will surface the
+        // error at execution time rather than blocking enqueue.
+    }
+
+    // ── Generate and enqueue render job ───────────────────────────────────
+    QString renderScript = buildRenderScript(
+        outputPath, width, height, camera, engine, iraySamples, resetMorphs, figureSpecs);
+
+    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd");
+    if (!sr.accepted)
+        return HttpResult(503, stdToQBA(ErrorResponse::build(
+            ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
+
+    m_pRenderProgress->setOutputPath(sr.id, outputPath);
+
+    appendLog(QString("[%1] [RENDER QUEUED] output:%2 -> %3")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+        .arg(outputPath).arg(sr.id));
+
+    return buildQueuedResponse(sr.id, sr.submittedAt);
+}
+
+HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody)
+{
+    // ── Parse body ────────────────────────────────────────────────────────
+    QScriptEngine parseEngine;
+    QScriptValue  parsed = parseEngine.evaluate(
+        "(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+    if (parseEngine.hasUncaughtException())
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
+
+    QVariantMap body = parsed.toVariant().toMap();
+
+    // ── Parse base (all fields optional — provides defaults for variants) ─
+    QVariantMap base = body.value("base").toMap();
+
+    int     baseWidth       = base.contains("width")        ? base.value("width").toInt()        : 0;
+    int     baseHeight      = base.contains("height")       ? base.value("height").toInt()       : 0;
+    int     baseIraySamples = base.contains("iray_samples") ? base.value("iray_samples").toInt() : 0;
+    bool    baseResetMorphs = base.value("reset_morphs").toBool();
+    QString baseCamera      = base.value("camera").toString().trimmed();
+    QString baseEngine      = base.value("engine").toString().trimmed();
+
+    // Resolve base figures (single-figure shorthand or explicit list)
+    QList<FigureSpec> baseFigures;
+    if (base.contains("figures")) {
+        QVariantList figs = base.value("figures").toList();
+        for (int i = 0; i < figs.size(); ++i) {
+            QVariantMap fig = figs[i].toMap();
+            QString name = fig.value("name").toString().trimmed();
+            if (name.isEmpty())
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD,
+                    "base.figures[" + std::to_string(i) + "].name")));
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = fig.value("morphs").toMap();
+            baseFigures.append(spec);
+        }
+    } else if (base.contains("figure")) {
+        QString name = base.value("figure").toString().trimmed();
+        if (!name.isEmpty()) {
+            FigureSpec spec;
+            spec.name   = name;
+            spec.morphs = base.value("morphs").toMap();
+            baseFigures.append(spec);
+        }
+    }
+
+    // ── Validate variants array ───────────────────────────────────────────
+    if (!body.contains("variants"))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD, "variants")));
+
+    QVariantList variants = body.value("variants").toList();
+    if (variants.isEmpty())
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "variants must be a non-empty array")));
+
+    static const int MAX_BATCH_VARIANTS = 100;
+    if (variants.size() > MAX_BATCH_VARIANTS)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "variants exceeds maximum of " + std::to_string(MAX_BATCH_VARIANTS))));
+
+    // ── Validate + pre-flight all variants before enqueuing any ──────────
+    struct VariantSpec {
+        QString           outputPath;
+        int               width, height, iraySamples;
+        bool              resetMorphs;
+        QString           camera, engine;
+        QList<FigureSpec> figures;
+        QString           renderScript;
+    };
+    QList<VariantSpec> specs;
+    specs.reserve(variants.size());
+
+    for (int vi = 0; vi < variants.size(); ++vi) {
+        QVariantMap v = variants[vi].toMap();
+        const std::string viStr = "variants[" + std::to_string(vi) + "]";
+
+        // output_path required per variant
+        QString outputPath = v.value("output_path").toString().trimmed();
+        {
+            ValidationResult vr = RequestValidator::validateRequiredField(outputPath,
+                viStr + ".output_path");
+            if (!vr.valid)
+                return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
+        }
+
+        // Merge scalar fields: variant overrides base
+        int     width       = v.contains("width")        ? v.value("width").toInt()        : baseWidth;
+        int     height      = v.contains("height")       ? v.value("height").toInt()       : baseHeight;
+        int     iraySamples = v.contains("iray_samples") ? v.value("iray_samples").toInt() : baseIraySamples;
+        bool    resetMorphs = v.contains("reset_morphs") ? v.value("reset_morphs").toBool(): baseResetMorphs;
+        QString camera      = v.contains("camera")       ? v.value("camera").toString().trimmed() : baseCamera;
+        QString engine      = v.contains("engine")       ? v.value("engine").toString().trimmed() : baseEngine;
+
+        if ((width > 0) != (height > 0))
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ": width and height must both be provided or both omitted")));
+        if (width < 0 || height < 0)
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ": width and height must be positive integers")));
+        if (!engine.isEmpty()
+                && engine != "iray" && engine != "3delight" && engine != "filament")
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ".engine must be one of: iray, 3delight, filament")));
+
+        // Merge figures: variant wins if it specifies figures/figure;
+        // if variant only has morphs and base has one figure, override its morphs.
+        QList<FigureSpec> figures;
+        if (v.contains("figures")) {
+            QVariantList figs = v.value("figures").toList();
+            for (int i = 0; i < figs.size(); ++i) {
+                QVariantMap fig = figs[i].toMap();
+                QString name = fig.value("name").toString().trimmed();
+                if (name.isEmpty())
+                    return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD,
+                        viStr + ".figures[" + std::to_string(i) + "].name")));
+                FigureSpec spec;
+                spec.name   = name;
+                spec.morphs = fig.value("morphs").toMap();
+                figures.append(spec);
+            }
+        } else if (v.contains("figure")) {
+            FigureSpec spec;
+            spec.name   = v.value("figure").toString().trimmed();
+            spec.morphs = v.value("morphs").toMap();
+            figures.append(spec);
+        } else if (v.contains("morphs") && baseFigures.size() == 1) {
+            // Shorthand: apply morph overrides on top of the single base figure's morphs
+            QVariantMap merged = baseFigures[0].morphs;
+            QVariantMap overrides = v.value("morphs").toMap();
+            for (QVariantMap::const_iterator it = overrides.begin(); it != overrides.end(); ++it)
+                merged[it.key()] = it.value();
+            FigureSpec spec;
+            spec.name   = baseFigures[0].name;
+            spec.morphs = merged;
+            figures.append(spec);
+        } else {
+            figures = baseFigures;
+        }
+
+        // Pre-flight: validate figure names against the current scene
+        if (!figures.isEmpty()) {
+            QString validateScript = "(function() {\n  var names = [";
+            for (int i = 0; i < figures.size(); ++i) {
+                if (i > 0) validateScript += ",";
+                validateScript += "\"";
+                validateScript += QString::fromStdString(
+                    JsonStd::escape(JsonStd::qstrToStd(figures[i].name)));
+                validateScript += "\"";
+            }
+            validateScript +=
+                "];\n"
+                "  for (var i = 0; i < names.length; i++) {\n"
+                "    if (!Scene.findNodeByLabel(names[i])) return 'NOT_FOUND:' + names[i];\n"
+                "  }\n"
+                "  return 'OK';\n"
+                "})()";
+            QScopedPointer<DzScript> valScript(new DzScript());
+            valScript->setCode(validateScript);
+            if (valScript->execute(QVariantList())) {
+                QString valResult = valScript->result().toString();
+                if (valResult.startsWith("NOT_FOUND:")) {
+                    QString missing = valResult.mid(10);
+                    return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                        viStr + ": Figure not found in scene: " + JsonStd::qstrToStd(missing))));
+                }
+            }
+        }
+
+        VariantSpec vs;
+        vs.outputPath   = outputPath;
+        vs.width        = width;
+        vs.height       = height;
+        vs.iraySamples  = iraySamples;
+        vs.resetMorphs  = resetMorphs;
+        vs.camera       = camera;
+        vs.engine       = engine;
+        vs.figures      = figures;
+        vs.renderScript = buildRenderScript(
+            outputPath, width, height, camera, engine, iraySamples, resetMorphs, figures);
+        specs.append(vs);
+    }
+
+    // ── Enqueue all variants ──────────────────────────────────────────────
+    QString batchId = MetricsCollector::generateAsyncId("bat");
+    QStringList requestIds;
+
+    for (int vi = 0; vi < specs.size(); ++vi) {
+        AsyncRequestManager::SubmitResult sr =
+            m_pAsyncMgr->submitRender(specs[vi].renderScript, "rnd");
+        if (!sr.accepted) {
+            // Queue full mid-batch — return 503 with how many were accepted.
+            // Already-enqueued variants will still execute.
+            std::string msg = "Queue full after accepting " + std::to_string(requestIds.size())
+                + " of " + std::to_string(specs.size()) + " variants: " + JsonStd::qstrToStd(sr.error);
+            return HttpResult(503, stdToQBA(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE, msg)));
+        }
+        m_pRenderProgress->setOutputPath(sr.id, specs[vi].outputPath);
+        requestIds.append(sr.id);
+    }
+
+    // ── Build response ────────────────────────────────────────────────────
+    std::string resp = "{\"batch_id\":\"" + JsonStd::qstrToStd(batchId) + "\""
+        + ",\"request_ids\":[";
+    for (int i = 0; i < requestIds.size(); ++i) {
+        if (i > 0) resp += ",";
+        resp += "\"" + JsonStd::qstrToStd(requestIds[i]) + "\"";
+    }
+    resp += "],\"total\":" + std::to_string(requestIds.size()) + "}";
+
+    appendLog(QString("[%1] [BATCH QUEUED] batch:%2 variants:%3")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+        .arg(batchId)
+        .arg(requestIds.size()));
+
+    return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 void DzScriptServerPane::onMessagePosted(const QString& msg)
 {
 	if (!m_bCapturingLog)
@@ -1610,6 +2366,10 @@ void DzScriptServerPane::processNextAsyncRequest()
 	m_pAsyncMgr->markRunning(id);
 	QTime wallClock = QTime::currentTime();
 
+	const bool isRender = id.startsWith("rnd-");
+	if (isRender && m_pRenderProgress)
+		m_pRenderProgress->notifyStarted(id);
+
 	// Execute the script on the main thread (same path as sync handler)
 	m_aCapturedLogLines.clear();
 	m_bCapturingLog = true;
@@ -1646,6 +2406,13 @@ void DzScriptServerPane::processNextAsyncRequest()
 	bool wasCancelled = false;
 	m_pAsyncMgr->markCompleted(id, executed, scriptResult, capturedOutput, errorMsg, wasCancelled);
 	m_pAsyncMgr->clearCurrent();
+
+	if (isRender && m_pRenderProgress) {
+		if (executed && !wasCancelled)
+			m_pRenderProgress->notifyCompleted(id, durationMs);
+		else
+			m_pRenderProgress->notifyFailed(id, errorMsg, durationMs);
+	}
 
 	m_metrics.recordRequest(executed && !wasCancelled);
 

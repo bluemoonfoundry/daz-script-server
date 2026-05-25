@@ -61,6 +61,46 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
     return r;
 }
 
+AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
+    const QString& scriptText, const QString& idPrefix)
+{
+    SubmitResult r;
+    r.accepted    = false;
+    r.submittedAt = 0;
+
+    {
+        QMutexLocker locker(&m_mutex);
+
+        if (m_queue.size() >= m_maxQueueDepth) {
+            r.error = QString("Queue full: %1 requests pending (max %2)")
+                      .arg(m_queue.size()).arg(m_maxQueueDepth);
+            return r;
+        }
+        if (m_requests.size() >= m_maxTrackedRequests) {
+            r.error = QString("Too many tracked requests: %1 (max %2)")
+                      .arg(m_requests.size()).arg(m_maxTrackedRequests);
+            return r;
+        }
+
+        AsyncRequest req;
+        req.id          = MetricsCollector::generateAsyncId(idPrefix);
+        req.requestType = REQUEST_TYPE_RENDER;
+        req.scriptText  = scriptText;
+        req.submittedAt = QDateTime::currentMSecsSinceEpoch();
+
+        m_requests.insert(req.id, req);
+        m_queue.enqueue(req.id);
+
+        r.accepted    = true;
+        r.id          = req.id;
+        r.submittedAt = req.submittedAt;
+    }
+
+    QMetaObject::invokeMethod(m_notifyTarget, "processNextAsyncRequest",
+                              Qt::QueuedConnection);
+    return r;
+}
+
 std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string& requestId) const
 {
     QString qid = QString::fromStdString(requestId);
@@ -197,7 +237,7 @@ std::pair<int, std::string> AsyncRequestManager::cancelJson(
             req.error       = "Cancelled by client";
             req.completedAt = QDateTime::currentMSecsSinceEpoch();
         } else {
-            needKillRender = true;
+            needKillRender = (req.requestType == REQUEST_TYPE_RENDER);
         }
     }
 

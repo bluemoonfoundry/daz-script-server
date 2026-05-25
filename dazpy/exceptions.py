@@ -63,3 +63,15 @@ class AsyncExecutionError(DazError):
     def __init__(self, message: str, request_id: str = ""):
         super().__init__(message)
         self.request_id = request_id
+
+
+class RenderError(DazError):
+    """Raised when a render job fails on the DAZ Studio side.
+
+    Attributes:
+        request_id: The server-assigned render request ID.
+    """
+
+    def __init__(self, message: str, request_id: str = ""):
+        super().__init__(message)
+        self.request_id = request_id
