@@ -18,9 +18,23 @@ All notable changes to DazScript Server are documented here.
 - **Plugin route registration interface** — companion plugins can register their
   own HTTP routes into the running server via a `DzScriptServerPane` pointer
   published on `qApp`. Supports path parameters (e.g. `/export/:id/status`).
+- **`POST /render/:id/cancel`** — cancel a queued or running render job by its
+  `request_id`. Returns 400 if the ID belongs to a non-render request, so callers
+  get a clear error rather than silently cancelling the wrong job.
 - **`dazpy` render API** — `render()`, `render_variants()`, `RenderVariant`, and
   `FigureMorphs` — high-level Python wrappers around the new render endpoints with
   SSE progress streaming and result polling.
+- **`RenderResult.request_id`** — the `request_id` is now populated on the result
+  returned by `render(..., wait=False)`, enabling cancellation via
+  `client.cancel_render(result.request_id)`.
+- **`DazClient.cancel_render(request_id)`** — cancel a render job by ID.
+- **`DazScene.find_camera_by_label(label)`** and
+  **`DazScene.find_light_by_label(label)`** — look up a camera or light by its
+  Scene-panel label. `find_camera_by_label` returns the same label string accepted
+  by the `camera` parameter of `render()`.
+- **`DazScene.undo_last()`** and **`DazScene.redo_last()`** — step the DAZ Studio
+  undo stack programmatically (equivalent to Ctrl+Z / Ctrl+Y). Distinct from the
+  existing `scene.undo()` context manager, which groups changes into a single step.
 - **`docs/examples/vn_render_workflow.py`** — four visual-novel render patterns
   (basic, batch morphs, interleaved scene setup, multi-figure) with full inline
   documentation.

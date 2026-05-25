@@ -331,6 +331,27 @@ class DazClient:
             raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
+    def cancel_render(self, request_id: str) -> bool:
+        """Cancel a queued or running render job.
+
+        Args:
+            request_id: The ``request_id`` from :meth:`render_submit` or a
+                :class:`~dazpy._render_api.RenderResult` with ``wait=False``.
+
+        Returns:
+            ``True`` if the server confirmed cancellation, ``False`` otherwise
+            (already finished, not found, or connection error).
+        """
+        try:
+            resp = _requests.post(
+                f"{self._base}/render/{request_id}/cancel",
+                headers=self._headers,
+                timeout=self._timeout,
+            )
+            return resp.status_code == 200
+        except _requests.exceptions.RequestException:
+            return False
+
     def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "object | None":
         """Open the SSE progress stream for a render request.
 

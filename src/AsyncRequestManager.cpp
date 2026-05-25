@@ -256,6 +256,63 @@ std::pair<int, std::string> AsyncRequestManager::cancelJson(
     return {200, s};
 }
 
+std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
+    const std::string& requestId, const std::string& clientIP)
+{
+    (void)clientIP;
+    QString qid = QString::fromStdString(requestId);
+
+    bool needKillRender = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_requests.contains(qid))
+            return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+
+        AsyncRequest& req = m_requests[qid];
+
+        if (req.requestType != REQUEST_TYPE_RENDER)
+            return {400, "{\"success\":false,\"error\":\"Not a render request\"}"};
+
+        RequestStatus statusBefore = req.status;
+
+        if (statusBefore == REQUEST_COMPLETED ||
+            statusBefore == REQUEST_FAILED    ||
+            statusBefore == REQUEST_CANCELLED) {
+            return {400, "{\"success\":false,\"error\":\"Request already finished\"}"};
+        }
+
+        req.cancelRequested = 1;
+
+        if (statusBefore == REQUEST_QUEUED) {
+            QQueue<QString> newQueue;
+            while (!m_queue.isEmpty()) {
+                QString id = m_queue.dequeue();
+                if (id != qid) newQueue.enqueue(id);
+            }
+            m_queue = newQueue;
+            req.status      = REQUEST_CANCELLED;
+            req.error       = "Cancelled by client";
+            req.completedAt = QDateTime::currentMSecsSinceEpoch();
+        } else {
+            needKillRender = true;
+        }
+    }
+
+    if (needKillRender) {
+        QMetaObject::invokeMethod(m_notifyTarget, "killRenderOnMainThread",
+                                  Qt::QueuedConnection);
+    }
+
+    long long nowMs = (long long)QDateTime::currentMSecsSinceEpoch();
+    std::string s = "{\"request_id\":\"";
+    s += JsonStd::escape(requestId);
+    s += "\",\"status\":\"cancelled\"";
+    s += ",\"message\":\"Cancellation requested\"";
+    s += ",\"cancelled_at\":\"" + JsonStd::msecToIso(nowMs) + "\"";
+    s += "}";
+    return {200, s};
+}
+
 std::string AsyncRequestManager::listJson(const std::string& statusFilter) const
 {
     QMutexLocker locker(&m_mutex);
