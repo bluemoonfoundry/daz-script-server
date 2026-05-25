@@ -188,6 +188,51 @@ data: {"stage":"rendering","progress":0.42,"elapsed_ms":4200}
 data: {"stage":"complete","progress":1.0,"output_path":"/path/to/render.png","elapsed_ms":9800}
 ```
 
+**`POST /render/:id/cancel`** — cancel a queued or running render job:
+
+```python
+# Submit without waiting, cancel later
+job = render(client, r"C:\tmp\out.png", width=1920, height=1080, wait=False)
+# ...
+client.cancel_render(job.request_id)
+```
+
+Returns 400 if the `request_id` belongs to a non-render job, so you get a clear
+error rather than silently cancelling the wrong request.
+
+### 🎥 Scene Camera and Light Discovery
+
+Two new `DazScene` methods make it easy to look up cameras and lights by label —
+the same label string the `render()` `camera` parameter accepts:
+
+```python
+from dazpy import DazClient, DazScene
+from dazpy._render_api import render
+
+client = DazClient()
+scene  = DazScene(client)
+
+cam = scene.find_camera_by_label("Camera 1")
+print(cam.focal_length, cam.pixels_width)
+
+# Use the found camera name directly in a render
+render(client, r"C:\tmp\out.png", camera="Camera 1", width=1920, height=1080)
+```
+
+### ↩️ Programmatic Undo / Redo
+
+Step the DAZ Studio undo stack from Python:
+
+```python
+scene.set_frame(10)
+scene.undo_last()   # step back (Ctrl+Z equivalent)
+scene.redo_last()   # step forward (Ctrl+Y equivalent)
+```
+
+`undo_last()` / `redo_last()` step the global stack directly. Use the existing
+`scene.undo("label")` context manager when you want to group a series of changes
+into a single undoable operation.
+
 ### 🔌 Companion Plugin Route Registration
 
 Third-party plugins can now register their own HTTP routes into the DazScript

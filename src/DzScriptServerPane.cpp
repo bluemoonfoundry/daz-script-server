@@ -718,6 +718,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pAsyncListHandler.reset(new AsyncListHandler(this));
 	m_pRenderHandler.reset(new RenderHandler(this));
 	m_pRenderBatchHandler.reset(new RenderBatchHandler(this));
+	m_pRenderCancelHandler.reset(new RenderCancelHandler(this));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -835,6 +836,12 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Post("/render/batch", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (m_pBaseExecuteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	m_pServer->Post("/render/([^/]+)/cancel", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pRenderCancelHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1250,6 +1257,18 @@ std::pair<int, std::string> DzScriptServerPane::cancelAsyncRequestJson(const std
 	std::pair<int, std::string> result = m_pAsyncMgr->cancelJson(requestId, clientIP);
 	if (result.first == 200) {
 		std::string logLine = "[" + JsonStd::currentTime() + "] [ASYNC CANCEL] " + requestId;
+		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
+		    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+	}
+	return result;
+}
+
+std::pair<int, std::string> DzScriptServerPane::cancelRenderRequestJson(const std::string& requestId,
+                                                                        const std::string& clientIP)
+{
+	std::pair<int, std::string> result = m_pAsyncMgr->cancelRenderJson(requestId, clientIP);
+	if (result.first == 200) {
+		std::string logLine = "[" + JsonStd::currentTime() + "] [RENDER CANCEL] " + requestId;
 		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
 		    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
 	}

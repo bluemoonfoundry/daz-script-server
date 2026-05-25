@@ -70,6 +70,7 @@ public:
     std::pair<int, std::string> getStatusJson(const std::string& requestId) const;
     std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec);
     std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP);
+    std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP);
     std::string                 listJson(const std::string& statusFilter) const;
 
     // Live counters — acquire mutex.

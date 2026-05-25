@@ -55,6 +55,7 @@ class RenderResult:
     file_size_bytes: int = -1
     duration_ms: int = 0
     error: str = ""
+    request_id: str = ""
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -254,7 +255,7 @@ def render(
     request_id: str = data.get("request_id", "")
 
     if not wait:
-        return RenderResult(success=True, output_path=output_path)
+        return RenderResult(success=True, output_path=output_path, request_id=request_id)
 
     return _wait_render_sse(client, request_id, timeout)
 

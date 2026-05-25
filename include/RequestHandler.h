@@ -237,3 +237,11 @@ public:
 private:
     DzScriptServerPane* m_pPane;
 };
+
+class RenderCancelHandler : public IRequestHandler {
+public:
+    explicit RenderCancelHandler(DzScriptServerPane* pane);
+    void handle(HttpContext& ctx) override;
+private:
+    DzScriptServerPane* m_pPane;
+};

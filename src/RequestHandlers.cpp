@@ -328,3 +328,13 @@ void RenderBatchHandler::handle(HttpContext& ctx)
         Q_ARG(QByteArray, bodyBytes));
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+RenderCancelHandler::RenderCancelHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
+
+void RenderCancelHandler::handle(HttpContext& ctx)
+{
+    std::pair<int, std::string> result = m_pPane->cancelRenderRequestJson(ctx.urlMatch, ctx.remoteAddr);
+    ctx.respond(result.first, result.second);
+}

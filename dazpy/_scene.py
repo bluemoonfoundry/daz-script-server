@@ -141,6 +141,50 @@ class DazScene:
         names = self._client.execute(script).value or []
         return [DazLight(self._client, NodeIdentifier(n)) for n in names]
 
+    def find_camera_by_label(self, label: str) -> "DazCamera":  # noqa: F821
+        """Find a camera by its user-visible label.
+
+        Args:
+            label: The label shown in the Scene panel (e.g. ``"Camera 1"``).
+                This is the same value accepted by the ``camera`` parameter of
+                :func:`~dazpy._render_api.render`.
+
+        Returns:
+            A :class:`~dazpy.DazCamera` proxy.
+
+        Raises:
+            NodeNotFoundError: If no camera with that label exists.
+        """
+        from ._camera import DazCamera
+        from .exceptions import NodeNotFoundError
+        exists = ScriptBuilder.iife(
+            f"return !!Scene.findCameraByLabel({ScriptBuilder.escape_string(label)});"
+        )
+        if not self._client.execute(exists).value:
+            raise NodeNotFoundError(f"Camera with label not found: {label!r}")
+        return DazCamera(self._client, NodeIdentifier(label, kind="label"))
+
+    def find_light_by_label(self, label: str) -> "DazLight":  # noqa: F821
+        """Find a light by its user-visible label.
+
+        Args:
+            label: The label shown in the Scene panel (e.g. ``"Distant Light 1"``).
+
+        Returns:
+            A :class:`~dazpy.DazLight` proxy.
+
+        Raises:
+            NodeNotFoundError: If no light with that label exists.
+        """
+        from ._light import DazLight
+        from .exceptions import NodeNotFoundError
+        exists = ScriptBuilder.iife(
+            f"return !!Scene.findLightByLabel({ScriptBuilder.escape_string(label)});"
+        )
+        if not self._client.execute(exists).value:
+            raise NodeNotFoundError(f"Light with label not found: {label!r}")
+        return DazLight(self._client, NodeIdentifier(label, kind="label"))
+
     def skeletons(self) -> list["DazSkeleton"]:  # noqa: F821
         """Return all skeleton (figure) nodes in the scene."""
         from ._skeleton import DazSkeleton
@@ -451,4 +495,27 @@ class DazScene:
         """
         flag = "true" if on else "false"
         script = ScriptBuilder.iife(f"Scene.loopPlayback({flag});")
+        self._client.execute(script)
+
+    # ── Undo / Redo ────────────────────────────────────────────────────────────
+
+    def undo_last(self) -> None:
+        """Step back one level in DAZ Studio's undo stack.
+
+        Equivalent to pressing Ctrl+Z / Edit > Undo in DAZ Studio.
+        Has no effect if the undo stack is empty.
+
+        Note: this steps the global undo stack.  To group a series of changes
+        into a single undoable operation use :meth:`undo` (the context manager).
+        """
+        script = ScriptBuilder.iife("App.getUndoStack().undo();")
+        self._client.execute(script)
+
+    def redo_last(self) -> None:
+        """Step forward one level in DAZ Studio's undo stack.
+
+        Equivalent to pressing Ctrl+Y / Edit > Redo in DAZ Studio.
+        Has no effect if there is nothing to redo.
+        """
+        script = ScriptBuilder.iife("App.getUndoStack().redo();")
         self._client.execute(script)
