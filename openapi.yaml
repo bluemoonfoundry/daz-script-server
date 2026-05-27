@@ -22,7 +22,7 @@ info:
     queue behind each other. The `/execute/async` family lets callers submit
     work without blocking their HTTP connection.
 
-  version: 2.2.0
+  version: 2.4.0
   contact:
     name: Blue Moon Foundry
     url: https://github.com/bluemoonfoundry/daz-script-server/issues
@@ -43,6 +43,10 @@ tags:
     description: Registered script management
   - name: Async
     description: Asynchronous script execution and request lifecycle
+  - name: SceneEvents
+    description: Real-time DAZ Studio scene change notifications via SSE (v2.3.0+)
+  - name: Render
+    description: Render job submission, progress streaming, and cancellation (v2.4.0+)
 
 paths:
   /status:
@@ -60,7 +64,7 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
               example:
                 running: true
-                version: "2.2.0"
+                version: "2.4.0"
 
   /health:
     get:
@@ -77,7 +81,7 @@ paths:
                 $ref: '#/components/schemas/HealthResponse'
               example:
                 status: ok
-                version: "2.2.0"
+                version: "2.4.0"
                 running: true
                 auth_enabled: true
                 active_requests: 2
@@ -443,6 +447,181 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /scene/events:
+    get:
+      tags: [SceneEvents]
+      summary: Subscribe to real-time scene-change notifications (SSE)
+      description: |
+        Opens a persistent connection and streams DAZ Studio scene-change events
+        as Server-Sent Events. A `:keepalive` comment is sent every 3 seconds of
+        idle time so clients can detect disconnects.
+
+        The connection stays open until the client disconnects or the server stops.
+        All configured security checks (auth, IP whitelist) apply.
+      operationId: sceneEvents
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          description: |
+            Comma-separated list of event categories to receive. Omit to receive all.
+            Values: `node`, `skeleton`, `light`, `camera`, `selection`, `scene`, `time`, `render`
+          schema:
+            type: string
+            example: "node,scene"
+      responses:
+        '200':
+          description: SSE stream (text/event-stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Newline-delimited SSE events. Each event is:
+                  `data: {"type":"<event_type>","ts":<unix_ms>,"data":{...}}\n\n`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /render:
+    post:
+      tags: [Render]
+      summary: Submit a render job
+      description: |
+        Submits a render job to DAZ Studio and returns a `request_id` immediately.
+        Use `GET /render/{id}/progress` to stream live progress, or
+        `GET /requests/{id}/result` (with `?wait=true`) to long-poll for completion.
+      operationId: submitRender
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderRequest'
+      responses:
+        '200':
+          description: Render job submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncSubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /render/batch:
+    post:
+      tags: [Render]
+      summary: Submit multiple render variants in one request
+      description: |
+        Each variant can override morphs and output path. Renders execute
+        sequentially on DAZ Studio's main thread.
+      operationId: submitRenderBatch
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderBatchRequest'
+      responses:
+        '200':
+          description: Batch submitted; one `request_id` per variant
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request_ids]
+                properties:
+                  request_ids:
+                    type: array
+                    items:
+                      type: string
+                    description: One `request_id` per variant, in submission order
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /render/{id}/progress:
+    get:
+      tags: [Render]
+      summary: Stream render progress via SSE
+      description: |
+        Opens an SSE connection for the given render job and delivers real-time
+        progress events until the render completes or fails.
+      operationId: renderProgress
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: SSE stream of render progress events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Progress events:
+                  `data: {"stage":"rendering","progress":0.42,"elapsed_ms":4200}`
+                  Completion event:
+                  `data: {"stage":"complete","progress":1.0,"output_path":"/path/render.png","elapsed_ms":9800}`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /render/{id}/cancel:
+    post:
+      tags: [Render]
+      summary: Cancel a queued or running render job
+      description: |
+        Returns 400 if the `request_id` belongs to a non-render request, so
+        callers get a clear error rather than silently cancelling the wrong job.
+      operationId: cancelRender
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Render job cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
 components:
   securitySchemes:
     apiToken:
@@ -473,6 +652,83 @@ components:
         maxLength: 8
 
   schemas:
+    FigureMorphs:
+      type: object
+      required: [figure_label, morphs]
+      properties:
+        figure_label:
+          type: string
+          description: Scene-panel label of the figure (e.g. "Genesis 9")
+          example: "Genesis 9"
+        morphs:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+          description: Morph name → value (0.0–1.0) map
+          example:
+            eCTRLSmileSimple: 1.0
+
+    RenderRequest:
+      type: object
+      properties:
+        output_path:
+          type: string
+          description: Absolute path for the output image
+          example: "C:/renders/out.png"
+        width:
+          type: integer
+          description: Render width in pixels
+          example: 1920
+        height:
+          type: integer
+          description: Render height in pixels
+          example: 1080
+        camera:
+          type: string
+          description: Scene-panel label of the camera to use
+          example: "Camera 1"
+        figure_morphs:
+          type: array
+          items:
+            $ref: '#/components/schemas/FigureMorphs'
+          description: Per-figure morph overrides applied before rendering
+
+    RenderVariant:
+      type: object
+      properties:
+        label:
+          type: string
+          description: Identifier for this variant (used in output filename if no output_path)
+          example: "smile"
+        output_path:
+          type: string
+          description: Absolute path for this variant's output image
+        figure_morphs:
+          type: array
+          items:
+            $ref: '#/components/schemas/FigureMorphs'
+          description: Per-figure morph overrides for this variant
+
+    RenderBatchRequest:
+      type: object
+      required: [variants]
+      properties:
+        width:
+          type: integer
+          example: 1920
+        height:
+          type: integer
+          example: 1080
+        camera:
+          type: string
+          example: "Camera 1"
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/RenderVariant'
+          description: List of render variants to submit sequentially
+
     ExecuteRequest:
       type: object
       description: |

@@ -1488,7 +1488,7 @@ data: {"type":"node.added","ts":1716307200123,"data":{"node_id":"0x1a2b3c4d","no
 
 ```
 
-A `:keepalive` comment is sent every 15 seconds so clients can detect disconnects without sending an event:
+A `:keepalive` comment is sent every 3 seconds of idle time so clients can detect disconnects without sending an event:
 
 ```
 :keepalive
