@@ -10,6 +10,22 @@ sys.path.insert(0, ".")
 from dazpy._result import ExecutionResult
 from dazpy._script_builder import ScriptBuilder
 from dazpy._batch import Batch
+from dazpy import (
+    AxisLimit,
+    BalanceTarget,
+    BoneChain,
+    BoneProfile,
+    ContactTarget,
+    FigureRigProfile,
+    InteractionAnchor,
+    InteractionPlan,
+    LookAtTarget,
+    PoseTarget,
+    SolveOptions,
+    ValidationIssue,
+    build_rig_profile,
+    default_axis_limits_for_bone,
+)
 from dazpy._node import DazNode, NodeIdentifier
 from dazpy._scene import DazScene
 from dazpy._client import DazClient
@@ -24,6 +40,35 @@ def _make_client(return_value=None, output=None):
         request_id="test1234",
     )
     return client
+
+
+class _FakeBone:
+    def __init__(
+        self,
+        name: str,
+        label: str | None = None,
+        parent: "_FakeBone | None" = None,
+        rotation_order: str | None = "XYZ",
+        local_position: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
+        local_euler: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
+    ) -> None:
+        self.name = name
+        self.label = label
+        self.parent = parent
+        self.rotation_order = rotation_order
+        self.local_position = local_position
+        self.local_euler = local_euler
+        self._identifier = NodeIdentifier(name)
+
+
+class _FakeSkeleton:
+    def __init__(self, label: str, bones: list[_FakeBone]) -> None:
+        self.label = label
+        self._bones = bones
+        self._identifier = NodeIdentifier(label, kind="label")
+
+    def bones(self) -> list[_FakeBone]:
+        return self._bones
 
 
 class TestScriptBuilder(unittest.TestCase):
@@ -266,6 +311,82 @@ class TestBatch(unittest.TestCase):
         with Batch(client):
             pass
         client.execute.assert_not_called()
+
+
+class TestInteractionAdapter(unittest.TestCase):
+    def test_build_rig_profile_detects_family_and_anchors(self):
+        hip = _FakeBone("hip", "Hip")
+        spine = _FakeBone("spine", "Spine", parent=hip)
+        chest = _FakeBone("chest", "Chest", parent=spine)
+        neck = _FakeBone("neck", "Neck", parent=chest)
+        head = _FakeBone("head", "Head", parent=neck)
+        l_hand = _FakeBone("l_hand", "Left Hand", parent=chest)
+        r_hand = _FakeBone("r_hand", "Right Hand", parent=chest)
+        l_foot = _FakeBone("l_foot", "Left Foot", parent=hip)
+        r_foot = _FakeBone("r_foot", "Right Foot", parent=hip)
+        skeleton = _FakeSkeleton("Genesis 9", [hip, spine, chest, neck, head, l_hand, r_hand, l_foot, r_foot])
+
+        profile = build_rig_profile(skeleton)
+        anchors = profile.anchor_map()
+
+        self.assertEqual(profile.family, "genesis_9")
+        self.assertIn("l_hand", anchors)
+        self.assertIn("r_hand", anchors)
+        self.assertIn("l_foot", anchors)
+        self.assertEqual(profile.anchor("r_hand").bone_name, "r_hand")
+        self.assertEqual(profile.anchor("l_foot").role, "foot")
+
+    def test_interaction_plan_validate_and_round_trip(self):
+        profile = FigureRigProfile(
+            figure_label="Genesis 9",
+            family="genesis_9",
+            bones=[
+                BoneProfile(name="hip"),
+                BoneProfile(name="r_hand", parent_name="hip"),
+                BoneProfile(name="head", parent_name="hip"),
+            ],
+        )
+        plan = InteractionPlan(
+            actors=["Genesis 9"],
+            constraints=[
+                PoseTarget("Genesis 9", "r_hand", orientation=(0.0, 0.0, 0.0)),
+                LookAtTarget("Genesis 9", "head", (0.0, 1.0, 2.0)),
+                BalanceTarget("Genesis 9", "hip", support_points=[(0.0, 0.0, 0.0)]),
+            ],
+            options=SolveOptions(backend="auto", max_iterations=25),
+            metadata={"scenario": "touch"},
+        )
+
+        data = plan.to_dict()
+        restored = InteractionPlan.from_dict(data)
+        issues = restored.validate({"Genesis 9": profile})
+
+        self.assertEqual(data["options"]["backend"], "auto")
+        self.assertEqual(len(data["constraints"]), 3)
+        self.assertEqual(issues, [])
+
+    def test_interaction_plan_validate_reports_missing_bone(self):
+        profile = FigureRigProfile(
+            figure_label="Genesis 9",
+            family="genesis_9",
+            bones=[BoneProfile(name="hip")],
+        )
+        plan = InteractionPlan(
+            actors=["Genesis 9"],
+            constraints=[PoseTarget("Genesis 9", "r_hand", orientation=(0.0, 0.0, 0.0))],
+        )
+
+        issues = plan.validate({"Genesis 9": profile})
+        self.assertEqual(len(issues), 1)
+        self.assertIsInstance(issues[0], ValidationIssue)
+        self.assertEqual(issues[0].severity, "error")
+        self.assertIn("r_hand", issues[0].message)
+
+    def test_default_axis_limits_for_bone(self):
+        limits = default_axis_limits_for_bone("r_forearm")
+        self.assertIsInstance(limits["x"], AxisLimit)
+        self.assertLess(limits["x"].min_degrees, 0.0)
+        self.assertGreater(limits["x"].max_degrees, 0.0)
 
 
 class TestErrorMapping(unittest.TestCase):
