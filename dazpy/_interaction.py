@@ -26,6 +26,7 @@ AnchorRole = Literal[
     "foot",
     "custom",
 ]
+InteractionKind = Literal["PoseTarget", "ContactTarget", "LookAtTarget", "BalanceTarget", "HandTarget", "FootTarget"]
 
 
 def _normalize_name(value: str | None) -> str:
@@ -366,6 +367,15 @@ class FigureRigProfile:
     def anchor(self, name: str) -> InteractionAnchor | None:
         return self.anchor_map().get(name)
 
+    def anchor_names(self) -> list[str]:
+        return sorted(self.anchor_map().keys())
+
+    def require_anchor(self, name: str) -> InteractionAnchor:
+        anchor = self.anchor(name)
+        if anchor is None:
+            raise KeyError(f"Anchor not found in rig profile: {name!r}")
+        return anchor
+
     def to_dict(self) -> dict:
         return {
             "figure_label": self.figure_label,
@@ -419,6 +429,43 @@ class PoseTarget:
             "position": list(self.position) if self.position else None,
             "orientation": list(self.orientation) if self.orientation else None,
         }
+
+
+@dataclass(frozen=True)
+class AnchorTarget:
+    """Target a canonical interaction anchor on a figure.
+
+    This is the bridge between high-level interaction authoring and the
+    actual DAZ bones used by the rig.  Hand and foot goals use this shape.
+    """
+
+    figure_label: str
+    anchor_name: str
+    target_figure: str | None = None
+    target_anchor: str | None = None
+    target_point: Vector3 | None = None
+    offset: Vector3 = (0.0, 0.0, 0.0)
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": type(self).__name__,
+            "figure_label": self.figure_label,
+            "anchor_name": self.anchor_name,
+            "target_figure": self.target_figure,
+            "target_anchor": self.target_anchor,
+            "target_point": list(self.target_point) if self.target_point else None,
+            "offset": list(self.offset),
+        }
+
+
+@dataclass(frozen=True)
+class HandTarget(AnchorTarget):
+    """Place a hand anchor against another anchor or world point."""
+
+
+@dataclass(frozen=True)
+class FootTarget(AnchorTarget):
+    """Place a foot anchor against another anchor, world point, or floor."""
 
 
 @dataclass(frozen=True)
@@ -519,7 +566,7 @@ class InteractionPlan:
     """A collection of interaction constraints across one or more figures."""
 
     actors: list[str]
-    constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget] = field(default_factory=list)
+    constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget | HandTarget | FootTarget] = field(default_factory=list)
     options: SolveOptions = field(default_factory=SolveOptions)
     metadata: dict[str, object] = field(default_factory=dict)
 
@@ -543,6 +590,28 @@ class InteractionPlan:
                         bone_name=item.get("bone_name", ""),
                         position=_as_tuple3(item.get("position")),
                         orientation=_as_tuple3(item.get("orientation")),
+                    )
+                )
+            elif kind == "HandTarget":
+                constraints.append(
+                    HandTarget(
+                        figure_label=item.get("figure_label", ""),
+                        anchor_name=item.get("anchor_name", ""),
+                        target_figure=item.get("target_figure"),
+                        target_anchor=item.get("target_anchor"),
+                        target_point=_as_tuple3(item.get("target_point")),
+                        offset=_as_tuple3(item.get("offset")) or (0.0, 0.0, 0.0),
+                    )
+                )
+            elif kind == "FootTarget":
+                constraints.append(
+                    FootTarget(
+                        figure_label=item.get("figure_label", ""),
+                        anchor_name=item.get("anchor_name", ""),
+                        target_figure=item.get("target_figure"),
+                        target_anchor=item.get("target_anchor"),
+                        target_point=_as_tuple3(item.get("target_point")),
+                        offset=_as_tuple3(item.get("offset")) or (0.0, 0.0, 0.0),
                     )
                 )
             elif kind == "ContactTarget":
@@ -638,9 +707,30 @@ class InteractionPlan:
                     )
                     continue
                 if constraint.pelvis_bone not in profile.bone_names():
+                        issues.append(
+                            ValidationIssue("error", constraint.figure_label, index, f"Unknown pelvis bone {constraint.pelvis_bone!r} on figure {constraint.figure_label!r}")
+                        )
+            elif isinstance(constraint, (HandTarget, FootTarget)):
+                profile = rig_profiles.get(constraint.figure_label)
+                if profile is None:
                     issues.append(
-                        ValidationIssue("error", constraint.figure_label, index, f"Unknown pelvis bone {constraint.pelvis_bone!r} on figure {constraint.figure_label!r}")
+                        ValidationIssue("error", constraint.figure_label, index, f"Unknown figure {constraint.figure_label!r}")
                     )
+                    continue
+                if constraint.anchor_name not in profile.anchor_names():
+                    issues.append(
+                        ValidationIssue("error", constraint.figure_label, index, f"Unknown anchor {constraint.anchor_name!r} on figure {constraint.figure_label!r}")
+                    )
+                if constraint.target_figure and constraint.target_anchor:
+                    target_profile = rig_profiles.get(constraint.target_figure)
+                    if target_profile is None:
+                        issues.append(
+                            ValidationIssue("error", constraint.target_figure, index, f"Unknown target figure {constraint.target_figure!r}")
+                        )
+                    elif constraint.target_anchor not in target_profile.anchor_names():
+                        issues.append(
+                            ValidationIssue("error", constraint.target_figure, index, f"Unknown target anchor {constraint.target_anchor!r} on figure {constraint.target_figure!r}")
+                        )
         return issues
 
 

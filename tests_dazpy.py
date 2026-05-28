@@ -11,14 +11,17 @@ from dazpy._result import ExecutionResult
 from dazpy._script_builder import ScriptBuilder
 from dazpy._batch import Batch
 from dazpy import (
+    AnchorTarget,
     AxisLimit,
     BalanceTarget,
     BoneChain,
     BoneProfile,
     ContactTarget,
     FigureRigProfile,
+    FootTarget,
     InteractionAnchor,
     InteractionPlan,
+    HandTarget,
     LookAtTarget,
     PoseTarget,
     SolveOptions,
@@ -343,6 +346,7 @@ class TestInteractionAdapter(unittest.TestCase):
             bones=[
                 BoneProfile(name="hip"),
                 BoneProfile(name="r_hand", parent_name="hip"),
+                BoneProfile(name="l_foot", parent_name="hip"),
                 BoneProfile(name="head", parent_name="hip"),
             ],
         )
@@ -352,6 +356,8 @@ class TestInteractionAdapter(unittest.TestCase):
                 PoseTarget("Genesis 9", "r_hand", orientation=(0.0, 0.0, 0.0)),
                 LookAtTarget("Genesis 9", "head", (0.0, 1.0, 2.0)),
                 BalanceTarget("Genesis 9", "hip", support_points=[(0.0, 0.0, 0.0)]),
+                HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0), offset=(0.0, 0.0, 0.0)),
+                FootTarget("Genesis 9", "l_foot", target_figure="Genesis 9", target_anchor="r_hand"),
             ],
             options=SolveOptions(backend="auto", max_iterations=25),
             metadata={"scenario": "touch"},
@@ -362,7 +368,7 @@ class TestInteractionAdapter(unittest.TestCase):
         issues = restored.validate({"Genesis 9": profile})
 
         self.assertEqual(data["options"]["backend"], "auto")
-        self.assertEqual(len(data["constraints"]), 3)
+        self.assertEqual(len(data["constraints"]), 5)
         self.assertEqual(issues, [])
 
     def test_interaction_plan_validate_reports_missing_bone(self):
@@ -381,6 +387,33 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertIsInstance(issues[0], ValidationIssue)
         self.assertEqual(issues[0].severity, "error")
         self.assertIn("r_hand", issues[0].message)
+
+    def test_hand_and_foot_targets_round_trip(self):
+        hand = HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0), offset=(0.1, 0.0, 0.0))
+        foot = FootTarget("Genesis 9", "l_foot", target_figure="Partner", target_anchor="r_hand")
+
+        hand_data = hand.to_dict()
+        foot_data = foot.to_dict()
+        hand_restored = HandTarget(
+            figure_label=hand_data["figure_label"],
+            anchor_name=hand_data["anchor_name"],
+            target_figure=hand_data.get("target_figure"),
+            target_anchor=hand_data.get("target_anchor"),
+            target_point=tuple(hand_data["target_point"]) if hand_data.get("target_point") else None,
+            offset=tuple(hand_data["offset"]),
+        )
+        foot_restored = FootTarget(
+            figure_label=foot_data["figure_label"],
+            anchor_name=foot_data["anchor_name"],
+            target_figure=foot_data.get("target_figure"),
+            target_anchor=foot_data.get("target_anchor"),
+            target_point=tuple(foot_data["target_point"]) if foot_data.get("target_point") else None,
+            offset=tuple(foot_data["offset"]),
+        )
+
+        self.assertEqual(hand_restored.anchor_name, "r_hand")
+        self.assertEqual(hand_restored.offset, (0.1, 0.0, 0.0))
+        self.assertEqual(foot_restored.target_anchor, "r_hand")
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")
