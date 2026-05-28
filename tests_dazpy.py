@@ -549,11 +549,12 @@ class TestInteractionAdapter(unittest.TestCase):
 
         self.assertIsInstance(result, PreparedInteractionResult)
         self.assertIsInstance(result.pose_patch, InteractionPosePatch)
-        self.assertEqual(source_skel.position_calls, [(3.0, 3.0, 3.0)])
-        self.assertEqual(target_skel.position_calls, [])
-        self.assertEqual(result.pose_patch.diagnostics["figure_count"], 1)
+        self.assertEqual(source_skel.position_calls, [(1.5, 1.5, 1.5)])
+        self.assertEqual(target_skel.position_calls, [(-1.5, -1.5, -1.5)])
+        self.assertEqual(result.pose_patch.diagnostics["figure_count"], 2)
         self.assertEqual(result.pose_patch.diagnostics["unresolved_target_count"], 0)
-        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [3.0, 3.0, 3.0])
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [1.5, 1.5, 1.5])
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Partner"], [-1.5, -1.5, -1.5])
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")

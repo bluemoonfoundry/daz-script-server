@@ -58,6 +58,24 @@ def _add_vec3(a: Vector3 | None, b: Vector3 | None) -> Vector3 | None:
     return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
 
 
+def _sub_vec3(a: Vector3, b: Vector3) -> Vector3:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _midpoint_vec3(a: Vector3, b: Vector3) -> Vector3:
+    return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0)
+
+
+def _average_vec3(points: list[Vector3] | None) -> Vector3 | None:
+    if not points:
+        return None
+    return (
+        sum(point[0] for point in points) / len(points),
+        sum(point[1] for point in points) / len(points),
+        sum(point[2] for point in points) / len(points),
+    )
+
+
 def _detect_figure_family(bone_names: list[str]) -> str:
     names = {_lower_name(name) for name in bone_names}
     if any(name.startswith(("r_", "l_")) for name in names):
@@ -895,6 +913,16 @@ class PreparedInteractionRecipe:
         def _append_position(label: str, point: Vector3) -> None:
             figure_positions.setdefault(label, []).append(point)
 
+        def _first_local_anchor_position(profile: FigureRigProfile, anchor_name: str) -> Vector3 | None:
+            anchor = profile.anchor(anchor_name)
+            if anchor is None:
+                return None
+            bone = profile.bone(anchor.bone_name)
+            return bone.local_position
+
+        def _current_figure_position(label: str) -> Vector3 | None:
+            return _average_vec3(figure_positions.get(label))
+
         for constraint in self.plan.constraints:
             if isinstance(constraint, BalanceTarget):
                 profile = self.rig_profiles.get(constraint.figure_label)
@@ -948,16 +976,40 @@ class PreparedInteractionRecipe:
                 unresolved.append(resolved)
                 continue
             source_bone = profile.bone(source_anchor.bone_name)
-            if source_bone.local_position is None or resolved.target_point is None:
+            if source_bone.local_position is None:
+                unresolved.append(resolved)
+                continue
+            target_profile = self.rig_profiles.get(resolved.target_figure) if resolved.target_figure else None
+            target_local = _first_local_anchor_position(target_profile, resolved.target_anchor) if (target_profile and resolved.target_anchor) else None
+            source_base = _current_figure_position(resolved.figure_label)
+            target_base = _current_figure_position(resolved.target_figure) if resolved.target_figure else None
+
+            if target_profile is not None and resolved.target_figure is not None:
+                if target_base is not None and resolved.target_point is not None and source_base is None:
+                    world_target = _add_vec3(target_base, resolved.target_point)
+                    _append_position(resolved.figure_label, _sub_vec3(world_target, source_bone.local_position))
+                    continue
+
+                if target_local is not None:
+                    if source_base is None and target_base is None:
+                        contact_center = _midpoint_vec3(source_bone.local_position, target_local)
+                        _append_position(resolved.figure_label, _sub_vec3(contact_center, source_bone.local_position))
+                        _append_position(resolved.target_figure, _sub_vec3(contact_center, target_local))
+                    elif source_base is None and target_base is not None:
+                        target_world = _add_vec3(target_base, target_local)
+                        _append_position(resolved.figure_label, _sub_vec3(target_world, source_bone.local_position))
+                    elif source_base is not None and target_base is None:
+                        source_world = _add_vec3(source_base, source_bone.local_position)
+                        if source_world is not None:
+                            _append_position(resolved.target_figure, _sub_vec3(source_world, target_local))
+                    continue
+
+            if resolved.target_point is None:
                 unresolved.append(resolved)
                 continue
             _append_position(
                 resolved.figure_label,
-                (
-                    resolved.target_point[0] - source_bone.local_position[0],
-                    resolved.target_point[1] - source_bone.local_position[1],
-                    resolved.target_point[2] - source_bone.local_position[2],
-                ),
+                _sub_vec3(resolved.target_point, source_bone.local_position),
             )
 
         averaged_positions: dict[str, Vector3] = {}
