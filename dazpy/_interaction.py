@@ -881,6 +881,148 @@ class PreparedInteractionRecipe:
             "diagnostics": dict(self.diagnostics),
         }
 
+    def build_pose_patch(self) -> "InteractionPosePatch":
+        """Build a coarse live-placement patch from the prepared recipe.
+
+        This is intentionally conservative: it only translates figures so their
+        anchors are staged near their requested targets. It does not attempt to
+        solve bone rotations yet.
+        """
+
+        figure_positions: dict[str, list[Vector3]] = {}
+        unresolved: list[ResolvedInteractionTarget] = []
+
+        def _append_position(label: str, point: Vector3) -> None:
+            figure_positions.setdefault(label, []).append(point)
+
+        for constraint in self.plan.constraints:
+            if isinstance(constraint, BalanceTarget):
+                profile = self.rig_profiles.get(constraint.figure_label)
+                if profile is None:
+                    continue
+                pelvis_anchor = profile.anchor(constraint.pelvis_bone)
+                if pelvis_anchor is None:
+                    unresolved.append(
+                        ResolvedInteractionTarget(
+                            figure_label=constraint.figure_label,
+                            anchor_name=constraint.pelvis_bone,
+                            bone_name=constraint.pelvis_bone,
+                        )
+                    )
+                    continue
+                pelvis_bone = profile.bone(pelvis_anchor.bone_name)
+                target_point = constraint.center_of_mass_hint
+                if target_point is None and constraint.support_points:
+                    support = constraint.support_points
+                    target_point = (
+                        sum(point[0] for point in support) / len(support),
+                        sum(point[1] for point in support) / len(support),
+                        sum(point[2] for point in support) / len(support),
+                    )
+                if target_point is None or pelvis_bone.local_position is None:
+                    unresolved.append(
+                        ResolvedInteractionTarget(
+                            figure_label=constraint.figure_label,
+                            anchor_name=constraint.pelvis_bone,
+                            bone_name=pelvis_anchor.bone_name,
+                            target_point=target_point,
+                        )
+                    )
+                    continue
+                _append_position(
+                    constraint.figure_label,
+                    (
+                        target_point[0] - pelvis_bone.local_position[0],
+                        target_point[1] - pelvis_bone.local_position[1],
+                        target_point[2] - pelvis_bone.local_position[2],
+                    ),
+                )
+
+        for resolved in self.resolved_targets:
+            profile = self.rig_profiles.get(resolved.figure_label)
+            if profile is None:
+                unresolved.append(resolved)
+                continue
+            source_anchor = profile.anchor(resolved.anchor_name)
+            if source_anchor is None:
+                unresolved.append(resolved)
+                continue
+            source_bone = profile.bone(source_anchor.bone_name)
+            if source_bone.local_position is None or resolved.target_point is None:
+                unresolved.append(resolved)
+                continue
+            _append_position(
+                resolved.figure_label,
+                (
+                    resolved.target_point[0] - source_bone.local_position[0],
+                    resolved.target_point[1] - source_bone.local_position[1],
+                    resolved.target_point[2] - source_bone.local_position[2],
+                ),
+            )
+
+        averaged_positions: dict[str, Vector3] = {}
+        for label, points in figure_positions.items():
+            averaged_positions[label] = (
+                sum(point[0] for point in points) / len(points),
+                sum(point[1] for point in points) / len(points),
+                sum(point[2] for point in points) / len(points),
+            )
+
+        diagnostics = {
+            "figure_count": len(averaged_positions),
+            "unresolved_target_count": len(unresolved),
+        }
+        return InteractionPosePatch(
+            figure_positions=averaged_positions,
+            unresolved_targets=unresolved,
+            diagnostics=diagnostics,
+        )
+
+    def apply(self, scene: object) -> "PreparedInteractionResult":
+        """Apply the compiled recipe as a coarse staging pass."""
+
+        patch = self.build_pose_patch()
+        patch.apply(scene)
+        return PreparedInteractionResult(
+            prepared=self,
+            pose_patch=patch,
+        )
+
+
+@dataclass
+class InteractionPosePatch:
+    """A coarse figure-placement patch built from a prepared interaction."""
+
+    figure_positions: dict[str, Vector3] = field(default_factory=dict)
+    unresolved_targets: list[ResolvedInteractionTarget] = field(default_factory=list)
+    diagnostics: dict[str, object] = field(default_factory=dict)
+
+    def apply(self, scene: object) -> None:
+        for figure_label, position in self.figure_positions.items():
+            skeleton = scene.find_skeleton_by_label(figure_label)
+            skeleton.set_position(*position)
+
+    def to_dict(self) -> dict:
+        return {
+            "figure_positions": {label: list(position) for label, position in self.figure_positions.items()},
+            "unresolved_targets": [target.to_dict() for target in self.unresolved_targets],
+            "diagnostics": dict(self.diagnostics),
+        }
+
+
+@dataclass
+class PreparedInteractionResult:
+    """The result of applying a prepared recipe as a live staging pass."""
+
+    prepared: PreparedInteractionRecipe
+    pose_patch: InteractionPosePatch
+
+    def to_dict(self) -> dict:
+        return {
+            "prepared": self.prepared.to_dict(),
+            "pose_patch": self.pose_patch.to_dict(),
+        }
+
 
 def prepare_interaction_recipe(
     recipe: InteractionRecipe,

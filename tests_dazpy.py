@@ -22,7 +22,9 @@ from dazpy import (
     InteractionAnchor,
     InteractionPlan,
     InteractionRecipe,
+    InteractionPosePatch,
     PreparedInteractionRecipe,
+    PreparedInteractionResult,
     HandTarget,
     LookAtTarget,
     PoseTarget,
@@ -77,9 +79,24 @@ class _FakeSkeleton:
         self.label = label
         self._bones = bones
         self._identifier = NodeIdentifier(label, kind="label")
+        self.position_calls: list[tuple[float, float, float]] = []
 
     def bones(self) -> list[_FakeBone]:
         return self._bones
+
+    def set_position(self, x: float, y: float, z: float) -> None:
+        self.position_calls.append((x, y, z))
+
+
+class _FakeScene:
+    def __init__(self, skeletons: list[_FakeSkeleton]) -> None:
+        self._skeletons = skeletons
+
+    def find_skeleton_by_label(self, label: str) -> _FakeSkeleton:
+        for skeleton in self._skeletons:
+            if skeleton.label == label:
+                return skeleton
+        raise KeyError(label)
 
 
 class TestScriptBuilder(unittest.TestCase):
@@ -511,6 +528,32 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(prepared.resolved_targets[0].target_bone, "l_shoulder")
         self.assertEqual(prepared.resolved_targets[0].target_point, (4.0, 5.0, 6.0))
         self.assertEqual(prepared.to_dict()["plan"]["actors"], ["Genesis 9", "Partner"])
+
+    def test_prepared_recipe_apply_moves_figures(self):
+        source_hip = _FakeBone("hip", "Hip")
+        source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip, local_position=(1.0, 2.0, 3.0))
+        target_hip = _FakeBone("hip", "Hip")
+        target_shoulder = _FakeBone("l_shoulder", "Left Shoulder", parent=target_hip, local_position=(4.0, 5.0, 6.0))
+        source_skel = _FakeSkeleton("Genesis 9", [source_hip, source_hand])
+        target_skel = _FakeSkeleton("Partner", [target_hip, target_shoulder])
+        scene = _FakeScene([source_skel, target_skel])
+
+        source_profile = build_rig_profile(source_skel)
+        target_profile = build_rig_profile(target_skel)
+        prepared = prepare_interaction_recipe(
+            build_touch_recipe("Genesis 9", "Partner", source_anchor="r_hand", target_anchor="l_shoulder"),
+            {"Genesis 9": source_profile, "Partner": target_profile},
+        )
+
+        result = prepared.apply(scene)
+
+        self.assertIsInstance(result, PreparedInteractionResult)
+        self.assertIsInstance(result.pose_patch, InteractionPosePatch)
+        self.assertEqual(source_skel.position_calls, [(3.0, 3.0, 3.0)])
+        self.assertEqual(target_skel.position_calls, [])
+        self.assertEqual(result.pose_patch.diagnostics["figure_count"], 1)
+        self.assertEqual(result.pose_patch.diagnostics["unresolved_target_count"], 0)
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [3.0, 3.0, 3.0])
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")
