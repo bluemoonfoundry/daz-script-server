@@ -120,7 +120,6 @@ print(response.json())
 - [HTTP API Reference](https://bluemoonfoundry.github.io/daz-script-server/api-reference/) — hosted on GitHub Pages
 - [OpenAPI Specification](openapi.yaml)
 - [Architecture](ARCHITECTURE.md)
-- [Interaction Pose Roadmap](INTERACTION_POSE_ROADMAP.md)
 - [Migration Guide (v1.x → v2.0)](MIGRATION.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing Guide](CONTRIBUTING.md)
