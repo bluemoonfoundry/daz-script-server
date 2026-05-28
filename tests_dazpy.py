@@ -21,9 +21,14 @@ from dazpy import (
     FootTarget,
     InteractionAnchor,
     InteractionPlan,
+    InteractionRecipe,
     HandTarget,
     LookAtTarget,
     PoseTarget,
+    build_fight_recipe,
+    build_kiss_recipe,
+    build_sit_recipe,
+    build_touch_recipe,
     SolveOptions,
     ValidationIssue,
     build_rig_profile,
@@ -449,6 +454,40 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(resolved.target_anchor, "r_hand")
         self.assertEqual(resolved.target_bone, "r_hand")
         self.assertEqual(resolved.target_point, (4.0, 5.0, 6.0))
+
+    def test_interaction_recipe_round_trip(self):
+        recipe = InteractionRecipe(
+            kind="touch",
+            actors=["Genesis 9", "Partner"],
+            constraints=[
+                HandTarget("Genesis 9", "r_hand", target_figure="Partner", target_anchor="l_shoulder"),
+            ],
+            metadata={"scenario": "contact"},
+        )
+
+        data = recipe.to_dict()
+        restored = InteractionRecipe.from_dict(data)
+
+        self.assertEqual(restored.kind, "touch")
+        self.assertEqual(restored.actors, ["Genesis 9", "Partner"])
+        self.assertEqual(len(restored.constraints), 1)
+        self.assertIsInstance(restored.constraints[0], HandTarget)
+
+    def test_interaction_recipe_builders(self):
+        sit = build_sit_recipe("Genesis 9", seat_point=(0.0, 1.0, 2.0), support_points=[(1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)])
+        touch = build_touch_recipe("Genesis 9", "Partner")
+        kiss = build_kiss_recipe("Genesis 9", "Partner")
+        fight = build_fight_recipe("Genesis 9", "Partner", strike_anchor="r_foot", target_anchor="head")
+
+        self.assertEqual(sit.kind, "sit")
+        self.assertEqual(touch.kind, "touch")
+        self.assertEqual(kiss.kind, "kiss")
+        self.assertEqual(fight.kind, "fight")
+        self.assertEqual(sit.to_plan().actors, ["Genesis 9"])
+        self.assertTrue(any(isinstance(constraint, BalanceTarget) for constraint in sit.constraints))
+        self.assertTrue(any(isinstance(constraint, HandTarget) for constraint in touch.constraints))
+        self.assertTrue(sum(isinstance(constraint, LookAtTarget) for constraint in kiss.constraints) >= 2)
+        self.assertTrue(any(isinstance(constraint, FootTarget) for constraint in fight.constraints))
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")

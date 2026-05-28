@@ -27,6 +27,7 @@ AnchorRole = Literal[
     "custom",
 ]
 InteractionKind = Literal["PoseTarget", "ContactTarget", "LookAtTarget", "BalanceTarget", "HandTarget", "FootTarget"]
+RecipeKind = Literal["sit", "touch", "kiss", "fight", "custom"]
 
 
 def _normalize_name(value: str | None) -> str:
@@ -814,6 +815,185 @@ class InteractionPlan:
                     continue
                 resolved.append(resolve_interaction_target(constraint, rig_profiles))
         return resolved
+
+
+@dataclass
+class InteractionRecipe:
+    """A higher-level interaction preset that expands into an interaction plan."""
+
+    kind: RecipeKind
+    actors: list[str]
+    constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget | HandTarget | FootTarget] = field(default_factory=list)
+    options: SolveOptions = field(default_factory=SolveOptions)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def to_plan(self) -> InteractionPlan:
+        return InteractionPlan(
+            actors=list(self.actors),
+            constraints=list(self.constraints),
+            options=self.options,
+            metadata=dict(self.metadata),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "actors": list(self.actors),
+            "constraints": [constraint.to_dict() for constraint in self.constraints],
+            "options": self.options.to_dict(),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "InteractionRecipe":
+        plan = InteractionPlan.from_dict(data)
+        return cls(
+            kind=data.get("kind", "custom"),
+            actors=plan.actors,
+            constraints=plan.constraints,
+            options=plan.options,
+            metadata=plan.metadata,
+        )
+
+
+def _target_anchor_from_strike_anchor(anchor_name: str) -> str:
+    lowered = _normalize_name(anchor_name)
+    if "hand" in lowered:
+        return "l_shoulder"
+    if "foot" in lowered:
+        return "l_hip"
+    return "chest"
+
+
+def build_sit_recipe(
+    actor_label: str,
+    *,
+    seat_point: Vector3 | None = None,
+    support_points: list[Vector3] | None = None,
+    foot_anchors: tuple[str, str] = ("l_foot", "r_foot"),
+) -> InteractionRecipe:
+    """Build a seat/lean preset for a single character."""
+
+    constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget | HandTarget | FootTarget] = [
+        BalanceTarget(
+            figure_label=actor_label,
+            pelvis_bone="pelvis",
+            support_points=list(support_points or ([] if seat_point is None else [seat_point])),
+            center_of_mass_hint=seat_point,
+        )
+    ]
+    for index, anchor_name in enumerate(foot_anchors):
+        target_point = None
+        if support_points:
+            target_point = support_points[min(index, len(support_points) - 1)]
+        elif seat_point is not None:
+            target_point = seat_point
+        constraints.append(
+            FootTarget(
+                figure_label=actor_label,
+                anchor_name=anchor_name,
+                target_point=target_point,
+            )
+        )
+    return InteractionRecipe(
+        kind="sit",
+        actors=[actor_label],
+        constraints=constraints,
+        metadata={"seat_point": list(seat_point) if seat_point else None},
+    )
+
+
+def build_touch_recipe(
+    source_label: str,
+    target_label: str,
+    *,
+    source_anchor: str = "r_hand",
+    target_anchor: str = "l_shoulder",
+    target_point: Vector3 | None = None,
+) -> InteractionRecipe:
+    """Build a touch/contact preset between two figures."""
+
+    return InteractionRecipe(
+        kind="touch",
+        actors=[source_label, target_label],
+        constraints=[
+            HandTarget(
+                figure_label=source_label,
+                anchor_name=source_anchor,
+                target_figure=target_label,
+                target_anchor=target_anchor,
+                target_point=target_point,
+            )
+        ],
+        metadata={
+            "source_anchor": source_anchor,
+            "target_anchor": target_anchor,
+        },
+    )
+
+
+def build_kiss_recipe(
+    actor_a: str,
+    actor_b: str,
+    *,
+    a_anchor: str = "r_hand",
+    b_anchor: str = "l_shoulder",
+) -> InteractionRecipe:
+    """Build a face-to-face interaction preset with a stabilizing contact plan."""
+
+    b_anchor = "l_shoulder" if _side_from_name(a_anchor) == "right" else "r_shoulder"
+    return InteractionRecipe(
+        kind="kiss",
+        actors=[actor_a, actor_b],
+        constraints=[
+            LookAtTarget(actor_a, "head", (0.0, 0.0, 0.0)),
+            LookAtTarget(actor_b, "head", (0.0, 0.0, 0.0)),
+            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=b_anchor),
+            HandTarget(actor_b, "l_hand" if _side_from_name(a_anchor) == "right" else "r_hand", target_figure=actor_a, target_anchor="l_shoulder" if _side_from_name(a_anchor) == "right" else "r_shoulder"),
+        ],
+        metadata={"interaction": "kiss"},
+    )
+
+
+def build_fight_recipe(
+    attacker: str,
+    defender: str,
+    *,
+    strike_anchor: str = "r_hand",
+    target_anchor: str = "head",
+) -> InteractionRecipe:
+    """Build a simple strike/contact preset for fight choreography."""
+
+    strike_target = _target_anchor_from_strike_anchor(strike_anchor)
+    strike_constraint: PoseTarget | ContactTarget | LookAtTarget | BalanceTarget | HandTarget | FootTarget
+    if "foot" in _normalize_name(strike_anchor):
+        strike_constraint = FootTarget(
+            figure_label=attacker,
+            anchor_name=strike_anchor,
+            target_figure=defender,
+            target_anchor=target_anchor,
+        )
+    else:
+        strike_constraint = HandTarget(
+            figure_label=attacker,
+            anchor_name=strike_anchor,
+            target_figure=defender,
+            target_anchor=target_anchor,
+        )
+    return InteractionRecipe(
+        kind="fight",
+        actors=[attacker, defender],
+        constraints=[
+            strike_constraint,
+            LookAtTarget(attacker, "head", (0.0, 0.0, 0.0)),
+            LookAtTarget(defender, "head", (0.0, 0.0, 0.0)),
+        ],
+        metadata={
+            "strike_anchor": strike_anchor,
+            "target_anchor": target_anchor,
+            "strike_target": strike_target,
+        },
+    )
 
 
 def default_axis_limits_for_bone(name: str, family: str = "generic") -> dict[AxisName, AxisLimit]:
