@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._interaction import LimbAlignmentResult
 
 
 class DazSkeleton(DazNode):
@@ -232,6 +236,54 @@ class DazSkeleton(DazNode):
         self._client.execute(script)
 
     # ── keyframe baking ───────────────────────────────────────────────────────
+
+    def hand_to_target(
+        self,
+        target_point: object | None,
+        *,
+        source_anchor: str = "r_hand",
+        max_iterations: int = 12,
+        step_degrees: float = 1.0,
+        damping: float = 0.25,
+        tolerance: float = 0.15,
+    ) -> "LimbAlignmentResult":
+        """Align a hand anchor toward a world-space target point."""
+
+        from ._interaction import align_hand_target
+
+        return align_hand_target(
+            self,
+            target_point,
+            source_anchor=source_anchor,
+            max_iterations=max_iterations,
+            step_degrees=step_degrees,
+            damping=damping,
+            tolerance=tolerance,
+        )
+
+    def foot_to_target(
+        self,
+        target_point: object | None,
+        *,
+        source_anchor: str = "r_foot",
+        max_iterations: int = 12,
+        step_degrees: float = 1.0,
+        damping: float = 0.25,
+        tolerance: float = 0.15,
+    ) -> "LimbAlignmentResult":
+        """Align a foot anchor toward a world-space target point."""
+
+        from ._interaction import align_foot_target
+
+        return align_foot_target(
+            self,
+            target_point,
+            source_anchor=source_anchor,
+            max_iterations=max_iterations,
+            step_degrees=step_degrees,
+            damping=damping,
+            tolerance=tolerance,
+        )
 
     def bake_bone_rotations(
         self,

@@ -1416,6 +1416,76 @@ def align_single_limb_target(
     )
 
 
+def align_hand_target(
+    skeleton: "DazSkeleton",
+    target_point: object | None,
+    *,
+    source_anchor: str = "r_hand",
+    max_iterations: int = 12,
+    step_degrees: float = 1.0,
+    damping: float = 0.25,
+    tolerance: float = 0.15,
+) -> LimbAlignmentResult:
+    """Convenience wrapper for a live hand-to-point alignment."""
+
+    if not hasattr(skeleton, "bones") or not hasattr(skeleton, "find_bone"):
+        raise TypeError("align_hand_target expects a skeleton-like object")
+    profile = build_rig_profile(skeleton)
+    figure_label = profile.figure_label or skeleton.label or skeleton._identifier.value
+    resolved = resolve_interaction_target(
+        HandTarget(
+            figure_label=figure_label,
+            anchor_name=source_anchor,
+            target_point=_as_tuple3(target_point),
+        ),
+        {figure_label: profile},
+    )
+    return align_single_limb_target(
+        skeleton,
+        profile,
+        resolved,
+        max_iterations=max_iterations,
+        step_degrees=step_degrees,
+        damping=damping,
+        tolerance=tolerance,
+    )
+
+
+def align_foot_target(
+    skeleton: "DazSkeleton",
+    target_point: object | None,
+    *,
+    source_anchor: str = "r_foot",
+    max_iterations: int = 12,
+    step_degrees: float = 1.0,
+    damping: float = 0.25,
+    tolerance: float = 0.15,
+) -> LimbAlignmentResult:
+    """Convenience wrapper for a live foot-to-point alignment."""
+
+    if not hasattr(skeleton, "bones") or not hasattr(skeleton, "find_bone"):
+        raise TypeError("align_foot_target expects a skeleton-like object")
+    profile = build_rig_profile(skeleton)
+    figure_label = profile.figure_label or skeleton.label or skeleton._identifier.value
+    resolved = resolve_interaction_target(
+        FootTarget(
+            figure_label=figure_label,
+            anchor_name=source_anchor,
+            target_point=_as_tuple3(target_point),
+        ),
+        {figure_label: profile},
+    )
+    return align_single_limb_target(
+        skeleton,
+        profile,
+        resolved,
+        max_iterations=max_iterations,
+        step_degrees=step_degrees,
+        damping=damping,
+        tolerance=tolerance,
+    )
+
+
 @dataclass
 class PreparedInteractionResult:
     """The result of applying a prepared recipe as a live staging pass."""

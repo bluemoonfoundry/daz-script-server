@@ -37,6 +37,7 @@ from dazpy import (
     SolveOptions,
     ValidationIssue,
     build_rig_profile,
+    align_hand_target,
     default_axis_limits_for_bone,
     align_single_limb_target,
     resolve_interaction_target,
@@ -650,6 +651,19 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertIsInstance(result.alignment_results[0], LimbAlignmentResult)
         self.assertLess(result.alignment_results[0].final_error, result.alignment_results[0].initial_error)
         self.assertTrue(result.alignment_results[0].final_error is not None)
+
+    def test_hand_to_target_convenience_wrapper_aligns(self):
+        hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))
+        shoulder = _KinematicFakeBone("l_shoulder", "Left Shoulder", parent=hip, local_position=(1.0, 0.0, 0.0))
+        upper_arm = _KinematicFakeBone("l_upper_arm", "Left Upper Arm", parent=shoulder, local_position=(1.0, 0.0, 0.0))
+        forearm = _KinematicFakeBone("l_forearm", "Left Forearm", parent=upper_arm, local_position=(1.0, 0.0, 0.0))
+        hand = _KinematicFakeBone("l_hand", "Left Hand", parent=forearm, local_position=(1.0, 0.0, 0.0))
+        skeleton = _KinematicFakeSkeleton("Genesis 9", [hip, shoulder, upper_arm, forearm, hand])
+
+        result = align_hand_target(skeleton, (3.0, 1.0, 0.0), source_anchor="l_hand", max_iterations=20, step_degrees=2.0, damping=0.35, tolerance=0.05)
+
+        self.assertIsInstance(result, LimbAlignmentResult)
+        self.assertLess(result.final_error, result.initial_error)
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")
