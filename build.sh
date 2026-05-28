@@ -17,6 +17,7 @@ Commands:
   release <tag>      Build plugin + dazpy wheel, create a GitHub release and attach both
 
 Options:
+  --platform <p>     Target platform: mac (dylib) or win (dll); default: auto-detect via uname
   --clean            Wipe the build directory before building
   --reconfigure      Force CMake configure even if a cache already exists
   --debug            Build Debug config instead of Release
@@ -29,7 +30,8 @@ Options:
 
 Examples:
   ./build.sh
-  ./build.sh build --clean --debug
+  ./build.sh build --platform mac --clean --debug
+  ./build.sh build --platform win --clean
   ./build.sh install --clean
   ./build.sh clean
   ./build.sh release v1.3.0 --title "v1.3.0" --notes "Bug fixes"
@@ -67,6 +69,7 @@ OPT_DEBUG=0
 OPT_VERBOSE=0
 OPT_UPDATE=0
 OPT_NO_WHEEL=0
+OPT_PLATFORM=""
 OPT_TITLE=""
 OPT_NOTES=""
 
@@ -78,6 +81,7 @@ while [[ $# -gt 0 ]]; do
         --verbose)     OPT_VERBOSE=1;                                    shift ;;
         --update)      OPT_UPDATE=1;                                     shift ;;
         --no-wheel)    OPT_NO_WHEEL=1;                                   shift ;;
+        --platform)    OPT_PLATFORM="${2:?'--platform requires mac or win'}"; shift 2 ;;
         --title)       OPT_TITLE="${2:?'--title requires a value'}";     shift 2 ;;
         --notes)       OPT_NOTES="${2:?'--notes requires a value'}";     shift 2 ;;
         --help|-h)     usage; exit 0 ;;
@@ -107,11 +111,21 @@ fi
 echo "DAZ_SDK_DIR: ${DAZ_SDK_DIR:-<not set>}"
 echo "DAZ_STUDIO_EXE_DIR: ${DAZ_STUDIO_EXE_DIR:-<not set>}"
 
-# Detect platform
+# Detect platform (auto, then allow --platform override)
 case "$(uname -s)" in
     Darwin*) PLATFORM=mac ;;
     *)       PLATFORM=win ;;
 esac
+if [ -n "$OPT_PLATFORM" ]; then
+    case "$OPT_PLATFORM" in
+        mac|win) PLATFORM="$OPT_PLATFORM" ;;
+        *)
+            echo "Error: --platform must be 'mac' or 'win', got '$OPT_PLATFORM'" >&2
+            exit 1
+            ;;
+    esac
+fi
+echo "Platform: $PLATFORM"
 
 # Locate cmake — check PATH first, then known Windows location
 if command -v cmake &>/dev/null; then

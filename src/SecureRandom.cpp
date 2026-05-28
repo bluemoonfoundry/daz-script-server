@@ -10,10 +10,10 @@
     #pragma comment(lib, "advapi32.lib")
 #else
     #include <fstream>
+    #include <unistd.h>
+    #include <errno.h>
     #ifdef __linux__
         #include <sys/syscall.h>
-        #include <unistd.h>
-        #include <errno.h>
     #endif
 #endif
 

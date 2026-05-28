@@ -75,9 +75,11 @@ if(INSTALL_TO_DAZ AND DAZ_STUDIO_EXE_DIR)
 		RUNTIME DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
 		LIBRARY DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
 	)
-	install(FILES
-		$<TARGET_PDB_FILE:DazScriptServer>
-		DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
-		OPTIONAL
-	)
+	if(WIN32)
+		install(FILES
+			$<TARGET_PDB_FILE:DazScriptServer>
+			DESTINATION "${DAZ_STUDIO_EXE_DIR}/plugins"
+			OPTIONAL
+		)
+	endif()
 endif()

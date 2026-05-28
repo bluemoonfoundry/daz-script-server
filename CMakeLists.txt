@@ -95,6 +95,13 @@ if(WIN32)
 else()
 	set_property(TARGET dzcore APPEND PROPERTY IMPORTED_LOCATION ${DAZ_SDK_LIB})
 endif()
+if(APPLE)
+	# Prepend the patch overlay so our fixed qiterator.h shadows the SDK copy.
+	# The SDK's version has bare namespace std { struct ...; } forward declarations
+	# that are ambiguous with libc++'s std::__1 inline namespace on modern clang.
+	set_property(TARGET dzcore APPEND PROPERTY
+		INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/cmake/qt4_patches")
+endif()
 set_property(TARGET dzcore APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${DZ_SDK_INCLUDE}")
 
 # dpc import target (Daz pre-compiler)
@@ -112,6 +119,9 @@ if(WIN32)
 	set(DAZ_SDK_QTCORE_LIBRARY "${DAZ_SDK_DIR}/lib/${DZ_MIXED_PLATFORM}/QtCore4.lib")
 elseif(APPLE)
 	set(DAZ_SDK_QTCORE_LIBRARY "${DAZ_SDK_DIR}/lib/${DZ_MIXED_PLATFORM}/QtCore.framework")
+	# SDK qmake is i386-only and can't run on macOS 10.15+; use our custom
+	# cmake/FindQt4.cmake instead, which bypasses qmake entirely.
+	list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 endif()
 
 set(QT_BINARY_DIR_DEFAULT "${DAZ_SDK_DIR}/bin/${DZ_MIXED_PLATFORM}")
