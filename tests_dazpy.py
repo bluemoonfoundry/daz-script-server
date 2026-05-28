@@ -23,6 +23,7 @@ from dazpy import (
     InteractionPlan,
     InteractionRecipe,
     InteractionPosePatch,
+    LimbAlignmentResult,
     PreparedInteractionRecipe,
     PreparedInteractionResult,
     HandTarget,
@@ -37,6 +38,7 @@ from dazpy import (
     ValidationIssue,
     build_rig_profile,
     default_axis_limits_for_bone,
+    align_single_limb_target,
     resolve_interaction_target,
 )
 from dazpy._node import DazNode, NodeIdentifier
@@ -97,6 +99,75 @@ class _FakeScene:
             if skeleton.label == label:
                 return skeleton
         raise KeyError(label)
+
+
+class _KinematicFakeBone:
+    def __init__(
+        self,
+        name: str,
+        label: str | None = None,
+        parent: "_KinematicFakeBone | None" = None,
+        local_position: tuple[float, float, float] | None = (1.0, 0.0, 0.0),
+    ) -> None:
+        self.name = name
+        self.label = label
+        self.parent = parent
+        self.rotation_order = "XYZ"
+        self.local_position = local_position
+        self.local_euler = (0.0, 0.0, 0.0)
+        self._identifier = NodeIdentifier(name)
+        self._world_position = (0.0, 0.0, 0.0)
+
+    def _world_angle(self) -> float:
+        import math
+
+        own = math.radians(self.local_euler[2])
+        if self.parent is None:
+            return own
+        return self.parent._world_angle() + own
+
+    @property
+    def position(self) -> tuple[float, float, float]:
+        import math
+
+        if self.parent is None:
+            return self._world_position
+        parent_position = self.parent.position
+        parent_angle = self.parent._world_angle()
+        offset = self.local_position or (0.0, 0.0, 0.0)
+        cos_a = math.cos(parent_angle)
+        sin_a = math.sin(parent_angle)
+        rotated = (
+            offset[0] * cos_a - offset[1] * sin_a,
+            offset[0] * sin_a + offset[1] * cos_a,
+            offset[2],
+        )
+        return (
+            parent_position[0] + rotated[0],
+            parent_position[1] + rotated[1],
+            parent_position[2] + rotated[2],
+        )
+
+    def set_local_rotation(self, x: float, y: float, z: float) -> None:
+        self.local_euler = (x, y, z)
+
+
+class _KinematicFakeSkeleton:
+    def __init__(self, label: str, bones: list[_KinematicFakeBone]) -> None:
+        self.label = label
+        self._bones = bones
+        self._by_name = {bone.name: bone for bone in bones}
+        self._identifier = NodeIdentifier(label, kind="label")
+        self.position_calls: list[tuple[float, float, float]] = []
+
+    def bones(self) -> list[_KinematicFakeBone]:
+        return self._bones
+
+    def find_bone(self, name: str) -> _KinematicFakeBone:
+        return self._by_name[name]
+
+    def set_position(self, x: float, y: float, z: float) -> None:
+        self.position_calls.append((x, y, z))
 
 
 class TestScriptBuilder(unittest.TestCase):
@@ -555,6 +626,30 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(result.pose_patch.diagnostics["unresolved_target_count"], 0)
         self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [1.5, 1.5, 1.5])
         self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Partner"], [-1.5, -1.5, -1.5])
+
+    def test_prepared_recipe_live_alignment_reduces_error(self):
+        hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))
+        shoulder = _KinematicFakeBone("l_shoulder", "Left Shoulder", parent=hip, local_position=(1.0, 0.0, 0.0))
+        upper_arm = _KinematicFakeBone("l_upper_arm", "Left Upper Arm", parent=shoulder, local_position=(1.0, 0.0, 0.0))
+        forearm = _KinematicFakeBone("l_forearm", "Left Forearm", parent=upper_arm, local_position=(1.0, 0.0, 0.0))
+        hand = _KinematicFakeBone("l_hand", "Left Hand", parent=forearm, local_position=(1.0, 0.0, 0.0))
+        source_skel = _KinematicFakeSkeleton("Genesis 9", [hip, shoulder, upper_arm, forearm, hand])
+        scene = _FakeScene([source_skel])
+
+        profile = build_rig_profile(source_skel)
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[HandTarget("Genesis 9", "l_hand", target_point=(3.0, 1.0, 0.0))],
+        )
+        prepared = prepare_interaction_recipe(recipe, {"Genesis 9": profile})
+
+        result = prepared.apply(scene, align_limb_targets=True, max_iterations=20, step_degrees=2.0, damping=0.35, tolerance=0.05)
+
+        self.assertEqual(len(result.alignment_results), 1)
+        self.assertIsInstance(result.alignment_results[0], LimbAlignmentResult)
+        self.assertLess(result.alignment_results[0].final_error, result.alignment_results[0].initial_error)
+        self.assertTrue(result.alignment_results[0].final_error is not None)
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")

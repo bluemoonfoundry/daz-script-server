@@ -43,6 +43,8 @@ def _lower_name(value: str | None) -> str:
 def _as_tuple3(value: object | None) -> Rotation3 | None:
     if value is None:
         return None
+    if isinstance(value, dict) and {"x", "y", "z"}.issubset(value.keys()):
+        return (float(value["x"]), float(value["y"]), float(value["z"]))
     if isinstance(value, tuple) and len(value) == 3:
         return (float(value[0]), float(value[1]), float(value[2]))
     if isinstance(value, list) and len(value) == 3:
@@ -1030,15 +1032,65 @@ class PreparedInteractionRecipe:
             diagnostics=diagnostics,
         )
 
-    def apply(self, scene: object) -> "PreparedInteractionResult":
-        """Apply the compiled recipe as a coarse staging pass."""
+    def apply(
+        self,
+        scene: object,
+        *,
+        align_limb_targets: bool = False,
+        max_iterations: int | None = None,
+        step_degrees: float = 1.0,
+        damping: float = 0.25,
+        tolerance: float = 0.15,
+    ) -> "PreparedInteractionResult":
+        """Apply the compiled recipe, optionally aligning a single limb chain."""
 
         patch = self.build_pose_patch()
         patch.apply(scene)
-        return PreparedInteractionResult(
+        result = PreparedInteractionResult(
             prepared=self,
             pose_patch=patch,
         )
+        if align_limb_targets:
+            result.alignment_results = self.align_limb_targets(
+                scene,
+                max_iterations=max_iterations,
+                step_degrees=step_degrees,
+                damping=damping,
+                tolerance=tolerance,
+            )
+        return result
+
+    def align_limb_targets(
+        self,
+        scene: object,
+        *,
+        max_iterations: int | None = None,
+        step_degrees: float = 1.0,
+        damping: float = 0.25,
+        tolerance: float = 0.15,
+    ) -> list["LimbAlignmentResult"]:
+        """Apply live limb alignment for resolved hand and foot targets."""
+
+        alignment_results: list[LimbAlignmentResult] = []
+        for resolved in self.resolved_targets:
+            if resolved.target_point is None:
+                continue
+            skeleton = scene.find_skeleton_by_label(resolved.figure_label)
+            profile = self.rig_profiles.get(resolved.figure_label)
+            if profile is None:
+                continue
+            alignment_results.append(
+                align_single_limb_target(
+                    skeleton,
+                    profile,
+                    resolved,
+                    max_iterations=max_iterations or self.plan.options.max_iterations,
+                    step_degrees=step_degrees,
+                    damping=damping,
+                    tolerance=tolerance,
+                )
+            )
+        return alignment_results
 
 
 @dataclass
@@ -1062,17 +1114,321 @@ class InteractionPosePatch:
         }
 
 
+@dataclass(frozen=True)
+class LimbAlignmentResult:
+    """Result data for a single live target-alignment pass."""
+
+    figure_label: str
+    anchor_name: str
+    effector_bone: str
+    chain: list[str]
+    target_point: Vector3 | None
+    iterations: int = 0
+    converged: bool = False
+    initial_error: float | None = None
+    final_error: float | None = None
+    applied_rotations: dict[str, Rotation3] = field(default_factory=dict)
+    diagnostics: dict[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "figure_label": self.figure_label,
+            "anchor_name": self.anchor_name,
+            "effector_bone": self.effector_bone,
+            "chain": list(self.chain),
+            "target_point": list(self.target_point) if self.target_point else None,
+            "iterations": self.iterations,
+            "converged": self.converged,
+            "initial_error": self.initial_error,
+            "final_error": self.final_error,
+            "applied_rotations": {name: list(rotation) for name, rotation in self.applied_rotations.items()},
+            "diagnostics": dict(self.diagnostics),
+        }
+
+
+def _vec3_add(a: Vector3, b: Vector3) -> Vector3:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _vec3_sub(a: Vector3, b: Vector3) -> Vector3:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _vec3_scale(v: Vector3, scale: float) -> Vector3:
+    return (v[0] * scale, v[1] * scale, v[2] * scale)
+
+
+def _vec3_dot(a: Vector3, b: Vector3) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _vec3_length(v: Vector3) -> float:
+    return _vec3_dot(v, v) ** 0.5
+
+
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(max_value, value))
+
+
+def _rotation_with_axis_limits(rotation: Rotation3, axis_limits: dict[AxisName, AxisLimit] | None) -> Rotation3:
+    if not axis_limits:
+        return rotation
+    values = [rotation[0], rotation[1], rotation[2]]
+    for index, axis in enumerate(("x", "y", "z")):
+        limit = axis_limits.get(axis)
+        if limit is not None:
+            values[index] = _clamp(values[index], limit.min_degrees, limit.max_degrees)
+    return (values[0], values[1], values[2])
+
+
+def _rotation_axis_value(rotation: Rotation3, axis: int) -> float:
+    return rotation[axis]
+
+
+def _set_rotation_axis(rotation: Rotation3, axis: int, value: float) -> Rotation3:
+    values = [rotation[0], rotation[1], rotation[2]]
+    values[axis] = value
+    return (values[0], values[1], values[2])
+
+
+def _invert_3x3(matrix: list[list[float]]) -> list[list[float]] | None:
+    a, b, c = matrix[0]
+    d, e, f = matrix[1]
+    g, h, i = matrix[2]
+    det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if abs(det) < 1e-9:
+        return None
+    inv_det = 1.0 / det
+    return [
+        [
+            (e * i - f * h) * inv_det,
+            (c * h - b * i) * inv_det,
+            (b * f - c * e) * inv_det,
+        ],
+        [
+            (f * g - d * i) * inv_det,
+            (a * i - c * g) * inv_det,
+            (c * d - a * f) * inv_det,
+        ],
+        [
+            (d * h - e * g) * inv_det,
+            (b * g - a * h) * inv_det,
+            (a * e - b * d) * inv_det,
+        ],
+    ]
+
+
+def _mul_3x3_vec(matrix: list[list[float]], vector: Vector3) -> Vector3:
+    return (
+        matrix[0][0] * vector[0] + matrix[0][1] * vector[1] + matrix[0][2] * vector[2],
+        matrix[1][0] * vector[0] + matrix[1][1] * vector[1] + matrix[1][2] * vector[2],
+        matrix[2][0] * vector[0] + matrix[2][1] * vector[1] + matrix[2][2] * vector[2],
+    )
+
+
+def _damped_least_squares_step(columns: list[Vector3], error: Vector3, damping: float) -> list[float] | None:
+    if not columns:
+        return None
+    jj = [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]
+    for column in columns:
+        jj[0][0] += column[0] * column[0]
+        jj[0][1] += column[0] * column[1]
+        jj[0][2] += column[0] * column[2]
+        jj[1][0] += column[1] * column[0]
+        jj[1][1] += column[1] * column[1]
+        jj[1][2] += column[1] * column[2]
+        jj[2][0] += column[2] * column[0]
+        jj[2][1] += column[2] * column[1]
+        jj[2][2] += column[2] * column[2]
+    jj[0][0] += damping
+    jj[1][1] += damping
+    jj[2][2] += damping
+    inv = _invert_3x3(jj)
+    if inv is None:
+        return None
+    y = _mul_3x3_vec(inv, error)
+    return [_vec3_dot(column, y) for column in columns]
+
+
+def _bone_world_position(bone: object) -> Vector3 | None:
+    return _as_tuple3(getattr(bone, "position", None))
+
+
+def _alignment_chain_names(profile: FigureRigProfile, chain: BoneChain) -> list[str]:
+    candidates = [name for name in chain.bones if name in profile.bone_names()]
+    candidates = [name for name in candidates if not profile.bone(name).is_helper]
+    if len(candidates) <= 1:
+        return candidates
+    role_limits: dict[ChainRole, int] = {
+        "hand": 4,
+        "arm": 4,
+        "foot": 4,
+        "leg": 4,
+        "head": 2,
+        "neck": 2,
+        "spine": 3,
+        "pelvis": 2,
+        "custom": 3,
+    }
+    limit = role_limits.get(chain.role, 3)
+    return candidates[:-1][-limit:]
+
+
+def align_single_limb_target(
+    skeleton: "DazSkeleton",
+    profile: FigureRigProfile,
+    target: ResolvedInteractionTarget,
+    *,
+    max_iterations: int = 12,
+    step_degrees: float = 1.0,
+    damping: float = 0.25,
+    tolerance: float = 0.15,
+) -> LimbAlignmentResult:
+    """Iteratively align a single limb chain to a resolved interaction target."""
+
+    if target.target_point is None:
+        return LimbAlignmentResult(
+            figure_label=target.figure_label,
+            anchor_name=target.anchor_name,
+            effector_bone=target.bone_name,
+            chain=[],
+            target_point=None,
+            diagnostics={"reason": "missing_target_point"},
+        )
+
+    chain = profile.suggest_primary_chain(target.bone_name)
+    chain_names = _alignment_chain_names(profile, chain) if chain is not None else []
+    if not chain_names:
+        return LimbAlignmentResult(
+            figure_label=target.figure_label,
+            anchor_name=target.anchor_name,
+            effector_bone=target.bone_name,
+            chain=[],
+            target_point=target.target_point,
+            diagnostics={"reason": "missing_chain"},
+        )
+
+    bones = [skeleton.find_bone(name) for name in chain_names]
+    effector = skeleton.find_bone(target.bone_name)
+    base_position = _bone_world_position(effector)
+    if base_position is None:
+        return LimbAlignmentResult(
+            figure_label=target.figure_label,
+            anchor_name=target.anchor_name,
+            effector_bone=target.bone_name,
+            chain=chain_names,
+            target_point=target.target_point,
+            diagnostics={"reason": "missing_effector_position"},
+        )
+
+    current_error = _vec3_sub(target.target_point, base_position)
+    initial_error = _vec3_length(current_error)
+    if initial_error <= tolerance:
+        return LimbAlignmentResult(
+            figure_label=target.figure_label,
+            anchor_name=target.anchor_name,
+            effector_bone=target.bone_name,
+            chain=chain_names,
+            target_point=target.target_point,
+            iterations=0,
+            converged=True,
+            initial_error=initial_error,
+            final_error=initial_error,
+            applied_rotations={bone.name: _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0) for bone in bones},
+            diagnostics={"reason": "already_aligned"},
+        )
+
+    iterations = 0
+    converged = False
+    for iteration in range(max_iterations):
+        iterations = iteration + 1
+        base_position = _bone_world_position(effector)
+        if base_position is None:
+            break
+        current_error = _vec3_sub(target.target_point, base_position)
+        if _vec3_length(current_error) <= tolerance:
+            converged = True
+            break
+
+        columns: list[Vector3] = []
+        original_rotations: dict[str, Rotation3] = {}
+        for bone in bones:
+            current_rotation = _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0)
+            original_rotations[bone.name] = current_rotation
+            profile_bone = profile.bone(bone.name)
+            for axis in range(3):
+                trial_rotation = _set_rotation_axis(current_rotation, axis, _rotation_axis_value(current_rotation, axis) + step_degrees)
+                trial_rotation = _rotation_with_axis_limits(trial_rotation, profile_bone.axis_limits if profile_bone.axis_limits else None)
+                bone.set_local_rotation(*trial_rotation)
+                trial_position = _bone_world_position(effector)
+                if trial_position is None:
+                    columns.append((0.0, 0.0, 0.0))
+                else:
+                    columns.append(_vec3_scale(_vec3_sub(trial_position, base_position), 1.0 / step_degrees))
+                bone.set_local_rotation(*current_rotation)
+
+        delta = _damped_least_squares_step(columns, current_error, damping)
+        if delta is None:
+            break
+
+        max_delta = max(abs(value) for value in delta) if delta else 0.0
+        if max_delta > step_degrees:
+            scale = step_degrees / max_delta
+            delta = [value * scale for value in delta]
+
+        for bone_index, bone in enumerate(bones):
+            current_rotation = original_rotations[bone.name]
+            start = bone_index * 3
+            next_rotation = (
+                current_rotation[0] + delta[start],
+                current_rotation[1] + delta[start + 1],
+                current_rotation[2] + delta[start + 2],
+            )
+            profile_bone = profile.bone(bone.name)
+            bone.set_local_rotation(*_rotation_with_axis_limits(next_rotation, profile_bone.axis_limits if profile_bone.axis_limits else None))
+
+    final_position = _bone_world_position(effector)
+    final_error = _vec3_length(_vec3_sub(target.target_point, final_position)) if final_position is not None else None
+    applied_rotations = {
+        bone.name: _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0)
+        for bone in bones
+    }
+    return LimbAlignmentResult(
+        figure_label=target.figure_label,
+        anchor_name=target.anchor_name,
+        effector_bone=target.bone_name,
+        chain=chain_names,
+        target_point=target.target_point,
+        iterations=iterations,
+        converged=converged,
+        initial_error=initial_error,
+        final_error=final_error,
+        applied_rotations=applied_rotations,
+        diagnostics={
+            "step_degrees": step_degrees,
+            "damping": damping,
+            "tolerance": tolerance,
+        },
+    )
+
+
 @dataclass
 class PreparedInteractionResult:
     """The result of applying a prepared recipe as a live staging pass."""
 
     prepared: PreparedInteractionRecipe
     pose_patch: InteractionPosePatch
+    alignment_results: list[LimbAlignmentResult] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "prepared": self.prepared.to_dict(),
             "pose_patch": self.pose_patch.to_dict(),
+            "alignment_results": [result.to_dict() for result in self.alignment_results],
         }
 
 
