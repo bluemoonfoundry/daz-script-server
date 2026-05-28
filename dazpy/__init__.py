@@ -31,6 +31,23 @@ from ._timeline import DazTimeline
 from ._property import DazProperty
 from ._element import DazElement
 from ._batch import Batch, BatchFuture
+from ._interaction import (
+    BalanceTarget,
+    AxisLimit,
+    BoneProfile,
+    BoneChain,
+    ContactTarget,
+    FigureRigProfile,
+    InteractionPlan,
+    LookAtTarget,
+    PoseTarget,
+    solve_interaction_plan,
+    SolveOptions,
+    SolveResult,
+    ValidationIssue,
+    default_axis_limits_for_bone,
+    build_rig_profile,
+)
 from ._undo import UndoGroup
 from ._pose import DazPose
 from ._animation import DazAnimation
@@ -67,6 +84,21 @@ __all__ = [
     "DazElement",
     "Batch",
     "BatchFuture",
+    "BalanceTarget",
+    "AxisLimit",
+    "BoneProfile",
+    "BoneChain",
+    "ContactTarget",
+    "FigureRigProfile",
+    "InteractionPlan",
+    "LookAtTarget",
+    "PoseTarget",
+    "solve_interaction_plan",
+    "SolveOptions",
+    "SolveResult",
+    "ValidationIssue",
+    "default_axis_limits_for_bone",
+    "build_rig_profile",
     "UndoGroup",
     "DazPose",
     "DazAnimation",
