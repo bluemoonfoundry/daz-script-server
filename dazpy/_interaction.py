@@ -856,6 +856,62 @@ class InteractionRecipe:
         )
 
 
+@dataclass
+class PreparedInteractionRecipe:
+    """A compiled recipe ready for a live DAZ session or a future solver."""
+
+    recipe: InteractionRecipe
+    plan: InteractionPlan
+    resolved_targets: list[ResolvedInteractionTarget] = field(default_factory=list)
+    rig_profiles: dict[str, FigureRigProfile] = field(default_factory=dict)
+    validation_issues: list[ValidationIssue] = field(default_factory=list)
+    diagnostics: dict[str, object] = field(default_factory=dict)
+
+    @property
+    def is_valid(self) -> bool:
+        return not any(issue.severity == "error" for issue in self.validation_issues)
+
+    def to_dict(self) -> dict:
+        return {
+            "recipe": self.recipe.to_dict(),
+            "plan": self.plan.to_dict(),
+            "resolved_targets": [target.to_dict() for target in self.resolved_targets],
+            "rig_profiles": {label: profile.to_dict() for label, profile in self.rig_profiles.items()},
+            "validation_issues": [issue.to_dict() for issue in self.validation_issues],
+            "diagnostics": dict(self.diagnostics),
+        }
+
+
+def prepare_interaction_recipe(
+    recipe: InteractionRecipe,
+    rig_profiles: dict[str, FigureRigProfile],
+) -> PreparedInteractionRecipe:
+    """Compile a recipe into a validated, resolved planning object.
+
+    This is the next step toward a live-facing interaction system: it doesn't
+    solve the pose yet, but it does normalize the recipe into concrete targets
+    that a DAZ session or future solver can consume directly.
+    """
+
+    plan = recipe.to_plan()
+    validation_issues = plan.validate(rig_profiles)
+    resolved_targets = plan.resolve_targets(rig_profiles)
+    diagnostics = {
+        "recipe_kind": recipe.kind,
+        "actor_count": len(recipe.actors),
+        "constraint_count": len(recipe.constraints),
+        "resolved_target_count": len(resolved_targets),
+    }
+    return PreparedInteractionRecipe(
+        recipe=recipe,
+        plan=plan,
+        resolved_targets=resolved_targets,
+        rig_profiles=dict(rig_profiles),
+        validation_issues=validation_issues,
+        diagnostics=diagnostics,
+    )
+
+
 def _target_anchor_from_strike_anchor(anchor_name: str) -> str:
     lowered = _normalize_name(anchor_name)
     if "hand" in lowered:

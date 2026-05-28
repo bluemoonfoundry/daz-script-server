@@ -42,6 +42,7 @@ from ._interaction import (
     InteractionAnchor,
     InteractionPlan,
     InteractionRecipe,
+    PreparedInteractionRecipe,
     FootTarget,
     LookAtTarget,
     HandTarget,
@@ -55,6 +56,7 @@ from ._interaction import (
     build_sit_recipe,
     build_touch_recipe,
     default_axis_limits_for_bone,
+    prepare_interaction_recipe,
     resolve_interaction_target,
 )
 from ._undo import UndoGroup
@@ -103,6 +105,7 @@ __all__ = [
     "InteractionAnchor",
     "InteractionPlan",
     "InteractionRecipe",
+    "PreparedInteractionRecipe",
     "FootTarget",
     "LookAtTarget",
     "HandTarget",
@@ -116,6 +119,7 @@ __all__ = [
     "build_sit_recipe",
     "build_touch_recipe",
     "default_axis_limits_for_bone",
+    "prepare_interaction_recipe",
     "resolve_interaction_target",
     "UndoGroup",
     "DazPose",

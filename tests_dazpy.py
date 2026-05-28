@@ -22,6 +22,7 @@ from dazpy import (
     InteractionAnchor,
     InteractionPlan,
     InteractionRecipe,
+    PreparedInteractionRecipe,
     HandTarget,
     LookAtTarget,
     PoseTarget,
@@ -29,6 +30,7 @@ from dazpy import (
     build_kiss_recipe,
     build_sit_recipe,
     build_touch_recipe,
+    prepare_interaction_recipe,
     SolveOptions,
     ValidationIssue,
     build_rig_profile,
@@ -488,6 +490,27 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertTrue(any(isinstance(constraint, HandTarget) for constraint in touch.constraints))
         self.assertTrue(sum(isinstance(constraint, LookAtTarget) for constraint in kiss.constraints) >= 2)
         self.assertTrue(any(isinstance(constraint, FootTarget) for constraint in fight.constraints))
+
+    def test_prepare_interaction_recipe_compiles_targets(self):
+        source_hip = _FakeBone("hip", "Hip")
+        source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip, local_position=(1.0, 2.0, 3.0))
+        target_hip = _FakeBone("hip", "Hip")
+        target_shoulder = _FakeBone("l_shoulder", "Left Shoulder", parent=target_hip, local_position=(4.0, 5.0, 6.0))
+        source_profile = build_rig_profile(_FakeSkeleton("Genesis 9", [source_hip, source_hand]))
+        target_profile = build_rig_profile(_FakeSkeleton("Partner", [target_hip, target_shoulder]))
+
+        recipe = build_touch_recipe("Genesis 9", "Partner", source_anchor="r_hand", target_anchor="l_shoulder")
+        prepared = prepare_interaction_recipe(recipe, {"Genesis 9": source_profile, "Partner": target_profile})
+
+        self.assertIsInstance(prepared, PreparedInteractionRecipe)
+        self.assertTrue(prepared.is_valid)
+        self.assertEqual(prepared.diagnostics["recipe_kind"], "touch")
+        self.assertEqual(prepared.diagnostics["resolved_target_count"], 1)
+        self.assertEqual(len(prepared.resolved_targets), 1)
+        self.assertEqual(prepared.resolved_targets[0].bone_name, "r_hand")
+        self.assertEqual(prepared.resolved_targets[0].target_bone, "l_shoulder")
+        self.assertEqual(prepared.resolved_targets[0].target_point, (4.0, 5.0, 6.0))
+        self.assertEqual(prepared.to_dict()["plan"]["actors"], ["Genesis 9", "Partner"])
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")
