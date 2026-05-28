@@ -28,6 +28,7 @@ from dazpy import (
     ValidationIssue,
     build_rig_profile,
     default_axis_limits_for_bone,
+    resolve_interaction_target,
 )
 from dazpy._node import DazNode, NodeIdentifier
 from dazpy._scene import DazScene
@@ -414,6 +415,40 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(hand_restored.anchor_name, "r_hand")
         self.assertEqual(hand_restored.offset, (0.1, 0.0, 0.0))
         self.assertEqual(foot_restored.target_anchor, "r_hand")
+
+    def test_resolve_interaction_target_same_figure(self):
+        hip = _FakeBone("hip", "Hip")
+        hand = _FakeBone("r_hand", "Right Hand", parent=hip, local_position=(10.0, 20.0, 30.0))
+        foot = _FakeBone("l_foot", "Left Foot", parent=hip, local_position=(1.0, 2.0, 3.0))
+        profile = build_rig_profile(_FakeSkeleton("Genesis 9", [hip, hand, foot]))
+
+        resolved = resolve_interaction_target(
+            HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0), offset=(0.5, 0.0, -0.5)),
+            {"Genesis 9": profile},
+        )
+
+        self.assertEqual(resolved.bone_name, "r_hand")
+        self.assertEqual(resolved.target_point, (1.5, 2.0, 2.5))
+        self.assertIsNone(resolved.target_bone)
+
+    def test_resolve_interaction_target_cross_figure(self):
+        source_hip = _FakeBone("hip", "Hip")
+        source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip)
+        source_profile = build_rig_profile(_FakeSkeleton("Genesis 9", [source_hip, source_hand]))
+
+        target_hip = _FakeBone("hip", "Hip")
+        target_hand = _FakeBone("r_hand", "Right Hand", parent=target_hip, local_position=(4.0, 5.0, 6.0))
+        target_profile = build_rig_profile(_FakeSkeleton("Partner", [target_hip, target_hand]))
+
+        resolved = resolve_interaction_target(
+            FootTarget("Genesis 9", "r_hand", target_figure="Partner", target_anchor="r_hand"),
+            {"Genesis 9": source_profile, "Partner": target_profile},
+        )
+
+        self.assertEqual(resolved.target_figure, "Partner")
+        self.assertEqual(resolved.target_anchor, "r_hand")
+        self.assertEqual(resolved.target_bone, "r_hand")
+        self.assertEqual(resolved.target_point, (4.0, 5.0, 6.0))
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")

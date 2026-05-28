@@ -45,10 +45,12 @@ from ._interaction import (
     LookAtTarget,
     HandTarget,
     PoseTarget,
+    ResolvedInteractionTarget,
     SolveOptions,
     ValidationIssue,
     build_rig_profile,
     default_axis_limits_for_bone,
+    resolve_interaction_target,
 )
 from ._undo import UndoGroup
 from ._pose import DazPose
@@ -99,10 +101,12 @@ __all__ = [
     "LookAtTarget",
     "HandTarget",
     "PoseTarget",
+    "ResolvedInteractionTarget",
     "SolveOptions",
     "ValidationIssue",
     "build_rig_profile",
     "default_axis_limits_for_bone",
+    "resolve_interaction_target",
     "UndoGroup",
     "DazPose",
     "DazAnimation",

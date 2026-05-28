@@ -49,6 +49,14 @@ def _as_tuple3(value: object | None) -> Rotation3 | None:
     return None
 
 
+def _add_vec3(a: Vector3 | None, b: Vector3 | None) -> Vector3 | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
 def _detect_figure_family(bone_names: list[str]) -> str:
     names = {_lower_name(name) for name in bone_names}
     if any(name.startswith(("r_", "l_")) for name in names):
@@ -217,6 +225,32 @@ class InteractionAnchor:
         }
 
 
+@dataclass(frozen=True)
+class ResolvedInteractionTarget:
+    """A fully resolved anchor target ready for solver consumption."""
+
+    figure_label: str
+    anchor_name: str
+    bone_name: str
+    target_point: Vector3 | None = None
+    target_figure: str | None = None
+    target_anchor: str | None = None
+    target_bone: str | None = None
+    offset: Vector3 = (0.0, 0.0, 0.0)
+
+    def to_dict(self) -> dict:
+        return {
+            "figure_label": self.figure_label,
+            "anchor_name": self.anchor_name,
+            "bone_name": self.bone_name,
+            "target_point": list(self.target_point) if self.target_point else None,
+            "target_figure": self.target_figure,
+            "target_anchor": self.target_anchor,
+            "target_bone": self.target_bone,
+            "offset": list(self.offset),
+        }
+
+
 @dataclass
 class FigureRigProfile:
     """A DAZ figure expressed as a solver-friendly rig profile."""
@@ -375,6 +409,42 @@ class FigureRigProfile:
         if anchor is None:
             raise KeyError(f"Anchor not found in rig profile: {name!r}")
         return anchor
+
+    def resolve_anchor_target(
+        self,
+        target: AnchorTarget,
+        rig_profiles: dict[str, "FigureRigProfile"] | None = None,
+    ) -> ResolvedInteractionTarget:
+        """Resolve an anchor target into concrete bones and an optional point."""
+
+        anchor = self.require_anchor(target.anchor_name)
+        target_point = target.target_point
+        target_figure = target.target_figure
+        target_anchor = target.target_anchor
+        target_bone = None
+
+        if target_figure and target_anchor and rig_profiles is not None:
+            target_profile = rig_profiles.get(target_figure)
+            if target_profile is not None:
+                resolved = target_profile.require_anchor(target_anchor)
+                target_bone = resolved.bone_name
+        if target_point is None and target_figure is not None and target_anchor is not None and rig_profiles is not None:
+            target_profile = rig_profiles.get(target_figure)
+            if target_profile is not None:
+                target_point = _anchor_world_point_hint(target_profile, target_anchor)
+
+        target_point = _add_vec3(target_point, target.offset)
+
+        return ResolvedInteractionTarget(
+            figure_label=self.figure_label,
+            anchor_name=anchor.name,
+            bone_name=anchor.bone_name,
+            target_point=target_point,
+            target_figure=target_figure,
+            target_anchor=target_anchor,
+            target_bone=target_bone,
+            offset=target.offset,
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -718,9 +788,9 @@ class InteractionPlan:
                     )
                     continue
                 if constraint.anchor_name not in profile.anchor_names():
-                    issues.append(
-                        ValidationIssue("error", constraint.figure_label, index, f"Unknown anchor {constraint.anchor_name!r} on figure {constraint.figure_label!r}")
-                    )
+                        issues.append(
+                            ValidationIssue("error", constraint.figure_label, index, f"Unknown anchor {constraint.anchor_name!r} on figure {constraint.figure_label!r}")
+                        )
                 if constraint.target_figure and constraint.target_anchor:
                     target_profile = rig_profiles.get(constraint.target_figure)
                     if target_profile is None:
@@ -732,6 +802,18 @@ class InteractionPlan:
                             ValidationIssue("error", constraint.target_figure, index, f"Unknown target anchor {constraint.target_anchor!r} on figure {constraint.target_figure!r}")
                         )
         return issues
+
+    def resolve_targets(self, rig_profiles: dict[str, FigureRigProfile]) -> list[ResolvedInteractionTarget]:
+        """Resolve hand and foot goals into concrete anchors and points."""
+
+        resolved: list[ResolvedInteractionTarget] = []
+        for constraint in self.constraints:
+            if isinstance(constraint, (HandTarget, FootTarget)):
+                profile = rig_profiles.get(constraint.figure_label)
+                if profile is None:
+                    continue
+                resolved.append(resolve_interaction_target(constraint, rig_profiles))
+        return resolved
 
 
 def default_axis_limits_for_bone(name: str, family: str = "generic") -> dict[AxisName, AxisLimit]:
@@ -753,6 +835,35 @@ def default_axis_limits_for_bone(name: str, family: str = "generic") -> dict[Axi
                 limits[axis] = AxisLimit(axis=axis, min_degrees=min_deg, max_degrees=max_deg)
             break
     return limits
+
+
+def _anchor_world_point_hint(profile: FigureRigProfile, anchor_name: str) -> Vector3 | None:
+    """Return the best available point hint for an anchor.
+
+    Until the solver is wired in, this uses the bone's local position metadata
+    if available.  That gives us a stable, reproducible target shape for hands
+    and feet without pretending we already have world-space evaluation.
+    """
+
+    anchor = profile.anchor(anchor_name)
+    if anchor is None:
+        return None
+    bone = profile.bone(anchor.bone_name)
+    if bone.local_position is not None:
+        return bone.local_position
+    return None
+
+
+def resolve_interaction_target(
+    target: AnchorTarget,
+    rig_profiles: dict[str, FigureRigProfile],
+) -> ResolvedInteractionTarget:
+    """Resolve a hand/foot interaction target against the available rig profiles."""
+
+    profile = rig_profiles.get(target.figure_label)
+    if profile is None:
+        raise KeyError(f"Unknown figure for target resolution: {target.figure_label!r}")
+    return profile.resolve_anchor_target(target, rig_profiles)
 
 
 def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
