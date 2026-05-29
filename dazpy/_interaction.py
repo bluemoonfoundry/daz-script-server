@@ -1532,6 +1532,37 @@ def prepare_interaction_recipe(
     )
 
 
+def apply_interaction_recipe_to_scene(
+    scene: object,
+    recipe: InteractionRecipe,
+    *,
+    rig_profiles: dict[str, FigureRigProfile] | None = None,
+    align_limb_targets: bool = False,
+    max_iterations: int | None = None,
+    step_degrees: float = 1.0,
+    damping: float = 0.25,
+    tolerance: float = 0.15,
+) -> PreparedInteractionResult:
+    """Prepare and apply an interaction recipe against a live scene object."""
+
+    if rig_profiles is None:
+        if not hasattr(scene, "skeletons"):
+            raise TypeError("apply_interaction_recipe_to_scene expects a scene-like object")
+        rig_profiles = {
+            skeleton.label or skeleton._identifier.value: build_rig_profile(skeleton)
+            for skeleton in scene.skeletons()
+        }
+    prepared = prepare_interaction_recipe(recipe, rig_profiles)
+    return prepared.apply(
+        scene,
+        align_limb_targets=align_limb_targets,
+        max_iterations=max_iterations,
+        step_degrees=step_degrees,
+        damping=damping,
+        tolerance=tolerance,
+    )
+
+
 def _target_anchor_from_strike_anchor(anchor_name: str) -> str:
     lowered = _normalize_name(anchor_name)
     if "hand" in lowered:

@@ -62,6 +62,7 @@ from ._interaction import (
     align_hand_target,
     default_axis_limits_for_bone,
     align_single_limb_target,
+    apply_interaction_recipe_to_scene,
     prepare_interaction_recipe,
     resolve_interaction_target,
 )
@@ -131,6 +132,7 @@ __all__ = [
     "align_hand_target",
     "default_axis_limits_for_bone",
     "align_single_limb_target",
+    "apply_interaction_recipe_to_scene",
     "prepare_interaction_recipe",
     "resolve_interaction_target",
     "UndoGroup",

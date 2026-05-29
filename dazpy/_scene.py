@@ -358,6 +358,32 @@ class DazScene:
         script = ScriptBuilder.iife(f"Scene.setPrimarySelection({find_expr});")
         self._client.execute(script)
 
+    def apply_interaction_recipe(
+        self,
+        recipe: "InteractionRecipe",  # noqa: F821
+        *,
+        rig_profiles: dict[str, "FigureRigProfile"] | None = None,  # noqa: F821
+        align_limb_targets: bool = False,
+        max_iterations: int | None = None,
+        step_degrees: float = 1.0,
+        damping: float = 0.25,
+        tolerance: float = 0.15,
+    ) -> "PreparedInteractionResult":  # noqa: F821
+        """Prepare and apply an interaction recipe against the current scene."""
+
+        from ._interaction import apply_interaction_recipe_to_scene
+
+        return apply_interaction_recipe_to_scene(
+            self,
+            recipe,
+            rig_profiles=rig_profiles,
+            align_limb_targets=align_limb_targets,
+            max_iterations=max_iterations,
+            step_degrees=step_degrees,
+            damping=damping,
+            tolerance=tolerance,
+        )
+
     def select_all(self, on: bool = True) -> None:
         """Select or deselect all nodes.
 

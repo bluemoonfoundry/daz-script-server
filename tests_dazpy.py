@@ -40,6 +40,7 @@ from dazpy import (
     align_hand_target,
     default_axis_limits_for_bone,
     align_single_limb_target,
+    apply_interaction_recipe_to_scene,
     resolve_interaction_target,
 )
 from dazpy._node import DazNode, NodeIdentifier
@@ -94,6 +95,9 @@ class _FakeSkeleton:
 class _FakeScene:
     def __init__(self, skeletons: list[_FakeSkeleton]) -> None:
         self._skeletons = skeletons
+
+    def skeletons(self) -> list[_FakeSkeleton]:
+        return self._skeletons
 
     def find_skeleton_by_label(self, label: str) -> _FakeSkeleton:
         for skeleton in self._skeletons:
@@ -664,6 +668,36 @@ class TestInteractionAdapter(unittest.TestCase):
 
         self.assertIsInstance(result, LimbAlignmentResult)
         self.assertLess(result.final_error, result.initial_error)
+
+    def test_scene_level_interaction_applies_recipe(self):
+        hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))
+        shoulder = _KinematicFakeBone("l_shoulder", "Left Shoulder", parent=hip, local_position=(1.0, 0.0, 0.0))
+        upper_arm = _KinematicFakeBone("l_upper_arm", "Left Upper Arm", parent=shoulder, local_position=(1.0, 0.0, 0.0))
+        forearm = _KinematicFakeBone("l_forearm", "Left Forearm", parent=upper_arm, local_position=(1.0, 0.0, 0.0))
+        hand = _KinematicFakeBone("l_hand", "Left Hand", parent=forearm, local_position=(1.0, 0.0, 0.0))
+        skeleton = _KinematicFakeSkeleton("Genesis 9", [hip, shoulder, upper_arm, forearm, hand])
+        scene = DazScene.__new__(DazScene)
+        scene.skeletons = lambda: [skeleton]
+        scene.find_skeleton_by_label = lambda label: skeleton
+
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[HandTarget("Genesis 9", "l_hand", target_point=(3.0, 1.0, 0.0))],
+        )
+        result = DazScene.apply_interaction_recipe(
+            scene,
+            recipe,
+            align_limb_targets=True,
+            max_iterations=20,
+            step_degrees=2.0,
+            damping=0.35,
+            tolerance=0.05,
+        )
+
+        self.assertIsInstance(result, PreparedInteractionResult)
+        self.assertEqual(len(result.alignment_results), 1)
+        self.assertLess(result.alignment_results[0].final_error, result.alignment_results[0].initial_error)
 
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")
