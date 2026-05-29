@@ -129,7 +129,7 @@ print(response.json())
 
 ## Why This Exists
 
-DAZ Studio is powerful for 3D content creation, but automation is limited to manually running scripts. This plugin solves that by exposing DAZ Studio as an HTTP API:
+DAZ Studio is powerful for 3D content creation, but automation is limited to manually running scripts. This plugin solves that by exposing REST endpoints (HTTP) for remote clients to, among other things, submit inline scripts to execute, which can return log output lines and a return object as JSON. 
 
 **What You Can Do:**
 - **Remote Automation** - Control DAZ Studio from Python, web apps, CI/CD pipelines
