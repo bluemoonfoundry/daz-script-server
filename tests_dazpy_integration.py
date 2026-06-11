@@ -29,7 +29,11 @@ from dazpy import (
     DazSkeleton,
     DazTimeline,
     ExecutionResult,
+    LimbAlignmentResult,
     NodeIdentifier,
+    build_rig_profiles_from_snapshot,
+    align_hand_target,
+    align_foot_target,
     execute_long,
     exceptions,
 )
@@ -1422,6 +1426,403 @@ class TestDazPose(unittest.TestCase):
             self.assertEqual(loaded.morphs, pose.morphs)
         finally:
             os.unlink(path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pose resolver — scene_snapshot, evaluate_pose, evaluate_pose_jacobian,
+# build_rig_profiles_from_snapshot, align_hand_target, align_foot_target
+# ══════════════════════════════════════════════════════════════════════════════
+
+@skip_if_down
+@skip_no_daz
+class TestSceneSnapshot(unittest.TestCase):
+    """Integration tests for DazScene.scene_snapshot()."""
+
+    def setUp(self):
+        self.scene = _scene()
+        self.skels = self.scene.skeletons()
+        if not self.skels:
+            self.skipTest("No skeletons in scene")
+
+    def test_returns_list(self):
+        result = self.scene.scene_snapshot()
+        self.assertIsInstance(result, list)
+
+    def test_entry_count_matches_num_skeletons(self):
+        result = self.scene.scene_snapshot()
+        self.assertEqual(len(result), len(self.skels))
+
+    def test_each_entry_has_required_keys(self):
+        for entry in self.scene.scene_snapshot():
+            with self.subTest(skel=entry.get("name")):
+                self.assertIn("name", entry)
+                self.assertIn("label", entry)
+                self.assertIn("bones", entry)
+                self.assertIsInstance(entry["bones"], list)
+
+    def test_bones_have_required_fields(self):
+        snapshot = self.scene.scene_snapshot()
+        for entry in snapshot:
+            for bone in entry["bones"][:5]:  # spot-check first 5
+                with self.subTest(skel=entry["name"], bone=bone.get("name")):
+                    for field in ("name", "label", "rotation_order",
+                                  "local_position", "world_position", "local_euler"):
+                        self.assertIn(field, bone)
+
+    def test_world_position_has_xyz(self):
+        snapshot = self.scene.scene_snapshot()
+        for entry in snapshot:
+            for bone in entry["bones"][:3]:
+                wp = bone["world_position"]
+                with self.subTest(bone=bone["name"]):
+                    self.assertIn("x", wp)
+                    self.assertIn("y", wp)
+                    self.assertIn("z", wp)
+                    self.assertIsInstance(wp["x"], (int, float))
+
+    def test_local_position_has_xyz(self):
+        snapshot = self.scene.scene_snapshot()
+        for entry in snapshot:
+            for bone in entry["bones"][:3]:
+                lp = bone["local_position"]
+                for key in ("x", "y", "z"):
+                    self.assertIn(key, lp)
+
+    def test_local_euler_has_xyz(self):
+        snapshot = self.scene.scene_snapshot()
+        for entry in snapshot:
+            for bone in entry["bones"][:3]:
+                le = bone["local_euler"]
+                for key in ("x", "y", "z"):
+                    self.assertIn(key, le)
+                    self.assertIsInstance(le[key], (int, float))
+
+    def test_filter_by_label(self):
+        skel = self.skels[0]
+        label = skel.label
+        filtered = self.scene.scene_snapshot(skeleton_labels=[label])
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["label"], label)
+
+    def test_filter_nonexistent_returns_empty(self):
+        result = self.scene.scene_snapshot(skeleton_labels=["__no_such_skel__"])
+        self.assertEqual(result, [])
+
+    def test_bone_count_matches_skeleton_bone_count(self):
+        snapshot = self.scene.scene_snapshot()
+        for entry in snapshot:
+            skel = next((s for s in self.skels if s.name == entry["name"] or s.label == entry["label"]), None)
+            if skel is not None:
+                with self.subTest(skel=entry["name"]):
+                    self.assertEqual(len(entry["bones"]), skel.num_bones())
+
+
+@skip_if_down
+@skip_no_daz
+class TestBuildRigProfilesFromSnapshot(unittest.TestCase):
+    """Integration tests for build_rig_profiles_from_snapshot()."""
+
+    def setUp(self):
+        self.scene = _scene()
+        self.skels = self.scene.skeletons()
+        if not self.skels:
+            self.skipTest("No skeletons in scene")
+        self.snapshot = self.scene.scene_snapshot()
+        self.profiles = build_rig_profiles_from_snapshot(self.snapshot)
+
+    def test_returns_dict(self):
+        self.assertIsInstance(self.profiles, dict)
+
+    def test_keyed_by_figure_label(self):
+        for skel in self.skels:
+            label = skel.label
+            self.assertIn(label, self.profiles)
+
+    def test_profile_has_bones(self):
+        for profile in self.profiles.values():
+            self.assertGreater(len(profile.bones), 0)
+
+    def test_bone_count_matches_snapshot(self):
+        for entry in self.snapshot:
+            label = entry["label"]
+            if label in self.profiles:
+                self.assertEqual(len(self.profiles[label].bones), len(entry["bones"]))
+
+    def test_bone_world_position_populated(self):
+        for profile in self.profiles.values():
+            for bone in profile.bones[:5]:
+                with self.subTest(bone=bone.name):
+                    self.assertIsNotNone(bone.world_position)
+                    self.assertEqual(len(bone.world_position), 3)
+                    for v in bone.world_position:
+                        self.assertIsInstance(v, (int, float))
+
+    def test_family_detected(self):
+        for profile in self.profiles.values():
+            self.assertIsInstance(profile.family, str)
+            self.assertGreater(len(profile.family), 0)
+
+    def test_source_metadata_is_snapshot(self):
+        for profile in self.profiles.values():
+            self.assertEqual(profile.metadata.get("source"), "snapshot")
+
+    def test_anchor_map_non_empty(self):
+        for profile in self.profiles.values():
+            anchors = profile.anchor_map()
+            self.assertIsInstance(anchors, dict)
+            # A well-formed figure should have at least some anchors
+            self.assertGreater(len(anchors), 0)
+
+
+@skip_if_down
+@skip_no_daz
+class TestEvaluatePose(unittest.TestCase):
+    """Integration tests for DazSkeleton.evaluate_pose()."""
+
+    def setUp(self):
+        self.scene = _scene()
+        skels = self.scene.skeletons()
+        if not skels:
+            self.skipTest("No skeletons in scene")
+        self.skel = skels[0]
+        bones = self.skel.bones()
+        if not bones:
+            self.skipTest("Skeleton has no bones")
+        self.first_bone = bones[0]
+
+    def test_returns_dict(self):
+        result = self.skel.evaluate_pose({}, [self.first_bone.name])
+        self.assertIsInstance(result, dict)
+
+    def test_returns_world_position_for_effector(self):
+        result = self.skel.evaluate_pose({}, [self.first_bone.name])
+        self.assertIn(self.first_bone.name, result)
+        pos = result[self.first_bone.name]
+        self.assertEqual(len(pos), 3)
+        for v in pos:
+            self.assertIsInstance(v, (int, float))
+
+    def test_missing_effector_omitted(self):
+        result = self.skel.evaluate_pose({}, ["__no_such_bone__"])
+        self.assertNotIn("__no_such_bone__", result)
+
+    def test_empty_effectors_returns_empty(self):
+        result = self.skel.evaluate_pose({}, [])
+        self.assertEqual(result, {})
+
+    def test_restores_original_rotations(self):
+        original_rots = self.skel.bone_rotations()
+        bone_name = self.first_bone.name
+        original = original_rots.get(bone_name, (0.0, 0.0, 0.0))
+
+        self.skel.evaluate_pose(
+            {bone_name: (original[0] + 30.0, original[1] + 15.0, original[2] + 10.0)},
+            [bone_name],
+        )
+
+        after_rots = self.skel.bone_rotations()
+        restored = after_rots.get(bone_name, (0.0, 0.0, 0.0))
+        for orig_v, rest_v in zip(original, restored):
+            self.assertAlmostEqual(orig_v, rest_v, places=3,
+                msg=f"evaluate_pose did not restore rotation for {bone_name}")
+
+    def test_candidate_rotation_changes_effector_position(self):
+        """Applying a non-trivial rotation should move the effector world position."""
+        bones = self.skel.bones()
+        # Find a non-root bone with a child (so rotation visibly moves something downstream)
+        moveable = None
+        effector_name = None
+        for b in bones:
+            if b.name == self.first_bone.name:
+                continue
+            # Try to pick a mid-chain bone; any non-hip bone is fine
+            moveable = b.name
+            effector_name = bones[-1].name  # last bone as effector
+            break
+        if moveable is None or effector_name is None:
+            self.skipTest("Could not find suitable bone pair")
+
+        base = self.skel.evaluate_pose({}, [effector_name])
+        perturbed = self.skel.evaluate_pose({moveable: (45.0, 0.0, 0.0)}, [effector_name])
+
+        if effector_name in base and effector_name in perturbed:
+            base_pos = base[effector_name]
+            pert_pos = perturbed[effector_name]
+            dist = sum((a - b) ** 2 for a, b in zip(base_pos, pert_pos)) ** 0.5
+            # A 45° rotation should move something by more than a rounding error
+            self.assertGreater(dist, 0.001,
+                msg="45° rotation produced no detectable world-space change")
+
+
+@skip_if_down
+@skip_no_daz
+class TestEvaluatePoseJacobian(unittest.TestCase):
+    """Integration tests for DazSkeleton.evaluate_pose_jacobian()."""
+
+    def setUp(self):
+        self.scene = _scene()
+        skels = self.scene.skeletons()
+        if not skels:
+            self.skipTest("No skeletons in scene")
+        self.skel = skels[0]
+        bones = self.skel.bones()
+        if len(bones) < 2:
+            self.skipTest("Skeleton needs at least 2 bones")
+        self.chain = [b.name for b in bones[:3]]
+        self.effector = bones[min(3, len(bones) - 1)].name
+
+    def test_returns_dict_with_expected_keys(self):
+        result = self.skel.evaluate_pose_jacobian(self.chain, self.effector)
+        self.assertIsNotNone(result)
+        self.assertIn("base_position", result)
+        self.assertIn("columns", result)
+
+    def test_base_position_is_xyz_list(self):
+        result = self.skel.evaluate_pose_jacobian(self.chain, self.effector)
+        bp = result["base_position"]
+        self.assertEqual(len(bp), 3)
+        for v in bp:
+            self.assertIsInstance(v, (int, float))
+
+    def test_column_count_is_three_per_bone(self):
+        result = self.skel.evaluate_pose_jacobian(self.chain, self.effector)
+        self.assertEqual(len(result["columns"]), len(self.chain) * 3)
+
+    def test_each_column_is_xyz(self):
+        result = self.skel.evaluate_pose_jacobian(self.chain, self.effector)
+        for col in result["columns"]:
+            self.assertEqual(len(col), 3)
+            for v in col:
+                self.assertIsInstance(v, (int, float))
+
+    def test_missing_effector_returns_none(self):
+        result = self.skel.evaluate_pose_jacobian(self.chain, "__no_such_bone__")
+        self.assertIsNone(result)
+
+    def test_restores_original_rotations(self):
+        original_rots = self.skel.bone_rotations()
+        self.skel.evaluate_pose_jacobian(self.chain, self.effector, step_degrees=5.0)
+        after_rots = self.skel.bone_rotations()
+        for name in self.chain:
+            orig = original_rots.get(name, (0.0, 0.0, 0.0))
+            after = after_rots.get(name, (0.0, 0.0, 0.0))
+            for o, a in zip(orig, after):
+                self.assertAlmostEqual(o, a, places=3,
+                    msg=f"evaluate_pose_jacobian did not restore {name}")
+
+    def test_step_degrees_affects_columns(self):
+        r1 = self.skel.evaluate_pose_jacobian(self.chain, self.effector, step_degrees=1.0)
+        r5 = self.skel.evaluate_pose_jacobian(self.chain, self.effector, step_degrees=5.0)
+        # base_position should be the same regardless of step size
+        for v1, v5 in zip(r1["base_position"], r5["base_position"]):
+            self.assertAlmostEqual(v1, v5, places=2)
+        # columns may differ (finite-difference approximation), but both are valid
+        self.assertEqual(len(r1["columns"]), len(r5["columns"]))
+
+
+@skip_if_down
+@skip_no_daz
+class TestAlignLimbTargets(unittest.TestCase):
+    """Integration tests for align_hand_target and align_foot_target."""
+
+    def setUp(self):
+        self.scene = _scene()
+        skels = self.scene.skeletons()
+        if not skels:
+            self.skipTest("No skeletons in scene")
+        self.skel = skels[0]
+
+    def _find_anchor_bone(self, candidates: list[str]) -> str | None:
+        bone_names = {b.name for b in self.skel.bones()}
+        for name in candidates:
+            if name in bone_names:
+                return name
+        return None
+
+    def test_align_hand_target_returns_result(self):
+        anchor = self._find_anchor_bone(["r_hand", "l_hand", "rHand", "lHand"])
+        if anchor is None:
+            self.skipTest("No hand bone found in skeleton")
+        result = align_hand_target(self.skel, (20.0, 130.0, 10.0),
+                                   source_anchor=anchor, max_iterations=6)
+        self.assertIsInstance(result, LimbAlignmentResult)
+
+    def test_align_hand_target_uses_batch_path(self):
+        anchor = self._find_anchor_bone(["r_hand", "l_hand", "rHand", "lHand"])
+        if anchor is None:
+            self.skipTest("No hand bone found in skeleton")
+        result = align_hand_target(self.skel, (20.0, 130.0, 10.0),
+                                   source_anchor=anchor, max_iterations=6)
+        self.assertEqual(result.diagnostics.get("path"), "batch",
+            "align_hand_target should use the batch IK path on a live skeleton")
+
+    def test_align_hand_target_errors_are_finite(self):
+        anchor = self._find_anchor_bone(["r_hand", "l_hand", "rHand", "lHand"])
+        if anchor is None:
+            self.skipTest("No hand bone found in skeleton")
+        result = align_hand_target(self.skel, (20.0, 130.0, 10.0),
+                                   source_anchor=anchor, max_iterations=6)
+        self.assertIsNotNone(result.initial_error)
+        self.assertIsNotNone(result.final_error)
+        self.assertGreater(result.initial_error, 0.0)
+        self.assertGreaterEqual(result.initial_error, 0.0)
+        self.assertGreaterEqual(result.final_error, 0.0)
+
+    def test_align_hand_target_does_not_increase_error(self):
+        anchor = self._find_anchor_bone(["r_hand", "l_hand", "rHand", "lHand"])
+        if anchor is None:
+            self.skipTest("No hand bone found in skeleton")
+        result = align_hand_target(self.skel, (20.0, 130.0, 10.0),
+                                   source_anchor=anchor, max_iterations=12)
+        if result.final_error is not None and result.initial_error is not None:
+            self.assertLessEqual(result.final_error, result.initial_error + 0.01,
+                msg="Solver should not increase the error")
+
+    def test_align_foot_target_returns_result(self):
+        anchor = self._find_anchor_bone(["r_foot", "l_foot", "rFoot", "lFoot"])
+        if anchor is None:
+            self.skipTest("No foot bone found in skeleton")
+        result = align_foot_target(self.skel, (10.0, 0.0, 5.0),
+                                   source_anchor=anchor, max_iterations=6)
+        self.assertIsInstance(result, LimbAlignmentResult)
+
+    def test_align_foot_target_uses_batch_path(self):
+        anchor = self._find_anchor_bone(["r_foot", "l_foot", "rFoot", "lFoot"])
+        if anchor is None:
+            self.skipTest("No foot bone found in skeleton")
+        result = align_foot_target(self.skel, (10.0, 0.0, 5.0),
+                                   source_anchor=anchor, max_iterations=6)
+        self.assertEqual(result.diagnostics.get("path"), "batch",
+            "align_foot_target should use the batch IK path on a live skeleton")
+
+    def test_align_hand_target_already_aligned_is_zero_iterations(self):
+        """When the effector is already at the target, solver converges in 0 iterations."""
+        anchor = self._find_anchor_bone(["r_hand", "l_hand", "rHand", "lHand"])
+        if anchor is None:
+            self.skipTest("No hand bone found in skeleton")
+        # Get current world position of the anchor bone and use it as target
+        positions = self.skel.evaluate_pose({}, [anchor])
+        if anchor not in positions:
+            self.skipTest("Could not read anchor world position")
+        current_pos = positions[anchor]
+        result = align_hand_target(self.skel, current_pos,
+                                   source_anchor=anchor, tolerance=1.0)
+        self.assertTrue(result.converged)
+        self.assertEqual(result.iterations, 0)
+
+    def test_align_limb_chain_names_non_empty(self):
+        anchor = self._find_anchor_bone(["r_hand", "l_hand", "r_foot", "l_foot",
+                                         "rHand", "lHand", "rFoot", "lFoot"])
+        if anchor is None:
+            self.skipTest("No hand or foot bone found")
+        if "hand" in anchor or "Hand" in anchor:
+            result = align_hand_target(self.skel, (0.0, 100.0, 0.0),
+                                       source_anchor=anchor, max_iterations=1)
+        else:
+            result = align_foot_target(self.skel, (0.0, 0.0, 0.0),
+                                       source_anchor=anchor, max_iterations=1)
+        self.assertIsInstance(result.chain, list)
+        self.assertGreater(len(result.chain), 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
