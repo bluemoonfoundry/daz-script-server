@@ -440,6 +440,35 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(profile.anchor("r_hand").bone_name, "r_hand")
         self.assertEqual(profile.anchor("l_foot").role, "foot")
 
+    def test_build_rig_profile_genesis_8_camel_case_anchors(self):
+        """Genesis 8/3 camelCase bone names (rHand, lFoot) resolve via canonical r_hand/l_foot anchors."""
+        hip = _FakeBone("hip", "Hip")
+        spine = _FakeBone("abdomenLower", "Abdomen Lower", parent=hip)
+        chest = _FakeBone("chestLower", "Chest Lower", parent=spine)
+        lCollar = _FakeBone("lCollar", "Left Collar", parent=chest)
+        rCollar = _FakeBone("rCollar", "Right Collar", parent=chest)
+        lForearmBend = _FakeBone("lForearmBend", "Left Forearm Bend", parent=lCollar)
+        rForearmBend = _FakeBone("rForearmBend", "Right Forearm Bend", parent=rCollar)
+        lHand = _FakeBone("lHand", "Left Hand", parent=lForearmBend)
+        rHand = _FakeBone("rHand", "Right Hand", parent=rForearmBend)
+        lFoot = _FakeBone("lFoot", "Left Foot", parent=hip)
+        rFoot = _FakeBone("rFoot", "Right Foot", parent=hip)
+        skeleton = _FakeSkeleton(
+            "Bob Genesis 8",
+            [hip, spine, chest, lCollar, rCollar, lForearmBend, rForearmBend, lHand, rHand, lFoot, rFoot],
+        )
+
+        profile = build_rig_profile(skeleton)
+        anchors = profile.anchor_map()
+
+        self.assertEqual(profile.family, "genesis_3_8")
+        self.assertIn("r_hand", anchors, "r_hand anchor must resolve for camelCase rHand bone")
+        self.assertIn("l_hand", anchors, "l_hand anchor must resolve for camelCase lHand bone")
+        self.assertIn("r_foot", anchors)
+        self.assertIn("l_foot", anchors)
+        self.assertEqual(profile.anchor("r_hand").bone_name, "rHand")
+        self.assertEqual(profile.anchor("l_foot").bone_name, "lFoot")
+
     def test_interaction_plan_validate_and_round_trip(self):
         profile = FigureRigProfile(
             figure_label="Genesis 9",

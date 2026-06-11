@@ -119,9 +119,14 @@ def _looks_like_helper(name: str, label: str | None = None) -> bool:
 
 def _side_from_name(name: str) -> ChainSide:
     lowered = _normalize_name(name)
-    if lowered.startswith(("l_", "left_")) or lowered.startswith("l") and len(lowered) > 1 and lowered[1] == "_":
+    if lowered.startswith(("l_", "left_")):
         return "left"
-    if lowered.startswith(("r_", "right_")) or lowered.startswith("r") and len(lowered) > 1 and lowered[1] == "_":
+    if lowered.startswith(("r_", "right_")):
+        return "right"
+    # camelCase prefix: rHand, lFoot, rForearmBend (Genesis 3/8 naming)
+    if len(name) > 1 and name[0] == "l" and name[1].isupper():
+        return "left"
+    if len(name) > 1 and name[0] == "r" and name[1].isupper():
         return "right"
     if lowered.startswith(("center_", "c_", "spine", "pelvis", "hip", "head", "neck", "chest")):
         return "center"
