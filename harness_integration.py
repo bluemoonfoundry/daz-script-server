@@ -233,13 +233,19 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
         hip = next((b for b in bones if b["name"] in ("hip", "Hip")), None)
         h.assert_true(hip is not None, "could not find 'hip' bone in BobG8 snapshot")
         wp = hip["world_position"]
-        h.assert_true(isinstance(wp, (list, tuple)) and len(wp) == 3, f"world_position bad shape: {wp}")
-        y = float(wp[1])
+        # Snapshot returns world_position as {x,y,z} dict; list/tuple also accepted.
+        if isinstance(wp, dict):
+            x, y, z = float(wp["x"]), float(wp["y"]), float(wp["z"])
+        elif isinstance(wp, (list, tuple)) and len(wp) == 3:
+            x, y, z = float(wp[0]), float(wp[1]), float(wp[2])
+        else:
+            h.assert_true(False, f"world_position unrecognised shape: {wp!r}")
+            return
         h.assert_true(
             HAND_Y_MIN < y < 300,
             f"hip world_position y={y:.1f} out of expected range — is figure in default T-pose?",
         )
-        h.ok(f"hip world_position: ({wp[0]:.1f}, {y:.1f}, {wp[2]:.1f})")
+        h.ok(f"hip world_position: ({x:.1f}, {y:.1f}, {z:.1f})")
 
     h.run(t_s1d)
 
