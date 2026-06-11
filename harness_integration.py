@@ -480,7 +480,8 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
                 return
             # Madison faces +X; her anatomical right is world −Z.
             # Fallback places her roughly where her hand should be at rest.
-            wp = r_hand_anchor.world_point_hint or (112.0, 130.0, -40.0)
+            from dazpy._interaction import _anchor_world_point_hint
+            wp = _anchor_world_point_hint(profile, "r_hand") or (112.0, 130.0, -40.0)
             target = (wp[0], wp[1], wp[2] - 20.0)
             result = align_hand_target(madison, target, source_anchor="r_hand", max_iterations=10)
             path = result.diagnostics.get("path", "unknown")
@@ -524,7 +525,8 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             h.skip("r_hand anchor not found for MadisonG9")
             return
         # Use the current world position as target — already aligned
-        current = r_hand_anchor.world_point_hint
+        from dazpy._interaction import _anchor_world_point_hint
+        current = _anchor_world_point_hint(profile, "r_hand")
         if current is None:
             h.skip("world_point_hint not available — world_position not in snapshot")
             return
@@ -558,7 +560,8 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             return
         # BobG8 at (0,0,−50) with no rotation; his anatomical right is world +X.
         # Fallback: approximate rHand world position for a standing G8 at (0,0,−50).
-        wp = r_hand_anchor.world_point_hint or (40.0, 130.0, -50.0)
+        from dazpy._interaction import _anchor_world_point_hint
+        wp = _anchor_world_point_hint(profile, "r_hand") or (40.0, 130.0, -50.0)
         target = (wp[0] + 15.0, wp[1] - 10.0, wp[2] - 5.0)
         saved = _save_pose(bob)
         try:
@@ -600,7 +603,8 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             return
         # AliceG8 at (0,0,50) rotated 180° on Y: faces +Z, anatomical left is world +X.
         # Fallback places foot near expected resting world position.
-        wp = l_foot_anchor.world_point_hint or (-10.0, 8.0, 50.0)
+        from dazpy._interaction import _anchor_world_point_hint
+        wp = _anchor_world_point_hint(profile, "l_foot") or (-10.0, 8.0, 50.0)
         target = (wp[0], wp[1], wp[2] + 10.0)  # step forward (+Z = her forward)
         saved = _save_pose(alice)
         try:
@@ -651,7 +655,8 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
                 h.skip("r_hand anchor not found")
                 return
             # Madison faces +X; her right is world −Z.
-            wp = r_hand_anchor.world_point_hint or (112.0, 130.0, -40.0)
+            from dazpy._interaction import _anchor_world_point_hint
+            wp = _anchor_world_point_hint(profile, "r_hand") or (112.0, 130.0, -40.0)
             target = (wp[0], wp[1], wp[2] - 25.0)
             calls.clear()
             align_hand_target(madison, target, source_anchor="r_hand", max_iterations=12)
