@@ -673,24 +673,28 @@ def connect_and_verify(host: str, port: int, h: Harness):
 
     print(f"\n{bold('Verifying scene …')}")
     try:
-        labels = scene.skeleton_labels()
+        snap = scene.scene_snapshot()
     except Exception as exc:
-        print(red(f"ERROR: could not list skeletons — {exc}"))
+        print(red(f"ERROR: could not snapshot scene — {exc}"))
         sys.exit(1)
 
-    missing = [lbl for lbl in EXPECTED_LABELS if lbl not in labels]
+    found_labels = {(s.get("label") or s.get("name")) for s in snap}
+    missing = [lbl for lbl in EXPECTED_LABELS if lbl not in found_labels]
     if missing:
         print(red(f"ERROR: required figures not found in scene: {missing}"))
-        print(f"  Found: {sorted(labels)}")
+        print(f"  Found: {sorted(found_labels)}")
         print("  Please load the test scene with: BobG8, AliceG8, MadisonG9, BaseLight")
         sys.exit(1)
 
-    print(f"  Scene OK — {len(labels)} skeleton(s): {sorted(labels)}")
+    print(f"  Scene OK — {len(snap)} skeleton(s): {sorted(found_labels)}")
 
-    from dazpy import DazSkeleton
     skeletons = {}
     for label in EXPECTED_LABELS:
-        skel = DazSkeleton(client, label=label)
+        try:
+            skel = scene.find_skeleton_by_label(label)
+        except Exception as exc:
+            print(red(f"ERROR: could not get skeleton handle for {label!r} — {exc}"))
+            sys.exit(1)
         skeletons[label] = skel
         print(f"  Resolved {label!r} skeleton handle")
 
