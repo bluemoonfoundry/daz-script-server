@@ -1298,6 +1298,120 @@ def _alignment_chain_names(profile: FigureRigProfile, chain: BoneChain) -> list[
     return candidates[:-1][-limit:]
 
 
+def _align_single_limb_batch(
+    skeleton: "DazSkeleton",
+    profile: FigureRigProfile,
+    chain_names: list[str],
+    target: ResolvedInteractionTarget,
+    *,
+    max_iterations: int = 12,
+    step_degrees: float = 1.0,
+    damping: float = 0.25,
+    tolerance: float = 0.15,
+) -> "LimbAlignmentResult":
+    """Batch IK path: 2 HTTP calls per iteration via evaluate_pose_jacobian."""
+
+    all_rotations = skeleton.bone_rotations()
+    current_rotations: dict[str, Rotation3] = {
+        name: all_rotations.get(name, (0.0, 0.0, 0.0))
+        for name in chain_names
+    }
+
+    jac = skeleton.evaluate_pose_jacobian(chain_names, target.bone_name, step_degrees)
+    if jac is None:
+        return LimbAlignmentResult(
+            figure_label=target.figure_label,
+            anchor_name=target.anchor_name,
+            effector_bone=target.bone_name,
+            chain=chain_names,
+            target_point=target.target_point,
+            diagnostics={"reason": "missing_effector_position"},
+        )
+
+    base_position: Vector3 = tuple(jac["base_position"])  # type: ignore[assignment]
+    columns: list[Vector3] = [tuple(c) for c in jac["columns"]]  # type: ignore[misc]
+
+    initial_error = _vec3_length(_vec3_sub(target.target_point, base_position))
+    if initial_error <= tolerance:
+        return LimbAlignmentResult(
+            figure_label=target.figure_label,
+            anchor_name=target.anchor_name,
+            effector_bone=target.bone_name,
+            chain=chain_names,
+            target_point=target.target_point,
+            iterations=0,
+            converged=True,
+            initial_error=initial_error,
+            final_error=initial_error,
+            applied_rotations=dict(current_rotations),
+            diagnostics={"reason": "already_aligned"},
+        )
+
+    iterations = 0
+    converged = False
+    final_position: Vector3 = base_position
+
+    for iteration in range(max_iterations):
+        iterations = iteration + 1
+        current_error = _vec3_sub(target.target_point, base_position)
+        if _vec3_length(current_error) <= tolerance:
+            converged = True
+            final_position = base_position
+            break
+
+        delta = _damped_least_squares_step(columns, current_error, damping)
+        if delta is None:
+            break
+
+        max_delta = max(abs(v) for v in delta) if delta else 0.0
+        if max_delta > step_degrees:
+            scale = step_degrees / max_delta
+            delta = [v * scale for v in delta]
+
+        new_rotations: dict[str, Rotation3] = {}
+        for bone_index, name in enumerate(chain_names):
+            curr = current_rotations[name]
+            start = bone_index * 3
+            next_rot: Rotation3 = (
+                curr[0] + delta[start],
+                curr[1] + delta[start + 1],
+                curr[2] + delta[start + 2],
+            )
+            profile_bone = profile.bone(name)
+            clamped = _rotation_with_axis_limits(next_rot, profile_bone.axis_limits or None)
+            new_rotations[name] = clamped
+            current_rotations[name] = clamped
+
+        skeleton.set_bone_rotations(new_rotations)
+
+        jac = skeleton.evaluate_pose_jacobian(chain_names, target.bone_name, step_degrees)
+        if jac is None:
+            break
+        base_position = tuple(jac["base_position"])  # type: ignore[assignment]
+        columns = [tuple(c) for c in jac["columns"]]  # type: ignore[misc]
+        final_position = base_position
+
+    final_error = _vec3_length(_vec3_sub(target.target_point, final_position))
+    return LimbAlignmentResult(
+        figure_label=target.figure_label,
+        anchor_name=target.anchor_name,
+        effector_bone=target.bone_name,
+        chain=chain_names,
+        target_point=target.target_point,
+        iterations=iterations,
+        converged=converged,
+        initial_error=initial_error,
+        final_error=final_error,
+        applied_rotations=dict(current_rotations),
+        diagnostics={
+            "step_degrees": step_degrees,
+            "damping": damping,
+            "tolerance": tolerance,
+            "path": "batch",
+        },
+    )
+
+
 def align_single_limb_target(
     skeleton: "DazSkeleton",
     profile: FigureRigProfile,
@@ -1330,6 +1444,15 @@ def align_single_limb_target(
             chain=[],
             target_point=target.target_point,
             diagnostics={"reason": "missing_chain"},
+        )
+
+    if hasattr(skeleton, "evaluate_pose_jacobian") and hasattr(skeleton, "_client"):
+        return _align_single_limb_batch(
+            skeleton, profile, chain_names, target,
+            max_iterations=max_iterations,
+            step_degrees=step_degrees,
+            damping=damping,
+            tolerance=tolerance,
         )
 
     bones = [skeleton.find_bone(name) for name in chain_names]

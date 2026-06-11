@@ -3607,5 +3607,148 @@ class TestSceneSnapshot(unittest.TestCase):
         self.assertIsNone(d["world_position"])
 
 
+class TestBatchPoseEvaluation(unittest.TestCase):
+    """Tests for DazSkeleton.evaluate_pose() and evaluate_pose_jacobian()."""
+
+    def _make_skeleton_client(self, return_value):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(return_value)
+        skel = DazSkeleton.__new__(DazSkeleton)
+        from dazpy._node import NodeIdentifier
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    def test_evaluate_pose_script_contains_save_apply_restore(self):
+        skel, client = self._make_skeleton_client({"r_hand": [10.0, 20.0, 30.0]})
+        result = skel.evaluate_pose({"hip": (5.0, 0.0, 0.0)}, ["r_hand"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("_originals", script)
+        self.assertIn("getWSPos", script)
+        self.assertIn('"hip"', script)
+        self.assertIn('"r_hand"', script)
+
+    def test_evaluate_pose_returns_typed_tuples(self):
+        skel, client = self._make_skeleton_client({"r_hand": [1.0, 2.0, 3.0]})
+        result = skel.evaluate_pose({"hip": (0.0, 0.0, 0.0)}, ["r_hand"])
+        self.assertEqual(result, {"r_hand": (1.0, 2.0, 3.0)})
+
+    def test_evaluate_pose_empty_response(self):
+        skel, client = self._make_skeleton_client({})
+        result = skel.evaluate_pose({}, [])
+        self.assertEqual(result, {})
+
+    def test_evaluate_pose_jacobian_script_contains_perturbation(self):
+        skel, client = self._make_skeleton_client(
+            {"base_position": [0.0, 150.0, 0.0], "columns": [[1.0, 0.0, 0.0]] * 9}
+        )
+        skel.evaluate_pose_jacobian(["hip", "spine", "chest"], "r_hand", step_degrees=2.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSPos", script)
+        self.assertIn("_columns", script)
+        self.assertIn("setValue(_orig + _step)", script)
+        self.assertIn("2.0", script)
+
+    def test_evaluate_pose_jacobian_chain_serialized(self):
+        skel, client = self._make_skeleton_client(
+            {"base_position": [0.0, 0.0, 0.0], "columns": []}
+        )
+        skel.evaluate_pose_jacobian(["hip", "r_hand"], "r_hand")
+        script = client.execute.call_args[0][0]
+        self.assertIn('"hip"', script)
+        self.assertIn('"r_hand"', script)
+
+    def test_evaluate_pose_jacobian_returns_none_on_missing_effector(self):
+        skel, client = self._make_skeleton_client(None)
+        result = skel.evaluate_pose_jacobian(["hip"], "missing_bone")
+        self.assertIsNone(result)
+
+    def test_align_single_limb_uses_batch_path_when_client_present(self):
+        """align_single_limb_target dispatches to batch path for real skeletons."""
+        from dazpy import align_single_limb_target, FigureRigProfile, BoneProfile
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy._interaction import ResolvedInteractionTarget
+
+        # Build a minimal profile
+        hip = BoneProfile(name="hip")
+        r_hand = BoneProfile(name="r_hand", parent_name="hip")
+        profile = FigureRigProfile(figure_label="Test", family="genesis_9", bones=[hip, r_hand])
+
+        target = ResolvedInteractionTarget(
+            figure_label="Test",
+            anchor_name="r_hand",
+            bone_name="r_hand",
+            target_point=(10.0, 150.0, 0.0),
+        )
+
+        call_log = []
+
+        def _execute(script):
+            call_log.append(script)
+            if "getAllBones" in script and "_result" not in script and "_columns" not in script:
+                # bone_rotations()
+                return ExecutionResult(value={"hip": [0.0, 0.0, 0.0], "r_hand": [0.0, 0.0, 0.0]}, output=[], request_id="x")
+            if "_columns" in script:
+                # evaluate_pose_jacobian
+                return ExecutionResult(
+                    value={"base_position": [0.0, 150.0, 0.0], "columns": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] * 2},
+                    output=[], request_id="x",
+                )
+            # set_bone_rotations
+            return ExecutionResult(value=None, output=[], request_id="x")
+
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = _execute
+
+        skel = DazSkeleton.__new__(DazSkeleton)
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+
+        result = align_single_limb_target(skel, profile, target)
+
+        self.assertEqual(result.diagnostics.get("path"), "batch")
+        self.assertIsNotNone(result.initial_error)
+
+    def test_align_single_limb_batch_already_aligned(self):
+        """Batch path returns converged immediately when already within tolerance."""
+        from dazpy import align_single_limb_target, FigureRigProfile, BoneProfile
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy._interaction import ResolvedInteractionTarget
+
+        hip = BoneProfile(name="hip")
+        r_hand = BoneProfile(name="r_hand", parent_name="hip")
+        profile = FigureRigProfile(figure_label="Test", family="genesis_9", bones=[hip, r_hand])
+
+        target = ResolvedInteractionTarget(
+            figure_label="Test",
+            anchor_name="r_hand",
+            bone_name="r_hand",
+            target_point=(0.0, 150.0, 0.0),  # exactly at base_position
+        )
+
+        def _execute(script):
+            if "_columns" in script:
+                return ExecutionResult(
+                    value={"base_position": [0.0, 150.0, 0.0], "columns": [[1, 0, 0]] * 6},
+                    output=[], request_id="x",
+                )
+            return ExecutionResult(value={"hip": [0, 0, 0], "r_hand": [0, 0, 0]}, output=[], request_id="x")
+
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = _execute
+
+        skel = DazSkeleton.__new__(DazSkeleton)
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+
+        result = align_single_limb_target(skel, profile, target, tolerance=0.5)
+
+        self.assertTrue(result.converged)
+        self.assertEqual(result.iterations, 0)
+        self.assertEqual(result.diagnostics.get("reason"), "already_aligned")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

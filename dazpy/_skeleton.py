@@ -71,6 +71,43 @@ class DazSkeleton(DazNode):
         names = self._client.execute(script).value or []
         return [DazBone._from_locator(self._client, self._bone_locator(n), n) for n in names]
 
+    def bone_metadata(self) -> list[dict]:
+        """Return bulk metadata for every bone in one HTTP call.
+
+        This is the live-facing efficiency path used by the interaction
+        adapter.  It avoids one request per bone when building rig profiles.
+        """
+
+        script = self._skeleton_body(
+            """
+            var bones = _node.getAllBones();
+            var result = [];
+            for (var i = 0; i < bones.length; i++) {
+                var b = bones[i];
+                var parent = b.getNodeParent();
+                var parent_name = null;
+                if (parent && parent.className && parent.className() === "DzBone") {
+                    parent_name = parent.getName();
+                }
+                var pos = b.getLocalPos();
+                result.push({
+                    name: b.getName(),
+                    label: b.getLabel(),
+                    parent_name: parent_name,
+                    rotation_order: b.getRotationOrder(),
+                    local_position: {x: pos.x, y: pos.y, z: pos.z},
+                    local_euler: {
+                        x: b.getXRotControl().getValue(),
+                        y: b.getYRotControl().getValue(),
+                        z: b.getZRotControl().getValue(),
+                    }
+                });
+            }
+            return result;
+            """
+        )
+        return self._client.execute(script).value or []
+
     def find_bone(self, name: str) -> "DazBone":  # noqa: F821
         """Find a bone by its internal name.
 
@@ -182,6 +219,151 @@ class DazSkeleton(DazNode):
             }}
         """)
         self._client.execute(script)
+
+    def evaluate_pose(
+        self,
+        rotations: dict[str, tuple | list],
+        effector_bone_names: list[str],
+    ) -> dict[str, tuple[float, float, float]]:
+        """Apply candidate rotations, read effector world positions, then restore.
+
+        The figure is left in its original state after this call.  Use this to
+        ask "if I posed these bones this way, where would the effectors end up?"
+        without committing anything to the scene.
+
+        Args:
+            rotations: ``{bone_name: (x, y, z)}`` candidate rotation set in
+                degrees.  Only the listed bones are temporarily modified.
+            effector_bone_names: Bone names whose world-space position should be
+                returned after applying *rotations*.
+
+        Returns:
+            ``{bone_name: (x, y, z)}`` world-space positions for each requested
+            effector bone.  Bones not found in the skeleton are omitted.
+        """
+        rotations_json = json.dumps({k: list(v) for k, v in rotations.items()})
+        effectors_json = json.dumps(effector_bone_names)
+        script = self._skeleton_body(f"""
+            var _data = {rotations_json};
+            var _effNames = {effectors_json};
+            var _allBones = _node.getAllBones();
+
+            var _originals = {{}};
+            for (var i = 0; i < _allBones.length; i++) {{
+                var _b = _allBones[i]; var _n = _b.getName();
+                if (_data.hasOwnProperty(_n)) {{
+                    _originals[_n] = [
+                        _b.getXRotControl().getValue(),
+                        _b.getYRotControl().getValue(),
+                        _b.getZRotControl().getValue()
+                    ];
+                    var _r = _data[_n];
+                    _b.getXRotControl().setValue(_r[0]);
+                    _b.getYRotControl().setValue(_r[1]);
+                    _b.getZRotControl().setValue(_r[2]);
+                }}
+            }}
+
+            var _result = {{}};
+            var _effSet = {{}};
+            for (var j = 0; j < _effNames.length; j++) {{ _effSet[_effNames[j]] = true; }}
+            for (var i = 0; i < _allBones.length; i++) {{
+                var _b = _allBones[i]; var _n = _b.getName();
+                if (_effSet.hasOwnProperty(_n)) {{
+                    var _p = _b.getWSPos();
+                    _result[_n] = [_p.x, _p.y, _p.z];
+                }}
+            }}
+
+            for (var i = 0; i < _allBones.length; i++) {{
+                var _b = _allBones[i]; var _n = _b.getName();
+                if (_originals.hasOwnProperty(_n)) {{
+                    var _r = _originals[_n];
+                    _b.getXRotControl().setValue(_r[0]);
+                    _b.getYRotControl().setValue(_r[1]);
+                    _b.getZRotControl().setValue(_r[2]);
+                }}
+            }}
+            return _result;
+        """)
+        raw = self._client.execute(script).value or {}
+        return {name: (v[0], v[1], v[2]) for name, v in raw.items()}
+
+    def evaluate_pose_jacobian(
+        self,
+        chain_bone_names: list[str],
+        effector_bone_name: str,
+        step_degrees: float = 1.0,
+    ) -> dict:
+        """Compute the IK Jacobian for a bone chain server-side in one HTTP call.
+
+        For each bone in *chain_bone_names* and each of its three rotation axes,
+        this perturbs the bone by *step_degrees*, reads the effector world
+        position, and restores the original rotation.  The figure is left
+        unchanged.
+
+        Args:
+            chain_bone_names: Ordered list of bone names in the IK chain
+                (root → effector direction).
+            effector_bone_name: The bone whose world position is the IK goal.
+            step_degrees: Perturbation size in degrees (default 1.0).
+
+        Returns:
+            A dict with keys:
+
+            - ``"base_position"`` — ``[x, y, z]`` world position of the effector
+              before any perturbation.
+            - ``"columns"`` — list of ``[dx, dy, dz]`` Jacobian columns, one per
+              (bone × axis) pair, ordered as
+              ``bone0_x, bone0_y, bone0_z, bone1_x, …``.  Each column is the
+              normalized position change ``(trial_pos - base_pos) / step_degrees``.
+
+            Returns ``None`` if the effector bone cannot be found.
+        """
+        chain_json = json.dumps(chain_bone_names)
+        effector_json = json.dumps(effector_bone_name)
+        step_js = float(step_degrees)
+        script = self._skeleton_body(f"""
+            var _chain = {chain_json};
+            var _effName = {effector_json};
+            var _step = {step_js};
+
+            var _allBones = _node.getAllBones();
+            var _boneMap = {{}};
+            for (var i = 0; i < _allBones.length; i++) {{
+                _boneMap[_allBones[i].getName()] = _allBones[i];
+            }}
+
+            var _eff = _boneMap[_effName];
+            if (!_eff) return null;
+
+            var _bp = _eff.getWSPos();
+            var _base = [_bp.x, _bp.y, _bp.z];
+
+            var _columns = [];
+            for (var c = 0; c < _chain.length; c++) {{
+                var _b = _boneMap[_chain[c]];
+                if (!_b) {{
+                    _columns.push([0,0,0]); _columns.push([0,0,0]); _columns.push([0,0,0]);
+                    continue;
+                }}
+                var _ctrls = [_b.getXRotControl(), _b.getYRotControl(), _b.getZRotControl()];
+                for (var axis = 0; axis < 3; axis++) {{
+                    var _ctrl = _ctrls[axis];
+                    var _orig = _ctrl.getValue();
+                    _ctrl.setValue(_orig + _step);
+                    var _tp = _eff.getWSPos();
+                    _ctrl.setValue(_orig);
+                    _columns.push([
+                        (_tp.x - _base[0]) / _step,
+                        (_tp.y - _base[1]) / _step,
+                        (_tp.z - _base[2]) / _step
+                    ]);
+                }}
+            }}
+            return {{base_position: _base, columns: _columns}};
+        """)
+        return self._client.execute(script).value
 
     def morph_values(self, nonzero_only: bool = False) -> dict[str, float]:
         """Return the current value of every DzMorph modifier in one HTTP call.
