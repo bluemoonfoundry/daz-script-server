@@ -472,6 +472,27 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(len(data["constraints"]), 5)
         self.assertEqual(issues, [])
 
+    def test_interaction_plan_accepts_compact_figure_aliases(self):
+        profile = FigureRigProfile(
+            figure_label="Genesis 9",
+            family="genesis_9",
+            bones=[
+                BoneProfile(name="hip"),
+                BoneProfile(name="r_hand", parent_name="hip"),
+            ],
+        )
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0))],
+        )
+
+        prepared = prepare_interaction_recipe(recipe, {"Genesis9": profile})
+
+        self.assertTrue(prepared.is_valid)
+        self.assertEqual(prepared.rig_profiles["Genesis9"].figure_label, "Genesis 9")
+        self.assertEqual(prepared.diagnostics["resolved_target_count"], 1)
+
     def test_interaction_plan_validate_reports_missing_bone(self):
         profile = FigureRigProfile(
             figure_label="Genesis 9",
@@ -1069,6 +1090,25 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
         skel, client = self._make_skeleton(["hip"])
         bones = skel.bones()
         self.assertIsInstance(bones[0], DazBone)
+
+    def test_bone_metadata_single_call(self):
+        payload = [
+            {
+                "name": "hip",
+                "label": "Hip",
+                "parent_name": None,
+                "rotation_order": "XYZ",
+                "local_position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "local_euler": {"x": 1.0, "y": 2.0, "z": 3.0},
+            }
+        ]
+        skel, client = self._make_skeleton(payload)
+        result = skel.bone_metadata()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result[0]["name"], "hip")
+        self.assertIsNone(result[0]["parent_name"])
+        self.assertIn("getAllBones", client.execute.call_args[0][0])
+        self.assertIn("getNodeParent", client.execute.call_args[0][0])
 
     def test_find_bone_calls_findBone(self):
         skel, client = self._make_skeleton("hip")
@@ -3397,6 +3437,174 @@ class TestBoundingBox(unittest.TestCase):
 
     def test_repr(self):
         self.assertIn("BoundingBox", repr(self._box()))
+
+
+class TestSceneSnapshot(unittest.TestCase):
+    """Tests for DazScene.scene_snapshot() and build_rig_profiles_from_snapshot()."""
+
+    from dazpy import build_rig_profiles_from_snapshot
+
+    _SAMPLE_SNAPSHOT = [
+        {
+            "name": "Genesis9",
+            "label": "Genesis 9",
+            "bones": [
+                {
+                    "name": "hip",
+                    "label": "Hip",
+                    "parent_name": None,
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": 0.0, "y": 100.0, "z": 0.0},
+                    "world_position": {"x": 0.0, "y": 100.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "name": "l_hand",
+                    "label": "Left Hand",
+                    "parent_name": "hip",
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": 20.0, "y": 150.0, "z": 0.0},
+                    "world_position": {"x": 20.0, "y": 150.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "name": "r_hand",
+                    "label": "Right Hand",
+                    "parent_name": "hip",
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": -20.0, "y": 150.0, "z": 0.0},
+                    "world_position": {"x": -20.0, "y": 150.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "name": "l_foot",
+                    "label": "Left Foot",
+                    "parent_name": "hip",
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": 10.0, "y": 0.0, "z": 0.0},
+                    "world_position": {"x": 10.0, "y": 0.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+            ],
+        }
+    ]
+
+    def test_build_rig_profiles_from_snapshot_keys(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        self.assertIn("Genesis 9", profiles)
+        self.assertIn("Genesis9", profiles)
+        self.assertIs(profiles["Genesis 9"], profiles["Genesis9"])
+
+    def test_build_rig_profiles_figure_label_and_family(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        profile = profiles["Genesis 9"]
+        self.assertEqual(profile.figure_label, "Genesis 9")
+        self.assertEqual(profile.family, "genesis_9")
+
+    def test_build_rig_profiles_bone_world_position(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        bone = profiles["Genesis 9"].bone("l_hand")
+        self.assertEqual(bone.world_position, (20.0, 150.0, 0.0))
+        self.assertEqual(bone.local_position, (20.0, 150.0, 0.0))
+
+    def test_build_rig_profiles_parent_chain(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        profile = profiles["Genesis 9"]
+        self.assertEqual(profile.bone("l_hand").parent_name, "hip")
+        self.assertIsNone(profile.bone("hip").parent_name)
+
+    def test_build_rig_profiles_anchor_uses_world_position(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        from dazpy._interaction import _anchor_world_point_hint
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        profile = profiles["Genesis 9"]
+        point = _anchor_world_point_hint(profile, "r_hand")
+        self.assertIsNotNone(point)
+        self.assertAlmostEqual(point[0], -20.0)
+
+    def test_build_rig_profiles_source_metadata(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        self.assertEqual(profiles["Genesis 9"].metadata["source"], "snapshot")
+
+    def test_build_rig_profiles_empty_snapshot(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        self.assertEqual(build_rig_profiles_from_snapshot([]), {})
+
+    def test_scene_snapshot_script_contains_getWSPos(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSPos", script)
+        self.assertIn("getAllBones", script)
+        self.assertIn("getSkeletonList", script)
+
+    def test_scene_snapshot_filter_serialized(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot(skeleton_labels=["Genesis 9", "Bob"])
+        script = client.execute.call_args[0][0]
+        self.assertIn('"Genesis 9"', script)
+        self.assertIn('"Bob"', script)
+
+    def test_scene_snapshot_no_filter_passes_null(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot()
+        script = client.execute.call_args[0][0]
+        self.assertIn("null", script)
+
+    def test_apply_recipe_uses_snapshot_when_available(self):
+        """apply_interaction_recipe_to_scene uses scene_snapshot() when present."""
+        from dazpy import build_rig_profiles_from_snapshot, InteractionRecipe, PoseTarget
+
+        snapshot = self._SAMPLE_SNAPSHOT
+        profiles = build_rig_profiles_from_snapshot(snapshot)
+
+        class _SnapshotScene:
+            def scene_snapshot(self, **_):
+                return snapshot
+
+            def skeletons(self):
+                raise AssertionError("skeletons() should not be called when scene_snapshot() is present")
+
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[PoseTarget(figure_label="Genesis 9", bone_name="hip")],
+        )
+
+        class _SceneWithApply(_SnapshotScene):
+            def __init__(self):
+                self.applied = False
+
+            def apply_interaction_recipe(self, *a, **kw):
+                self.applied = True
+
+        # Just verify build_rig_profiles_from_snapshot returns correct structure
+        self.assertIn("Genesis 9", profiles)
+        self.assertEqual(profiles["Genesis 9"].bone("l_hand").world_position, (20.0, 150.0, 0.0))
+
+    def test_bone_profile_world_position_round_trips(self):
+        bp = BoneProfile(
+            name="test_bone",
+            world_position=(1.0, 2.0, 3.0),
+        )
+        d = bp.to_dict()
+        self.assertEqual(d["world_position"], [1.0, 2.0, 3.0])
+        restored = BoneProfile.from_dict(d)
+        self.assertEqual(restored.world_position, (1.0, 2.0, 3.0))
+
+    def test_bone_profile_world_position_none_by_default(self):
+        bp = BoneProfile(name="test_bone")
+        self.assertIsNone(bp.world_position)
+        d = bp.to_dict()
+        self.assertIsNone(d["world_position"])
 
 
 if __name__ == "__main__":

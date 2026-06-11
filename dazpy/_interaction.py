@@ -36,6 +36,11 @@ def _normalize_name(value: str | None) -> str:
     return text.strip("_")
 
 
+def _compact_name(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    return re.sub(r"[\s_\-]+", "", text)
+
+
 def _lower_name(value: str | None) -> str:
     return (value or "").strip().lower()
 
@@ -49,6 +54,18 @@ def _as_tuple3(value: object | None) -> Rotation3 | None:
         return (float(value[0]), float(value[1]), float(value[2]))
     if isinstance(value, list) and len(value) == 3:
         return (float(value[0]), float(value[1]), float(value[2]))
+    return None
+
+
+def _lookup_rig_profile(rig_profiles: dict[str, "FigureRigProfile"], label: str | None) -> "FigureRigProfile" | None:
+    if label is None:
+        return None
+    if label in rig_profiles:
+        return rig_profiles[label]
+    compact = _compact_name(label)
+    for key, profile in rig_profiles.items():
+        if _compact_name(key) == compact:
+            return profile
     return None
 
 
@@ -170,6 +187,7 @@ class BoneProfile:
     parent_name: str | None = None
     rotation_order: str | None = None
     local_position: Vector3 | None = None
+    world_position: Vector3 | None = None
     rest_rotation: Rotation3 | None = None
     axis_limits: dict[AxisName, AxisLimit] = field(default_factory=dict)
     is_twist: bool = False
@@ -182,6 +200,7 @@ class BoneProfile:
             "parent_name": self.parent_name,
             "rotation_order": self.rotation_order,
             "local_position": list(self.local_position) if self.local_position else None,
+            "world_position": list(self.world_position) if self.world_position else None,
             "rest_rotation": list(self.rest_rotation) if self.rest_rotation else None,
             "axis_limits": {axis: limit.to_dict() for axis, limit in self.axis_limits.items()},
             "is_twist": self.is_twist,
@@ -196,6 +215,7 @@ class BoneProfile:
             parent_name=data.get("parent_name"),
             rotation_order=data.get("rotation_order"),
             local_position=_as_tuple3(data.get("local_position")),
+            world_position=_as_tuple3(data.get("world_position")),
             rest_rotation=_as_tuple3(data.get("rest_rotation")),
             axis_limits={
                 axis: AxisLimit.from_dict(limit)
@@ -445,12 +465,12 @@ class FigureRigProfile:
         target_bone = None
 
         if target_figure and target_anchor and rig_profiles is not None:
-            target_profile = rig_profiles.get(target_figure)
+            target_profile = _lookup_rig_profile(rig_profiles, target_figure)
             if target_profile is not None:
                 resolved = target_profile.require_anchor(target_anchor)
                 target_bone = resolved.bone_name
         if target_point is None and target_figure is not None and target_anchor is not None and rig_profiles is not None:
-            target_profile = rig_profiles.get(target_figure)
+            target_profile = _lookup_rig_profile(rig_profiles, target_figure)
             if target_profile is not None:
                 target_point = _anchor_world_point_hint(target_profile, target_anchor)
 
@@ -748,7 +768,7 @@ class InteractionPlan:
         issues: list[ValidationIssue] = []
         for index, constraint in enumerate(self.constraints):
             if isinstance(constraint, PoseTarget):
-                profile = rig_profiles.get(constraint.figure_label)
+                profile = _lookup_rig_profile(rig_profiles, constraint.figure_label)
                 if profile is None:
                     issues.append(
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown figure {constraint.figure_label!r}")
@@ -759,7 +779,7 @@ class InteractionPlan:
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown bone {constraint.bone_name!r} on figure {constraint.figure_label!r}")
                     )
             elif isinstance(constraint, LookAtTarget):
-                profile = rig_profiles.get(constraint.figure_label)
+                profile = _lookup_rig_profile(rig_profiles, constraint.figure_label)
                 if profile is None:
                     issues.append(
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown figure {constraint.figure_label!r}")
@@ -770,7 +790,7 @@ class InteractionPlan:
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown bone {constraint.bone_name!r} on figure {constraint.figure_label!r}")
                     )
             elif isinstance(constraint, ContactTarget):
-                profile = rig_profiles.get(constraint.source_figure)
+                profile = _lookup_rig_profile(rig_profiles, constraint.source_figure)
                 if profile is None:
                     issues.append(
                         ValidationIssue("error", constraint.source_figure, index, f"Unknown source figure {constraint.source_figure!r}")
@@ -781,7 +801,7 @@ class InteractionPlan:
                         ValidationIssue("error", constraint.source_figure, index, f"Unknown source bone {constraint.source_bone!r} on figure {constraint.source_figure!r}")
                     )
                 if constraint.target_figure and constraint.target_bone:
-                    target_profile = rig_profiles.get(constraint.target_figure)
+                    target_profile = _lookup_rig_profile(rig_profiles, constraint.target_figure)
                     if target_profile is None:
                         issues.append(
                             ValidationIssue("error", constraint.target_figure, index, f"Unknown target figure {constraint.target_figure!r}")
@@ -791,7 +811,7 @@ class InteractionPlan:
                             ValidationIssue("error", constraint.target_figure, index, f"Unknown target bone {constraint.target_bone!r} on figure {constraint.target_figure!r}")
                         )
             elif isinstance(constraint, BalanceTarget):
-                profile = rig_profiles.get(constraint.figure_label)
+                profile = _lookup_rig_profile(rig_profiles, constraint.figure_label)
                 if profile is None:
                     issues.append(
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown figure {constraint.figure_label!r}")
@@ -802,7 +822,7 @@ class InteractionPlan:
                             ValidationIssue("error", constraint.figure_label, index, f"Unknown pelvis bone {constraint.pelvis_bone!r} on figure {constraint.figure_label!r}")
                         )
             elif isinstance(constraint, (HandTarget, FootTarget)):
-                profile = rig_profiles.get(constraint.figure_label)
+                profile = _lookup_rig_profile(rig_profiles, constraint.figure_label)
                 if profile is None:
                     issues.append(
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown figure {constraint.figure_label!r}")
@@ -813,7 +833,7 @@ class InteractionPlan:
                             ValidationIssue("error", constraint.figure_label, index, f"Unknown anchor {constraint.anchor_name!r} on figure {constraint.figure_label!r}")
                         )
                 if constraint.target_figure and constraint.target_anchor:
-                    target_profile = rig_profiles.get(constraint.target_figure)
+                    target_profile = _lookup_rig_profile(rig_profiles, constraint.target_figure)
                     if target_profile is None:
                         issues.append(
                             ValidationIssue("error", constraint.target_figure, index, f"Unknown target figure {constraint.target_figure!r}")
@@ -830,7 +850,7 @@ class InteractionPlan:
         resolved: list[ResolvedInteractionTarget] = []
         for constraint in self.constraints:
             if isinstance(constraint, (HandTarget, FootTarget)):
-                profile = rig_profiles.get(constraint.figure_label)
+                profile = _lookup_rig_profile(rig_profiles, constraint.figure_label)
                 if profile is None:
                     continue
                 resolved.append(resolve_interaction_target(constraint, rig_profiles))
@@ -927,7 +947,7 @@ class PreparedInteractionRecipe:
 
         for constraint in self.plan.constraints:
             if isinstance(constraint, BalanceTarget):
-                profile = self.rig_profiles.get(constraint.figure_label)
+                profile = _lookup_rig_profile(self.rig_profiles, constraint.figure_label)
                 if profile is None:
                     continue
                 pelvis_anchor = profile.anchor(constraint.pelvis_bone)
@@ -969,7 +989,7 @@ class PreparedInteractionRecipe:
                 )
 
         for resolved in self.resolved_targets:
-            profile = self.rig_profiles.get(resolved.figure_label)
+            profile = _lookup_rig_profile(self.rig_profiles, resolved.figure_label)
             if profile is None:
                 unresolved.append(resolved)
                 continue
@@ -981,7 +1001,7 @@ class PreparedInteractionRecipe:
             if source_bone.local_position is None:
                 unresolved.append(resolved)
                 continue
-            target_profile = self.rig_profiles.get(resolved.target_figure) if resolved.target_figure else None
+            target_profile = _lookup_rig_profile(self.rig_profiles, resolved.target_figure) if resolved.target_figure else None
             target_local = _first_local_anchor_position(target_profile, resolved.target_anchor) if (target_profile and resolved.target_anchor) else None
             source_base = _current_figure_position(resolved.figure_label)
             target_base = _current_figure_position(resolved.target_figure) if resolved.target_figure else None
@@ -1076,7 +1096,7 @@ class PreparedInteractionRecipe:
             if resolved.target_point is None:
                 continue
             skeleton = scene.find_skeleton_by_label(resolved.figure_label)
-            profile = self.rig_profiles.get(resolved.figure_label)
+            profile = _lookup_rig_profile(self.rig_profiles, resolved.figure_label)
             if profile is None:
                 continue
             alignment_results.append(
@@ -1548,10 +1568,15 @@ def apply_interaction_recipe_to_scene(
     if rig_profiles is None:
         if not hasattr(scene, "skeletons"):
             raise TypeError("apply_interaction_recipe_to_scene expects a scene-like object")
-        rig_profiles = {
-            skeleton.label or skeleton._identifier.value: build_rig_profile(skeleton)
-            for skeleton in scene.skeletons()
-        }
+        if hasattr(scene, "scene_snapshot") and hasattr(scene, "_client"):
+            rig_profiles = build_rig_profiles_from_snapshot(scene.scene_snapshot())
+        else:
+            rig_profiles = {}
+            for skeleton in scene.skeletons():
+                profile = build_rig_profile(skeleton)
+                rig_profiles[profile.figure_label] = profile
+                if skeleton._identifier.value and skeleton._identifier.value != profile.figure_label:
+                    rig_profiles[skeleton._identifier.value] = profile
     prepared = prepare_interaction_recipe(recipe, rig_profiles)
     return prepared.apply(
         scene,
@@ -1725,17 +1750,18 @@ def default_axis_limits_for_bone(name: str, family: str = "generic") -> dict[Axi
 
 
 def _anchor_world_point_hint(profile: FigureRigProfile, anchor_name: str) -> Vector3 | None:
-    """Return the best available point hint for an anchor.
+    """Return the best available world-space point hint for an anchor.
 
-    Until the solver is wired in, this uses the bone's local position metadata
-    if available.  That gives us a stable, reproducible target shape for hands
-    and feet without pretending we already have world-space evaluation.
+    Prefers world_position from a scene snapshot; falls back to local_position
+    as a rough proxy when only per-bone metadata is available.
     """
 
     anchor = profile.anchor(anchor_name)
     if anchor is None:
         return None
     bone = profile.bone(anchor.bone_name)
+    if bone.world_position is not None:
+        return bone.world_position
     if bone.local_position is not None:
         return bone.local_position
     return None
@@ -1747,10 +1773,51 @@ def resolve_interaction_target(
 ) -> ResolvedInteractionTarget:
     """Resolve a hand/foot interaction target against the available rig profiles."""
 
-    profile = rig_profiles.get(target.figure_label)
+    profile = _lookup_rig_profile(rig_profiles, target.figure_label)
     if profile is None:
         raise KeyError(f"Unknown figure for target resolution: {target.figure_label!r}")
     return profile.resolve_anchor_target(target, rig_profiles)
+
+
+def build_rig_profiles_from_snapshot(snapshot: list[dict]) -> dict[str, "FigureRigProfile"]:
+    """Build rig profiles for all skeletons from a scene_snapshot() result.
+
+    Converts the bulk snapshot (one HTTP call) to the same dict used by
+    prepare_interaction_recipe / apply_interaction_recipe_to_scene.  Both the
+    figure label and internal name are stored as keys so lookup tolerates either.
+    """
+
+    profiles: dict[str, FigureRigProfile] = {}
+    for skel_data in snapshot:
+        name = skel_data.get("name", "")
+        label = skel_data.get("label") or name
+        bones: list[BoneProfile] = []
+        for item in skel_data.get("bones", []):
+            bones.append(
+                BoneProfile(
+                    name=item.get("name", ""),
+                    label=item.get("label"),
+                    parent_name=item.get("parent_name"),
+                    rotation_order=item.get("rotation_order"),
+                    local_position=_as_tuple3(item.get("local_position")),
+                    world_position=_as_tuple3(item.get("world_position")),
+                    rest_rotation=_as_tuple3(item.get("local_euler")),
+                    axis_limits=default_axis_limits_for_bone(item.get("name", "")),
+                    is_twist=_looks_like_twist(item.get("name", ""), item.get("label")),
+                    is_helper=_looks_like_helper(item.get("name", ""), item.get("label")),
+                )
+            )
+        family = _detect_figure_family([b.name for b in bones])
+        profile = FigureRigProfile(
+            figure_label=label,
+            family=family,
+            bones=bones,
+            metadata={"bone_count": len(bones), "source": "snapshot"},
+        )
+        profiles[label] = profile
+        if name and name != label:
+            profiles[name] = profile
+    return profiles
 
 
 def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
@@ -1758,21 +1825,45 @@ def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
 
     figure_label = skeleton.label or skeleton._identifier.value
     bones: list[BoneProfile] = []
-    for bone in skeleton.bones():
-        parent = bone.parent
-        bones.append(
-            BoneProfile(
-                name=bone.name or bone._identifier.value,
-                label=bone.label,
-                parent_name=getattr(parent, "name", None) if parent else None,
-                rotation_order=bone.rotation_order,
-                local_position=_as_tuple3(bone.local_position),
-                rest_rotation=_as_tuple3(bone.local_euler),
-                axis_limits=default_axis_limits_for_bone(bone.name or bone._identifier.value),
-                is_twist=_looks_like_twist(bone.name or bone._identifier.value, bone.label),
-                is_helper=_looks_like_helper(bone.name or bone._identifier.value, bone.label),
+    if hasattr(skeleton, "bone_metadata"):
+        raw_bones = skeleton.bone_metadata()
+        for item in raw_bones:
+            bones.append(
+                BoneProfile(
+                    name=item.get("name", ""),
+                    label=item.get("label"),
+                    parent_name=item.get("parent_name"),
+                    rotation_order=item.get("rotation_order"),
+                    local_position=_as_tuple3(item.get("local_position")),
+                    rest_rotation=_as_tuple3(item.get("local_euler")),
+                    axis_limits=default_axis_limits_for_bone(item.get("name", "")),
+                    is_twist=_looks_like_twist(item.get("name", ""), item.get("label")),
+                    is_helper=_looks_like_helper(item.get("name", ""), item.get("label")),
+                )
             )
-        )
+    else:
+        for bone in skeleton.bones():
+            parent = bone.parent
+            parent_name = getattr(parent, "name", None) if parent is not None else None
+            root_names = {
+                getattr(skeleton, "label", None),
+                getattr(getattr(skeleton, "_identifier", None), "value", None),
+            }
+            if parent_name in root_names:
+                parent_name = None
+            bones.append(
+                BoneProfile(
+                    name=bone.name or bone._identifier.value,
+                    label=bone.label,
+                    parent_name=parent_name,
+                    rotation_order=bone.rotation_order,
+                    local_position=_as_tuple3(bone.local_position),
+                    rest_rotation=_as_tuple3(bone.local_euler),
+                    axis_limits=default_axis_limits_for_bone(bone.name or bone._identifier.value),
+                    is_twist=_looks_like_twist(bone.name or bone._identifier.value, bone.label),
+                    is_helper=_looks_like_helper(bone.name or bone._identifier.value, bone.label),
+                )
+            )
 
     family = _detect_figure_family([bone.name for bone in bones])
     return FigureRigProfile(
