@@ -90,12 +90,14 @@ class DazSkeleton(DazNode):
                     parent_name = parent.getName();
                 }
                 var pos = b.getLocalPos();
+                var wpos = b.getWSPos();
                 result.push({
                     name: b.getName(),
                     label: b.getLabel(),
                     parent_name: parent_name,
                     rotation_order: b.getRotationOrder(),
                     local_position: {x: pos.x, y: pos.y, z: pos.z},
+                    world_position: {x: wpos.x, y: wpos.y, z: wpos.z},
                     local_euler: {
                         x: b.getXRotControl().getValue(),
                         y: b.getYRotControl().getValue(),

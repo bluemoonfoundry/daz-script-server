@@ -1958,6 +1958,7 @@ def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
                     parent_name=item.get("parent_name"),
                     rotation_order=item.get("rotation_order"),
                     local_position=_as_tuple3(item.get("local_position")),
+                    world_position=_as_tuple3(item.get("world_position")),
                     rest_rotation=_as_tuple3(item.get("local_euler")),
                     axis_limits=default_axis_limits_for_bone(item.get("name", "")),
                     is_twist=_looks_like_twist(item.get("name", ""), item.get("label")),
