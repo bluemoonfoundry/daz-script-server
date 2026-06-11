@@ -452,9 +452,11 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
 
     h.test(
         "S5-a",
-        "align_hand_target() on MadisonG9 moves r_hand toward a target 20 cm to her right. "
+        "align_hand_target() on MadisonG9 moves r_hand toward a target 20 cm in world −Z "
+        "(her right side — she is at (72.53,0,0) rotated −89.84° on Y, so she faces world +X "
+        "and her anatomical right points toward world −Z). "
         "We capture pose before, run alignment, visually confirm, then restore.",
-        watch="MadisonG9's right hand should reach toward screen-right. "
+        watch="MadisonG9's right arm should extend toward screen-bottom (world −Z). "
               "After confirmation, the pose will be RESTORED.",
     )
 
@@ -470,9 +472,10 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             if r_hand_anchor is None:
                 h.skip("r_hand anchor not found for MadisonG9")
                 return
-            # Place target 20 cm to the right of the anchor's current world position
-            wp = r_hand_anchor.world_point_hint or (40.0, 130.0, 0.0)
-            target = (wp[0] + 20.0, wp[1], wp[2])
+            # Madison faces +X; her anatomical right is world −Z.
+            # Fallback places her roughly where her hand should be at rest.
+            wp = r_hand_anchor.world_point_hint or (112.0, 130.0, -40.0)
+            target = (wp[0], wp[1], wp[2] - 20.0)
             result = align_hand_target(madison, target, source_anchor="r_hand", max_iterations=10)
             path = result.diagnostics.get("path", "unknown")
             h.assert_true(
@@ -487,7 +490,7 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             converge_note = "converged" if result.converged else f"{result.iterations} iters"
             print(f"  {dim(f'path={path}, initial_error={result.initial_error:.1f}cm, {converge_note}')}")
             confirmed = h.visual_confirm(
-                "Does MadisonG9's right hand reach toward screen-right?"
+                "Does MadisonG9's right arm extend toward screen-bottom (world −Z)?"
             )
             if not confirmed and not h.auto:
                 h.fail("visual check: hand did not appear to move to target")
@@ -534,7 +537,8 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
         "S5-c",
         "align_hand_target on BobG8 (Genesis 8, camelCase bones) using canonical anchor r_hand. "
         "Verifies that the camelCase side-detection fix lets Genesis 8 figures use the same API.",
-        watch="BobG8's right hand should move slightly. Pose will be restored.",
+        watch="BobG8's right hand should move slightly to screen-right and lower. "
+              "Pose will be restored.",
     )
 
     def t_s5c():
@@ -546,8 +550,10 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
         if r_hand_anchor is None:
             h.skip("r_hand anchor not found for BobG8 — anchor map may not resolve camelCase")
             return
-        wp = r_hand_anchor.world_point_hint or (40.0, 130.0, 0.0)
-        target = (wp[0] + 15.0, wp[1] - 10.0, wp[2] + 5.0)
+        # BobG8 at (0,0,−50) with no rotation; his anatomical right is world +X.
+        # Fallback: approximate rHand world position for a standing G8 at (0,0,−50).
+        wp = r_hand_anchor.world_point_hint or (40.0, 130.0, -50.0)
+        target = (wp[0] + 15.0, wp[1] - 10.0, wp[2] - 5.0)
         saved = _save_pose(bob)
         try:
             result = align_hand_target(bob, target, source_anchor="r_hand", max_iterations=8)
@@ -570,9 +576,11 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
 
     h.test(
         "S6-a",
-        "align_foot_target() on AliceG8 moves l_foot 10 cm forward (+Z). "
+        "align_foot_target() on AliceG8 moves l_foot 10 cm forward in world +Z. "
+        "AliceG8 is at (0,0,50) rotated 180° on Y, so she faces +Z — forward is +Z for her. "
         "Checks that the batch IK path is used and error is reduced.",
-        watch="AliceG8's left foot should step forward. Pose will be restored.",
+        watch="AliceG8's left foot should step toward screen (world +Z, her forward). "
+              "Pose will be restored.",
     )
 
     def t_s6a():
@@ -584,14 +592,18 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
         if l_foot_anchor is None:
             h.skip("l_foot anchor not found for AliceG8")
             return
-        wp = l_foot_anchor.world_point_hint or (0.0, 10.0, 0.0)
-        target = (wp[0], wp[1], wp[2] + 10.0)
+        # AliceG8 at (0,0,50) rotated 180° on Y: faces +Z, anatomical left is world +X.
+        # Fallback places foot near expected resting world position.
+        wp = l_foot_anchor.world_point_hint or (-10.0, 8.0, 50.0)
+        target = (wp[0], wp[1], wp[2] + 10.0)  # step forward (+Z = her forward)
         saved = _save_pose(alice)
         try:
             result = align_foot_target(alice, target, source_anchor="l_foot", max_iterations=10)
             path = result.diagnostics.get("path", "unknown")
             h.assert_true(result.initial_error is not None, "initial_error is None")
-            confirmed = h.visual_confirm("Does AliceG8's left foot step forward?")
+            confirmed = h.visual_confirm(
+                "Does AliceG8's left foot step forward toward screen (world +Z)?"
+            )
             if not confirmed and not h.auto:
                 h.fail("visual check: AliceG8 foot did not step forward")
                 return
@@ -632,8 +644,9 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             if r_hand_anchor is None:
                 h.skip("r_hand anchor not found")
                 return
-            wp = r_hand_anchor.world_point_hint or (40.0, 130.0, 0.0)
-            target = (wp[0] + 25.0, wp[1], wp[2])
+            # Madison faces +X; her right is world −Z.
+            wp = r_hand_anchor.world_point_hint or (112.0, 130.0, -40.0)
+            target = (wp[0], wp[1], wp[2] - 25.0)
             calls.clear()
             align_hand_target(madison, target, source_anchor="r_hand", max_iterations=12)
             # scene_snapshot call (already done above) is NOT counted here
