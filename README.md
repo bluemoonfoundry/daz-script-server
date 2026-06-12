@@ -196,12 +196,10 @@ profiles  = build_rig_profiles_from_snapshot(snapshot)
 
 **Body measurement accuracy improvements** in `docs/examples/body_measurements.py`:
 
-- Bust and underbust slices now use centroid-weighted torso loop selection to
-  filter arm cross-sections, correcting a ~70 cm overestimate on A-pose figures.
+- Slices now use centroid-weighted torso loop selection to filter arm cross-sections, correcting a ~70 cm overestimate on A-pose figures.
 - The heuristic fallback for unlabelled figures (e.g. a character named
   `"MadisonG9"`) now uses robust outlier rejection before selecting the peak
   perimeter slice.
-- Bra band calculation updated to the standard US +4/+5 industry rule.
 - Pass `--figure-type G9F` (or `G9M`, `G8F`, etc.) to force a calibration entry
   when the figure's scene label doesn't contain a gender keyword.
 
