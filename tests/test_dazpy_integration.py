@@ -2,14 +2,17 @@
 Integration tests for the dazpy SDK.
 
 Skipped automatically when DAZ Studio / the script server is not reachable.
-Run with:  python tests_dazpy_integration.py
+
+Run standalone:  python tests/test_dazpy_integration.py
+Via runner:      python tests.py integration
 """
 
+import os
 import sys
 import time
 import unittest
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import requests as _req
 

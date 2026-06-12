@@ -9,7 +9,7 @@ AliceG8   -- Genesis 8 female
 MadisonG9 -- Genesis 9 female
 BaseLight -- point light
 
-Run:  python harness_integration.py [--host HOST] [--port PORT] [--auto]
+Run:  python tests/harness_integration.py [--host HOST] [--port PORT] [--auto]
 
 Press Enter to advance through each test.
 For visual tests, look at the DAZ Studio viewport and answer the y/n prompt.

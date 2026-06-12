@@ -2,8 +2,8 @@
 HTTP API integration tests for DazScriptServer plugin.
 
 Requires the plugin to be running in DAZ Studio at the default address.
-Run standalone with: python tests_api.py
-Or via the unified runner: python tests.py --api
+Run standalone with: python tests/test_api.py
+Via runner:          python tests.py api
 
 Dependencies: requests  (pip install requests)
 

@@ -1,11 +1,19 @@
-"""Unit tests for dazpy — mock DazClient.execute() to verify script generation."""
+"""
+Unit tests for dazpy — mock DazClient.execute() to verify script generation.
+
+No server or DAZ Studio required; all DAZ calls are mocked.
+
+Run standalone:  python tests/test_dazpy.py
+Via runner:      python tests.py unit
+"""
 
 import json
+import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from dazpy._result import ExecutionResult
 from dazpy._script_builder import ScriptBuilder
