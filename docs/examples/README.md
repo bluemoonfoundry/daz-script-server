@@ -278,29 +278,47 @@ python geometry_analysis.py --figure "Genesis 9" --triangulate --out tris.json
 
 Computes practical body measurements for a selected figure by pulling the
 posed mesh into Python, slicing it with horizontal planes, and measuring the
-largest closed loop at each slice.  The example targets Genesis 8, Genesis 8.1,
+torso contour at each slice.  The example targets Genesis 8, Genesis 8.1,
 and Genesis 9 figures, but the same approach works for other figures too.
 Each reported measurement includes both centimeters and inches.
-It also picks generation-specific torso anchors and offers a `--torso-only`
-mode that filters obvious arm-spread outliers from the bust measurement.
-For bust anchoring it prefers left/right pectoral bones when present, then
-falls back to the spine/chest chain.
-Bust is measured from the largest perimeter loop within a narrow band around
-that anchor, which is closer to how tape-style measurements are usually taken.
-The example loads a small calibration table from
-`body_measurements.calibration.json`, with `Genesis 9 Female` seeded from the
-provided Measure Metrics reference values.
-You can edit that JSON file to tune the reference targets without touching the
-measurement code.
-The script detects the figure generation from the skeleton bones and uses the
-scene label to choose a matching calibration entry when it can, so labels like
-`Genesis 9 Male` or `Genesis 9 Female` will select the corresponding table row.
-If you want to override that behavior explicitly, pass `--figure-type` with a
-value like `G9M`, `G9F`, `G8M`, or `G8.1F`.
-If you pass `--clothing` on a female figure, the example also prints heuristic
-bra and dress size estimates in US, UK, and EU sizing.
-Add `--pretty` if you want the summary rendered as compact tables, including a
-small bra sanity-check table with bust, underbust, and difference values.
+
+**Torso loop selection** — at heights where the arms are also present (such as
+the bust and underbust), a horizontal plane intersects both the torso and the
+arms, producing multiple disconnected loops.  The script scores each loop by
+centroid distance from the body centerline (`|cx| * 2 + |cz|`) and picks the
+lowest-scoring (most-centered) loop, reliably selecting the torso contour even
+in an A-pose.  This replaces the naive approach of taking the largest loop,
+which could pick up an arm cross-section and produce grossly inflated
+measurements.
+
+**Robust outlier rejection** — when calibration data is unavailable for a
+figure (for example, a figure whose scene label contains no gender keyword),
+the script falls back to a heuristic that selects the slice with the largest
+perimeter within the search window.  Before selecting, it discards slices whose
+perimeter is more than 1.35× the median across the window, preventing an
+arm-inflated slice from being chosen as the bust peak.
+
+For bust anchoring the script prefers left/right pectoral bones when present,
+then falls back to the spine/chest chain.
+
+**Calibration** — the script loads a table from
+`body_measurements.calibration.json`, with entries for Genesis 9 Female/Male,
+Genesis 8 Female/Male, and Genesis 8.1 Female/Male seeded from Measure Metrics
+reference values.  You can edit that JSON file to tune targets without touching
+the measurement code.  The script selects a calibration row by matching the
+scene label (e.g. `"Genesis 9 Female"`).  For figures whose label does not
+contain a gender keyword (e.g. a character named `"MadisonG9"`), the heuristic
+fallback is used; pass `--figure-type G9F` (or `G9M`, `G8M`, `G8.1F`, etc.)
+to force a specific calibration entry.
+
+**Bra and clothing estimates** — when `--clothing` is passed on a female
+figure, the script prints heuristic bra and dress size estimates in US, UK,
+and EU sizing.  Bra band is computed using the standard US industry method:
+round the underbust measurement to the nearest inch, then add 4 if even or
+5 if odd — this always yields an even band number.  Cup is determined by
+rounding the difference between bust and band to the nearest inch
+(1″=A, 2″=B, 3″=C, 4″=D, 5″=DD, 6″=DDD/F, …).  Add `--pretty` for the
+summary in compact table form, including a bra sanity-check table.
 
 Best results come from a neutral A-pose or T-pose with the figure standing
 upright in the scene.  The example uses bone heights as anchors when they are
@@ -312,18 +330,22 @@ pip install trimesh
 ```
 
 ```bash
-python body_measurements.py --figure "Genesis 9"
+python body_measurements.py --figure "Genesis 9 Female"
+python body_measurements.py --figure "MadisonG9" --figure-type G9F
 python body_measurements.py --figure "Genesis 8" --out measurements.json
 python body_measurements.py --figure "Genesis 8.1" --sample-step 0.25
-python body_measurements.py --figure "Genesis 9" --torso-only
+python body_measurements.py --figure "Genesis 9 Female" --clothing --pretty
 ```
 
 | Argument | Default | Description |
 |---|---|---|
 | `--figure LABEL` | `Genesis 9` | Figure label as shown in the Scene panel |
-| `--sample-step CM` | `0.5` | Slice spacing used when searching for local min/max circumferences |
+| `--figure-type TYPE` | auto-detect | Force calibration entry: `G9F`, `G9M`, `G8F`, `G8M`, `G8.1F`, `G8.1M` |
+| `--sample-step CM` | `0.5` | Slice spacing when searching for local min/max circumferences |
 | `--search-window CM` | `5.0` | Half-width of the bust / underbust / low-hip search window |
-| `--torso-only` | off | Apply a robust bust selector that ignores obvious arm-spread outliers |
+| `--torso-only` | off | Narrow the bust search band (centroid-based torso loop selection is always active) |
+| `--clothing` | off | Print bra and dress size estimates |
+| `--pretty` | off | Render summary as compact tables |
 | `--out FILE` | `measurements.json` | Output JSON file for the computed measurements |
 
 ---
