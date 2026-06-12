@@ -66,7 +66,8 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.5.0](#whats-new-in-v240)
+- [What's New in v2.5.0](#whats-new-in-v250)
+- [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
 - [What's New in v2.2.0](#whats-new-in-v220)
 - [What's New in v2.0.0](#whats-new-in-v200)
@@ -147,6 +148,66 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 ---
 
 ## What's New in v2.5.0
+
+### 🤝 Interaction Posing — Multi-Figure Poses and IK Alignment
+
+The dazpy SDK now includes a full **interaction posing system** for placing two
+figures together in physically plausible poses (seated, touching, kissing, combat
+stances, etc.) and aligning individual limbs to world-space targets using an
+iterative IK solver.
+
+**Preset recipe builders** generate a ready-to-apply `InteractionRecipe` from a
+pair of figure labels:
+
+```python
+from dazpy import DazClient, DazScene
+from dazpy._interaction import build_sit_recipe, build_touch_recipe
+
+client = DazClient()
+scene  = DazScene(client)
+
+recipe = build_sit_recipe("BobG8", "AliceG8")
+scene.apply_interaction_recipe_to_scene(recipe)
+```
+
+Available presets: `build_sit_recipe`, `build_touch_recipe`, `build_kiss_recipe`,
+`build_fight_recipe`. All presets produce an `InteractionRecipe` that can be
+serialised to JSON, stored, and replayed.
+
+**IK limb alignment** moves a hand or foot end-effector to a world-space target
+using a Jacobian-based iterative solver running entirely inside a single batched
+HTTP call sequence:
+
+```python
+from dazpy._interaction import align_hand_target, align_foot_target
+
+skel   = scene.find_skeleton("BobG8")
+result = align_hand_target(skel, target_position=(12.0, 95.0, 8.0))
+print(f"converged={result.converged}  final_error={result.final_error:.3f} cm")
+```
+
+**Bulk scene snapshot** fetches every skeleton's bone world positions in a single
+HTTP call, avoiding per-bone round-trips when building rig data:
+
+```python
+snapshot  = scene.scene_snapshot()
+profiles  = build_rig_profiles_from_snapshot(snapshot)
+```
+
+**Body measurement accuracy improvements** in `docs/examples/body_measurements.py`:
+
+- Bust and underbust slices now use centroid-weighted torso loop selection to
+  filter arm cross-sections, correcting a ~70 cm overestimate on A-pose figures.
+- The heuristic fallback for unlabelled figures (e.g. a character named
+  `"MadisonG9"`) now uses robust outlier rejection before selecting the peak
+  perimeter slice.
+- Bra band calculation updated to the standard US +4/+5 industry rule.
+- Pass `--figure-type G9F` (or `G9M`, `G8F`, etc.) to force a calibration entry
+  when the figure's scene label doesn't contain a gender keyword.
+
+---
+
+## What's New in v2.4.0
 
 ### 🎬 Render Endpoints — Trigger and Track DAZ Studio Renders
 
