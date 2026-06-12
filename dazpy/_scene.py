@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from ._client import DazClient
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
@@ -275,6 +277,79 @@ class DazScene:
         script = ScriptBuilder.iife("return Scene.getNumSkeletons();")
         return self._client.execute(script).value or 0
 
+    def scene_snapshot(
+        self,
+        skeleton_labels: list[str] | None = None,
+    ) -> list[dict]:
+        """Return full skeleton and bone metadata for the scene in one HTTP call.
+
+        Each entry in the returned list represents one skeleton and contains:
+        ``name``, ``label``, and ``bones`` — a list of dicts with ``name``,
+        ``label``, ``parent_name``, ``rotation_order``, ``local_position``,
+        ``world_position``, and ``local_euler``.
+
+        Pass to :func:`~dazpy.build_rig_profiles_from_snapshot` to build
+        solver-ready :class:`~dazpy.FigureRigProfile` objects without any
+        additional HTTP calls.
+
+        Args:
+            skeleton_labels: Optional list of skeleton names or labels to
+                include.  ``None`` returns every skeleton in the scene.
+
+        Returns:
+            List of skeleton snapshot dicts, one per matching skeleton.
+        """
+        filter_js = json.dumps(skeleton_labels) if skeleton_labels is not None else "null"
+        script = ScriptBuilder.iife(f"""
+            var _filter = {filter_js};
+            var _skels = Scene.getSkeletonList();
+            var _result = [];
+            for (var _s = 0; _s < _skels.length; _s++) {{
+                var _skel = _skels[_s];
+                if (_filter !== null) {{
+                    var _found = false;
+                    for (var _f = 0; _f < _filter.length; _f++) {{
+                        if (_filter[_f] === _skel.getName() || _filter[_f] === _skel.getLabel()) {{
+                            _found = true; break;
+                        }}
+                    }}
+                    if (!_found) continue;
+                }}
+                var _bones = _skel.getAllBones();
+                var _boneList = [];
+                for (var _i = 0; _i < _bones.length; _i++) {{
+                    var _b = _bones[_i];
+                    var _parent = _b.getNodeParent();
+                    var _parentName = null;
+                    if (_parent && _parent.className && _parent.className() === "DzBone") {{
+                        _parentName = _parent.getName();
+                    }}
+                    var _lpos = _b.getLocalPos();
+                    var _wpos = _b.getWSPos();
+                    _boneList.push({{
+                        name: _b.getName(),
+                        label: _b.getLabel(),
+                        parent_name: _parentName,
+                        rotation_order: _b.getRotationOrder(),
+                        local_position: {{x: _lpos.x, y: _lpos.y, z: _lpos.z}},
+                        world_position: {{x: _wpos.x, y: _wpos.y, z: _wpos.z}},
+                        local_euler: {{
+                            x: _b.getXRotControl().getValue(),
+                            y: _b.getYRotControl().getValue(),
+                            z: _b.getZRotControl().getValue()
+                        }}
+                    }});
+                }}
+                _result.push({{
+                    name: _skel.getName(),
+                    label: _skel.getLabel(),
+                    bones: _boneList
+                }});
+            }}
+            return _result;
+        """)
+        return self._client.execute(script).value or []
+
     def all_node_transforms(self) -> list[dict]:
         """Return world-space transforms for every node in a single call.
 
@@ -357,6 +432,32 @@ class DazScene:
         find_expr = ScriptBuilder.find_node_expr(node._identifier)
         script = ScriptBuilder.iife(f"Scene.setPrimarySelection({find_expr});")
         self._client.execute(script)
+
+    def apply_interaction_recipe(
+        self,
+        recipe: "InteractionRecipe",  # noqa: F821
+        *,
+        rig_profiles: dict[str, "FigureRigProfile"] | None = None,  # noqa: F821
+        align_limb_targets: bool = False,
+        max_iterations: int | None = None,
+        step_degrees: float = 1.0,
+        damping: float = 0.25,
+        tolerance: float = 0.15,
+    ) -> "PreparedInteractionResult":  # noqa: F821
+        """Prepare and apply an interaction recipe against the current scene."""
+
+        from ._interaction import apply_interaction_recipe_to_scene
+
+        return apply_interaction_recipe_to_scene(
+            self,
+            recipe,
+            rig_profiles=rig_profiles,
+            align_limb_targets=align_limb_targets,
+            max_iterations=max_iterations,
+            step_degrees=step_degrees,
+            damping=damping,
+            tolerance=tolerance,
+        )
 
     def select_all(self, on: bool = True) -> None:
         """Select or deselect all nodes.

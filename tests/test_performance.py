@@ -2,7 +2,7 @@
 Performance benchmarks and load tests for DazScriptServer.
 
 Measures throughput, latency, and graceful-degradation behavior.
-Run with: python test-performance.py [--url http://127.0.0.1:18811]
+Run with: python tests/test_performance.py [--url http://127.0.0.1:18811]
 
 Dependencies: requests  (pip install requests)
 

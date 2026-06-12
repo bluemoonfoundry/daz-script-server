@@ -412,7 +412,12 @@ def _section_perimeter(mesh, y: float) -> float | None:
         plane_origin=(0.0, float(y), 0.0),
         plane_normal=(0.0, 1.0, 0.0),
     )
-    return _best_loop_perimeter(section)
+    if section is None:
+        return None
+    loop = _select_torso_loop(section)
+    if loop is None:
+        return None
+    return _loop_perimeter(loop)
 
 
 def _section_torso_perimeter(mesh, y: float) -> float | None:
@@ -503,7 +508,7 @@ def _scan_calibrated_band(
         )
     if calibration.fallback_mode == "min":
         return min(profile, key=lambda item: item[1])
-    return max(profile, key=lambda item: item[1])
+    return _robust_profile_max(profile)
 
 
 def _build_mesh(vertices: list[list[float]], faces: list[list[int]]):
@@ -539,7 +544,10 @@ def _figure_gender(figure_label: str, figure_type: str | None, calibration_name:
 
 
 def _bra_band_from_underbust(underbust_in: float) -> int:
-    band = int(round(underbust_in / 2.0) * 2)
+    # US traditional method: round underbust to nearest inch, add 4 if even or 5 if odd.
+    # This always produces an even band number.
+    rounded = int(round(underbust_in))
+    band = rounded + (4 if rounded % 2 == 0 else 5)
     return max(28, band)
 
 
@@ -568,8 +576,9 @@ def _bra_size_estimate(bust_cm: float | None, underbust_cm: float | None) -> Bra
     cup_uk = _cup_from_difference(diff_uk, UK_BRA_CUPS)
     cup_eu = cup_uk
     note = (
-        "heuristic bra estimate; band is rounded from underbust and the cup is "
-        "based on bust minus band, so the letter is relative to the band size"
+        "US traditional method: band = underbust rounded to nearest inch + 4 (if even) "
+        "or + 5 (if odd); cup = bust minus band rounded to nearest inch (1\"=A, 2\"=B, "
+        "3\"=C, 4\"=D, 5\"=DD, 6\"=DDD, …)"
     )
     return BraSizeEstimate(
         us=f"{band_us}{cup_us}",

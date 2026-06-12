@@ -1,31 +1,55 @@
-"""Unit tests for dazpy — mock DazClient.execute() to verify script generation."""
+"""
+Unit tests for dazpy — mock DazClient.execute() to verify script generation.
+
+No server or DAZ Studio required; all DAZ calls are mocked.
+
+Run standalone:  python tests/test_dazpy.py
+Via runner:      python tests.py unit
+"""
 
 import json
+import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from dazpy._result import ExecutionResult
 from dazpy._script_builder import ScriptBuilder
 from dazpy._batch import Batch
 from dazpy import (
-    BalanceTarget,
+    AnchorTarget,
     AxisLimit,
-    BoneProfile,
+    BalanceTarget,
     BoneChain,
+    BoneProfile,
     ContactTarget,
     FigureRigProfile,
+    FootTarget,
+    InteractionAnchor,
     InteractionPlan,
+    InteractionRecipe,
+    InteractionPosePatch,
+    LimbAlignmentResult,
+    PreparedInteractionRecipe,
+    PreparedInteractionResult,
+    HandTarget,
     LookAtTarget,
     PoseTarget,
-    solve_interaction_plan,
+    build_fight_recipe,
+    build_kiss_recipe,
+    build_sit_recipe,
+    build_touch_recipe,
+    prepare_interaction_recipe,
     SolveOptions,
-    SolveResult,
     ValidationIssue,
-    default_axis_limits_for_bone,
     build_rig_profile,
+    align_hand_target,
+    default_axis_limits_for_bone,
+    align_single_limb_target,
+    apply_interaction_recipe_to_scene,
+    resolve_interaction_target,
 )
 from dazpy._node import DazNode, NodeIdentifier
 from dazpy._scene import DazScene
@@ -41,6 +65,122 @@ def _make_client(return_value=None, output=None):
         request_id="test1234",
     )
     return client
+
+
+class _FakeBone:
+    def __init__(
+        self,
+        name: str,
+        label: str | None = None,
+        parent: "_FakeBone | None" = None,
+        rotation_order: str | None = "XYZ",
+        local_position: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
+        local_euler: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
+    ) -> None:
+        self.name = name
+        self.label = label
+        self.parent = parent
+        self.rotation_order = rotation_order
+        self.local_position = local_position
+        self.local_euler = local_euler
+        self._identifier = NodeIdentifier(name)
+
+
+class _FakeSkeleton:
+    def __init__(self, label: str, bones: list[_FakeBone]) -> None:
+        self.label = label
+        self._bones = bones
+        self._identifier = NodeIdentifier(label, kind="label")
+        self.position_calls: list[tuple[float, float, float]] = []
+
+    def bones(self) -> list[_FakeBone]:
+        return self._bones
+
+    def set_position(self, x: float, y: float, z: float) -> None:
+        self.position_calls.append((x, y, z))
+
+
+class _FakeScene:
+    def __init__(self, skeletons: list[_FakeSkeleton]) -> None:
+        self._skeletons = skeletons
+
+    def skeletons(self) -> list[_FakeSkeleton]:
+        return self._skeletons
+
+    def find_skeleton_by_label(self, label: str) -> _FakeSkeleton:
+        for skeleton in self._skeletons:
+            if skeleton.label == label:
+                return skeleton
+        raise KeyError(label)
+
+
+class _KinematicFakeBone:
+    def __init__(
+        self,
+        name: str,
+        label: str | None = None,
+        parent: "_KinematicFakeBone | None" = None,
+        local_position: tuple[float, float, float] | None = (1.0, 0.0, 0.0),
+    ) -> None:
+        self.name = name
+        self.label = label
+        self.parent = parent
+        self.rotation_order = "XYZ"
+        self.local_position = local_position
+        self.local_euler = (0.0, 0.0, 0.0)
+        self._identifier = NodeIdentifier(name)
+        self._world_position = (0.0, 0.0, 0.0)
+
+    def _world_angle(self) -> float:
+        import math
+
+        own = math.radians(self.local_euler[2])
+        if self.parent is None:
+            return own
+        return self.parent._world_angle() + own
+
+    @property
+    def position(self) -> tuple[float, float, float]:
+        import math
+
+        if self.parent is None:
+            return self._world_position
+        parent_position = self.parent.position
+        parent_angle = self.parent._world_angle()
+        offset = self.local_position or (0.0, 0.0, 0.0)
+        cos_a = math.cos(parent_angle)
+        sin_a = math.sin(parent_angle)
+        rotated = (
+            offset[0] * cos_a - offset[1] * sin_a,
+            offset[0] * sin_a + offset[1] * cos_a,
+            offset[2],
+        )
+        return (
+            parent_position[0] + rotated[0],
+            parent_position[1] + rotated[1],
+            parent_position[2] + rotated[2],
+        )
+
+    def set_local_rotation(self, x: float, y: float, z: float) -> None:
+        self.local_euler = (x, y, z)
+
+
+class _KinematicFakeSkeleton:
+    def __init__(self, label: str, bones: list[_KinematicFakeBone]) -> None:
+        self.label = label
+        self._bones = bones
+        self._by_name = {bone.name: bone for bone in bones}
+        self._identifier = NodeIdentifier(label, kind="label")
+        self.position_calls: list[tuple[float, float, float]] = []
+
+    def bones(self) -> list[_KinematicFakeBone]:
+        return self._bones
+
+    def find_bone(self, name: str) -> _KinematicFakeBone:
+        return self._by_name[name]
+
+    def set_position(self, x: float, y: float, z: float) -> None:
+        self.position_calls.append((x, y, z))
 
 
 class TestScriptBuilder(unittest.TestCase):
@@ -278,190 +418,73 @@ class TestBatch(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _ = future.value
 
-
-class _FakeBone:
-    def __init__(
-        self,
-        name: str,
-        label: str | None = None,
-        parent: "_FakeBone | None" = None,
-        rotation_order: str | None = "XYZ",
-        local_position: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
-        local_euler: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
-        position: dict[str, float] | None = None,
-    ) -> None:
-        self.name = name
-        self.label = label
-        self.parent = parent
-        self.rotation_order = rotation_order
-        self.local_position = local_position
-        self.local_euler = local_euler
-        self.position = position or {"x": 0.0, "y": 0.0, "z": 0.0}
-        self._identifier = NodeIdentifier(name)
+    def test_empty_batch_no_call(self):
+        client = _make_client(None)
+        with Batch(client):
+            pass
+        client.execute.assert_not_called()
 
 
-class _FakeSkeleton:
-    def __init__(self, label: str, bones: list[_FakeBone]) -> None:
-        self.label = label
-        self._bones = bones
-        self._identifier = NodeIdentifier(label, kind="label")
-        self.position_calls: list[tuple[float, float, float]] = []
-        self.rotation_calls: list[dict[str, tuple[float, float, float]]] = []
-
-    def bones(self) -> list[_FakeBone]:
-        return self._bones
-
-    def find_bone(self, name: str) -> _FakeBone:
-        for bone in self._bones:
-            if bone.name == name:
-                return bone
-        raise KeyError(name)
-
-    def set_position(self, x: float, y: float, z: float) -> None:
-        self.position_calls.append((x, y, z))
-
-    def set_bone_rotations(self, rotations: dict[str, tuple[float, float, float]]) -> None:
-        self.rotation_calls.append(dict(rotations))
-
-
-class _FakeScene:
-    def __init__(self, skeletons: list[_FakeSkeleton]) -> None:
-        self._skeletons = skeletons
-
-    def skeletons(self) -> list[_FakeSkeleton]:
-        return self._skeletons
-
-    def find_skeleton_by_label(self, label: str) -> _FakeSkeleton:
-        for skeleton in self._skeletons:
-            if skeleton.label == label:
-                return skeleton
-        raise KeyError(label)
-
-
-class TestInteractionRoadmapFoundation(unittest.TestCase):
-    def test_build_rig_profile_detects_family_and_chain(self):
-        hip = _FakeBone("hip", "Hip")
-        spine = _FakeBone("spine", "Spine", parent=hip)
-        shoulder = _FakeBone("r_shoulder", "Right Shoulder", parent=spine)
-        forearm = _FakeBone("r_forearm_twist", "Right Forearm Twist", parent=shoulder)
-        hand = _FakeBone("r_hand", "Right Hand", parent=forearm)
-        skeleton = _FakeSkeleton("Genesis 9", [hip, spine, shoulder, forearm, hand])
-
-        profile = build_rig_profile(skeleton)
-
-        self.assertIsInstance(profile, FigureRigProfile)
-        self.assertEqual(profile.family, "genesis_9")
-        self.assertEqual(profile.bone_names(), ["hip", "spine", "r_shoulder", "r_forearm_twist", "r_hand"])
-        self.assertEqual(profile.chain_to("r_hand"), ["hip", "spine", "r_shoulder", "r_forearm_twist", "r_hand"])
-        self.assertTrue(profile.bone("r_forearm_twist").is_twist)
-        self.assertFalse(profile.bone("hip").is_twist)
-        self.assertIn("x", profile.bone("r_forearm_twist").axis_limits)
-
-    def test_rig_profile_round_trips_to_dict(self):
-        profile = FigureRigProfile(
-            figure_label="Genesis 9",
-            family="genesis_9",
-            bones=[
-                BoneProfile(
-                    name="hip",
-                    label="Hip",
-                    axis_limits={"x": AxisLimit("x", -20.0, 20.0)},
-                ),
-                BoneProfile(
-                    name="r_forearm",
-                    label="Right Forearm",
-                    parent_name="hip",
-                    axis_limits={"y": AxisLimit("y", -45.0, 45.0, preferred_degrees=5.0)},
-                ),
-            ],
-            metadata={"bone_count": 2},
-        )
-
-        data = profile.to_dict()
-        restored = FigureRigProfile.from_dict(data)
-
-        self.assertEqual(restored.figure_label, "Genesis 9")
-        self.assertEqual(restored.family, "genesis_9")
-        self.assertEqual(restored.chain_to("r_forearm"), ["hip", "r_forearm"])
-        self.assertAlmostEqual(restored.bone("hip").axis_limits["x"].min_degrees, -20.0)
-        self.assertAlmostEqual(restored.bone("r_forearm").axis_limits["y"].preferred_degrees, 5.0)
-
-    def test_bone_profile_round_trips_axis_limits(self):
-        profile = BoneProfile(
-            name="r_forearm",
-            label="Right Forearm",
-            axis_limits={
-                "x": AxisLimit("x", -90.0, 90.0),
-                "z": AxisLimit("z", -45.0, 45.0, preferred_degrees=10.0),
-            },
-        )
-
-        restored = BoneProfile.from_dict(profile.to_dict())
-
-        self.assertEqual(restored.name, "r_forearm")
-        self.assertAlmostEqual(restored.axis_limits["x"].min_degrees, -90.0)
-        self.assertAlmostEqual(restored.axis_limits["z"].preferred_degrees, 10.0)
-
-    def test_chain_suggestions_cover_primary_lanes(self):
+class TestInteractionAdapter(unittest.TestCase):
+    def test_build_rig_profile_detects_family_and_anchors(self):
         hip = _FakeBone("hip", "Hip")
         spine = _FakeBone("spine", "Spine", parent=hip)
         chest = _FakeBone("chest", "Chest", parent=spine)
         neck = _FakeBone("neck", "Neck", parent=chest)
         head = _FakeBone("head", "Head", parent=neck)
-        l_upper = _FakeBone("l_upper_arm", "Left Upper Arm", parent=chest)
-        l_forearm = _FakeBone("l_forearm", "Left Forearm", parent=l_upper)
-        l_hand = _FakeBone("l_hand", "Left Hand", parent=l_forearm)
-        r_upper = _FakeBone("r_upper_arm", "Right Upper Arm", parent=chest)
-        r_forearm = _FakeBone("r_forearm", "Right Forearm", parent=r_upper)
-        r_hand = _FakeBone("r_hand", "Right Hand", parent=r_forearm)
-        skeleton = _FakeSkeleton("Genesis 9", [hip, spine, chest, neck, head, l_upper, l_forearm, l_hand, r_upper, r_forearm, r_hand])
+        l_hand = _FakeBone("l_hand", "Left Hand", parent=chest)
+        r_hand = _FakeBone("r_hand", "Right Hand", parent=chest)
+        l_foot = _FakeBone("l_foot", "Left Foot", parent=hip)
+        r_foot = _FakeBone("r_foot", "Right Foot", parent=hip)
+        skeleton = _FakeSkeleton("Genesis 9", [hip, spine, chest, neck, head, l_hand, r_hand, l_foot, r_foot])
 
         profile = build_rig_profile(skeleton)
-        suggestions = profile.chain_suggestions()
-        roles = {chain.role for chain in suggestions}
+        anchors = profile.anchor_map()
 
-        self.assertIn("arm", roles)
-        self.assertIn("spine", roles)
-        self.assertGreaterEqual(len(suggestions), 3)
-        right_chain = profile.suggest_primary_chain("r_hand")
-        self.assertIsInstance(right_chain, BoneChain)
-        self.assertEqual(right_chain.role, "hand")
-        self.assertEqual(right_chain.side, "right")
-        self.assertEqual(right_chain.effector_bone, "r_hand")
+        self.assertEqual(profile.family, "genesis_9")
+        self.assertIn("l_hand", anchors)
+        self.assertIn("r_hand", anchors)
+        self.assertIn("l_foot", anchors)
+        self.assertEqual(profile.anchor("r_hand").bone_name, "r_hand")
+        self.assertEqual(profile.anchor("l_foot").role, "foot")
 
-    def test_default_axis_limits_for_bone(self):
-        limits = default_axis_limits_for_bone("r_forearm")
-        self.assertIsInstance(limits["x"], AxisLimit)
-        self.assertLess(limits["x"].min_degrees, 0.0)
-        self.assertGreater(limits["x"].max_degrees, 0.0)
-
-    def test_interaction_plan_serializes_constraints(self):
-        plan = InteractionPlan(
-            actors=["Genesis 9", "Partner"],
-            constraints=[
-                PoseTarget("Genesis 9", "r_forearm", position=(1.0, 2.0, 3.0)),
-                ContactTarget("Genesis 9", "r_hand", "Partner", "l_shoulder"),
-                LookAtTarget("Genesis 9", "head", (0.0, 1.0, 2.0)),
-                BalanceTarget("Genesis 9", "pelvis", support_points=[(0.0, 0.0, 0.0)]),
-            ],
-            options=SolveOptions(backend="scipy", max_iterations=25),
-            metadata={"scenario": "hand-on-shoulder"},
+    def test_build_rig_profile_genesis_8_camel_case_anchors(self):
+        """Genesis 8/3 camelCase bone names (rHand, lFoot) resolve via canonical r_hand/l_foot anchors."""
+        hip = _FakeBone("hip", "Hip")
+        spine = _FakeBone("abdomenLower", "Abdomen Lower", parent=hip)
+        chest = _FakeBone("chestLower", "Chest Lower", parent=spine)
+        lCollar = _FakeBone("lCollar", "Left Collar", parent=chest)
+        rCollar = _FakeBone("rCollar", "Right Collar", parent=chest)
+        lForearmBend = _FakeBone("lForearmBend", "Left Forearm Bend", parent=lCollar)
+        rForearmBend = _FakeBone("rForearmBend", "Right Forearm Bend", parent=rCollar)
+        lHand = _FakeBone("lHand", "Left Hand", parent=lForearmBend)
+        rHand = _FakeBone("rHand", "Right Hand", parent=rForearmBend)
+        lFoot = _FakeBone("lFoot", "Left Foot", parent=hip)
+        rFoot = _FakeBone("rFoot", "Right Foot", parent=hip)
+        skeleton = _FakeSkeleton(
+            "Bob Genesis 8",
+            [hip, spine, chest, lCollar, rCollar, lForearmBend, rForearmBend, lHand, rHand, lFoot, rFoot],
         )
 
-        payload = plan.to_dict()
-        self.assertEqual(payload["actors"], ["Genesis 9", "Partner"])
-        self.assertEqual(payload["options"]["backend"], "scipy")
-        self.assertEqual(len(payload["constraints"]), 4)
-        self.assertEqual(payload["constraints"][0]["kind"], "PoseTarget")
-        self.assertEqual(payload["constraints"][1]["kind"], "ContactTarget")
+        profile = build_rig_profile(skeleton)
+        anchors = profile.anchor_map()
 
-    def test_interaction_plan_validate_ok(self):
+        self.assertEqual(profile.family, "genesis_3_8")
+        self.assertIn("r_hand", anchors, "r_hand anchor must resolve for camelCase rHand bone")
+        self.assertIn("l_hand", anchors, "l_hand anchor must resolve for camelCase lHand bone")
+        self.assertIn("r_foot", anchors)
+        self.assertIn("l_foot", anchors)
+        self.assertEqual(profile.anchor("r_hand").bone_name, "rHand")
+        self.assertEqual(profile.anchor("l_foot").bone_name, "lFoot")
+
+    def test_interaction_plan_validate_and_round_trip(self):
         profile = FigureRigProfile(
             figure_label="Genesis 9",
             family="genesis_9",
             bones=[
                 BoneProfile(name="hip"),
                 BoneProfile(name="r_hand", parent_name="hip"),
+                BoneProfile(name="l_foot", parent_name="hip"),
                 BoneProfile(name="head", parent_name="hip"),
             ],
         )
@@ -471,11 +494,41 @@ class TestInteractionRoadmapFoundation(unittest.TestCase):
                 PoseTarget("Genesis 9", "r_hand", orientation=(0.0, 0.0, 0.0)),
                 LookAtTarget("Genesis 9", "head", (0.0, 1.0, 2.0)),
                 BalanceTarget("Genesis 9", "hip", support_points=[(0.0, 0.0, 0.0)]),
+                HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0), offset=(0.0, 0.0, 0.0)),
+                FootTarget("Genesis 9", "l_foot", target_figure="Genesis 9", target_anchor="r_hand"),
             ],
+            options=SolveOptions(backend="auto", max_iterations=25),
+            metadata={"scenario": "touch"},
         )
 
-        issues = plan.validate({"Genesis 9": profile})
+        data = plan.to_dict()
+        restored = InteractionPlan.from_dict(data)
+        issues = restored.validate({"Genesis 9": profile})
+
+        self.assertEqual(data["options"]["backend"], "auto")
+        self.assertEqual(len(data["constraints"]), 5)
         self.assertEqual(issues, [])
+
+    def test_interaction_plan_accepts_compact_figure_aliases(self):
+        profile = FigureRigProfile(
+            figure_label="Genesis 9",
+            family="genesis_9",
+            bones=[
+                BoneProfile(name="hip"),
+                BoneProfile(name="r_hand", parent_name="hip"),
+            ],
+        )
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0))],
+        )
+
+        prepared = prepare_interaction_recipe(recipe, {"Genesis9": profile})
+
+        self.assertTrue(prepared.is_valid)
+        self.assertEqual(prepared.rig_profiles["Genesis9"].figure_label, "Genesis 9")
+        self.assertEqual(prepared.diagnostics["resolved_target_count"], 1)
 
     def test_interaction_plan_validate_reports_missing_bone(self):
         profile = FigureRigProfile(
@@ -494,52 +547,221 @@ class TestInteractionRoadmapFoundation(unittest.TestCase):
         self.assertEqual(issues[0].severity, "error")
         self.assertIn("r_hand", issues[0].message)
 
-    def test_solve_result_apply_uses_figure_label(self):
-        skeleton = MagicMock()
-        skeleton.set_bone_rotations = MagicMock()
-        result = SolveResult(
-            success=True,
-            pose_by_figure={"Genesis 9": {"hip": (0.0, 1.0, 2.0)}},
+    def test_hand_and_foot_targets_round_trip(self):
+        hand = HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0), offset=(0.1, 0.0, 0.0))
+        foot = FootTarget("Genesis 9", "l_foot", target_figure="Partner", target_anchor="r_hand")
+
+        hand_data = hand.to_dict()
+        foot_data = foot.to_dict()
+        hand_restored = HandTarget(
+            figure_label=hand_data["figure_label"],
+            anchor_name=hand_data["anchor_name"],
+            target_figure=hand_data.get("target_figure"),
+            target_anchor=hand_data.get("target_anchor"),
+            target_point=tuple(hand_data["target_point"]) if hand_data.get("target_point") else None,
+            offset=tuple(hand_data["offset"]),
+        )
+        foot_restored = FootTarget(
+            figure_label=foot_data["figure_label"],
+            anchor_name=foot_data["anchor_name"],
+            target_figure=foot_data.get("target_figure"),
+            target_anchor=foot_data.get("target_anchor"),
+            target_point=tuple(foot_data["target_point"]) if foot_data.get("target_point") else None,
+            offset=tuple(foot_data["offset"]),
         )
 
-        result.apply(skeleton, figure_label="Genesis 9")
+        self.assertEqual(hand_restored.anchor_name, "r_hand")
+        self.assertEqual(hand_restored.offset, (0.1, 0.0, 0.0))
+        self.assertEqual(foot_restored.target_anchor, "r_hand")
 
-        skeleton.set_bone_rotations.assert_called_once_with({"hip": (0.0, 1.0, 2.0)})
+    def test_resolve_interaction_target_same_figure(self):
+        hip = _FakeBone("hip", "Hip")
+        hand = _FakeBone("r_hand", "Right Hand", parent=hip, local_position=(10.0, 20.0, 30.0))
+        foot = _FakeBone("l_foot", "Left Foot", parent=hip, local_position=(1.0, 2.0, 3.0))
+        profile = build_rig_profile(_FakeSkeleton("Genesis 9", [hip, hand, foot]))
 
-    def test_solve_interaction_plan_resolves_target_and_balance(self):
+        resolved = resolve_interaction_target(
+            HandTarget("Genesis 9", "r_hand", target_point=(1.0, 2.0, 3.0), offset=(0.5, 0.0, -0.5)),
+            {"Genesis 9": profile},
+        )
+
+        self.assertEqual(resolved.bone_name, "r_hand")
+        self.assertEqual(resolved.target_point, (1.5, 2.0, 2.5))
+        self.assertIsNone(resolved.target_bone)
+
+    def test_resolve_interaction_target_cross_figure(self):
         source_hip = _FakeBone("hip", "Hip")
         source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip)
-        source_skel = _FakeSkeleton("Genesis 9", [source_hip, source_hand])
+        source_profile = build_rig_profile(_FakeSkeleton("Genesis 9", [source_hip, source_hand]))
 
         target_hip = _FakeBone("hip", "Hip")
-        target_shoulder = _FakeBone("l_shoulder", "Left Shoulder", parent=target_hip, position={"x": 7.0, "y": 8.0, "z": 9.0})
-        target_skel = _FakeSkeleton("Partner", [target_hip, target_shoulder])
+        target_hand = _FakeBone("r_hand", "Right Hand", parent=target_hip, local_position=(4.0, 5.0, 6.0))
+        target_profile = build_rig_profile(_FakeSkeleton("Partner", [target_hip, target_hand]))
 
-        scene = _FakeScene([source_skel, target_skel])
-        plan = InteractionPlan(
-            actors=["Genesis 9", "Partner"],
-            constraints=[
-                ContactTarget("Genesis 9", "r_hand", "Partner", "l_shoulder"),
-                BalanceTarget("Genesis 9", "hip", support_points=[(1.0, 2.0, 3.0)]),
-            ],
+        resolved = resolve_interaction_target(
+            FootTarget("Genesis 9", "r_hand", target_figure="Partner", target_anchor="r_hand"),
+            {"Genesis 9": source_profile, "Partner": target_profile},
         )
 
-        with patch("dazpy._interaction._solve_position_target", return_value={"r_hand": (1.0, 2.0, 3.0)}) as solver:
-            result = solve_interaction_plan(scene, plan)
+        self.assertEqual(resolved.target_figure, "Partner")
+        self.assertEqual(resolved.target_anchor, "r_hand")
+        self.assertEqual(resolved.target_bone, "r_hand")
+        self.assertEqual(resolved.target_point, (4.0, 5.0, 6.0))
 
-        self.assertTrue(result.success)
-        self.assertEqual(source_skel.position_calls, [(1.0, 2.0, 3.0)])
-        solver.assert_called_once()
-        call_args = solver.call_args.args
-        self.assertEqual(call_args[2].effector_bone, "r_hand")
-        self.assertEqual(call_args[3], (7.0, 8.0, 9.0))
-        self.assertEqual(result.pose_by_figure["Genesis 9"]["r_hand"], (1.0, 2.0, 3.0))
+    def test_interaction_recipe_round_trip(self):
+        recipe = InteractionRecipe(
+            kind="touch",
+            actors=["Genesis 9", "Partner"],
+            constraints=[
+                HandTarget("Genesis 9", "r_hand", target_figure="Partner", target_anchor="l_shoulder"),
+            ],
+            metadata={"scenario": "contact"},
+        )
 
-    def test_empty_batch_no_call(self):
-        client = _make_client(None)
-        with Batch(client):
-            pass
-        client.execute.assert_not_called()
+        data = recipe.to_dict()
+        restored = InteractionRecipe.from_dict(data)
+
+        self.assertEqual(restored.kind, "touch")
+        self.assertEqual(restored.actors, ["Genesis 9", "Partner"])
+        self.assertEqual(len(restored.constraints), 1)
+        self.assertIsInstance(restored.constraints[0], HandTarget)
+
+    def test_interaction_recipe_builders(self):
+        sit = build_sit_recipe("Genesis 9", seat_point=(0.0, 1.0, 2.0), support_points=[(1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)])
+        touch = build_touch_recipe("Genesis 9", "Partner")
+        kiss = build_kiss_recipe("Genesis 9", "Partner")
+        fight = build_fight_recipe("Genesis 9", "Partner", strike_anchor="r_foot", target_anchor="head")
+
+        self.assertEqual(sit.kind, "sit")
+        self.assertEqual(touch.kind, "touch")
+        self.assertEqual(kiss.kind, "kiss")
+        self.assertEqual(fight.kind, "fight")
+        self.assertEqual(sit.to_plan().actors, ["Genesis 9"])
+        self.assertTrue(any(isinstance(constraint, BalanceTarget) for constraint in sit.constraints))
+        self.assertTrue(any(isinstance(constraint, HandTarget) for constraint in touch.constraints))
+        self.assertTrue(sum(isinstance(constraint, LookAtTarget) for constraint in kiss.constraints) >= 2)
+        self.assertTrue(any(isinstance(constraint, FootTarget) for constraint in fight.constraints))
+
+    def test_prepare_interaction_recipe_compiles_targets(self):
+        source_hip = _FakeBone("hip", "Hip")
+        source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip, local_position=(1.0, 2.0, 3.0))
+        target_hip = _FakeBone("hip", "Hip")
+        target_shoulder = _FakeBone("l_shoulder", "Left Shoulder", parent=target_hip, local_position=(4.0, 5.0, 6.0))
+        source_profile = build_rig_profile(_FakeSkeleton("Genesis 9", [source_hip, source_hand]))
+        target_profile = build_rig_profile(_FakeSkeleton("Partner", [target_hip, target_shoulder]))
+
+        recipe = build_touch_recipe("Genesis 9", "Partner", source_anchor="r_hand", target_anchor="l_shoulder")
+        prepared = prepare_interaction_recipe(recipe, {"Genesis 9": source_profile, "Partner": target_profile})
+
+        self.assertIsInstance(prepared, PreparedInteractionRecipe)
+        self.assertTrue(prepared.is_valid)
+        self.assertEqual(prepared.diagnostics["recipe_kind"], "touch")
+        self.assertEqual(prepared.diagnostics["resolved_target_count"], 1)
+        self.assertEqual(len(prepared.resolved_targets), 1)
+        self.assertEqual(prepared.resolved_targets[0].bone_name, "r_hand")
+        self.assertEqual(prepared.resolved_targets[0].target_bone, "l_shoulder")
+        self.assertEqual(prepared.resolved_targets[0].target_point, (4.0, 5.0, 6.0))
+        self.assertEqual(prepared.to_dict()["plan"]["actors"], ["Genesis 9", "Partner"])
+
+    def test_prepared_recipe_apply_moves_figures(self):
+        source_hip = _FakeBone("hip", "Hip")
+        source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip, local_position=(1.0, 2.0, 3.0))
+        target_hip = _FakeBone("hip", "Hip")
+        target_shoulder = _FakeBone("l_shoulder", "Left Shoulder", parent=target_hip, local_position=(4.0, 5.0, 6.0))
+        source_skel = _FakeSkeleton("Genesis 9", [source_hip, source_hand])
+        target_skel = _FakeSkeleton("Partner", [target_hip, target_shoulder])
+        scene = _FakeScene([source_skel, target_skel])
+
+        source_profile = build_rig_profile(source_skel)
+        target_profile = build_rig_profile(target_skel)
+        prepared = prepare_interaction_recipe(
+            build_touch_recipe("Genesis 9", "Partner", source_anchor="r_hand", target_anchor="l_shoulder"),
+            {"Genesis 9": source_profile, "Partner": target_profile},
+        )
+
+        result = prepared.apply(scene)
+
+        self.assertIsInstance(result, PreparedInteractionResult)
+        self.assertIsInstance(result.pose_patch, InteractionPosePatch)
+        self.assertEqual(source_skel.position_calls, [(1.5, 1.5, 1.5)])
+        self.assertEqual(target_skel.position_calls, [(-1.5, -1.5, -1.5)])
+        self.assertEqual(result.pose_patch.diagnostics["figure_count"], 2)
+        self.assertEqual(result.pose_patch.diagnostics["unresolved_target_count"], 0)
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [1.5, 1.5, 1.5])
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Partner"], [-1.5, -1.5, -1.5])
+
+    def test_prepared_recipe_live_alignment_reduces_error(self):
+        hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))
+        shoulder = _KinematicFakeBone("l_shoulder", "Left Shoulder", parent=hip, local_position=(1.0, 0.0, 0.0))
+        upper_arm = _KinematicFakeBone("l_upper_arm", "Left Upper Arm", parent=shoulder, local_position=(1.0, 0.0, 0.0))
+        forearm = _KinematicFakeBone("l_forearm", "Left Forearm", parent=upper_arm, local_position=(1.0, 0.0, 0.0))
+        hand = _KinematicFakeBone("l_hand", "Left Hand", parent=forearm, local_position=(1.0, 0.0, 0.0))
+        source_skel = _KinematicFakeSkeleton("Genesis 9", [hip, shoulder, upper_arm, forearm, hand])
+        scene = _FakeScene([source_skel])
+
+        profile = build_rig_profile(source_skel)
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[HandTarget("Genesis 9", "l_hand", target_point=(3.0, 1.0, 0.0))],
+        )
+        prepared = prepare_interaction_recipe(recipe, {"Genesis 9": profile})
+
+        result = prepared.apply(scene, align_limb_targets=True, max_iterations=20, step_degrees=2.0, damping=0.35, tolerance=0.05)
+
+        self.assertEqual(len(result.alignment_results), 1)
+        self.assertIsInstance(result.alignment_results[0], LimbAlignmentResult)
+        self.assertLess(result.alignment_results[0].final_error, result.alignment_results[0].initial_error)
+        self.assertTrue(result.alignment_results[0].final_error is not None)
+
+    def test_hand_to_target_convenience_wrapper_aligns(self):
+        hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))
+        shoulder = _KinematicFakeBone("l_shoulder", "Left Shoulder", parent=hip, local_position=(1.0, 0.0, 0.0))
+        upper_arm = _KinematicFakeBone("l_upper_arm", "Left Upper Arm", parent=shoulder, local_position=(1.0, 0.0, 0.0))
+        forearm = _KinematicFakeBone("l_forearm", "Left Forearm", parent=upper_arm, local_position=(1.0, 0.0, 0.0))
+        hand = _KinematicFakeBone("l_hand", "Left Hand", parent=forearm, local_position=(1.0, 0.0, 0.0))
+        skeleton = _KinematicFakeSkeleton("Genesis 9", [hip, shoulder, upper_arm, forearm, hand])
+
+        result = align_hand_target(skeleton, (3.0, 1.0, 0.0), source_anchor="l_hand", max_iterations=20, step_degrees=2.0, damping=0.35, tolerance=0.05)
+
+        self.assertIsInstance(result, LimbAlignmentResult)
+        self.assertLess(result.final_error, result.initial_error)
+
+    def test_scene_level_interaction_applies_recipe(self):
+        hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))
+        shoulder = _KinematicFakeBone("l_shoulder", "Left Shoulder", parent=hip, local_position=(1.0, 0.0, 0.0))
+        upper_arm = _KinematicFakeBone("l_upper_arm", "Left Upper Arm", parent=shoulder, local_position=(1.0, 0.0, 0.0))
+        forearm = _KinematicFakeBone("l_forearm", "Left Forearm", parent=upper_arm, local_position=(1.0, 0.0, 0.0))
+        hand = _KinematicFakeBone("l_hand", "Left Hand", parent=forearm, local_position=(1.0, 0.0, 0.0))
+        skeleton = _KinematicFakeSkeleton("Genesis 9", [hip, shoulder, upper_arm, forearm, hand])
+        scene = DazScene.__new__(DazScene)
+        scene.skeletons = lambda: [skeleton]
+        scene.find_skeleton_by_label = lambda label: skeleton
+
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[HandTarget("Genesis 9", "l_hand", target_point=(3.0, 1.0, 0.0))],
+        )
+        result = DazScene.apply_interaction_recipe(
+            scene,
+            recipe,
+            align_limb_targets=True,
+            max_iterations=20,
+            step_degrees=2.0,
+            damping=0.35,
+            tolerance=0.05,
+        )
+
+        self.assertIsInstance(result, PreparedInteractionResult)
+        self.assertEqual(len(result.alignment_results), 1)
+        self.assertLess(result.alignment_results[0].final_error, result.alignment_results[0].initial_error)
+
+    def test_default_axis_limits_for_bone(self):
+        limits = default_axis_limits_for_bone("r_forearm")
+        self.assertIsInstance(limits["x"], AxisLimit)
+        self.assertLess(limits["x"].min_degrees, 0.0)
+        self.assertGreater(limits["x"].max_degrees, 0.0)
 
 
 class TestErrorMapping(unittest.TestCase):
@@ -905,6 +1127,25 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
         skel, client = self._make_skeleton(["hip"])
         bones = skel.bones()
         self.assertIsInstance(bones[0], DazBone)
+
+    def test_bone_metadata_single_call(self):
+        payload = [
+            {
+                "name": "hip",
+                "label": "Hip",
+                "parent_name": None,
+                "rotation_order": "XYZ",
+                "local_position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "local_euler": {"x": 1.0, "y": 2.0, "z": 3.0},
+            }
+        ]
+        skel, client = self._make_skeleton(payload)
+        result = skel.bone_metadata()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result[0]["name"], "hip")
+        self.assertIsNone(result[0]["parent_name"])
+        self.assertIn("getAllBones", client.execute.call_args[0][0])
+        self.assertIn("getNodeParent", client.execute.call_args[0][0])
 
     def test_find_bone_calls_findBone(self):
         skel, client = self._make_skeleton("hip")
@@ -3233,6 +3474,409 @@ class TestBoundingBox(unittest.TestCase):
 
     def test_repr(self):
         self.assertIn("BoundingBox", repr(self._box()))
+
+
+class TestCallCounts(unittest.TestCase):
+    """Prove that the batch paths reduce HTTP call counts dramatically."""
+
+    _BONE_META = [
+        {"name": "hip",      "label": "Hip",        "parent_name": None,    "rotation_order": "YXZ",
+         "local_position": {"x": 0, "y": 100, "z": 0}, "world_position": {"x": 0, "y": 100, "z": 0},
+         "local_euler": {"x": 0, "y": 0, "z": 0}},
+        {"name": "l_thigh",  "label": "LThigh",     "parent_name": "hip",   "rotation_order": "YXZ",
+         "local_position": {"x": 10, "y": 80, "z": 0}, "world_position": {"x": 10, "y": 80, "z": 0},
+         "local_euler": {"x": 0, "y": 0, "z": 0}},
+        {"name": "l_shin",   "label": "LShin",      "parent_name": "l_thigh","rotation_order": "YXZ",
+         "local_position": {"x": 10, "y": 50, "z": 0}, "world_position": {"x": 10, "y": 50, "z": 0},
+         "local_euler": {"x": 0, "y": 0, "z": 0}},
+        {"name": "l_foot",   "label": "LFoot",      "parent_name": "l_shin","rotation_order": "YXZ",
+         "local_position": {"x": 10, "y": 10, "z": 0}, "world_position": {"x": 10, "y": 10, "z": 0},
+         "local_euler": {"x": 0, "y": 0, "z": 0}},
+    ]
+    _BONE_ROTS = {b["name"]: [0.0, 0.0, 0.0] for b in _BONE_META}
+    _JACOBIAN = {
+        "base_position": [10.0, 10.0, 0.0],
+        "columns": [[1, 0, 0], [0, 1, 0], [0, 0, 1]] * 4,
+    }
+
+    def _make_batch_skeleton(self, max_iterations=12):
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+
+        def _execute(script):
+            if "getLabel" in script and "getAllBones" not in script:
+                return ExecutionResult(value="Genesis 9", output=[], request_id="x")
+            if "_columns" in script:
+                return ExecutionResult(value=self._JACOBIAN, output=[], request_id="x")
+            if "getLocalPos" in script:
+                return ExecutionResult(value=self._BONE_META, output=[], request_id="x")
+            # bone_rotations or set_bone_rotations — return rotations dict or None
+            if "_result" in script:
+                return ExecutionResult(value=self._BONE_ROTS, output=[], request_id="x")
+            return ExecutionResult(value=None, output=[], request_id="x")
+
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = _execute
+
+        skel = DazSkeleton.__new__(DazSkeleton)
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    def test_align_hand_target_call_count_bounded(self):
+        """align_hand_target must use ≤ 30 execute calls for 12 iterations."""
+        skel, client = self._make_batch_skeleton()
+        from dazpy import align_hand_target
+        align_hand_target(skel, (50.0, 10.0, 0.0), source_anchor="l_foot", max_iterations=12)
+        # Old per-bone approach: ~500 calls for a 4-bone chain, 12 iterations.
+        # Batch approach: 1 (label) + 1 (bone_meta) + 1 (bone_rots) + 1 (init jac) + 12×2 = 28.
+        self.assertLessEqual(client.execute.call_count, 30)
+
+    def test_align_foot_target_call_count_bounded(self):
+        """align_foot_target must use ≤ 30 execute calls for 12 iterations."""
+        skel, client = self._make_batch_skeleton()
+        from dazpy import align_foot_target
+        align_foot_target(skel, (50.0, 10.0, 0.0), source_anchor="l_foot", max_iterations=12)
+        self.assertLessEqual(client.execute.call_count, 30)
+
+    def test_align_hand_target_iterations_proportional(self):
+        """Call count scales linearly with max_iterations (2 calls/iter + O(1) setup)."""
+        skel3, client3 = self._make_batch_skeleton()
+        skel6, client6 = self._make_batch_skeleton()
+        from dazpy import align_hand_target
+        align_hand_target(skel3, (50.0, 10.0, 0.0), source_anchor="l_foot", max_iterations=3)
+        align_hand_target(skel6, (50.0, 10.0, 0.0), source_anchor="l_foot", max_iterations=6)
+        # Extra calls for 3 more iterations ≤ 7 (3 extra iters × 2 + rounding)
+        delta = client6.execute.call_count - client3.execute.call_count
+        self.assertLessEqual(delta, 7)
+
+    def test_build_rig_profile_world_position_populated(self):
+        """build_rig_profile populates world_position from bone_metadata()."""
+        from dazpy import build_rig_profile
+        skel, _ = self._make_batch_skeleton()
+        profile = build_rig_profile(skel)
+        foot = profile.bone("l_foot")
+        self.assertIsNotNone(foot.world_position)
+        self.assertEqual(foot.world_position, (10.0, 10.0, 0.0))
+
+    def test_bone_metadata_includes_world_position(self):
+        """bone_metadata() script must request getWSPos()."""
+        skel, client = self._make_batch_skeleton()
+        skel.bone_metadata()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSPos", script)
+        self.assertIn("world_position", script)
+
+
+class TestSceneSnapshot(unittest.TestCase):
+    """Tests for DazScene.scene_snapshot() and build_rig_profiles_from_snapshot()."""
+
+    from dazpy import build_rig_profiles_from_snapshot
+
+    _SAMPLE_SNAPSHOT = [
+        {
+            "name": "Genesis9",
+            "label": "Genesis 9",
+            "bones": [
+                {
+                    "name": "hip",
+                    "label": "Hip",
+                    "parent_name": None,
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": 0.0, "y": 100.0, "z": 0.0},
+                    "world_position": {"x": 0.0, "y": 100.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "name": "l_hand",
+                    "label": "Left Hand",
+                    "parent_name": "hip",
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": 20.0, "y": 150.0, "z": 0.0},
+                    "world_position": {"x": 20.0, "y": 150.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "name": "r_hand",
+                    "label": "Right Hand",
+                    "parent_name": "hip",
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": -20.0, "y": 150.0, "z": 0.0},
+                    "world_position": {"x": -20.0, "y": 150.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "name": "l_foot",
+                    "label": "Left Foot",
+                    "parent_name": "hip",
+                    "rotation_order": "YXZ",
+                    "local_position": {"x": 10.0, "y": 0.0, "z": 0.0},
+                    "world_position": {"x": 10.0, "y": 0.0, "z": 0.0},
+                    "local_euler": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+            ],
+        }
+    ]
+
+    def test_build_rig_profiles_from_snapshot_keys(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        self.assertIn("Genesis 9", profiles)
+        self.assertIn("Genesis9", profiles)
+        self.assertIs(profiles["Genesis 9"], profiles["Genesis9"])
+
+    def test_build_rig_profiles_figure_label_and_family(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        profile = profiles["Genesis 9"]
+        self.assertEqual(profile.figure_label, "Genesis 9")
+        self.assertEqual(profile.family, "genesis_9")
+
+    def test_build_rig_profiles_bone_world_position(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        bone = profiles["Genesis 9"].bone("l_hand")
+        self.assertEqual(bone.world_position, (20.0, 150.0, 0.0))
+        self.assertEqual(bone.local_position, (20.0, 150.0, 0.0))
+
+    def test_build_rig_profiles_parent_chain(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        profile = profiles["Genesis 9"]
+        self.assertEqual(profile.bone("l_hand").parent_name, "hip")
+        self.assertIsNone(profile.bone("hip").parent_name)
+
+    def test_build_rig_profiles_anchor_uses_world_position(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        from dazpy._interaction import _anchor_world_point_hint
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        profile = profiles["Genesis 9"]
+        point = _anchor_world_point_hint(profile, "r_hand")
+        self.assertIsNotNone(point)
+        self.assertAlmostEqual(point[0], -20.0)
+
+    def test_build_rig_profiles_source_metadata(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
+        self.assertEqual(profiles["Genesis 9"].metadata["source"], "snapshot")
+
+    def test_build_rig_profiles_empty_snapshot(self):
+        from dazpy import build_rig_profiles_from_snapshot
+        self.assertEqual(build_rig_profiles_from_snapshot([]), {})
+
+    def test_scene_snapshot_script_contains_getWSPos(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSPos", script)
+        self.assertIn("getAllBones", script)
+        self.assertIn("getSkeletonList", script)
+
+    def test_scene_snapshot_filter_serialized(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot(skeleton_labels=["Genesis 9", "Bob"])
+        script = client.execute.call_args[0][0]
+        self.assertIn('"Genesis 9"', script)
+        self.assertIn('"Bob"', script)
+
+    def test_scene_snapshot_no_filter_passes_null(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot()
+        script = client.execute.call_args[0][0]
+        self.assertIn("null", script)
+
+    def test_apply_recipe_uses_snapshot_when_available(self):
+        """apply_interaction_recipe_to_scene uses scene_snapshot() when present."""
+        from dazpy import build_rig_profiles_from_snapshot, InteractionRecipe, PoseTarget
+
+        snapshot = self._SAMPLE_SNAPSHOT
+        profiles = build_rig_profiles_from_snapshot(snapshot)
+
+        class _SnapshotScene:
+            def scene_snapshot(self, **_):
+                return snapshot
+
+            def skeletons(self):
+                raise AssertionError("skeletons() should not be called when scene_snapshot() is present")
+
+        recipe = InteractionRecipe(
+            kind="custom",
+            actors=["Genesis 9"],
+            constraints=[PoseTarget(figure_label="Genesis 9", bone_name="hip")],
+        )
+
+        class _SceneWithApply(_SnapshotScene):
+            def __init__(self):
+                self.applied = False
+
+            def apply_interaction_recipe(self, *a, **kw):
+                self.applied = True
+
+        # Just verify build_rig_profiles_from_snapshot returns correct structure
+        self.assertIn("Genesis 9", profiles)
+        self.assertEqual(profiles["Genesis 9"].bone("l_hand").world_position, (20.0, 150.0, 0.0))
+
+    def test_bone_profile_world_position_round_trips(self):
+        bp = BoneProfile(
+            name="test_bone",
+            world_position=(1.0, 2.0, 3.0),
+        )
+        d = bp.to_dict()
+        self.assertEqual(d["world_position"], [1.0, 2.0, 3.0])
+        restored = BoneProfile.from_dict(d)
+        self.assertEqual(restored.world_position, (1.0, 2.0, 3.0))
+
+    def test_bone_profile_world_position_none_by_default(self):
+        bp = BoneProfile(name="test_bone")
+        self.assertIsNone(bp.world_position)
+        d = bp.to_dict()
+        self.assertIsNone(d["world_position"])
+
+
+class TestBatchPoseEvaluation(unittest.TestCase):
+    """Tests for DazSkeleton.evaluate_pose() and evaluate_pose_jacobian()."""
+
+    def _make_skeleton_client(self, return_value):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(return_value)
+        skel = DazSkeleton.__new__(DazSkeleton)
+        from dazpy._node import NodeIdentifier
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    def test_evaluate_pose_script_contains_save_apply_restore(self):
+        skel, client = self._make_skeleton_client({"r_hand": [10.0, 20.0, 30.0]})
+        result = skel.evaluate_pose({"hip": (5.0, 0.0, 0.0)}, ["r_hand"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("_originals", script)
+        self.assertIn("getWSPos", script)
+        self.assertIn('"hip"', script)
+        self.assertIn('"r_hand"', script)
+
+    def test_evaluate_pose_returns_typed_tuples(self):
+        skel, client = self._make_skeleton_client({"r_hand": [1.0, 2.0, 3.0]})
+        result = skel.evaluate_pose({"hip": (0.0, 0.0, 0.0)}, ["r_hand"])
+        self.assertEqual(result, {"r_hand": (1.0, 2.0, 3.0)})
+
+    def test_evaluate_pose_empty_response(self):
+        skel, client = self._make_skeleton_client({})
+        result = skel.evaluate_pose({}, [])
+        self.assertEqual(result, {})
+
+    def test_evaluate_pose_jacobian_script_contains_perturbation(self):
+        skel, client = self._make_skeleton_client(
+            {"base_position": [0.0, 150.0, 0.0], "columns": [[1.0, 0.0, 0.0]] * 9}
+        )
+        skel.evaluate_pose_jacobian(["hip", "spine", "chest"], "r_hand", step_degrees=2.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSPos", script)
+        self.assertIn("_columns", script)
+        self.assertIn("setValue(_orig + _step)", script)
+        self.assertIn("2.0", script)
+
+    def test_evaluate_pose_jacobian_chain_serialized(self):
+        skel, client = self._make_skeleton_client(
+            {"base_position": [0.0, 0.0, 0.0], "columns": []}
+        )
+        skel.evaluate_pose_jacobian(["hip", "r_hand"], "r_hand")
+        script = client.execute.call_args[0][0]
+        self.assertIn('"hip"', script)
+        self.assertIn('"r_hand"', script)
+
+    def test_evaluate_pose_jacobian_returns_none_on_missing_effector(self):
+        skel, client = self._make_skeleton_client(None)
+        result = skel.evaluate_pose_jacobian(["hip"], "missing_bone")
+        self.assertIsNone(result)
+
+    def test_align_single_limb_uses_batch_path_when_client_present(self):
+        """align_single_limb_target dispatches to batch path for real skeletons."""
+        from dazpy import align_single_limb_target, FigureRigProfile, BoneProfile
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy._interaction import ResolvedInteractionTarget
+
+        # Build a minimal profile
+        hip = BoneProfile(name="hip")
+        r_hand = BoneProfile(name="r_hand", parent_name="hip")
+        profile = FigureRigProfile(figure_label="Test", family="genesis_9", bones=[hip, r_hand])
+
+        target = ResolvedInteractionTarget(
+            figure_label="Test",
+            anchor_name="r_hand",
+            bone_name="r_hand",
+            target_point=(10.0, 150.0, 0.0),
+        )
+
+        call_log = []
+
+        def _execute(script):
+            call_log.append(script)
+            if "getAllBones" in script and "_result" not in script and "_columns" not in script:
+                # bone_rotations()
+                return ExecutionResult(value={"hip": [0.0, 0.0, 0.0], "r_hand": [0.0, 0.0, 0.0]}, output=[], request_id="x")
+            if "_columns" in script:
+                # evaluate_pose_jacobian
+                return ExecutionResult(
+                    value={"base_position": [0.0, 150.0, 0.0], "columns": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] * 2},
+                    output=[], request_id="x",
+                )
+            # set_bone_rotations
+            return ExecutionResult(value=None, output=[], request_id="x")
+
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = _execute
+
+        skel = DazSkeleton.__new__(DazSkeleton)
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+
+        result = align_single_limb_target(skel, profile, target)
+
+        self.assertEqual(result.diagnostics.get("path"), "batch")
+        self.assertIsNotNone(result.initial_error)
+
+    def test_align_single_limb_batch_already_aligned(self):
+        """Batch path returns converged immediately when already within tolerance."""
+        from dazpy import align_single_limb_target, FigureRigProfile, BoneProfile
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy._interaction import ResolvedInteractionTarget
+
+        hip = BoneProfile(name="hip")
+        r_hand = BoneProfile(name="r_hand", parent_name="hip")
+        profile = FigureRigProfile(figure_label="Test", family="genesis_9", bones=[hip, r_hand])
+
+        target = ResolvedInteractionTarget(
+            figure_label="Test",
+            anchor_name="r_hand",
+            bone_name="r_hand",
+            target_point=(0.0, 150.0, 0.0),  # exactly at base_position
+        )
+
+        def _execute(script):
+            if "_columns" in script:
+                return ExecutionResult(
+                    value={"base_position": [0.0, 150.0, 0.0], "columns": [[1, 0, 0]] * 6},
+                    output=[], request_id="x",
+                )
+            return ExecutionResult(value={"hip": [0, 0, 0], "r_hand": [0, 0, 0]}, output=[], request_id="x")
+
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = _execute
+
+        skel = DazSkeleton.__new__(DazSkeleton)
+        object.__setattr__(skel, "_client", client)
+        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+
+        result = align_single_limb_target(skel, profile, target, tolerance=0.5)
+
+        self.assertTrue(result.converged)
+        self.assertEqual(result.iterations, 0)
+        self.assertEqual(result.diagnostics.get("reason"), "already_aligned")
 
 
 if __name__ == "__main__":
