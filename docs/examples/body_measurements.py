@@ -412,7 +412,12 @@ def _section_perimeter(mesh, y: float) -> float | None:
         plane_origin=(0.0, float(y), 0.0),
         plane_normal=(0.0, 1.0, 0.0),
     )
-    return _best_loop_perimeter(section)
+    if section is None:
+        return None
+    loop = _select_torso_loop(section)
+    if loop is None:
+        return None
+    return _loop_perimeter(loop)
 
 
 def _section_torso_perimeter(mesh, y: float) -> float | None:
@@ -503,7 +508,7 @@ def _scan_calibrated_band(
         )
     if calibration.fallback_mode == "min":
         return min(profile, key=lambda item: item[1])
-    return max(profile, key=lambda item: item[1])
+    return _robust_profile_max(profile)
 
 
 def _build_mesh(vertices: list[list[float]], faces: list[list[int]]):
