@@ -47,22 +47,81 @@ class DazViewport:
         path: str,
         width: int | None = None,
         height: int | None = None,
+        hide_overlays: bool = True,
     ) -> str:
         """Capture the active 3D viewport to a PNG or JPEG file.
 
+        When *hide_overlays* is True (default), axes, floor grid, pose tool,
+        and aspect frame are temporarily disabled before capture and restored
+        afterwards.  Pass False to capture the viewport exactly as it appears.
+
         *width* and *height* are accepted for API compatibility but ignored —
-        Dz3DViewport does not expose resize via DazScript.  Set the viewport
-        size in DAZ Studio before calling this method if a specific resolution
-        is needed.  The output path is returned as confirmation.
+        Dz3DViewport does not expose resize via DazScript.
         """
         js_path = json.dumps(path)
-        script = ScriptBuilder.iife(f"""
-            var vp = {_VIEWPORT_EXPR};
-            if (!vp) return null;
-            var img = vp.captureImage();
-            if (!img) return null;
-            img.save({js_path});
-            return {js_path};
-        """)
+        if hide_overlays:
+            script = ScriptBuilder.iife(f"""
+                var vp = {_VIEWPORT_EXPR};
+                if (!vp) return null;
+
+                // Save viewport overlay state
+                var prevAxes        = vp.axesOn;
+                var prevFloor       = vp.floorStyle;
+                var prevPose        = vp.showPoseTool;
+                var prevAspect      = vp.aspectOn;
+                var prevThirds      = vp.thirdsGuideOn;
+                var prevToolBarMode = vp.toolBarMode;
+
+                // Save scene state
+                var prevSelection = Scene.getPrimarySelection();
+                var tnNode = Scene.findNodeByLabel("Tonemapper Options");
+                var envNode = Scene.findNodeByLabel("Environment Options");
+                var prevTnVisible  = tnNode  ? tnNode.isVisibleInViewport()  : null;
+                var prevEnvVisible = envNode ? envNode.isVisibleInViewport() : null;
+
+                // Hide overlays
+                vp.axesOn        = false;
+                vp.floorStyle    = 0;
+                vp.showPoseTool  = false;
+                vp.aspectOn      = false;
+                vp.thirdsGuideOn = false;
+                vp.toolBarMode   = 0;
+
+                // Deselect and hide env nodes
+                Scene.setPrimarySelection(null);
+                if (tnNode)  tnNode.setVisibleInViewport(false);
+                if (envNode) envNode.setVisibleInViewport(false);
+
+                vp.updateGL();
+
+                var img = vp.captureImage();
+
+                // Restore all state
+                vp.axesOn        = prevAxes;
+                vp.floorStyle    = prevFloor;
+                vp.showPoseTool  = prevPose;
+                vp.aspectOn      = prevAspect;
+                vp.thirdsGuideOn = prevThirds;
+                vp.toolBarMode   = prevToolBarMode;
+
+                Scene.setPrimarySelection(prevSelection);
+                if (tnNode  && prevTnVisible  !== null) tnNode.setVisibleInViewport(prevTnVisible);
+                if (envNode && prevEnvVisible !== null) envNode.setVisibleInViewport(prevEnvVisible);
+
+                vp.updateGL();
+
+                if (!img) return null;
+                img.save({js_path});
+                return {js_path};
+            """)
+        else:
+            script = ScriptBuilder.iife(f"""
+                var vp = {_VIEWPORT_EXPR};
+                if (!vp) return null;
+                var img = vp.captureImage();
+                if (!img) return null;
+                img.save({js_path});
+                return {js_path};
+            """)
         result = self._client.execute(script).value
         return str(result) if result is not None else path
