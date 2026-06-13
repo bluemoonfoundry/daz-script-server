@@ -67,6 +67,7 @@ print(response.json())
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
 - [What's New in v2.6.0](#whats-new-in-v260)
+- [What's New in v2.5.0](#whats-new-in-v250)
 - [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
 - [What's New in v2.2.0](#whats-new-in-v220)
@@ -175,6 +176,8 @@ See `docs/examples/fundamentals/scene_save_copy.py` for a complete example
 with `--compare` and `--dry-run` options.
 
 ---
+
+## What's New in v2.5.0
 
 ### 🤝 Interaction Posing — Multi-Figure Poses and IK Alignment
 
