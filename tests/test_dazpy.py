@@ -3901,33 +3901,29 @@ class TestDazViewport(unittest.TestCase):
         self.assertEqual(result, {"width": 1280, "height": 720})
         client.execute.assert_called_once()
 
-    def test_set_size_calls_execute(self):
+    def test_set_size_raises(self):
         vp, client = self._make_viewport()
-        vp.set_size(800, 600)
-        script = client.execute.call_args[0][0]
-        self.assertIn("800", script)
-        self.assertIn("600", script)
-        self.assertIn("setFixedSize", script)
+        with self.assertRaises(NotImplementedError):
+            vp.set_size(800, 600)
 
     def test_capture_basic(self):
         path = "C:/tmp/snap.png"
         vp, client = self._make_viewport(return_value=path)
         result = vp.capture(path)
         script = client.execute.call_args[0][0]
-        self.assertIn("captureToFile", script)
+        self.assertIn("captureImage", script)
+        self.assertIn(".save(", script)
         self.assertIn(json.dumps(path), script)
         self.assertEqual(result, path)
 
-    def test_capture_with_resize(self):
+    def test_capture_ignores_width_height(self):
         path = "C:/tmp/snap.png"
         vp, client = self._make_viewport(return_value=path)
         vp.capture(path, width=1920, height=1080)
         script = client.execute.call_args[0][0]
-        self.assertIn("captureToFile", script)
-        self.assertIn("setFixedSize", script)
-        self.assertIn("1920", script)
-        self.assertIn("1080", script)
-        self.assertIn("_prevSize", script)
+        self.assertIn("captureImage", script)
+        self.assertNotIn("setFixedSize", script)
+        self.assertNotIn("_prevSize", script)
 
     def test_capture_returns_path_on_null_result(self):
         path = "C:/tmp/snap.png"

@@ -27,20 +27,20 @@ class DazViewport:
         script = ScriptBuilder.iife(f"""
             var vp = {_VIEWPORT_EXPR};
             if (!vp) return null;
-            var r = vp.geometry();
+            var r = vp.geometry;
             return {{width: r.width, height: r.height}};
         """)
         return self._client.execute(script).value
 
     def set_size(self, width: int, height: int) -> None:
-        """Resize the active 3D viewport."""
-        w, h = int(width), int(height)
-        script = ScriptBuilder.iife(f"""
-            var vp = {_VIEWPORT_EXPR};
-            if (!vp) return;
-            vp.setFixedSize(new QSize({w}, {h}));
-        """)
-        self._client.execute(script)
+        """Not supported — Dz3DViewport does not expose resize via DazScript.
+
+        Resize the DAZ Studio viewport window manually before calling capture().
+        """
+        raise NotImplementedError(
+            "Viewport resize via DazScript is not supported. "
+            "Resize the DAZ Studio viewport window manually."
+        )
 
     def capture(
         self,
@@ -50,29 +50,18 @@ class DazViewport:
     ) -> str:
         """Capture the active 3D viewport to a PNG or JPEG file.
 
-        When *width* and *height* are given the viewport is temporarily resized
-        before capture and restored afterwards.  The output path is returned as
-        confirmation.
+        *width* and *height* are accepted for API compatibility but ignored —
+        Dz3DViewport does not expose resize via DazScript.  Set the viewport
+        size in DAZ Studio before calling this method if a specific resolution
+        is needed.  The output path is returned as confirmation.
         """
         js_path = json.dumps(path)
-        resize_before = ""
-        resize_after = ""
-        if width is not None and height is not None:
-            w, h = int(width), int(height)
-            resize_before = (
-                f"var _prevSize = vp.geometry();"
-                f"vp.setFixedSize(new QSize({w}, {h}));"
-            )
-            resize_after = (
-                "vp.setFixedSize(new QSize(_prevSize.width, _prevSize.height));"
-            )
-
         script = ScriptBuilder.iife(f"""
             var vp = {_VIEWPORT_EXPR};
             if (!vp) return null;
-            {resize_before}
-            vp.captureToFile({js_path});
-            {resize_after}
+            var img = vp.captureImage();
+            if (!img) return null;
+            img.save({js_path});
             return {js_path};
         """)
         result = self._client.execute(script).value
