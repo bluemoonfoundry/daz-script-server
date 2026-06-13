@@ -50,7 +50,7 @@ ENVIRONMENT SETUP
 4. Open a scene in DAZ Studio containing a Genesis 9 figure with FACS HD
    applied, connect a webcam, then run:
 
-       python docs/examples/webcam_expression_mirror.py
+       python docs/examples/ai_vision/webcam_expression_mirror.py
 
 Usage:
     python webcam_expression_mirror.py

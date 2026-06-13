@@ -72,8 +72,8 @@ ENVIRONMENT SETUP
    (Patterns A, B, C also work with other figure labels — edit OUT_DIR and
    FIGURE at the top of the file).
 
-       python docs/examples/vn_render_workflow.py
-       python docs/examples/vn_render_workflow.py --pattern A
+       python docs/examples/rendering/vn_render_workflow.py
+       python docs/examples/rendering/vn_render_workflow.py --pattern A
 
 Usage:
     python vn_render_workflow.py [--pattern {0,A,B,C}] [--out DIR]

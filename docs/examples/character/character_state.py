@@ -55,7 +55,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio containing the target figure, then run:
 
-       python docs/examples/character_state.py save --figure "Genesis 9" --out state.json
+       python docs/examples/character/character_state.py save --figure "Genesis 9" --out state.json
 
 Usage:
     python character_state.py save    --figure "Genesis 9" --out state.json

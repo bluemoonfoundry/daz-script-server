@@ -82,7 +82,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio with an animated Genesis 9 figure, then run:
 
-       python docs/examples/animation_frame_dump.py --figure "Genesis 9" --out anim.json
+       python docs/examples/character/animation_frame_dump.py --figure "Genesis 9" --out anim.json
 
 Usage:
     python animation_frame_dump.py --figure "Genesis 9" --out anim.json

@@ -40,7 +40,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio and select any node, then run:
 
-       python docs/examples/raw_script.py
+       python docs/examples/fundamentals/raw_script.py
 
 Usage:
     python raw_script.py

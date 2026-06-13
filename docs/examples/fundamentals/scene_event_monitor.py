@@ -45,10 +45,10 @@ ENVIRONMENT SETUP
 
 4. Start DAZ Studio with a scene loaded, then run one of:
 
-       python docs/examples/scene_event_monitor.py monitor
-       python docs/examples/scene_event_monitor.py monitor --filter node,selection
-       python docs/examples/scene_event_monitor.py log --out events.jsonl
-       python docs/examples/scene_event_monitor.py wait-for --type node.added
+       python docs/examples/fundamentals/scene_event_monitor.py monitor
+       python docs/examples/fundamentals/scene_event_monitor.py monitor --filter node,selection
+       python docs/examples/fundamentals/scene_event_monitor.py log --out events.jsonl
+       python docs/examples/fundamentals/scene_event_monitor.py wait-for --type node.added
 
 Usage:
     python scene_event_monitor.py monitor [--filter CATEGORIES] [--quiet]

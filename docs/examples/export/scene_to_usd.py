@@ -58,7 +58,7 @@ ENVIRONMENT SETUP
 4. Open a scene in DAZ Studio, then run this script from the repo root or
    from the docs/examples directory:
 
-       python docs/examples/scene_to_usd.py --out scene.usda
+       python docs/examples/export/scene_to_usd.py --out scene.usda
 
 VIEWING THE OUTPUT
 ------------------

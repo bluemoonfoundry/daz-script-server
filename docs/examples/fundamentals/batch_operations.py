@@ -54,7 +54,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio with one or more figures, then run:
 
-       python docs/examples/batch_operations.py
+       python docs/examples/fundamentals/batch_operations.py
 
 Usage:
     python batch_operations.py

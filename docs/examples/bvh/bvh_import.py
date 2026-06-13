@@ -48,7 +48,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio with a Genesis figure, then run:
 
-       python docs/examples/bvh_import.py walk.bvh
+       python docs/examples/bvh/bvh_import.py walk.bvh
 
 Usage:
     python bvh_import.py walk.bvh

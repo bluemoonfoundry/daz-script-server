@@ -65,7 +65,7 @@ ENVIRONMENT SETUP
 
 4. Produce two state files with character_state.py, then run:
 
-       python docs/examples/pose_interpolation.py --a neutral.json --b smile.json --steps 10
+       python docs/examples/animation/pose_interpolation.py --a neutral.json --b smile.json --steps 10
 
 Usage:
     python pose_interpolation.py --a neutral.json --b smile.json --steps 10

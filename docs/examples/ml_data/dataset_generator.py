@@ -43,7 +43,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio containing a Genesis 9 figure, then run:
 
-       python docs/examples/dataset_generator.py
+       python docs/examples/ml_data/dataset_generator.py
 
 Usage:
     python dataset_generator.py [--count 100] [--out C:/dataset] [--size 512]

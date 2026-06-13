@@ -49,7 +49,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio with an animated figure, then run:
 
-       python docs/examples/keyframe_baking.py --figure "Genesis 9"
+       python docs/examples/animation/keyframe_baking.py --figure "Genesis 9"
 
 Usage:
     python keyframe_baking.py --figure "Genesis 9"

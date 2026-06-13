@@ -42,7 +42,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio with one or more cameras, then run:
 
-       python docs/examples/multi_camera_render.py
+       python docs/examples/rendering/multi_camera_render.py
 
 Usage:
     python multi_camera_render.py

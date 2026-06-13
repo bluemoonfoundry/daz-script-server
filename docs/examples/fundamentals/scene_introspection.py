@@ -39,7 +39,7 @@ ENVIRONMENT SETUP
 
 4. Open any scene in DAZ Studio, then run:
 
-       python docs/examples/scene_introspection.py
+       python docs/examples/fundamentals/scene_introspection.py
 
 Usage:
     python scene_introspection.py

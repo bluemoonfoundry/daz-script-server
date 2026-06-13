@@ -8,40 +8,56 @@ running inside DAZ Studio and `dazpy` installed in your Python environment.
 pip install dazpy
 ```
 
-The examples are roughly ordered from simple to complex.  Start with
-`raw_script.py` if you are new to the SDK.
+Examples are organised into folders by topic.  Run them from the
+`docs/examples/` directory:
+
+```
+docs/examples/
+  fundamentals/   — raw scripting, scene inspection, batching
+  character/      — pose, state, IK, animation dumps
+  animation/      — keyframe baking, clip mixing, interpolation
+  geometry/       — mesh analysis, body measurements
+  export/         — USD export
+  rendering/      — turntable, multi-cam, batch renders, VN workflows
+  ml_data/        — dataset generation for ML training
+  ai_vision/      — MediaPipe expression transfer, webcam mirroring
+  bvh/            — BVH motion-capture import (in development)
+```
+
+Start with `fundamentals/raw_script.py` if you are new to the SDK.
 
 ---
 
 ## Quick reference
 
-| Script | Category | What Python does | Renders? |
+| Script | Folder | What Python does | Renders? |
 |---|---|---|---|
-| [raw_script.py](#raw_scriptpy) | Fundamentals | Executes arbitrary DazScript and prints the result | No |
-| [scene_event_monitor.py](#scene_event_monitorpy) | Fundamentals | Streams real-time scene-change events via SSE (monitor / log / wait-for) | No |
-| [scene_introspection.py](#scene_introspectionpy) | Fundamentals | Dumps the full scene hierarchy and transforms as JSON | No |
-| [scene_inventory.py](#scene_inventorypy) | Fundamentals | Structured per-node audit (type, materials, vertex count, etc.) | No |
-| [batch_operations.py](#batch_operationspy) | Fundamentals | Reads multiple properties in one HTTP call using `Batch` | No |
-| [character_state.py](#character_statepy) | Character | Saves and restores morphs, expression controls, and bone rotations | No |
-| [pose_transfer.py](#pose_transferpy) | Character | Copies a pose from one figure to another in a single undo step | No |
-| [animation_frame_dump.py](#animation_frame_dumppy) | Character | Exports bone rotations and morph values for every animation frame | No |
-| [keyframe_baking.py](#keyframe_bakingpy) | Animation | Bakes constraint-driven or IK-driven animation to explicit keyframes | No |
-| [animation_mixing.py](#animation_mixingpy) | Animation | Clips, crossfades, concatenates, and applies animation clips offline | No |
-| [pose_interpolation.py](#pose_interpolationpy) | Animation | Interpolates between two saved states with easing curves and renders each step | Yes |
-| [geometry_analysis.py](#geometry_analysispy) | Geometry | Inspects mesh metadata, bounding boxes, face groups, and exports triangulated geometry | No |
-| [body_measurements.py](#body_measurementspy) | Geometry | Computes height and bust / waist / hip circumferences from horizontal mesh slices | No |
-| [scene_to_usd.py](#scene_to_usdpy) | Export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
-| [turntable.py](#turntablepy) | Rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
-| [multi_camera_render.py](#multi_camera_renderpy) | Rendering | Renders from every camera in the scene to separate files | Yes |
-| [material_color_variations.py](#material_color_variationspy) | Rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
-| [batch_render_morph_variations.py](#batch_render_morph_variationspy) | Rendering | Renders a matrix of morph value combinations | Yes |
-| [vn_render_workflow.py](#vn_render_workflowpy) | Rendering | Four VN pipeline patterns: single render, batch variants, interleaved scene setup, multi-figure | Yes |
-| [dataset_generator.py](#dataset_generatorpy) | ML / Data | Generates a randomised render dataset with JSON sidecar for LoRA training | Yes |
-| [expression_transfer.py](#expression_transferpy) | AI / Vision | Extracts a facial expression from a photo using MediaPipe and applies it to a Genesis 9 figure | No |
-| [webcam_expression_mirror.py](#webcam_expression_mirrorpy) | AI / Vision | Mirrors your live webcam expression onto a Genesis 9 figure in real time | No |
+| [raw_script.py](#raw_scriptpy) | fundamentals | Executes arbitrary DazScript and prints the result | No |
+| [scene_event_monitor.py](#scene_event_monitorpy) | fundamentals | Streams real-time scene-change events via SSE (monitor / log / wait-for) | No |
+| [scene_introspection.py](#scene_introspectionpy) | fundamentals | Dumps the full scene hierarchy and transforms as JSON | No |
+| [scene_inventory.py](#scene_inventorypy) | fundamentals | Structured per-node audit (type, materials, vertex count, etc.) | No |
+| [batch_operations.py](#batch_operationspy) | fundamentals | Reads multiple properties in one HTTP call using `Batch` | No |
+| [character_state.py](#character_statepy) | character | Saves and restores morphs, expression controls, and bone rotations | No |
+| [pose_transfer.py](#pose_transferpy) | character | Copies a pose from one figure to another in a single undo step | No |
+| [animation_frame_dump.py](#animation_frame_dumppy) | character | Exports bone rotations and morph values for every animation frame | No |
+| [ik_bone_to_target.py](#ik_bone_to_targetpy) | character | Moves a bone toward a named target node using IK | No |
+| [keyframe_baking.py](#keyframe_bakingpy) | animation | Bakes constraint-driven or IK-driven animation to explicit keyframes | No |
+| [animation_mixing.py](#animation_mixingpy) | animation | Clips, crossfades, concatenates, and applies animation clips offline | No |
+| [pose_interpolation.py](#pose_interpolationpy) | animation | Interpolates between two saved states with easing curves and renders each step | Yes |
+| [geometry_analysis.py](#geometry_analysispy) | geometry | Inspects mesh metadata, bounding boxes, face groups, and exports triangulated geometry | No |
+| [body_measurements.py](#body_measurementspy) | geometry | Computes height and bust / waist / hip circumferences from horizontal mesh slices | No |
+| [scene_to_usd.py](#scene_to_usdpy) | export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
+| [turntable.py](#turntablepy) | rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
+| [multi_camera_render.py](#multi_camera_renderpy) | rendering | Renders from every camera in the scene to separate files | Yes |
+| [material_color_variations.py](#material_color_variationspy) | rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
+| [batch_render_morph_variations.py](#batch_render_morph_variationspy) | rendering | Renders a matrix of morph value combinations | Yes |
+| [vn_render_workflow.py](#vn_render_workflowpy) | rendering | Four VN pipeline patterns: single render, batch variants, interleaved scene setup, multi-figure | Yes |
+| [dataset_generator.py](#dataset_generatorpy) | ml_data | Generates a randomised render dataset with JSON sidecar for LoRA training | Yes |
+| [expression_transfer.py](#expression_transferpy) | ai_vision | Extracts a facial expression from a photo using MediaPipe and applies it to a Genesis 9 figure | No |
+| [webcam_expression_mirror.py](#webcam_expression_mirrorpy) | ai_vision | Mirrors your live webcam expression onto a Genesis 9 figure in real time | No |
 
-BVH / motion-capture examples (`bvh_import.py`, `bvh_discover.py`,
-`bvh_bone_maps.py`) are under active development and not yet stable.
+BVH / motion-capture examples (`bvh/bvh_import.py`, `bvh/bvh_discover.py`,
+`bvh/bvh_bone_maps.py`) are under active development and not yet stable.
 
 ---
 
@@ -60,17 +76,17 @@ shows the local time, event type (colour-coded by category), and a short
 payload summary.
 
 ```bash
-python scene_event_monitor.py monitor
-python scene_event_monitor.py monitor --filter node,selection
-python scene_event_monitor.py monitor --filter render --quiet
+python fundamentals/scene_event_monitor.py monitor
+python fundamentals/scene_event_monitor.py monitor --filter node,selection
+python fundamentals/scene_event_monitor.py monitor --filter render --quiet
 ```
 
 **log** — append every event as a JSON object to a JSONL file.  Useful for
 capturing a work session and replaying or analysing it offline.
 
 ```bash
-python scene_event_monitor.py log --out session.jsonl
-python scene_event_monitor.py log --out renders.jsonl --filter render
+python fundamentals/scene_event_monitor.py log --out session.jsonl
+python fundamentals/scene_event_monitor.py log --out renders.jsonl --filter render
 ```
 
 **wait-for** — block until one matching event arrives, print its data, and
@@ -79,8 +95,8 @@ synchronise with DAZ Studio — for example, waiting for `render.finished`
 before post-processing the output file.
 
 ```bash
-python scene_event_monitor.py wait-for --type render.finished
-python scene_event_monitor.py wait-for --type scene.loaded --timeout 60
+python fundamentals/scene_event_monitor.py wait-for --type render.finished
+python fundamentals/scene_event_monitor.py wait-for --type scene.loaded --timeout 60
 ```
 
 | Argument | Subcommand | Default | Description |
@@ -105,7 +121,7 @@ Executes an IIFE against the primary scene selection and pretty-prints the
 JSON result.
 
 ```bash
-python raw_script.py
+python fundamentals/raw_script.py
 ```
 
 No arguments.  Edit the script body inline to run your own DazScript.
@@ -118,8 +134,8 @@ Read-only dump of the entire scene hierarchy and world-space transforms.
 Output is JSON and can be piped to `jq` or redirected to a file.
 
 ```bash
-python scene_introspection.py
-python scene_introspection.py | jq '.tree[0]'
+python fundamentals/scene_introspection.py
+python fundamentals/scene_introspection.py | jq '.tree[0]'
 ```
 
 No arguments.
@@ -135,8 +151,8 @@ bone and morph counts.  Everything is gathered in a single DazScript call.
 Useful for pipeline QA, asset auditing, and debugging scene composition.
 
 ```bash
-python scene_inventory.py
-python scene_inventory.py --out inventory.json --pretty
+python fundamentals/scene_inventory.py
+python fundamentals/scene_inventory.py --out inventory.json --pretty
 ```
 
 | Argument | Default | Description |
@@ -156,8 +172,8 @@ Includes an optional `--compare` mode that runs the same reads the naive way
 and prints the speedup ratio.
 
 ```bash
-python batch_operations.py
-python batch_operations.py --compare
+python fundamentals/batch_operations.py
+python fundamentals/batch_operations.py --compare
 ```
 
 | Argument | Default | Description |
@@ -180,8 +196,8 @@ Only non-default values are stored so the file stays compact.
 State files are the input format for `pose_interpolation.py`.
 
 ```bash
-python character_state.py save    --figure "Genesis 9" --out state.json
-python character_state.py restore --figure "Genesis 9" --file state.json
+python character/character_state.py save    --figure "Genesis 9" --out state.json
+python character/character_state.py restore --figure "Genesis 9" --file state.json
 ```
 
 **save subcommand**
@@ -209,7 +225,7 @@ step (Ctrl+Z in DAZ Studio undoes the entire transfer).
 Edit the `src` and `dst` labels at the top of the script before running.
 
 ```bash
-python pose_transfer.py
+python character/pose_transfer.py
 ```
 
 No command-line arguments.
@@ -226,8 +242,8 @@ Output JSON contains a bone-name index and parallel rotation arrays to keep
 the per-frame payload compact.
 
 ```bash
-python animation_frame_dump.py --figure "Genesis 9" --out anim.json
-python animation_frame_dump.py --figure "Genesis 9" --out anim.json --morphs
+python character/animation_frame_dump.py --figure "Genesis 9" --out anim.json
+python character/animation_frame_dump.py --figure "Genesis 9" --out anim.json --morphs
 ```
 
 | Argument | Default | Description |
@@ -235,6 +251,28 @@ python animation_frame_dump.py --figure "Genesis 9" --out anim.json --morphs
 | `--figure LABEL` | `Genesis 9` | Figure label |
 | `--out FILE` | `anim.json` | Output JSON file |
 | `--morphs` | off | Also capture non-zero morph values per frame |
+
+---
+
+### ik_bone_to_target.py
+
+Moves a specified bone on one figure toward a named target node using a
+simple iterative IK approach — useful for quick posing, reach tests, and
+interaction scripting.  Optionally restores the original pose afterward.
+
+```bash
+python character/ik_bone_to_target.py --source MadisonG9 --bone r_hand --target HandTarget
+python character/ik_bone_to_target.py --source BobG8 --bone lFoot --target AliceG8 --restore
+python character/ik_bone_to_target.py --source MadisonG9 --bone r_hand --target HandTarget --dry-run
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--source LABEL` | *(required)* | Figure whose bone should move |
+| `--bone NAME` | *(required)* | Effector bone to move toward the target |
+| `--target LABEL` | *(required)* | Target scene node (any node — figure, prop, null) |
+| `--restore` | off | Restore the original bone rotation after printing the result |
+| `--dry-run` | off | Print what would happen without moving anything |
 
 ---
 
@@ -252,9 +290,9 @@ server-side (no vertex transfer needed).  `triangulate()` and `as_vec3()` are
 pure Python — zero additional HTTP calls.
 
 ```bash
-python geometry_analysis.py --figure "Genesis 9"
-python geometry_analysis.py --figure "Genesis 9" --groups
-python geometry_analysis.py --figure "Genesis 9" --triangulate --out tris.json
+python geometry/geometry_analysis.py --figure "Genesis 9"
+python geometry/geometry_analysis.py --figure "Genesis 9" --groups
+python geometry/geometry_analysis.py --figure "Genesis 9" --triangulate --out tris.json
 ```
 
 | Argument | Default | Description |
@@ -330,11 +368,11 @@ pip install trimesh
 ```
 
 ```bash
-python body_measurements.py --figure "Genesis 9 Female"
-python body_measurements.py --figure "MadisonG9" --figure-type G9F
-python body_measurements.py --figure "Genesis 8" --out measurements.json
-python body_measurements.py --figure "Genesis 8.1" --sample-step 0.25
-python body_measurements.py --figure "Genesis 9 Female" --clothing --pretty
+python geometry/body_measurements.py --figure "Genesis 9 Female"
+python geometry/body_measurements.py --figure "MadisonG9" --figure-type G9F
+python geometry/body_measurements.py --figure "Genesis 8" --out measurements.json
+python geometry/body_measurements.py --figure "Genesis 8.1" --sample-step 0.25
+python geometry/body_measurements.py --figure "Genesis 9 Female" --clothing --pretty
 ```
 
 | Argument | Default | Description |
@@ -369,9 +407,9 @@ pip install usd-core
 ```
 
 ```bash
-python scene_to_usd.py --out scene.usda
-python scene_to_usd.py --out scene.usda --morphs
-python scene_to_usd.py --out scene.usdc --figure "Genesis 9"
+python export/scene_to_usd.py --out scene.usda
+python export/scene_to_usd.py --out scene.usda --morphs
+python export/scene_to_usd.py --out scene.usdc --figure "Genesis 9"
 ```
 
 | Argument | Default | Description |
@@ -400,8 +438,8 @@ ffmpeg -framerate 24 -i frame_%03d.png turntable.mp4
 ```
 
 ```bash
-python turntable.py
-python turntable.py --figure "My Character" --steps 72 --out C:/turntable
+python rendering/turntable.py
+python rendering/turntable.py --figure "My Character" --steps 72 --out C:/turntable
 ```
 
 | Argument | Default | Description |
@@ -421,9 +459,9 @@ each one to `<out>/<camera_label>.png`.  Useful for storyboarding and
 covering multiple angles in a single run.
 
 ```bash
-python multi_camera_render.py
-python multi_camera_render.py --out C:/renders --width 1920 --height 1080
-python multi_camera_render.py --cameras "Front" "Side" "Hero Shot"
+python rendering/multi_camera_render.py
+python rendering/multi_camera_render.py --out C:/renders --width 1920 --height 1080
+python rendering/multi_camera_render.py --cameras "Front" "Side" "Hero Shot"
 ```
 
 | Argument | Default | Description |
@@ -442,8 +480,8 @@ original colour is saved before the loop and restored afterward — including
 if the run is interrupted.
 
 ```bash
-python material_color_variations.py --node "Cube" --material "Default"
-python material_color_variations.py \
+python rendering/material_color_variations.py --node "Cube" --material "Default"
+python rendering/material_color_variations.py \
     --node "Shirt" --material "Fabric" \
     --colors "#C0392B" "#2980B9" "#27AE60" \
     --out C:/swatches --width 1920 --height 1080
@@ -467,7 +505,7 @@ Intended as a minimal starting template — edit the morph labels and value
 pairs at the top of the file.
 
 ```bash
-python batch_render_morph_variations.py
+python rendering/batch_render_morph_variations.py
 ```
 
 No command-line arguments.
@@ -482,10 +520,10 @@ costumes, or compositions.  Run `--pattern 0|A|B|C` to execute just one
 pattern, or omit it to run all four in sequence.
 
 ```bash
-python vn_render_workflow.py
-python vn_render_workflow.py --pattern A
-python vn_render_workflow.py --pattern B --figure "Hero" --out C:/vn/renders
-python vn_render_workflow.py --pattern C --figure "Alice" --figure2 "Bob"
+python rendering/vn_render_workflow.py
+python rendering/vn_render_workflow.py --pattern A
+python rendering/vn_render_workflow.py --pattern B --figure "Hero" --out C:/vn/renders
+python rendering/vn_render_workflow.py --pattern C --figure "Alice" --figure2 "Bob"
 ```
 
 | Argument | Default | Description |
@@ -648,8 +686,8 @@ images so the dataset is fully reproducible.  Suitable as a starting point
 for generating LoRA training data.
 
 ```bash
-python dataset_generator.py
-python dataset_generator.py --count 100 --out C:/dataset --size 512
+python ml_data/dataset_generator.py
+python ml_data/dataset_generator.py --count 100 --out C:/dataset --size 512
 ```
 
 | Argument | Default | Description |
@@ -671,10 +709,10 @@ expression controllers, or other drivers — useful before FBX/BVH export or
 after pushing a captured clip back to the timeline.
 
 ```bash
-python keyframe_baking.py --figure "Genesis 9"
-python keyframe_baking.py --figure "Genesis 9" --morphs
-python keyframe_baking.py --figure "Genesis 9" --start 10 --end 90 --morphs
-python keyframe_baking.py --figure "Genesis 9" --preview
+python animation/keyframe_baking.py --figure "Genesis 9"
+python animation/keyframe_baking.py --figure "Genesis 9" --morphs
+python animation/keyframe_baking.py --figure "Genesis 9" --start 10 --end 90 --morphs
+python animation/keyframe_baking.py --figure "Genesis 9" --preview
 ```
 
 | Argument | Default | Description |
@@ -700,10 +738,10 @@ in Python with no HTTP calls.  The result can be pushed back to a live figure
 in a single call when needed.
 
 ```bash
-python animation_mixing.py clip   --anim walk.json --start 10 --end 40 --out walk_loop.json
-python animation_mixing.py blend  --a walk.json --b run.json --t 0.5 --out trot.json
-python animation_mixing.py append --a intro.json --b main.json --out full.json
-python animation_mixing.py apply  --anim walk.json --frame 0 --figure "Genesis 9"
+python animation/animation_mixing.py clip   --anim walk.json --start 10 --end 40 --out walk_loop.json
+python animation/animation_mixing.py blend  --a walk.json --b run.json --t 0.5 --out trot.json
+python animation/animation_mixing.py append --a intro.json --b main.json --out full.json
+python animation/animation_mixing.py apply  --anim walk.json --frame 0 --figure "Genesis 9"
 ```
 
 **clip** — extract a sub-range of frames (inclusive, by scene frame number)
@@ -761,8 +799,8 @@ ffmpeg -framerate 24 -i frame_%03d.png interpolation.mp4
 ```
 
 ```bash
-python pose_interpolation.py --a neutral.json --b smile.json --steps 10
-python pose_interpolation.py --a neutral.json --b smile.json \
+python animation/pose_interpolation.py --a neutral.json --b smile.json --steps 10
+python animation/pose_interpolation.py --a neutral.json --b smile.json \
     --steps 30 --ease ease_in_out --out C:/interpolation \
     --width 1920 --height 1080
 ```
@@ -808,11 +846,11 @@ to discover the correct labels for your installed product, then edit
 `FACS_MAP` at the top of the script.
 
 ```bash
-python expression_transfer.py photo.jpg
-python expression_transfer.py photo.jpg --figure "Genesis 9" --scale 0.8
-python expression_transfer.py --list-properties
-python expression_transfer.py --list-properties --search blink
-python expression_transfer.py photo.jpg --debug
+python ai_vision/expression_transfer.py photo.jpg
+python ai_vision/expression_transfer.py photo.jpg --figure "Genesis 9" --scale 0.8
+python ai_vision/expression_transfer.py --list-properties
+python ai_vision/expression_transfer.py --list-properties --search blink
+python ai_vision/expression_transfer.py photo.jpg --debug
 ```
 
 | Argument | Default | Description |
@@ -853,11 +891,11 @@ Run `expression_transfer.py --list-properties` to discover labels for your
 installed FACS product if morphs don't apply.
 
 ```bash
-python webcam_expression_mirror.py
-python webcam_expression_mirror.py --figure "Genesis 9" --scale 0.8
-python webcam_expression_mirror.py --camera 1 --fps 15
-python webcam_expression_mirror.py --smooth 0.7
-python webcam_expression_mirror.py --no-preview
+python ai_vision/webcam_expression_mirror.py
+python ai_vision/webcam_expression_mirror.py --figure "Genesis 9" --scale 0.8
+python ai_vision/webcam_expression_mirror.py --camera 1 --fps 15
+python ai_vision/webcam_expression_mirror.py --smooth 0.7
+python ai_vision/webcam_expression_mirror.py --no-preview
 ```
 
 | Argument | Default | Description |

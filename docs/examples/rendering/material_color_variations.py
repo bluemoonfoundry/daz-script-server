@@ -42,7 +42,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio containing the target node and material, then run:
 
-       python docs/examples/material_color_variations.py --node "Cube" --material "Default"
+       python docs/examples/rendering/material_color_variations.py --node "Cube" --material "Default"
 
 Usage:
     python material_color_variations.py --node "Cube" --material "Default"

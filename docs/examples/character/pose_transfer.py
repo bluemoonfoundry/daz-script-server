@@ -41,7 +41,7 @@ ENVIRONMENT SETUP
 4. Open a scene in DAZ Studio containing two Genesis 9 figures labelled
    "Genesis 9" and "Genesis 9-2", then run:
 
-       python docs/examples/pose_transfer.py
+       python docs/examples/character/pose_transfer.py
 
 Usage:
     python pose_transfer.py

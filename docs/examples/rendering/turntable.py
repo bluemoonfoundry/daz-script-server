@@ -42,7 +42,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio containing the target figure, then run:
 
-       python docs/examples/turntable.py
+       python docs/examples/rendering/turntable.py
 
 Usage:
     python turntable.py

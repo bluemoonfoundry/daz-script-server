@@ -48,7 +48,7 @@ ENVIRONMENT SETUP
 
 4. Open a scene in DAZ Studio containing a figure, then run:
 
-       python docs/examples/geometry_analysis.py --figure "Genesis 9"
+       python docs/examples/geometry/geometry_analysis.py --figure "Genesis 9"
 
 Usage:
     python geometry_analysis.py --figure "Genesis 9"

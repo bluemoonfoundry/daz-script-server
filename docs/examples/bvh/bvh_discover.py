@@ -44,7 +44,7 @@ ENVIRONMENT SETUP
 
 4. Load the target generation in DAZ Studio, then run:
 
-       python docs/examples/bvh_discover.py --figure "Genesis 8 Female"
+       python docs/examples/bvh/bvh_discover.py --figure "Genesis 8 Female"
 
 Usage:
     python bvh_discover.py --figure "Genesis 8 Female"

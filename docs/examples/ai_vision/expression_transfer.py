@@ -48,7 +48,7 @@ ENVIRONMENT SETUP
 4. Open a scene in DAZ Studio containing a Genesis 9 figure with FACS HD
    applied, then run:
 
-       python docs/examples/expression_transfer.py photo.jpg
+       python docs/examples/ai_vision/expression_transfer.py photo.jpg
 
 Usage:
     python expression_transfer.py photo.jpg

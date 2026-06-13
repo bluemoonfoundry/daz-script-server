@@ -44,10 +44,10 @@ ENVIRONMENT SETUP
 
 4. Produce animation files with animation_frame_dump.py, then run:
 
-       python docs/examples/animation_mixing.py clip   --anim walk.json --start 10 --end 40 --out walk_loop.json
-       python docs/examples/animation_mixing.py blend  --a walk.json --b run.json --t 0.5 --out trot.json
-       python docs/examples/animation_mixing.py append --a intro.json --b main.json --out full.json
-       python docs/examples/animation_mixing.py apply  --anim walk.json --frame 0 --figure "Genesis 9"
+       python docs/examples/animation/animation_mixing.py clip   --anim walk.json --start 10 --end 40 --out walk_loop.json
+       python docs/examples/animation/animation_mixing.py blend  --a walk.json --b run.json --t 0.5 --out trot.json
+       python docs/examples/animation/animation_mixing.py append --a intro.json --b main.json --out full.json
+       python docs/examples/animation/animation_mixing.py apply  --anim walk.json --frame 0 --figure "Genesis 9"
 
 Usage:
     python animation_mixing.py clip   --anim <file> --start <frame> --end <frame> --out <file>

@@ -42,7 +42,7 @@ ENVIRONMENT SETUP
 4. Open a scene in DAZ Studio containing a Genesis 9 figure, then run this
    script from the repo root or from the docs/examples directory:
 
-       python docs/examples/batch_render_morph_variations.py
+       python docs/examples/rendering/batch_render_morph_variations.py
 
 Usage:
     python batch_render_morph_variations.py
