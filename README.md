@@ -153,7 +153,7 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 ### 💾 Scene Save Copy — `POST /scene/save-copy` + `DazScene.save_copy()`
 
 Save the current scene to a new path without changing the scene's internal
-filename pointer or dirty flag — the programmatic equivalent of DAZ Studio's
+filename pointer or dirty flag — the programmatic equivalent of a
 **"Save a Copy As…"** menu option.
 
 ```python
