@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.5.0** | DAZ Studio 4.5+ | Windows & macOS
+**Version 2.6.0** | DAZ Studio 4.5+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -66,7 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.5.0](#whats-new-in-v250)
+- [What's New in v2.6.0](#whats-new-in-v250)
 - [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
 - [What's New in v2.2.0](#whats-new-in-v220)
@@ -147,7 +147,7 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
-## What's New in v2.5.0
+## What's New in v2.6.0
 
 ### 🤝 Interaction Posing — Multi-Figure Poses and IK Alignment
 
@@ -536,7 +536,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.5.0-py3-none-any.whl
+pip install dazpy-2.6.0-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
