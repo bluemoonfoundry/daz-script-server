@@ -37,6 +37,7 @@ Start with `fundamentals/raw_script.py` if you are new to the SDK.
 | [scene_introspection.py](#scene_introspectionpy) | fundamentals | Dumps the full scene hierarchy and transforms as JSON | No |
 | [scene_inventory.py](#scene_inventorypy) | fundamentals | Structured per-node audit (type, materials, vertex count, etc.) | No |
 | [batch_operations.py](#batch_operationspy) | fundamentals | Reads multiple properties in one HTTP call using `Batch` | No |
+| [scene_save_copy.py](#scene_save_copypy) | fundamentals | Saves a copy of the current scene to a new path without changing its filename or dirty state | No |
 | [character_state.py](#character_statepy) | character | Saves and restores morphs, expression controls, and bone rotations | No |
 | [pose_transfer.py](#pose_transferpy) | character | Copies a pose from one figure to another in a single undo step | No |
 | [animation_frame_dump.py](#animation_frame_dumppy) | character | Exports bone rotations and morph values for every animation frame | No |
@@ -161,6 +162,37 @@ python fundamentals/scene_inventory.py --out inventory.json --pretty
 |---|---|---|
 | `--out FILE` | stdout | Write JSON to this file instead of stdout |
 | `--pretty` | off | Pretty-print the JSON output |
+
+---
+
+### scene_save_copy.py
+
+Saves a copy of the current scene to a new path — the Python equivalent of
+DAZ Studio's "Save a Copy As…" menu option — without changing the scene's
+internal filename or dirty flag.
+
+For clean scenes the plugin performs a `QFile::copy()` with zero DAZ state
+change; the copy is byte-identical to the original.  For scenes with unsaved
+changes it serialises via `Scene.saveScene()` and immediately restores state.
+The response `method` field (`"copy"`, `"serialize"`, or
+`"serialize+restore"`) tells you which strategy was used.
+
+```bash
+python fundamentals/scene_save_copy.py --dest C:/backups/scene_v2.duf
+python fundamentals/scene_save_copy.py --dest C:/backups/scene_v2.duf --compare
+python fundamentals/scene_save_copy.py --dest C:/backups/scene_v2.duf --dry-run
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--dest PATH` | *(required)* | Absolute destination path on the DAZ Studio host |
+| `--compare` | off | After saving, print source/copy sizes and whether the files are byte-identical |
+| `--dry-run` | off | Print the strategy that would be used without writing anything |
+| `--host HOST` | `127.0.0.1` | Server host |
+| `--port PORT` | `18811` | Server port |
+
+**SDK features demonstrated:** `DazScene.save_copy()`, `DazScene.filename()`,
+`DazScene.needs_save()`.
 
 ---
 

@@ -66,7 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.6.0](#whats-new-in-v250)
+- [What's New in v2.6.0](#whats-new-in-v260)
 - [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
 - [What's New in v2.2.0](#whats-new-in-v220)
@@ -148,6 +148,33 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 ---
 
 ## What's New in v2.6.0
+
+### 💾 Scene Save Copy — `POST /scene/save-copy` + `DazScene.save_copy()`
+
+Save the current scene to a new path without changing the scene's internal
+filename pointer or dirty flag — the programmatic equivalent of DAZ Studio's
+**"Save a Copy As…"** menu option.
+
+```python
+from dazpy import DazClient, DazScene
+
+client = DazClient()
+scene  = DazScene(client)
+
+result = scene.save_copy("C:/backups/scene_v2.duf")
+print(result["method"])   # "copy", "serialize", or "serialize+restore"
+```
+
+For scenes with no unsaved changes the plugin uses `QFile::copy()` — a pure
+file-system copy that produces a byte-identical file with zero DAZ Studio state
+change.  For dirty scenes it serialises via `Scene.saveScene()` and restores
+the original filename immediately.  The `method` field in the response tells
+you which strategy was used.
+
+See `docs/examples/fundamentals/scene_save_copy.py` for a complete example
+with `--compare` and `--dry-run` options.
+
+---
 
 ### 🤝 Interaction Posing — Multi-Figure Poses and IK Alignment
 
@@ -777,8 +804,9 @@ light.set_color(1.0, 0.9, 0.8)
 
 ```python
 # Load and save
-scene.load("/path/to/scene.duf")     # merge mode (does not clear existing scene)
+scene.load("/path/to/scene.duf")          # merge mode (does not clear existing scene)
 scene.save("/path/to/output.duf")
+scene.save_copy("/path/to/backup.duf")    # write copy; filename/dirty flag unchanged
 print(scene.filename())
 print(scene.needs_save())
 
