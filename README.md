@@ -80,6 +80,7 @@ print(response.json())
 ### dazpy Python SDK
 - [Overview](#-dazpy-python-sdk)
 - [Installation](#installation)
+- [Jupyter Notebook](#jupyter-notebook)
 - [Connecting to DAZ Studio](#connecting-to-daz-studio)
 - [Scene Graph](#scene-graph)
 - [Figures — Skeletons and Bones](#figures--skeletons-and-bones)
@@ -576,6 +577,52 @@ pip install -e .
 ```
 
 **Requirements:** Python 3.10+, `requests` (installed automatically).
+
+---
+
+### Jupyter Notebook
+
+The repo ships an interactive Jupyter notebook (`notebooks/dazpy_intro.ipynb`) that
+covers the full dazpy API with runnable examples. Launcher scripts handle installing
+Jupyter and opening the notebook in one step.
+
+**Prerequisites:** DAZ Studio must be running with the DazScriptServer plugin active before opening the notebook.
+
+**Launch (macOS / Linux / Git Bash on Windows):**
+
+```bash
+./notebook.sh
+```
+
+**Launch (Windows PowerShell):**
+
+```powershell
+.\notebook.ps1
+```
+
+Both scripts install `dazpy` (editable) and `notebook` if they are not already present,
+then open Jupyter in the `notebooks/` directory.
+
+**Notebook sections:**
+
+| Section | What it covers |
+|---|---|
+| 1. Server health | `client.health()` — verify the plugin is reachable |
+| 2. Scene overview | `scene.num_nodes()`, `scene.nodes()` — list everything in the scene |
+| 3. Find a figure / read a bone | `find_skeleton_by_label()`, `find_bone()`, `bone.local_euler` |
+| 4. Raw DazScript | `client.execute()` — run arbitrary DazScript when the SDK doesn't cover it |
+| 5. Error handling | Full exception hierarchy with `try/except` examples |
+| 6. API browser | `dir(obj)` one-liner to list any object's public API surface |
+| 7. Jupyter introspection | `obj?` / `obj??` inline help for any dazpy object |
+| 8. Interactive bone rotator | `ipywidgets` sliders driving `bone.set_local_rotation()` in real time |
+| 9. Morph / property explorer | List, search, and set morphs with `morph_values()` / `set_morph_values()` |
+| 10. Scene tree pretty-printer | `scene.node_tree()` rendered as an indented tree with box-drawing characters |
+
+**Interactive bone rotator** (section 8) requires ipywidgets:
+
+```bash
+pip install ipywidgets
+```
 
 ---
 
