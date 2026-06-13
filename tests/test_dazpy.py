@@ -3879,5 +3879,62 @@ class TestBatchPoseEvaluation(unittest.TestCase):
         self.assertEqual(result.diagnostics.get("reason"), "already_aligned")
 
 
+class TestDazViewport(unittest.TestCase):
+    def _make_viewport(self, return_value=None):
+        client = _make_client(return_value=return_value)
+        from dazpy._viewport import DazViewport
+        vp = DazViewport(client)
+        return vp, client
+
+    def test_is_available_true(self):
+        vp, client = self._make_viewport(return_value=True)
+        self.assertTrue(vp.is_available())
+        client.execute.assert_called_once()
+
+    def test_is_available_false(self):
+        vp, client = self._make_viewport(return_value=False)
+        self.assertFalse(vp.is_available())
+
+    def test_get_size(self):
+        vp, client = self._make_viewport(return_value={"width": 1280, "height": 720})
+        result = vp.get_size()
+        self.assertEqual(result, {"width": 1280, "height": 720})
+        client.execute.assert_called_once()
+
+    def test_set_size_calls_execute(self):
+        vp, client = self._make_viewport()
+        vp.set_size(800, 600)
+        script = client.execute.call_args[0][0]
+        self.assertIn("800", script)
+        self.assertIn("600", script)
+        self.assertIn("setFixedSize", script)
+
+    def test_capture_basic(self):
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport(return_value=path)
+        result = vp.capture(path)
+        script = client.execute.call_args[0][0]
+        self.assertIn("captureToFile", script)
+        self.assertIn(json.dumps(path), script)
+        self.assertEqual(result, path)
+
+    def test_capture_with_resize(self):
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport(return_value=path)
+        vp.capture(path, width=1920, height=1080)
+        script = client.execute.call_args[0][0]
+        self.assertIn("captureToFile", script)
+        self.assertIn("setFixedSize", script)
+        self.assertIn("1920", script)
+        self.assertIn("1080", script)
+        self.assertIn("_prevSize", script)
+
+    def test_capture_returns_path_on_null_result(self):
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport(return_value=None)
+        result = vp.capture(path)
+        self.assertEqual(result, path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

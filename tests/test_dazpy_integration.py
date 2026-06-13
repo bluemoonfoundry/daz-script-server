@@ -31,6 +31,7 @@ from dazpy import (
     DazScene,
     DazSkeleton,
     DazTimeline,
+    DazViewport,
     ExecutionResult,
     LimbAlignmentResult,
     NodeIdentifier,
@@ -1826,6 +1827,71 @@ class TestAlignLimbTargets(unittest.TestCase):
                                        source_anchor=anchor, max_iterations=1)
         self.assertIsInstance(result.chain, list)
         self.assertGreater(len(result.chain), 0)
+
+
+# ── DazViewport ───────────────────────────────────────────────────────────────
+
+_VIEWPORT_AVAILABLE: bool = False
+if _DAZ_GLOBALS_AVAILABLE:
+    try:
+        _vr = _req.post(
+            "http://127.0.0.1:18811/execute",
+            json={"script": "(function(){ var vp = MainWindow.getViewportMgr().getActiveViewport().get3DViewport(); return (vp !== null && vp !== undefined); })()"},
+            headers={"X-API-Token": DazClient()._token},
+            timeout=5,
+        )
+        _VIEWPORT_AVAILABLE = bool(_vr.status_code == 200 and _vr.json().get("result") is True)
+    except Exception:
+        pass
+
+skip_no_viewport = unittest.skipUnless(_VIEWPORT_AVAILABLE, "3D viewport not available")
+
+
+class TestDazViewportIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from dazpy._viewport import DazViewport
+        cls.client = DazClient()
+        cls.vp = DazViewport(cls.client)
+
+    @skip_no_viewport
+    def test_is_available(self):
+        self.assertTrue(self.vp.is_available())
+
+    @skip_no_viewport
+    def test_get_size(self):
+        size = self.vp.get_size()
+        self.assertIsNotNone(size)
+        self.assertIn("width", size)
+        self.assertIn("height", size)
+        self.assertGreater(size["width"], 0)
+        self.assertGreater(size["height"], 0)
+
+    @skip_no_viewport
+    def test_capture_writes_file(self):
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        try:
+            result = self.vp.capture(path)
+            self.assertEqual(result, path)
+            self.assertTrue(os.path.isfile(path), "captureToFile did not write the file")
+            self.assertGreater(os.path.getsize(path), 0)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    @skip_no_viewport
+    def test_capture_with_resize(self):
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        try:
+            result = self.vp.capture(path, width=640, height=480)
+            self.assertEqual(result, path)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -27,6 +27,7 @@ from ._modifier import DazModifier
 from ._morph import DazMorph
 from ._geometry import DazGeometry
 from ._render import DazRenderSettings
+from ._viewport import DazViewport
 from ._timeline import DazTimeline
 from ._property import DazProperty
 from ._element import DazElement
@@ -98,6 +99,7 @@ __all__ = [
     "DazMorph",
     "DazGeometry",
     "DazRenderSettings",
+    "DazViewport",
     "DazTimeline",
     "DazProperty",
     "DazElement",
