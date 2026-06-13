@@ -2519,13 +2519,13 @@ HttpResult DzScriptServerPane::handleSaveCopy(const QByteArray& jsonBody)
 				ErrorResponse::build(ErrorCode::INTERNAL_ERROR, "file copy failed")));
 		}
 		JsonBuilder jb;
-		jb.beginObject();
-		jb.field("ok",     true);
-		jb.field("path",   JsonStd::qstrToStd(destPath));
-		jb.field("source", JsonStd::qstrToStd(origFilename));
-		jb.field("method", std::string("copy"));
-		jb.endObject();
-		return HttpResult(200, stdToQBA(jb.str()));
+		jb.startObject();
+		jb.addMember("ok",     true);
+		jb.addMember("path",   destPath);
+		jb.addMember("source", origFilename);
+		jb.addMember("method", "copy");
+		jb.finishObject();
+		return HttpResult(200, jb.toString().toUtf8());
 	}
 
 	// ── Case 2: scene needs serialisation ────────────────────────────────────
@@ -2560,13 +2560,13 @@ HttpResult DzScriptServerPane::handleSaveCopy(const QByteArray& jsonBody)
 		dzScene->markChanged();
 
 	JsonBuilder jb;
-	jb.beginObject();
-	jb.field("ok",     true);
-	jb.field("path",   JsonStd::qstrToStd(destPath));
-	jb.field("source", JsonStd::qstrToStd(origFilename));
-	jb.field("method", method);
-	jb.endObject();
-	return HttpResult(200, stdToQBA(jb.str()));
+	jb.startObject();
+	jb.addMember("ok",     true);
+	jb.addMember("path",   destPath);
+	jb.addMember("source", origFilename);
+	jb.addMember("method", QString::fromStdString(method));
+	jb.finishObject();
+	return HttpResult(200, jb.toString().toUtf8());
 }
 
 #include "moc_DzScriptServerPane.cpp"
