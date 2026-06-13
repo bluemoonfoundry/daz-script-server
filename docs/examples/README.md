@@ -47,6 +47,7 @@ Start with `fundamentals/raw_script.py` if you are new to the SDK.
 | [geometry_analysis.py](#geometry_analysispy) | geometry | Inspects mesh metadata, bounding boxes, face groups, and exports triangulated geometry | No |
 | [body_measurements.py](#body_measurementspy) | geometry | Computes height and bust / waist / hip circumferences from horizontal mesh slices | No |
 | [scene_to_usd.py](#scene_to_usdpy) | export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
+| [capture_viewport.py](#capture_viewportpy) | rendering | Captures the OpenGL viewport as a screenshot or transparent sprite PNG | No |
 | [turntable.py](#turntablepy) | rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
 | [multi_camera_render.py](#multi_camera_renderpy) | rendering | Renders from every camera in the scene to separate files | Yes |
 | [material_color_variations.py](#material_color_variationspy) | rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
@@ -425,6 +426,61 @@ python export/scene_to_usd.py --out scene.usdc --figure "Genesis 9"
 ---
 
 ## Rendering
+
+### capture_viewport.py
+
+Captures the active DAZ Studio 3D viewport to a file without triggering an
+iRay render.  Three modes cover the common use cases:
+
+- **raw** — grab the viewport exactly as it appears on screen (overlays, gizmos, and all)
+- **clean** — temporarily hide axes, floor grid, pose tool, thirds guide, toolbar, and
+  environment/tonemapper nodes, deselect all, capture, then restore everything
+- **sprite** — clean capture + AI background removal via `rembg`, producing a
+  transparent PNG ready to use as a game or UI sprite
+
+Background removal uses the `u2net` model with alpha matting enabled by default
+for clean edges around hair and limb gaps.  An optional `--backdrop R,G,B`
+override sets the viewport background colour during capture; leave it unset to
+use the current scene background.
+
+**Dependency (sprite mode only):**
+```bash
+pip install rembg
+```
+
+```bash
+# Clean screenshot
+python rendering/capture_viewport.py --output snap.png
+
+# Transparent sprite
+python rendering/capture_viewport.py --mode sprite --output sprite.png
+
+# Sprite with custom backdrop colour
+python rendering/capture_viewport.py --mode sprite --backdrop 0,0,255 --output sprite.png
+
+# Faster sprite, lower edge quality
+python rendering/capture_viewport.py --mode sprite --no-alpha-matting --output sprite.png
+
+# Raw capture — no overlay hiding
+python rendering/capture_viewport.py --mode raw --output raw.png
+
+# Preview what would happen
+python rendering/capture_viewport.py --mode sprite --output sprite.png --dry-run
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--mode {raw,clean,sprite}` | `clean` | Capture mode |
+| `--output PATH` | *(required)* | Output file path (`.png` recommended) |
+| `--backdrop R,G,B` | *(unchanged)* | Override viewport background colour during capture |
+| `--no-alpha-matting` | off | Sprite mode: disable alpha matting (faster, lower edge quality) |
+| `--daz-url URL` | `http://127.0.0.1:18811` | DAZ Studio script server URL |
+| `--dry-run` | off | Print the plan without executing |
+
+**SDK features demonstrated:** `DazViewport.capture()`, `DazViewport.capture_sprite()`,
+`DazViewport.is_available()`, `DazViewport.get_size()`.
+
+---
 
 ### turntable.py
 
