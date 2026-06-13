@@ -28,6 +28,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--denoise", type=float, help="Override denoise strength (0.0–1.0)")
     p.add_argument("--no-watch", action="store_true", help="Skip file watcher; use --snapshot-path directly")
     p.add_argument("--snapshot-path", metavar="PATH", help="Existing snapshot to submit (requires --no-watch)")
+    p.add_argument("--checkpoint", metavar="NAME", help="Override ComfyUI checkpoint filename")
     p.add_argument("--dry-run", action="store_true", help="Print plan without executing")
     return p.parse_args()
 
@@ -43,6 +44,8 @@ def main() -> None:
 
     if args.denoise is not None:
         cfg.denoise_strength = args.denoise
+    if args.checkpoint is not None:
+        cfg.checkpoint_name = args.checkpoint
 
     snapshot_path = os.path.join(cfg.watch_dir, "daz_snapshot.png")
     output_path = args.output or os.path.join(cfg.output_dir, "daz_enhanced.png")
