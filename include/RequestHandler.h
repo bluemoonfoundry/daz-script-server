@@ -245,3 +245,11 @@ public:
 private:
     DzScriptServerPane* m_pPane;
 };
+
+class SaveCopyHandler : public IRequestHandler {
+public:
+    explicit SaveCopyHandler(DzScriptServerPane* pane);
+    void handle(HttpContext& ctx) override;
+private:
+    DzScriptServerPane* m_pPane;
+};

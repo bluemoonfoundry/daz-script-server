@@ -13,6 +13,7 @@
 
 #include <dzapp.h>
 #include <dzscript.h>
+#include <dzscene.h>
 #include <dzrendermgr.h>
 #include <dzrenderer.h>
 
@@ -719,6 +720,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pRenderHandler.reset(new RenderHandler(this));
 	m_pRenderBatchHandler.reset(new RenderBatchHandler(this));
 	m_pRenderCancelHandler.reset(new RenderCancelHandler(this));
+	m_pSaveCopyHandler.reset(new SaveCopyHandler(this));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -842,6 +844,14 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Post("/render/([^/]+)/cancel", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (m_pAuthChain->run(ctx)) m_pRenderCancelHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	// ── Scene I/O endpoints ───────────────────────────────────────────────────
+
+	m_pServer->Post("/scene/save-copy", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pSaveCopyHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -2464,6 +2474,99 @@ void DzScriptServerPane::killRenderOnMainThread()
 		DzRenderer* renderer = renderMgr->getActiveRenderer();
 		if (renderer) renderer->killRender();
 	}
+}
+
+// ─── Scene I/O ────────────────────────────────────────────────────────────────
+
+HttpResult DzScriptServerPane::handleSaveCopy(const QByteArray& jsonBody)
+{
+	// ── Parse ─────────────────────────────────────────────────────────────────
+	QScriptEngine parseEngine;
+	QScriptValue  parsed = parseEngine.evaluate(
+		"(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
+	if (parseEngine.hasUncaughtException()) {
+		QString detail = QString("line %1: %2")
+			.arg(parseEngine.uncaughtExceptionLineNumber())
+			.arg(parseEngine.uncaughtException().toString());
+		return HttpResult(400, stdToQBA(
+			ErrorResponse::build(ErrorCode::INVALID_JSON, JsonStd::qstrToStd(detail))));
+	}
+
+	QVariantMap body = parsed.toVariant().toMap();
+	QString destPath = body.value("path").toString().trimmed();
+
+	if (destPath.isEmpty()) {
+		return HttpResult(400, stdToQBA(
+			ErrorResponse::build(ErrorCode::MISSING_FIELD, "path")));
+	}
+
+	if (!dzScene) {
+		return HttpResult(500, stdToQBA(
+			ErrorResponse::build(ErrorCode::INTERNAL_ERROR, "dzScene is null")));
+	}
+
+	// ── Snapshot current state ────────────────────────────────────────────────
+	QString origFilename = dzScene->getFilename();
+	bool    wasDirty     = dzScene->needsSave();
+
+	// ── Case 1: clean scene with a saved file — skip serialisation entirely ──
+	// QFile::copy does not touch DAZ Studio scene state at all.
+	if (!wasDirty && !origFilename.isEmpty() && QFile::exists(origFilename)) {
+		if (QFile::exists(destPath))
+			QFile::remove(destPath);
+		if (!QFile::copy(origFilename, destPath)) {
+			return HttpResult(500, stdToQBA(
+				ErrorResponse::build(ErrorCode::INTERNAL_ERROR, "file copy failed")));
+		}
+		JsonBuilder jb;
+		jb.beginObject();
+		jb.field("ok",     true);
+		jb.field("path",   JsonStd::qstrToStd(destPath));
+		jb.field("source", JsonStd::qstrToStd(origFilename));
+		jb.field("method", std::string("copy"));
+		jb.endObject();
+		return HttpResult(200, stdToQBA(jb.str()));
+	}
+
+	// ── Case 2: scene needs serialisation ────────────────────────────────────
+	// saveScene() serialises the current in-memory state to destPath.
+	// If it also updates the scene's internal filename pointer we restore it
+	// immediately with a second saveScene() call.  A double-write is the only
+	// available option when the scene has unsaved changes: doSave(saveOnly=true)
+	// is compiled out in all current DAZ Studio 4.x DSON_IO builds.
+	DzError err = dzScene->saveScene(destPath);
+	if (err != DZ_NO_ERROR) {
+		return HttpResult(500, stdToQBA(
+			ErrorResponse::build(ErrorCode::INTERNAL_ERROR,
+				"saveScene failed (code " + std::to_string((int)err) + ")")));
+	}
+
+	std::string method = "serialize";
+
+	// Restore internal filename if saveScene changed it
+	if (dzScene->getFilename() != origFilename) {
+		method = "serialize+restore";
+		if (!origFilename.isEmpty()) {
+			// Note: this writes the original file again as a side effect.
+			// When the scene has unsaved changes this also saves them to the
+			// original file — there is no way to avoid this without the
+			// (unavailable) doSave(saveOnly=true) API.
+			dzScene->saveScene(origFilename);
+		}
+	}
+
+	// Restore dirty flag
+	if (wasDirty)
+		dzScene->markChanged();
+
+	JsonBuilder jb;
+	jb.beginObject();
+	jb.field("ok",     true);
+	jb.field("path",   JsonStd::qstrToStd(destPath));
+	jb.field("source", JsonStd::qstrToStd(origFilename));
+	jb.field("method", method);
+	jb.endObject();
+	return HttpResult(200, stdToQBA(jb.str()));
 }
 
 #include "moc_DzScriptServerPane.cpp"

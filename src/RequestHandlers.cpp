@@ -338,3 +338,18 @@ void RenderCancelHandler::handle(HttpContext& ctx)
     std::pair<int, std::string> result = m_pPane->cancelRenderRequestJson(ctx.urlMatch, ctx.remoteAddr);
     ctx.respond(result.first, result.second);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+SaveCopyHandler::SaveCopyHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
+
+void SaveCopyHandler::handle(HttpContext& ctx)
+{
+    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleSaveCopy",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result),
+        Q_ARG(QByteArray, bodyBytes));
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+}

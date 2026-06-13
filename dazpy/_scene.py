@@ -525,6 +525,42 @@ class DazScene:
         )
         self._client.execute(script)
 
+    def save_copy(self, path: str) -> dict:
+        """Save a copy of the scene to *path* without changing the scene's current
+        file or dirty state — equivalent to a "Save a Copy As…" operation.
+
+        For clean scenes the plugin performs a simple file copy (zero DAZ state
+        change).  For scenes with unsaved changes it serialises via
+        ``Scene.saveScene()`` and immediately restores the original filename; as
+        a side effect unsaved changes are also written to the original file
+        (unavoidable without the ``doSave(saveOnly=true)`` API, which is
+        compiled out of current DAZ Studio 4.x builds).
+
+        Args:
+            path: Absolute destination path on the server host (e.g.
+                ``"C:/backups/scene_v2.duf"``).
+
+        Returns:
+            ``{"ok": True, "path": str, "source": str, "method": str}`` where
+            *method* is ``"copy"`` (file copy, no serialisation) or
+            ``"serialize"`` / ``"serialize+restore"`` (required when the scene
+            has unsaved changes).
+
+        Raises:
+            :class:`~dazpy.exceptions.DazError`: on server-side failure (non-2xx response).
+            :class:`~dazpy.exceptions.AuthenticationError`: on HTTP 401/403.
+            :class:`~dazpy.exceptions.ConnectionError`: if the server is unreachable.
+        """
+        from .exceptions import AuthenticationError, DazError
+        resp = self._client._post("/scene/save-copy", {"path": path})
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        if not resp.ok:
+            body = resp.json() if resp.content else {}
+            msg = body.get("error") or body.get("detail") or resp.text[:200]
+            raise DazError(f"save_copy failed ({resp.status_code}): {msg}")
+        return resp.json()
+
     def filename(self) -> str:
         """Return the file path of the currently loaded scene, or an empty string."""
         script = ScriptBuilder.iife("return Scene.getFilename();")

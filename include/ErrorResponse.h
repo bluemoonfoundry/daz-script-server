@@ -35,6 +35,9 @@ enum class ErrorCode {
 
     // 503 Service Unavailable
     SERVER_UNAVAILABLE,
+
+    // 500 Internal Server Error
+    INTERNAL_ERROR,
 };
 
 // Builds consistent JSON error responses and maps error codes to HTTP statuses.

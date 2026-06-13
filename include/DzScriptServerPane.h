@@ -109,6 +109,9 @@ public slots:
 	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
 
+	// Scene I/O helpers — called on main thread via BlockingQueuedConnection.
+	Q_INVOKABLE HttpResult handleSaveCopy(const QByteArray& jsonBody);
+
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
 	// not ::free, so it is safe to construct/destroy on httplib worker threads).
@@ -266,6 +269,7 @@ private:
 	std::unique_ptr<RenderHandler>        m_pRenderHandler;
 	std::unique_ptr<RenderBatchHandler>   m_pRenderBatchHandler;
 	std::unique_ptr<RenderCancelHandler>  m_pRenderCancelHandler;
+	std::unique_ptr<SaveCopyHandler>      m_pSaveCopyHandler;
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;
