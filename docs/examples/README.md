@@ -48,6 +48,7 @@ Start with `fundamentals/raw_script.py` if you are new to the SDK.
 | [body_measurements.py](#body_measurementspy) | geometry | Computes height and bust / waist / hip circumferences from horizontal mesh slices | No |
 | [scene_to_usd.py](#scene_to_usdpy) | export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
 | [capture_viewport.py](#capture_viewportpy) | rendering | Captures the OpenGL viewport as a screenshot or transparent sprite PNG | No |
+| [comfyui_enhance/main.py](#comfyui_enhancemainpy) | rendering | Captures a viewport snapshot and enhances it via a ComfyUI img2img workflow | No |
 | [turntable.py](#turntablepy) | rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
 | [multi_camera_render.py](#multi_camera_renderpy) | rendering | Renders from every camera in the scene to separate files | Yes |
 | [material_color_variations.py](#material_color_variationspy) | rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
@@ -479,6 +480,54 @@ python rendering/capture_viewport.py --mode sprite --output sprite.png --dry-run
 
 **SDK features demonstrated:** `DazViewport.capture()`, `DazViewport.capture_sprite()`,
 `DazViewport.is_available()`, `DazViewport.get_size()`.
+
+---
+
+### comfyui_enhance/main.py
+
+End-to-end pipeline that captures the active DAZ Studio viewport and submits
+the result to a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
+instance for img2img enhancement via a photorealistic diffusion model.
+
+**Prerequisites:**
+- DAZ Studio running with the DazScriptServer plugin
+- ComfyUI running locally at `http://127.0.0.1:8188`
+- A compatible checkpoint installed in ComfyUI (e.g. `juggernautXL_juggXIByRundiffusion.safetensors`)
+
+**Dependencies:**
+```bash
+pip install requests watchdog Pillow
+```
+
+Edit `comfyui_enhance/config.py` to set your checkpoint name and other defaults
+before running.
+
+```bash
+cd docs/examples/rendering/comfyui_enhance
+
+# Full pipeline: capture viewport → submit to ComfyUI → save result
+python main.py --output C:/tmp/enhanced.png --checkpoint juggernautXL_juggXIByRundiffusion.safetensors
+
+# Skip capture, use an existing snapshot
+python main.py --no-watch --snapshot-path C:/tmp/snap.png --output C:/tmp/enhanced.png
+
+# Adjust denoise strength (lower = closer to original)
+python main.py --no-watch --snapshot-path C:/tmp/snap.png --denoise 0.25 --output C:/tmp/enhanced.png
+
+# Preview the plan without executing
+python main.py --dry-run --output C:/tmp/enhanced.png
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--output PATH` | *(required)* | Output path for the enhanced image |
+| `--checkpoint NAME` | *(from config.py)* | ComfyUI checkpoint filename override |
+| `--denoise FLOAT` | `0.45` | Denoise strength (0.0 = no change, 1.0 = full generation) |
+| `--no-watch` | off | Skip file watcher; use `--snapshot-path` directly |
+| `--snapshot-path PATH` | — | Existing snapshot to submit (requires `--no-watch`) |
+| `--dry-run` | off | Print plan without executing |
+
+**SDK features demonstrated:** `DazViewport.capture()`, `DazClient`.
 
 ---
 
