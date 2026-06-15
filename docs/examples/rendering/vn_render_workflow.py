@@ -350,9 +350,13 @@ if __name__ == "__main__":
     parser.add_argument("--out",     default=OUT_DIR,   help="Output directory")
     parser.add_argument("--figure",  default=FIGURE,    help="Primary figure label")
     parser.add_argument("--figure2", default=FIGURE2,   help="Second figure label (Pattern C)")
-    parser.add_argument("--width",   type=int, default=WIDTH,  help="Render width in pixels")
-    parser.add_argument("--height",  type=int, default=HEIGHT, help="Render height in pixels")
+    parser.add_argument("--width",   type=int, default=None,  help="Render width in pixels (default: use scene render settings)")
+    parser.add_argument("--height",  type=int, default=None, help="Render height in pixels (default: use scene render settings)")
     args = parser.parse_args()
+
+    # 0 is the sentinel meaning "use whatever the scene has saved" in _render_api.
+    w = args.width  or 0
+    h = args.height or 0
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -364,12 +368,12 @@ if __name__ == "__main__":
     p = args.pattern
 
     if run_all or p == "0":
-        pattern_basic(client, args.out, args.figure, args.width, args.height)
+        pattern_basic(client, args.out, args.figure, w, h)
     if run_all or p == "A":
-        pattern_a_batch_variants(client, args.out, args.figure, args.width, args.height)
+        pattern_a_batch_variants(client, args.out, args.figure, w, h)
     if run_all or p == "B":
-        pattern_b_interleaved(client, args.out, args.figure, args.width, args.height)
+        pattern_b_interleaved(client, args.out, args.figure, w, h)
     if run_all or p == "C":
-        pattern_c_multi_figure(client, args.out, args.figure, args.figure2, args.width, args.height)
+        pattern_c_multi_figure(client, args.out, args.figure, args.figure2, w, h)
 
     print("\nDone.")
