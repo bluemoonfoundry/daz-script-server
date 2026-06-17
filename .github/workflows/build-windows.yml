@@ -61,11 +61,18 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Configure CMake
-        shell: cmd
+      - name: Add Qt DLLs to system PATH
+        shell: bash
         run: |
-          set "PATH=${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;%PATH%"
-          cmake -B build -S . -DDAZ_SDK_DIR="${{ github.workspace }}\DAZStudio4.5+ SDK" -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
+          # Add SDK bin directory to GitHub PATH for all subsequent steps
+          echo "${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64" >> $GITHUB_PATH
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake -B build -S . \
+            -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
+            -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
 
       - name: Build with MSBuild
         shell: bash
