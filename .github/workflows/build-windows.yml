@@ -61,13 +61,28 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Copy Qt DLLs to system directory
+      - name: Check moc.exe dependencies
         shell: powershell
         run: |
-          # Copy Qt DLLs to Windows System32 so moc.exe can find them
-          $sdkBin = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64"
-          Copy-Item "$sdkBin\*.dll" "C:\Windows\System32\" -Force
-          Write-Host "Copied Qt DLLs from $sdkBin to System32"
+          # Try to run moc.exe directly to see what DLL is missing
+          $mocPath = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64\moc.exe"
+          Write-Host "Testing moc.exe at: $mocPath"
+
+          # Set PATH to include SDK bin
+          $env:PATH = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;$env:PATH"
+
+          # Try to run moc
+          try {
+              & $mocPath -h 2>&1 | Write-Host
+              Write-Host "moc.exe executed successfully"
+          } catch {
+              Write-Host "Error running moc.exe: $_"
+              Write-Host "Exit code: $LASTEXITCODE"
+          }
+
+          # List DLLs in the directory
+          Write-Host "`nDLLs in SDK bin directory:"
+          Get-ChildItem "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64\*.dll" | Select-Object Name
 
       - name: Configure CMake
         shell: bash
