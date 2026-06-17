@@ -61,11 +61,13 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Add Qt DLLs to system PATH
-        shell: bash
+      - name: Copy Qt DLLs to system directory
+        shell: powershell
         run: |
-          # Add SDK bin directory to GitHub PATH for all subsequent steps
-          echo "${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64" >> $GITHUB_PATH
+          # Copy Qt DLLs to Windows System32 so moc.exe can find them
+          $sdkBin = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64"
+          Copy-Item "$sdkBin\*.dll" "C:\Windows\System32\" -Force
+          Write-Host "Copied Qt DLLs from $sdkBin to System32"
 
       - name: Configure CMake
         shell: bash
