@@ -14,6 +14,8 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       configuration: Release
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
   build-macos-intel:
     name: Build macOS Intel Plugin
@@ -21,6 +23,8 @@ jobs:
     with:
       architecture: x86_64
       configuration: Release
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
   build-macos-arm:
     name: Build macOS Apple Silicon Plugin
@@ -28,6 +32,8 @@ jobs:
     with:
       architecture: arm64
       configuration: Release
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
   build-macos-universal:
     name: Build macOS Universal Binary Plugin
@@ -35,6 +41,8 @@ jobs:
     with:
       architecture: universal
       configuration: Release
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
   build-dazpy:
     name: Build dazpy Wheel

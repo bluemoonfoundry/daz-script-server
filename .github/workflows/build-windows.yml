@@ -8,6 +8,10 @@ on:
         required: false
         type: string
         default: 'Release'
+    secrets:
+      sdk-repo-token:
+        description: 'Token for accessing private SDK repository'
+        required: true
     outputs:
       artifact-name:
         description: 'Name of the uploaded artifact'
@@ -40,6 +44,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: bluemoonfoundry/daz-studio-sdks
+          token: ${{ secrets.sdk-repo-token }}
           path: temp-sdk
           sparse-checkout: |
             daz-studio-45-sdk-win32
