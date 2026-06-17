@@ -1,0 +1,93 @@
+name: Build Windows Plugin
+
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        description: 'Build configuration (Release or Debug)'
+        required: false
+        type: string
+        default: 'Release'
+    outputs:
+      artifact-name:
+        description: 'Name of the uploaded artifact'
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+jobs:
+  build:
+    runs-on: windows-2022
+    outputs:
+      artifact-name: ${{ steps.upload.outputs.artifact-name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up cache key for DAZ SDK
+        id: cache-key
+        run: echo "sdk-cache-key=daz-sdk-4.5-windows-v1" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Cache DAZ Studio SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/DAZStudio4.5+ SDK
+          key: ${{ steps.cache-key.outputs.sdk-cache-key }}
+
+      - name: Download DAZ Studio SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "Downloading DAZ Studio SDK from GitHub..."
+          curl -L -o daz-sdk.zip https://github.com/3DBreww/DAZ-Studio-SDK/archive/refs/heads/main.zip
+          unzip -q daz-sdk.zip
+          mv DAZ-Studio-SDK-main "DAZStudio4.5+ SDK"
+          rm daz-sdk.zip
+
+      - name: Verify SDK structure
+        shell: bash
+        run: |
+          if [ ! -d "DAZStudio4.5+ SDK/include" ]; then
+            echo "Error: SDK include directory not found"
+            exit 1
+          fi
+          if [ ! -d "DAZStudio4.5+ SDK/lib" ]; then
+            echo "Error: SDK lib directory not found"
+            exit 1
+          fi
+          echo "SDK structure verified"
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake -B build -S . \
+            -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
+            -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
+
+      - name: Build with MSBuild
+        shell: bash
+        run: |
+          cmake --build build --config ${{ inputs.configuration }} --verbose
+
+      - name: Verify build output
+        shell: bash
+        run: |
+          DLL_PATH="build/plugin/${{ inputs.configuration }}/DazScriptServer.dll"
+          if [ ! -f "$DLL_PATH" ]; then
+            echo "Error: DLL not found at $DLL_PATH"
+            exit 1
+          fi
+          echo "Build successful: $DLL_PATH"
+          ls -lh "$DLL_PATH"
+
+      - name: Upload Windows DLL artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: DazScriptServer-windows-${{ inputs.configuration }}
+          path: build/plugin/${{ inputs.configuration }}/DazScriptServer.dll
+          if-no-files-found: error

@@ -1,0 +1,113 @@
+name: Build macOS Plugin
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        description: 'Target architecture (x86_64, arm64, or universal)'
+        required: true
+        type: string
+      configuration:
+        description: 'Build configuration (Release or Debug)'
+        required: false
+        type: string
+        default: 'Release'
+    outputs:
+      artifact-name:
+        description: 'Name of the uploaded artifact'
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+jobs:
+  build:
+    runs-on: ${{ inputs.architecture == 'arm64' && 'macos-14' || 'macos-13' }}
+    outputs:
+      artifact-name: ${{ steps.upload.outputs.artifact-name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set architecture flags
+        id: arch-flags
+        run: |
+          case "${{ inputs.architecture }}" in
+            x86_64)
+              echo "cmake-arch=x86_64" >> $GITHUB_OUTPUT
+              echo "runner-desc=Intel" >> $GITHUB_OUTPUT
+              ;;
+            arm64)
+              echo "cmake-arch=arm64" >> $GITHUB_OUTPUT
+              echo "runner-desc=AppleSilicon" >> $GITHUB_OUTPUT
+              ;;
+            universal)
+              echo "cmake-arch=x86_64;arm64" >> $GITHUB_OUTPUT
+              echo "runner-desc=Universal" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Error: Unknown architecture ${{ inputs.architecture }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Set up cache key for DAZ SDK
+        id: cache-key
+        run: echo "sdk-cache-key=daz-sdk-4.5-macos-v1" >> $GITHUB_OUTPUT
+
+      - name: Cache DAZ Studio SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/DAZStudio4.5+ SDK
+          key: ${{ steps.cache-key.outputs.sdk-cache-key }}
+
+      - name: Download DAZ Studio SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading DAZ Studio SDK from GitHub..."
+          curl -L -o daz-sdk.zip https://github.com/3DBreww/DAZ-Studio-SDK/archive/refs/heads/main.zip
+          unzip -q daz-sdk.zip
+          mv DAZ-Studio-SDK-main "DAZStudio4.5+ SDK"
+          rm daz-sdk.zip
+
+      - name: Verify SDK structure
+        run: |
+          if [ ! -d "DAZStudio4.5+ SDK/include" ]; then
+            echo "Error: SDK include directory not found"
+            exit 1
+          fi
+          if [ ! -d "DAZStudio4.5+ SDK/lib" ]; then
+            echo "Error: SDK lib directory not found"
+            exit 1
+          fi
+          echo "SDK structure verified"
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . \
+            -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
+            -DCMAKE_BUILD_TYPE=${{ inputs.configuration }} \
+            -DCMAKE_OSX_ARCHITECTURES="${{ steps.arch-flags.outputs.cmake-arch }}"
+
+      - name: Build with CMake
+        run: |
+          cmake --build build --config ${{ inputs.configuration }} --verbose
+
+      - name: Verify build output
+        run: |
+          DYLIB_PATH="build/plugin/DazScriptServer.dylib"
+          if [ ! -f "$DYLIB_PATH" ]; then
+            echo "Error: dylib not found at $DYLIB_PATH"
+            exit 1
+          fi
+          echo "Build successful: $DYLIB_PATH"
+          ls -lh "$DYLIB_PATH"
+          file "$DYLIB_PATH"
+          lipo -info "$DYLIB_PATH"
+
+      - name: Upload macOS dylib artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: DazScriptServer-macos-${{ steps.arch-flags.outputs.runner-desc }}-${{ inputs.configuration }}
+          path: build/plugin/DazScriptServer.dylib
+          if-no-files-found: error

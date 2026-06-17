@@ -1,0 +1,103 @@
+name: Test Build (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build'
+        required: true
+        type: choice
+        options:
+          - all
+          - windows
+          - macos-intel
+          - macos-arm
+          - macos-universal
+          - dazpy
+        default: 'all'
+      configuration:
+        description: 'Build configuration'
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+        default: 'Release'
+
+jobs:
+  build-windows:
+    name: Build Windows Plugin
+    if: inputs.platform == 'all' || inputs.platform == 'windows'
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      configuration: ${{ inputs.configuration }}
+
+  build-macos-intel:
+    name: Build macOS Intel Plugin
+    if: inputs.platform == 'all' || inputs.platform == 'macos-intel'
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: x86_64
+      configuration: ${{ inputs.configuration }}
+
+  build-macos-arm:
+    name: Build macOS Apple Silicon Plugin
+    if: inputs.platform == 'all' || inputs.platform == 'macos-arm'
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: arm64
+      configuration: ${{ inputs.configuration }}
+
+  build-macos-universal:
+    name: Build macOS Universal Binary Plugin
+    if: inputs.platform == 'all' || inputs.platform == 'macos-universal'
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: universal
+      configuration: ${{ inputs.configuration }}
+
+  build-dazpy:
+    name: Build dazpy Wheel
+    if: inputs.platform == 'all' || inputs.platform == 'dazpy'
+    uses: ./.github/workflows/build-dazpy.yml
+
+  summary:
+    name: Build Summary
+    needs: [build-windows, build-macos-intel, build-macos-arm, build-macos-universal, build-dazpy]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check build results
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Platform: ${{ inputs.platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "Configuration: ${{ inputs.configuration }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build-windows.result }}" != "skipped" ]; then
+            echo "- Windows: ${{ needs.build-windows.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-macos-intel.result }}" != "skipped" ]; then
+            echo "- macOS Intel: ${{ needs.build-macos-intel.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-macos-arm.result }}" != "skipped" ]; then
+            echo "- macOS Apple Silicon: ${{ needs.build-macos-arm.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-macos-universal.result }}" != "skipped" ]; then
+            echo "- macOS Universal: ${{ needs.build-macos-universal.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-dazpy.result }}" != "skipped" ]; then
+            echo "- dazpy: ${{ needs.build-dazpy.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts are available for download from the workflow run page." >> $GITHUB_STEP_SUMMARY
