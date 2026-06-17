@@ -62,14 +62,10 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Configure CMake
-        shell: bash
+        shell: cmd
         run: |
-          # Add SDK bin directory to PATH so moc.exe can find Qt DLLs
-          export PATH="${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64:$PATH"
-
-          cmake -B build -S . \
-            -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
-            -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
+          set "PATH=${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;%PATH%"
+          cmake -B build -S . -DDAZ_SDK_DIR="${{ github.workspace }}\DAZStudio4.5+ SDK" -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
 
       - name: Build with MSBuild
         shell: bash
