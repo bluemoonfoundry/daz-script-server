@@ -61,28 +61,13 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Check moc.exe dependencies
-        shell: powershell
+      - name: Add Qt DLLs to PATH
+        shell: bash
         run: |
-          # Try to run moc.exe directly to see what DLL is missing
-          $mocPath = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64\moc.exe"
-          Write-Host "Testing moc.exe at: $mocPath"
-
-          # Set PATH to include SDK bin
-          $env:PATH = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;$env:PATH"
-
-          # Try to run moc
-          try {
-              & $mocPath -h 2>&1 | Write-Host
-              Write-Host "moc.exe executed successfully"
-          } catch {
-              Write-Host "Error running moc.exe: $_"
-              Write-Host "Exit code: $LASTEXITCODE"
-          }
-
-          # List DLLs in the directory
-          Write-Host "`nDLLs in SDK bin directory:"
-          Get-ChildItem "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64\*.dll" | Select-Object Name
+          # Add SDK bin directory to GITHUB_PATH with proper Windows path format
+          SDK_BIN=$(cygpath -w "${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64")
+          echo "$SDK_BIN" >> $GITHUB_PATH
+          echo "Added to PATH: $SDK_BIN"
 
       - name: Configure CMake
         shell: bash
