@@ -51,7 +51,7 @@ jobs:
 
       - name: Set up cache key for DAZ SDK
         id: cache-key
-        run: echo "sdk-cache-key=daz-sdk-4.5-macos-v1" >> $GITHUB_OUTPUT
+        run: echo "sdk-cache-key=daz-sdk-4.5-macos-private-v1" >> $GITHUB_OUTPUT
 
       - name: Cache DAZ Studio SDK
         id: cache-sdk
@@ -62,12 +62,16 @@ jobs:
 
       - name: Download DAZ Studio SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Downloading DAZ Studio SDK from GitHub..."
-          curl -L -o daz-sdk.zip https://github.com/3DBreww/DAZ-Studio-SDK/archive/refs/heads/main.zip
+          echo "Downloading macOS DAZ Studio SDK from private repo..."
+          curl -L -H "Authorization: token $GH_TOKEN" \
+            -o daz-sdk.zip \
+            https://github.com/bluemoonfoundry/daz-studio-sdks/archive/refs/heads/main.zip
           unzip -q daz-sdk.zip
-          mv DAZ-Studio-SDK-main "DAZStudio4.5+ SDK"
-          rm daz-sdk.zip
+          mv daz-studio-sdks-main/daz-studio-45-sdk-macos "DAZStudio4.5+ SDK"
+          rm -rf daz-studio-sdks-main daz-sdk.zip
 
       - name: Verify SDK structure
         run: |

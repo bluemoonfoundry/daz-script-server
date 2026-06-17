@@ -15,29 +15,26 @@ jobs:
     with:
       configuration: Release
 
-  # FIXME: macOS builds disabled - public SDK (https://github.com/3DBreww/DAZ-Studio-SDK)
-  # is Windows-only. Enable these when macOS SDK is available.
-  #
-  # build-macos-intel:
-  #   name: Build macOS Intel Plugin
-  #   uses: ./.github/workflows/build-macos.yml
-  #   with:
-  #     architecture: x86_64
-  #     configuration: Release
-  #
-  # build-macos-arm:
-  #   name: Build macOS Apple Silicon Plugin
-  #   uses: ./.github/workflows/build-macos.yml
-  #   with:
-  #     architecture: arm64
-  #     configuration: Release
-  #
-  # build-macos-universal:
-  #   name: Build macOS Universal Binary Plugin
-  #   uses: ./.github/workflows/build-macos.yml
-  #   with:
-  #     architecture: universal
-  #     configuration: Release
+  build-macos-intel:
+    name: Build macOS Intel Plugin
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: x86_64
+      configuration: Release
+
+  build-macos-arm:
+    name: Build macOS Apple Silicon Plugin
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: arm64
+      configuration: Release
+
+  build-macos-universal:
+    name: Build macOS Universal Binary Plugin
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: universal
+      configuration: Release
 
   build-dazpy:
     name: Build dazpy Wheel
@@ -45,7 +42,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-windows, build-dazpy]
+    needs: [build-windows, build-macos-intel, build-macos-arm, build-macos-universal, build-dazpy]
     runs-on: ubuntu-latest
 
     steps:
@@ -91,10 +88,11 @@ jobs:
             echo ""
             echo "## Built Artifacts"
             echo ""
-            echo "- **Windows:** \`DazScriptServer.dll\`"
+            echo "- **Windows:** \`DazScriptServer-windows.dll\`"
+            echo "- **macOS Intel:** \`DazScriptServer-macos-Intel.dylib\`"
+            echo "- **macOS Apple Silicon:** \`DazScriptServer-macos-AppleSilicon.dylib\`"
+            echo "- **macOS Universal Binary:** \`DazScriptServer-macos-Universal.dylib\`"
             echo "- **Python Package:** \`dazpy-*.whl\`"
-            echo ""
-            echo "> **Note:** macOS builds temporarily disabled pending SDK availability."
           } > release_notes.md
 
       - name: Download all artifacts
@@ -109,6 +107,18 @@ jobs:
           # Windows DLL
           cp artifacts/DazScriptServer-windows-Release/DazScriptServer.dll \
              release-assets/DazScriptServer-windows.dll
+
+          # macOS Intel dylib
+          cp artifacts/DazScriptServer-macos-Intel-Release/DazScriptServer.dylib \
+             release-assets/DazScriptServer-macos-Intel.dylib
+
+          # macOS Apple Silicon dylib
+          cp artifacts/DazScriptServer-macos-AppleSilicon-Release/DazScriptServer.dylib \
+             release-assets/DazScriptServer-macos-AppleSilicon.dylib
+
+          # macOS Universal Binary dylib
+          cp artifacts/DazScriptServer-macos-Universal-Release/DazScriptServer.dylib \
+             release-assets/DazScriptServer-macos-Universal.dylib
 
           # dazpy wheel
           cp artifacts/dazpy-wheel/*.whl release-assets/
