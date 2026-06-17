@@ -64,6 +64,9 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
+          # Add SDK bin directory to PATH so moc.exe can find Qt DLLs
+          export PATH="${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64:$PATH"
+
           cmake -B build -S . \
             -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
             -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
