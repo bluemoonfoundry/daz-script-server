@@ -35,18 +35,19 @@ jobs:
           path: ${{ github.workspace }}/DAZStudio4.5+ SDK
           key: ${{ steps.cache-key.outputs.sdk-cache-key }}
 
-      - name: Download DAZ Studio SDK
+      - name: Checkout DAZ Studio SDK repo
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: bluemoonfoundry/daz-studio-sdks
+          path: temp-sdk
+          sparse-checkout: |
+            daz-studio-45-sdk-win32
+
+      - name: Move SDK to expected location
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Cloning Windows DAZ Studio SDK from private repo..."
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://x-access-token:$GH_TOKEN@github.com/bluemoonfoundry/daz-studio-sdks.git temp-sdk
-          cd temp-sdk
-          git sparse-checkout set daz-studio-45-sdk-win32
-          cd ..
           mv temp-sdk/daz-studio-45-sdk-win32 "DAZStudio4.5+ SDK"
           rm -rf temp-sdk
 

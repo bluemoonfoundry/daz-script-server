@@ -60,17 +60,18 @@ jobs:
           path: ${{ github.workspace }}/DAZStudio4.5+ SDK
           key: ${{ steps.cache-key.outputs.sdk-cache-key }}
 
-      - name: Download DAZ Studio SDK
+      - name: Checkout DAZ Studio SDK repo
         if: steps.cache-sdk.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: actions/checkout@v4
+        with:
+          repository: bluemoonfoundry/daz-studio-sdks
+          path: temp-sdk
+          sparse-checkout: |
+            daz-studio-45-sdk-macos
+
+      - name: Move SDK to expected location
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          echo "Cloning macOS DAZ Studio SDK from private repo..."
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://x-access-token:$GH_TOKEN@github.com/bluemoonfoundry/daz-studio-sdks.git temp-sdk
-          cd temp-sdk
-          git sparse-checkout set daz-studio-45-sdk-macos
-          cd ..
           mv temp-sdk/daz-studio-45-sdk-macos "DAZStudio4.5+ SDK"
           rm -rf temp-sdk
 
