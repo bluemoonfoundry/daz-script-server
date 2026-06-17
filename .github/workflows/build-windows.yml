@@ -61,12 +61,26 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      - name: Install Visual C++ 2010 Redistributable
+        shell: pwsh
+        run: |
+          # Qt 4.8 from 2014 likely needs VS 2010 redistributables
+          # Download and install VC++ 2010 x64
+          $vcRedistUrl = "https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x64.exe"
+          $installerPath = "$env:TEMP\vcredist_x64_2010.exe"
+
+          Write-Host "Downloading VC++ 2010 Redistributable..."
+          Invoke-WebRequest -Uri $vcRedistUrl -OutFile $installerPath
+
+          Write-Host "Installing VC++ 2010 Redistributable..."
+          Start-Process -FilePath $installerPath -ArgumentList "/install", "/quiet", "/norestart" -Wait
+
+          Write-Host "VC++ 2010 Redistributable installed"
+
       - name: Configure CMake
         shell: pwsh
         run: |
-          # Set PATH in PowerShell which CMake might respect better
           $env:PATH = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;$env:PATH"
-          Write-Host "PATH includes: $($env:PATH.Split(';')[0])"
 
           cmake -B build -S . `
             -DDAZ_SDK_DIR="${{ github.workspace }}\DAZStudio4.5+ SDK" `
