@@ -61,16 +61,10 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Add Qt DLLs to PATH
-        shell: bash
-        run: |
-          # Add SDK bin directory to GITHUB_PATH with proper Windows path format
-          SDK_BIN=$(cygpath -w "${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64")
-          echo "$SDK_BIN" >> $GITHUB_PATH
-          echo "Added to PATH: $SDK_BIN"
-
       - name: Configure CMake
         shell: bash
+        env:
+          PATH: ${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64:${{ env.PATH }}
         run: |
           cmake -B build -S . \
             -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
