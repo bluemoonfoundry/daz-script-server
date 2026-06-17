@@ -62,12 +62,14 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Configure CMake
-        shell: bash
-        env:
-          PATH: ${{ github.workspace }}/DAZStudio4.5+ SDK/bin/x64:${{ env.PATH }}
+        shell: pwsh
         run: |
-          cmake -B build -S . \
-            -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
+          # Set PATH in PowerShell which CMake might respect better
+          $env:PATH = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;$env:PATH"
+          Write-Host "PATH includes: $($env:PATH.Split(';')[0])"
+
+          cmake -B build -S . `
+            -DDAZ_SDK_DIR="${{ github.workspace }}\DAZStudio4.5+ SDK" `
             -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
 
       - name: Build with MSBuild
