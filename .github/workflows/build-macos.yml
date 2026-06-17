@@ -65,13 +65,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Downloading macOS DAZ Studio SDK from private repo..."
-          curl -L -H "Authorization: token $GH_TOKEN" \
-            -o daz-sdk.zip \
-            https://github.com/bluemoonfoundry/daz-studio-sdks/archive/refs/heads/main.zip
-          unzip -q daz-sdk.zip
-          mv daz-studio-sdks-main/daz-studio-45-sdk-macos "DAZStudio4.5+ SDK"
-          rm -rf daz-studio-sdks-main daz-sdk.zip
+          echo "Cloning macOS DAZ Studio SDK from private repo..."
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://x-access-token:$GH_TOKEN@github.com/bluemoonfoundry/daz-studio-sdks.git temp-sdk
+          cd temp-sdk
+          git sparse-checkout set daz-studio-45-sdk-macos
+          cd ..
+          mv temp-sdk/daz-studio-45-sdk-macos "DAZStudio4.5+ SDK"
+          rm -rf temp-sdk
 
       - name: Verify SDK structure
         run: |
