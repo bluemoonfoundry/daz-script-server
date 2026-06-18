@@ -64,6 +64,7 @@ TORSO_BUST_BONES = ["chestUpper", "chestLower", "chest"]
 TORSO_UNDERBUST_BONES = ["abdomenLower", "abdomenUpper", "abdomen"]
 TORSO_LOW_HIP_BONES = ["pelvis", "hip"]
 CM_PER_INCH = 2.54
+HIGH_HIP_OFFSET_CM = 7.5  # ~3 in above full hip bone
 GENESIS_9_BONES = {"hip", "pelvis", "spine1", "spine2", "spine3", "spine4", "neck1", "neck2", "head"}
 GENESIS_8_BONES = {"hip", "pelvis", "abdomen", "abdomen2", "chest", "chestLower", "chestUpper", "neck", "head"}
 PECTORAL_LEFT_CANDIDATES = [
@@ -110,6 +111,21 @@ class FigureProfile:
     crotch_right_bones: list[str]
     wrist_left_bones: list[str]
     wrist_right_bones: list[str]
+    neck_bones: list[str]
+    high_bust_left_bones: list[str]
+    high_bust_right_bones: list[str]
+    thigh_left_bones: list[str]
+    thigh_right_bones: list[str]
+    knee_left_bones: list[str]
+    knee_right_bones: list[str]
+    ankle_left_bones: list[str]
+    ankle_right_bones: list[str]
+    upper_arm_left_bones: list[str]
+    upper_arm_right_bones: list[str]
+    elbow_left_bones: list[str]
+    elbow_right_bones: list[str]
+    wrist_circ_left_bones: list[str]
+    wrist_circ_right_bones: list[str]
 
 
 @dataclass(slots=True)
@@ -393,6 +409,21 @@ def _figure_profile(figure) -> FigureProfile:
             crotch_right_bones=["rThighBend", "rThigh"],
             wrist_left_bones=["lHand", "lCarpal1"],
             wrist_right_bones=["rHand", "rCarpal1"],
+            neck_bones=["neck1", "neck2", "neckLower"],
+            high_bust_left_bones=["lShldrBend", "lShldr"],
+            high_bust_right_bones=["rShldrBend", "rShldr"],
+            thigh_left_bones=["lThighBend", "lThigh"],
+            thigh_right_bones=["rThighBend", "rThigh"],
+            knee_left_bones=["lShin", "lKnee"],
+            knee_right_bones=["rShin", "rKnee"],
+            ankle_left_bones=["lFoot", "lAnkle"],
+            ankle_right_bones=["rFoot", "rAnkle"],
+            upper_arm_left_bones=["lShldrBend", "lShldr"],
+            upper_arm_right_bones=["rShldrBend", "rShldr"],
+            elbow_left_bones=["lForeArm", "lForeArmBend"],
+            elbow_right_bones=["rForeArm", "rForeArmBend"],
+            wrist_circ_left_bones=["lHand", "lCarpal1"],
+            wrist_circ_right_bones=["rHand", "rCarpal1"],
         )
 
     if bone_names & GENESIS_8_BONES:
@@ -411,6 +442,21 @@ def _figure_profile(figure) -> FigureProfile:
             crotch_right_bones=["rThighBend", "rThigh"],
             wrist_left_bones=["lHand", "lCarpal1"],
             wrist_right_bones=["rHand", "rCarpal1"],
+            neck_bones=["neck", "neckLower"],
+            high_bust_left_bones=["lShldrBend", "lShldr"],
+            high_bust_right_bones=["rShldrBend", "rShldr"],
+            thigh_left_bones=["lThigh", "lThighBend"],
+            thigh_right_bones=["rThigh", "rThighBend"],
+            knee_left_bones=["lShin"],
+            knee_right_bones=["rShin"],
+            ankle_left_bones=["lFoot"],
+            ankle_right_bones=["rFoot"],
+            upper_arm_left_bones=["lShldrBend", "lShldr"],
+            upper_arm_right_bones=["rShldrBend", "rShldr"],
+            elbow_left_bones=["lForeArm", "lForeArmBend"],
+            elbow_right_bones=["rForeArm", "rForeArmBend"],
+            wrist_circ_left_bones=["lHand", "lCarpal1"],
+            wrist_circ_right_bones=["rHand", "rCarpal1"],
         )
 
     return FigureProfile(
@@ -428,6 +474,21 @@ def _figure_profile(figure) -> FigureProfile:
         crotch_right_bones=["rThighBend", "rThigh"],
         wrist_left_bones=["lHand", "lCarpal1"],
         wrist_right_bones=["rHand", "rCarpal1"],
+        neck_bones=["neck1", "neck2", "neckLower", "neck"],
+        high_bust_left_bones=["lShldrBend", "lShldr"],
+        high_bust_right_bones=["rShldrBend", "rShldr"],
+        thigh_left_bones=["lThighBend", "lThigh"],
+        thigh_right_bones=["rThighBend", "rThigh"],
+        knee_left_bones=["lShin", "lKnee"],
+        knee_right_bones=["rShin", "rKnee"],
+        ankle_left_bones=["lFoot", "lAnkle"],
+        ankle_right_bones=["rFoot", "rAnkle"],
+        upper_arm_left_bones=["lShldrBend", "lShldr"],
+        upper_arm_right_bones=["rShldrBend", "rShldr"],
+        elbow_left_bones=["lForeArm", "lForeArmBend"],
+        elbow_right_bones=["rForeArm", "rForeArmBend"],
+        wrist_circ_left_bones=["lHand", "lCarpal1"],
+        wrist_circ_right_bones=["rHand", "rCarpal1"],
     )
 
 
@@ -555,6 +616,69 @@ def _scan_calibrated_band(
     if calibration.fallback_mode == "min":
         return min(profile, key=lambda item: item[1])
     return _robust_profile_max(profile)
+
+
+def _section_limb_pair_perimeter(mesh, y: float) -> float | None:
+    """Average perimeter of the left+right symmetric limb loops at height y.
+
+    Prefers cross-section loops whose centroid is laterally displaced from the
+    body centerline (|x| large), so arm and leg contours are favoured over any
+    co-planar torso contour at the same height.  Returns the mean of the two
+    most-displaced loops when a symmetric pair is detected; otherwise the single
+    best-displaced loop.
+    """
+    section = mesh.section(
+        plane_origin=(0.0, float(y), 0.0),
+        plane_normal=(0.0, 1.0, 0.0),
+    )
+    if section is None:
+        return None
+    loops = list(section.discrete)
+    if not loops:
+        return None
+
+    candidates = []
+    for loop in loops:
+        perimeter = _loop_perimeter(loop)
+        if perimeter <= 0:
+            continue
+        cx, _ = _loop_centroid(loop)
+        candidates.append((abs(cx), perimeter))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: -item[0])
+
+    if len(candidates) >= 2:
+        d1, p1 = candidates[0]
+        d2, p2 = candidates[1]
+        if d1 > 0.5 and d2 > 0.3 and d2 / d1 > 0.5:
+            return (p1 + p2) * 0.5
+
+    return candidates[0][1]
+
+
+def _scan_limb_band(
+    mesh,
+    center_y: float,
+    below_cm: float,
+    above_cm: float,
+    mode: str,
+    step: float,
+) -> tuple[float | None, float | None]:
+    start = center_y - below_cm
+    stop = center_y + above_cm
+    profile: list[tuple[float, float]] = []
+    for y in frange(start, stop, step):
+        value = _section_limb_pair_perimeter(mesh, y)
+        if value is not None:
+            profile.append((y, value))
+    if not profile:
+        return None, None
+    if mode == "min":
+        return min(profile, key=lambda item: item[1])
+    return max(profile, key=lambda item: item[1])
 
 
 def _build_mesh(vertices: list[list[float]], faces: list[list[int]]):
@@ -727,12 +851,30 @@ def measure_figure(
     crotch_y, crotch_source = _avg_pair_y(figure, profile.crotch_left_bones, profile.crotch_right_bones)
     wrist_y, wrist_source = _avg_pair_y(figure, profile.wrist_left_bones, profile.wrist_right_bones)
 
+    neck_y, neck_source = _find_anchor_y(figure, profile.neck_bones)
+    high_bust_y, high_bust_source = _avg_pair_y(figure, profile.high_bust_left_bones, profile.high_bust_right_bones)
+    thigh_y, thigh_source = _avg_pair_y(figure, profile.thigh_left_bones, profile.thigh_right_bones)
+    knee_y, knee_source = _avg_pair_y(figure, profile.knee_left_bones, profile.knee_right_bones)
+    ankle_y, ankle_source = _avg_pair_y(figure, profile.ankle_left_bones, profile.ankle_right_bones)
+    upper_arm_y, upper_arm_source = _avg_pair_y(figure, profile.upper_arm_left_bones, profile.upper_arm_right_bones)
+    elbow_y, elbow_source = _avg_pair_y(figure, profile.elbow_left_bones, profile.elbow_right_bones)
+
     # Figure-specific calibration shifts the sample bands toward the measurement
     # convention used by product pages / Measure Metrics.
     bust_center = (bust_y if bust_y is not None else min_y + height * 0.78)
     underbust_center = (underbust_y if underbust_y is not None else min_y + height * 0.70)
     waist_center = (waist_y if waist_y is not None else min_y + height * 0.62)
     lowhip_center = (lowhip_y if lowhip_y is not None else min_y + height * 0.58)
+
+    neck_center = neck_y if neck_y is not None else min_y + height * 0.93
+    high_bust_center = high_bust_y if high_bust_y is not None else min_y + height * 0.83
+    high_hip_center = (lowhip_y + HIGH_HIP_OFFSET_CM) if lowhip_y is not None else min_y + height * 0.61
+    thigh_center = thigh_y if thigh_y is not None else min_y + height * 0.50
+    knee_center = knee_y if knee_y is not None else min_y + height * 0.28
+    ankle_center = ankle_y if ankle_y is not None else min_y + height * 0.07
+    upper_arm_center = upper_arm_y if upper_arm_y is not None else min_y + height * 0.78
+    elbow_center = elbow_y if elbow_y is not None else min_y + height * 0.65
+    wrist_circ_center = wrist_y if wrist_y is not None else min_y + height * 0.55
 
     bust_cal = calibration.bust
     if torso_only:
@@ -748,6 +890,23 @@ def measure_figure(
     waist_slice_y, waist_value = _scan_calibrated_band(mesh, waist_center, calibration.waist, sample_step)
     lowhip_slice_y, lowhip_value = _scan_calibrated_band(mesh, lowhip_center, calibration.low_hip, sample_step)
 
+    neck_slice_y, neck_value = _scan_calibrated_band(
+        mesh, neck_center, MeasurementCalibration(None, 2.0, 2.0, "min"), sample_step
+    )
+    high_bust_slice_y, high_bust_value = _scan_calibrated_band(
+        mesh, high_bust_center, MeasurementCalibration(None, 3.0, 3.0, "max"), sample_step
+    )
+    high_hip_slice_y, high_hip_value = _scan_calibrated_band(
+        mesh, high_hip_center, MeasurementCalibration(None, 4.0, 4.0, "max"), sample_step
+    )
+    thigh_slice_y, thigh_value = _scan_limb_band(mesh, thigh_center, 15.0, 2.0, "max", sample_step)
+    knee_slice_y, knee_value = _scan_limb_band(mesh, knee_center, 4.0, 4.0, "min", sample_step)
+    calf_slice_y, calf_value = _scan_limb_band(mesh, knee_center, 20.0, 2.0, "max", sample_step)
+    ankle_slice_y, ankle_value = _scan_limb_band(mesh, ankle_center, 3.0, 3.0, "min", sample_step)
+    upper_arm_slice_y, upper_arm_value = _scan_limb_band(mesh, upper_arm_center, 12.0, 2.0, "max", sample_step)
+    elbow_slice_y, elbow_value = _scan_limb_band(mesh, elbow_center, 4.0, 4.0, "min", sample_step)
+    wrist_circ_slice_y, wrist_circ_value = _scan_limb_band(mesh, wrist_circ_center, 3.0, 3.0, "min", sample_step)
+
     measurements = {
         "height": SliceMeasurement(
             name="Height",
@@ -756,6 +915,22 @@ def measure_figure(
             slice_y=None,
             source="mesh bounds",
             note=f"min_y={min_y:.3f}, max_y={max_y:.3f}",
+        ),
+        "neck_circumference": SliceMeasurement(
+            name="Neck Circumference",
+            value_cm=neck_value,
+            value_in=_cm_to_in(neck_value),
+            slice_y=neck_slice_y,
+            source=neck_source,
+            note=f"anchor_y={neck_center:.3f}",
+        ),
+        "high_bust_circumference": SliceMeasurement(
+            name="High Bust Circumference",
+            value_cm=high_bust_value,
+            value_in=_cm_to_in(high_bust_value),
+            slice_y=high_bust_slice_y,
+            source=high_bust_source,
+            note=f"anchor_y={high_bust_center:.3f}",
         ),
         "bust_circumference": SliceMeasurement(
             name="Bust Circumference",
@@ -781,6 +956,14 @@ def measure_figure(
             source=waist_source if waist_y is not None else "calibrated band",
             note=f"anchor_y={waist_center:.3f}; target_cm={calibration.waist.target_cm}",
         ),
+        "high_hip_circumference": SliceMeasurement(
+            name="High Hip Circumference",
+            value_cm=high_hip_value,
+            value_in=_cm_to_in(high_hip_value),
+            slice_y=high_hip_slice_y,
+            source=lowhip_source,
+            note=f"anchor_y={high_hip_center:.3f}; +{HIGH_HIP_OFFSET_CM:.1f}cm above low hip",
+        ),
         "low_hip_circumference": SliceMeasurement(
             name="Low Hip Circumference",
             value_cm=lowhip_value,
@@ -788,6 +971,62 @@ def measure_figure(
             slice_y=lowhip_slice_y,
             source=lowhip_source,
             note=f"anchor_y={lowhip_center:.3f}; target_cm={calibration.low_hip.target_cm}",
+        ),
+        "thigh_circumference": SliceMeasurement(
+            name="Thigh Circumference",
+            value_cm=thigh_value,
+            value_in=_cm_to_in(thigh_value),
+            slice_y=thigh_slice_y,
+            source=thigh_source,
+            note=f"anchor_y={thigh_center:.3f}; scan 15cm below hip joint",
+        ),
+        "knee_circumference": SliceMeasurement(
+            name="Knee Circumference",
+            value_cm=knee_value,
+            value_in=_cm_to_in(knee_value),
+            slice_y=knee_slice_y,
+            source=knee_source,
+            note=f"anchor_y={knee_center:.3f}",
+        ),
+        "calf_circumference": SliceMeasurement(
+            name="Calf Circumference",
+            value_cm=calf_value,
+            value_in=_cm_to_in(calf_value),
+            slice_y=calf_slice_y,
+            source=knee_source,
+            note=f"anchor_y={knee_center:.3f}; scan 20cm below knee joint",
+        ),
+        "ankle_circumference": SliceMeasurement(
+            name="Ankle Circumference",
+            value_cm=ankle_value,
+            value_in=_cm_to_in(ankle_value),
+            slice_y=ankle_slice_y,
+            source=ankle_source,
+            note=f"anchor_y={ankle_center:.3f}",
+        ),
+        "upper_arm_circumference": SliceMeasurement(
+            name="Upper Arm Circumference",
+            value_cm=upper_arm_value,
+            value_in=_cm_to_in(upper_arm_value),
+            slice_y=upper_arm_slice_y,
+            source=upper_arm_source,
+            note=f"anchor_y={upper_arm_center:.3f}; scan 12cm below shoulder joint",
+        ),
+        "elbow_circumference": SliceMeasurement(
+            name="Elbow Circumference",
+            value_cm=elbow_value,
+            value_in=_cm_to_in(elbow_value),
+            slice_y=elbow_slice_y,
+            source=elbow_source,
+            note=f"anchor_y={elbow_center:.3f}",
+        ),
+        "wrist_circumference": SliceMeasurement(
+            name="Wrist Circumference",
+            value_cm=wrist_circ_value,
+            value_in=_cm_to_in(wrist_circ_value),
+            slice_y=wrist_circ_slice_y,
+            source=wrist_source,
+            note=f"anchor_y={wrist_circ_center:.3f}",
         ),
         "back_waist_length": SliceMeasurement(
             name="Back Waist Length",
@@ -929,10 +1168,20 @@ def _format_table(headers: list[str], rows: list[list[str]]) -> str:
 
 _CIRCUMFERENCE_KEYS = [
     "height",
+    "neck_circumference",
+    "high_bust_circumference",
     "bust_circumference",
     "underbust_circumference",
     "waist_circumference",
+    "high_hip_circumference",
     "low_hip_circumference",
+    "thigh_circumference",
+    "knee_circumference",
+    "calf_circumference",
+    "ankle_circumference",
+    "upper_arm_circumference",
+    "elbow_circumference",
+    "wrist_circumference",
 ]
 
 _LENGTH_KEYS = [
