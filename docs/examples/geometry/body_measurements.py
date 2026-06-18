@@ -103,6 +103,13 @@ class FigureProfile:
     underbust_bones: list[str]
     waist_bones: list[str]
     low_hip_bones: list[str]
+    nape_bones: list[str]
+    shoulder_left_bones: list[str]
+    shoulder_right_bones: list[str]
+    crotch_left_bones: list[str]
+    crotch_right_bones: list[str]
+    wrist_left_bones: list[str]
+    wrist_right_bones: list[str]
 
 
 @dataclass(slots=True)
@@ -345,6 +352,24 @@ def _find_pair_anchor_y(figure, left_candidates: list[str], right_candidates: li
     return None, "fallback"
 
 
+def _avg_pair_y(figure, left_bones: list[str], right_bones: list[str]) -> tuple[float | None, str]:
+    left_y, left_src = _find_anchor_y(figure, left_bones)
+    right_y, right_src = _find_anchor_y(figure, right_bones)
+    if left_y is not None and right_y is not None:
+        return (left_y + right_y) * 0.5, f"avg({left_src}, {right_src})"
+    if left_y is not None:
+        return left_y, left_src
+    if right_y is not None:
+        return right_y, right_src
+    return None, "fallback"
+
+
+def _vertical_distance(top_y: float | None, bottom_y: float | None) -> float | None:
+    if top_y is None or bottom_y is None:
+        return None
+    return abs(top_y - bottom_y)
+
+
 def _figure_profile(figure) -> FigureProfile:
     bone_names = set()
     try:
@@ -361,6 +386,13 @@ def _figure_profile(figure) -> FigureProfile:
             underbust_bones=["spine3", "spine2"],
             waist_bones=["spine2", "spine1"],
             low_hip_bones=["pelvis", "hip"],
+            nape_bones=["neck2", "neck1", "neckLower"],
+            shoulder_left_bones=["lShldrBend", "lShldr"],
+            shoulder_right_bones=["rShldrBend", "rShldr"],
+            crotch_left_bones=["lThighBend", "lThigh"],
+            crotch_right_bones=["rThighBend", "rThigh"],
+            wrist_left_bones=["lHand", "lCarpal1"],
+            wrist_right_bones=["rHand", "rCarpal1"],
         )
 
     if bone_names & GENESIS_8_BONES:
@@ -372,6 +404,13 @@ def _figure_profile(figure) -> FigureProfile:
             underbust_bones=["chestLower", "abdomenUpper", "abdomen"],
             waist_bones=["abdomenUpper", "abdomenLower", "pelvis"],
             low_hip_bones=["pelvis", "hip"],
+            nape_bones=["neckLower", "neck"],
+            shoulder_left_bones=["lShldrBend", "lShldr"],
+            shoulder_right_bones=["rShldrBend", "rShldr"],
+            crotch_left_bones=["lThighBend", "lThigh"],
+            crotch_right_bones=["rThighBend", "rThigh"],
+            wrist_left_bones=["lHand", "lCarpal1"],
+            wrist_right_bones=["rHand", "rCarpal1"],
         )
 
     return FigureProfile(
@@ -382,6 +421,13 @@ def _figure_profile(figure) -> FigureProfile:
         underbust_bones=TORSO_UNDERBUST_BONES,
         waist_bones=["abdomen", "abdomen2", "spine2", "spine3", "pelvis"],
         low_hip_bones=TORSO_LOW_HIP_BONES,
+        nape_bones=["neck2", "neck1", "neckLower", "neck"],
+        shoulder_left_bones=["lShldrBend", "lShldr"],
+        shoulder_right_bones=["rShldrBend", "rShldr"],
+        crotch_left_bones=["lThighBend", "lThigh"],
+        crotch_right_bones=["rThighBend", "rThigh"],
+        wrist_left_bones=["lHand", "lCarpal1"],
+        wrist_right_bones=["rHand", "rCarpal1"],
     )
 
 
@@ -676,6 +722,11 @@ def measure_figure(
     waist_y, waist_source = _find_anchor_y(figure, profile.waist_bones)
     lowhip_y, lowhip_source = _find_anchor_y(figure, profile.low_hip_bones)
 
+    nape_y, nape_source = _find_anchor_y(figure, profile.nape_bones)
+    shoulder_y, shoulder_source = _avg_pair_y(figure, profile.shoulder_left_bones, profile.shoulder_right_bones)
+    crotch_y, crotch_source = _avg_pair_y(figure, profile.crotch_left_bones, profile.crotch_right_bones)
+    wrist_y, wrist_source = _avg_pair_y(figure, profile.wrist_left_bones, profile.wrist_right_bones)
+
     # Figure-specific calibration shifts the sample bands toward the measurement
     # convention used by product pages / Measure Metrics.
     bust_center = (bust_y if bust_y is not None else min_y + height * 0.78)
@@ -737,6 +788,69 @@ def measure_figure(
             slice_y=lowhip_slice_y,
             source=lowhip_source,
             note=f"anchor_y={lowhip_center:.3f}; target_cm={calibration.low_hip.target_cm}",
+        ),
+        "back_waist_length": SliceMeasurement(
+            name="Back Waist Length",
+            value_cm=_vertical_distance(nape_y, waist_y),
+            value_in=_cm_to_in(_vertical_distance(nape_y, waist_y)),
+            slice_y=None,
+            source=f"{nape_source} → {waist_source}",
+        ),
+        "front_waist_length": SliceMeasurement(
+            name="Front Waist Length",
+            value_cm=_vertical_distance(shoulder_y, waist_y),
+            value_in=_cm_to_in(_vertical_distance(shoulder_y, waist_y)),
+            slice_y=None,
+            source=f"{shoulder_source} → {waist_source}",
+        ),
+        "torso_length": SliceMeasurement(
+            name="Torso Length",
+            value_cm=_vertical_distance(shoulder_y, lowhip_y),
+            value_in=_cm_to_in(_vertical_distance(shoulder_y, lowhip_y)),
+            slice_y=None,
+            source=f"{shoulder_source} → {lowhip_source}",
+        ),
+        "inseam": SliceMeasurement(
+            name="Inseam",
+            value_cm=_vertical_distance(crotch_y, min_y),
+            value_in=_cm_to_in(_vertical_distance(crotch_y, min_y)),
+            slice_y=None,
+            source=f"{crotch_source} → floor",
+        ),
+        "outseam": SliceMeasurement(
+            name="Outseam",
+            value_cm=_vertical_distance(waist_y, min_y),
+            value_in=_cm_to_in(_vertical_distance(waist_y, min_y)),
+            slice_y=None,
+            source=f"{waist_source} → floor",
+        ),
+        "sleeve_length": SliceMeasurement(
+            name="Sleeve Length",
+            value_cm=_vertical_distance(shoulder_y, wrist_y),
+            value_in=_cm_to_in(_vertical_distance(shoulder_y, wrist_y)),
+            slice_y=None,
+            source=f"{shoulder_source} → {wrist_source}",
+        ),
+        "shoulder_to_bust": SliceMeasurement(
+            name="Shoulder to Bust",
+            value_cm=_vertical_distance(shoulder_y, bust_y),
+            value_in=_cm_to_in(_vertical_distance(shoulder_y, bust_y)),
+            slice_y=None,
+            source=f"{shoulder_source} → {bust_source}",
+        ),
+        "waist_to_hip": SliceMeasurement(
+            name="Waist to Hip",
+            value_cm=_vertical_distance(waist_y, lowhip_y),
+            value_in=_cm_to_in(_vertical_distance(waist_y, lowhip_y)),
+            slice_y=None,
+            source=f"{waist_source} → {lowhip_source}",
+        ),
+        "crotch_depth": SliceMeasurement(
+            name="Crotch Depth",
+            value_cm=_vertical_distance(waist_y, crotch_y),
+            value_in=_cm_to_in(_vertical_distance(waist_y, crotch_y)),
+            slice_y=None,
+            source=f"{waist_source} → {crotch_source}",
         ),
     }
 
@@ -813,15 +927,30 @@ def _format_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+_CIRCUMFERENCE_KEYS = [
+    "height",
+    "bust_circumference",
+    "underbust_circumference",
+    "waist_circumference",
+    "low_hip_circumference",
+]
+
+_LENGTH_KEYS = [
+    "back_waist_length",
+    "front_waist_length",
+    "torso_length",
+    "inseam",
+    "outseam",
+    "sleeve_length",
+    "shoulder_to_bust",
+    "waist_to_hip",
+    "crotch_depth",
+]
+
+
 def _measurement_rows(result: dict) -> list[list[str]]:
     rows = []
-    for key in [
-        "height",
-        "bust_circumference",
-        "underbust_circumference",
-        "waist_circumference",
-        "low_hip_circumference",
-    ]:
+    for key in _CIRCUMFERENCE_KEYS + _LENGTH_KEYS:
         item = result["measurements"][key]
         rows.append(
             [
@@ -899,13 +1028,7 @@ def _print_summary(result: dict, pretty: bool = False) -> None:
             )
         )
     else:
-        for key in [
-            "height",
-            "bust_circumference",
-            "underbust_circumference",
-            "waist_circumference",
-            "low_hip_circumference",
-        ]:
+        for key in _CIRCUMFERENCE_KEYS + _LENGTH_KEYS:
             item = result["measurements"][key]
             suffix = f"{_fmt_measurement(item)}"
             details = f"  (slice_y={_fmt_value(item['slice_y'])}, source={item['source']})"
