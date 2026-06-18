@@ -547,7 +547,7 @@ def _bra_band_from_underbust(underbust_in: float) -> int:
     # US traditional method: round underbust to nearest inch, add 4 if even or 5 if odd.
     # This always produces an even band number.
     rounded = int(round(underbust_in))
-    band = rounded + (4 if rounded % 2 == 0 else 5)
+    band = rounded # + (4 if rounded % 2 == 0 else 5)
     return max(28, band)
 
 
