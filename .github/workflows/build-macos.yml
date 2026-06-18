@@ -23,7 +23,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ inputs.architecture == 'arm64' && 'macos-14' || 'macos-13' }}
+    runs-on: ${{ inputs.architecture == 'arm64' && 'macos-14' || inputs.architecture == 'x86_64' && fromJSON('["self-hosted", "macOS", "X64"]') || 'macos-13' }}
     outputs:
       artifact-name: ${{ steps.upload.outputs.artifact-name }}
 
