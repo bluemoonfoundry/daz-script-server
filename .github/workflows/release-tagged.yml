@@ -35,22 +35,13 @@ jobs:
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-universal:
-    name: Build macOS Universal Binary Plugin
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: universal
-      configuration: Release
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
   build-dazpy:
     name: Build dazpy Wheel
     uses: ./.github/workflows/build-dazpy.yml
 
   create-release:
     name: Create GitHub Release
-    needs: [build-windows, build-macos-intel, build-macos-arm, build-macos-universal, build-dazpy]
+    needs: [build-windows, build-macos-intel, build-macos-arm, build-dazpy]
     runs-on: ubuntu-latest
 
     steps:
@@ -99,7 +90,6 @@ jobs:
             echo "- **Windows:** \`DazScriptServer-windows.dll\`"
             echo "- **macOS Intel:** \`DazScriptServer-macos-Intel.dylib\`"
             echo "- **macOS Apple Silicon:** \`DazScriptServer-macos-AppleSilicon.dylib\`"
-            echo "- **macOS Universal Binary:** \`DazScriptServer-macos-Universal.dylib\`"
             echo "- **Python Package:** \`dazpy-*.whl\`"
           } > release_notes.md
 
@@ -123,10 +113,6 @@ jobs:
           # macOS Apple Silicon dylib
           cp artifacts/DazScriptServer-macos-AppleSilicon-Release/DazScriptServer.dylib \
              release-assets/DazScriptServer-macos-AppleSilicon.dylib
-
-          # macOS Universal Binary dylib
-          cp artifacts/DazScriptServer-macos-Universal-Release/DazScriptServer.dylib \
-             release-assets/DazScriptServer-macos-Universal.dylib
 
           # dazpy wheel
           cp artifacts/dazpy-wheel/*.whl release-assets/

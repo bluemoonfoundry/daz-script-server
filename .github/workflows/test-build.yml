@@ -12,7 +12,6 @@ on:
           - windows
           - macos-intel
           - macos-arm
-          - macos-universal
           - dazpy
         default: 'all'
       configuration:
@@ -54,16 +53,6 @@ jobs:
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-universal:
-    name: Build macOS Universal Binary Plugin
-    if: inputs.platform == 'all' || inputs.platform == 'macos-universal'
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: universal
-      configuration: ${{ inputs.configuration }}
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
   build-dazpy:
     name: Build dazpy Wheel
     if: inputs.platform == 'all' || inputs.platform == 'dazpy'
@@ -71,7 +60,7 @@ jobs:
 
   summary:
     name: Build Summary
-    needs: [build-windows, build-macos-intel, build-macos-arm, build-macos-universal, build-dazpy]
+    needs: [build-windows, build-macos-intel, build-macos-arm, build-dazpy]
     if: always()
     runs-on: ubuntu-latest
 
@@ -97,10 +86,6 @@ jobs:
 
           if [ "${{ needs.build-macos-arm.result }}" != "skipped" ]; then
             echo "- macOS Apple Silicon: ${{ needs.build-macos-arm.result }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [ "${{ needs.build-macos-universal.result }}" != "skipped" ]; then
-            echo "- macOS Universal: ${{ needs.build-macos-universal.result }}" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ "${{ needs.build-dazpy.result }}" != "skipped" ]; then
