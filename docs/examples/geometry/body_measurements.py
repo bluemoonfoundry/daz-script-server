@@ -681,6 +681,77 @@ def _scan_limb_band(
     return max(profile, key=lambda item: item[1])
 
 
+def _loop_x_span(loop) -> float:
+    points = list(loop)
+    if not points:
+        return 0.0
+    xs = [float(p[0]) for p in points]
+    return max(xs) - min(xs)
+
+
+def _section_torso_x_span(mesh, y: float) -> float | None:
+    section = mesh.section(
+        plane_origin=(0.0, float(y), 0.0),
+        plane_normal=(0.0, 1.0, 0.0),
+    )
+    if section is None:
+        return None
+    loop = _select_torso_loop(section)
+    if loop is None:
+        return None
+    return _loop_x_span(loop)
+
+
+def _bone_pair_x_span(figure, left_bones: list[str], right_bones: list[str]) -> tuple[float | None, str]:
+    """Return the X-axis distance between the left and right bone positions."""
+    left_x = None
+    right_x = None
+    left_src = None
+    right_src = None
+    for name in left_bones:
+        try:
+            pos = figure.find_bone(name).position
+            if pos and "x" in pos:
+                left_x = float(pos["x"])
+                left_src = name
+                break
+        except Exception:
+            continue
+    for name in right_bones:
+        try:
+            pos = figure.find_bone(name).position
+            if pos and "x" in pos:
+                right_x = float(pos["x"])
+                right_src = name
+                break
+        except Exception:
+            continue
+    if left_x is not None and right_x is not None:
+        return abs(left_x - right_x), f"{left_src} → {right_src}"
+    return None, "fallback"
+
+
+def _scan_x_span_band(
+    mesh,
+    center_y: float,
+    below_cm: float,
+    above_cm: float,
+    step: float,
+) -> tuple[float | None, float | None]:
+    """Return (y, x_span) for the widest torso cross-section in the scan band."""
+    start = center_y - below_cm
+    stop = center_y + above_cm
+    best_y = None
+    best_span = None
+    for y in frange(start, stop, step):
+        span = _section_torso_x_span(mesh, y)
+        if span is None:
+            continue
+        if best_span is None or span > best_span:
+            best_y, best_span = y, span
+    return best_y, best_span
+
+
 def _build_mesh(vertices: list[list[float]], faces: list[list[int]]):
     if trimesh is None:
         raise SystemExit(
@@ -859,6 +930,10 @@ def measure_figure(
     upper_arm_y, upper_arm_source = _avg_pair_y(figure, profile.upper_arm_left_bones, profile.upper_arm_right_bones)
     elbow_y, elbow_source = _avg_pair_y(figure, profile.elbow_left_bones, profile.elbow_right_bones)
 
+    shoulder_width_value, shoulder_width_source = _bone_pair_x_span(
+        figure, profile.shoulder_left_bones, profile.shoulder_right_bones
+    )
+
     # Figure-specific calibration shifts the sample bands toward the measurement
     # convention used by product pages / Measure Metrics.
     bust_center = (bust_y if bust_y is not None else min_y + height * 0.78)
@@ -868,6 +943,8 @@ def measure_figure(
 
     neck_center = neck_y if neck_y is not None else min_y + height * 0.93
     high_bust_center = high_bust_y if high_bust_y is not None else min_y + height * 0.83
+    across_back_center = (nape_y - 10.0) if nape_y is not None else min_y + height * 0.85
+    across_chest_center = high_bust_center
     high_hip_center = (lowhip_y + HIGH_HIP_OFFSET_CM) if lowhip_y is not None else min_y + height * 0.61
     thigh_center = thigh_y if thigh_y is not None else min_y + height * 0.50
     knee_center = knee_y if knee_y is not None else min_y + height * 0.28
@@ -906,6 +983,9 @@ def measure_figure(
     upper_arm_slice_y, upper_arm_value = _scan_limb_band(mesh, upper_arm_center, 12.0, 2.0, "max", sample_step)
     elbow_slice_y, elbow_value = _scan_limb_band(mesh, elbow_center, 4.0, 4.0, "min", sample_step)
     wrist_circ_slice_y, wrist_circ_value = _scan_limb_band(mesh, wrist_circ_center, 3.0, 3.0, "min", sample_step)
+
+    across_back_slice_y, across_back_value = _scan_x_span_band(mesh, across_back_center, 5.0, 2.0, sample_step)
+    across_chest_slice_y, across_chest_value = _scan_x_span_band(mesh, across_chest_center, 3.0, 3.0, sample_step)
 
     measurements = {
         "height": SliceMeasurement(
@@ -1027,6 +1107,30 @@ def measure_figure(
             slice_y=wrist_circ_slice_y,
             source=wrist_source,
             note=f"anchor_y={wrist_circ_center:.3f}",
+        ),
+        "shoulder_width": SliceMeasurement(
+            name="Shoulder Width",
+            value_cm=shoulder_width_value,
+            value_in=_cm_to_in(shoulder_width_value),
+            slice_y=None,
+            source=shoulder_width_source,
+            note="bone-to-bone X span",
+        ),
+        "across_back": SliceMeasurement(
+            name="Across Back",
+            value_cm=across_back_value,
+            value_in=_cm_to_in(across_back_value),
+            slice_y=across_back_slice_y,
+            source=f"{nape_source} -10cm",
+            note=f"anchor_y={across_back_center:.3f}; X-span of torso contour at shoulder-blade level",
+        ),
+        "across_chest": SliceMeasurement(
+            name="Across Chest",
+            value_cm=across_chest_value,
+            value_in=_cm_to_in(across_chest_value),
+            slice_y=across_chest_slice_y,
+            source=high_bust_source,
+            note=f"anchor_y={across_chest_center:.3f}; X-span of torso contour at high-bust level",
         ),
         "back_waist_length": SliceMeasurement(
             name="Back Waist Length",
@@ -1194,6 +1298,9 @@ _LENGTH_KEYS = [
     "shoulder_to_bust",
     "waist_to_hip",
     "crotch_depth",
+    "shoulder_width",
+    "across_back",
+    "across_chest",
 ]
 
 
