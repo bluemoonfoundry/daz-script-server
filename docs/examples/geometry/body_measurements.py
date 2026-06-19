@@ -65,6 +65,7 @@ TORSO_UNDERBUST_BONES = ["abdomenLower", "abdomenUpper", "abdomen"]
 TORSO_LOW_HIP_BONES = ["pelvis", "hip"]
 CM_PER_INCH = 2.54
 HIGH_HIP_OFFSET_CM = 7.5  # ~3 in above full hip bone
+HIGH_BUST_ABOVE_BUST_CM = 5.0  # offset above fullest bust to reach below-armpit zone
 GENESIS_9_BONES = {"spine1", "spine2", "spine3", "spine4", "neck1", "neck2"}
 GENESIS_8_BONES = {"hip", "pelvis", "abdomenLower", "abdomenUpper", "chestLower", "chestUpper", "neckLower", "head"}
 PECTORAL_LEFT_CANDIDATES = [
@@ -942,7 +943,15 @@ def measure_figure(
     lowhip_center = (lowhip_y if lowhip_y is not None else min_y + height * 0.58)
 
     neck_center = neck_y if neck_y is not None else min_y + height * 0.93
-    high_bust_center = high_bust_y if high_bust_y is not None else min_y + height * 0.83
+    # Anchor high bust above the fullest bust point, not at the shoulder joint.
+    # At shoulder height the arm mesh is still fused to the torso, inflating the slice.
+    if bust_y is not None:
+        high_bust_center = bust_y + HIGH_BUST_ABOVE_BUST_CM
+        high_bust_source = f"{bust_source} +{HIGH_BUST_ABOVE_BUST_CM:.0f}cm"
+    elif high_bust_y is not None:
+        high_bust_center = high_bust_y
+    else:
+        high_bust_center = min_y + height * 0.83
     across_back_center = (nape_y - 10.0) if nape_y is not None else min_y + height * 0.85
     across_chest_center = high_bust_center
     high_hip_center = (lowhip_y + HIGH_HIP_OFFSET_CM) if lowhip_y is not None else min_y + height * 0.61
@@ -971,7 +980,7 @@ def measure_figure(
         mesh, neck_center, MeasurementCalibration(None, 2.0, 2.0, "min"), sample_step
     )
     high_bust_slice_y, high_bust_value = _scan_calibrated_band(
-        mesh, high_bust_center, MeasurementCalibration(None, 3.0, 3.0, "max"), sample_step
+        mesh, high_bust_center, MeasurementCalibration(None, 3.0, 1.0, "min"), sample_step
     )
     high_hip_slice_y, high_hip_value = _scan_calibrated_band(
         mesh, high_hip_center, MeasurementCalibration(None, 4.0, 4.0, "max"), sample_step
