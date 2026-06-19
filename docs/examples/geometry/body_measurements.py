@@ -127,6 +127,8 @@ class FigureProfile:
     elbow_right_bones: list[str]
     wrist_circ_left_bones: list[str]
     wrist_circ_right_bones: list[str]
+    shoulder_width_left_bones: list[str]
+    shoulder_width_right_bones: list[str]
 
 
 @dataclass(slots=True)
@@ -387,6 +389,37 @@ def _vertical_distance(top_y: float | None, bottom_y: float | None) -> float | N
     return abs(top_y - bottom_y)
 
 
+def _find_anchor_xyz(figure, bone_names: list[str]) -> tuple[tuple[float, float, float] | None, str]:
+    for bone_name in bone_names:
+        try:
+            bone = figure.find_bone(bone_name)
+        except Exception:
+            continue
+        pos = bone.position
+        if pos and "x" in pos and "y" in pos and "z" in pos:
+            return (float(pos["x"]), float(pos["y"]), float(pos["z"])), bone_name
+    return None, "fallback"
+
+
+def _avg_pair_xyz(figure, left_bones: list[str], right_bones: list[str]) -> tuple[tuple[float, float, float] | None, str]:
+    left_xyz, left_src = _find_anchor_xyz(figure, left_bones)
+    right_xyz, right_src = _find_anchor_xyz(figure, right_bones)
+    if left_xyz is not None and right_xyz is not None:
+        avg = tuple((l + r) * 0.5 for l, r in zip(left_xyz, right_xyz))
+        return avg, f"avg({left_src}, {right_src})"  # type: ignore[return-value]
+    if left_xyz is not None:
+        return left_xyz, left_src
+    if right_xyz is not None:
+        return right_xyz, right_src
+    return None, "fallback"
+
+
+def _3d_distance(a: tuple[float, float, float] | None, b: tuple[float, float, float] | None) -> float | None:
+    if a is None or b is None:
+        return None
+    return math.sqrt(sum((ai - bi) ** 2 for ai, bi in zip(a, b)))
+
+
 def _figure_profile(figure) -> FigureProfile:
     bone_names = set()
     try:
@@ -425,6 +458,9 @@ def _figure_profile(figure) -> FigureProfile:
             elbow_right_bones=["r_forearm", "rForeArm", "rForeArmBend"],
             wrist_circ_left_bones=["l_hand", "lHand", "lCarpal1"],
             wrist_circ_right_bones=["r_hand", "rHand", "rCarpal1"],
+            # l_upperarm (humeral head) is closer to the acromion than l_shoulder (inner clavicle joint)
+            shoulder_width_left_bones=["l_upperarm", "l_shoulder"],
+            shoulder_width_right_bones=["r_upperarm", "r_shoulder"],
         )
 
     if bone_names & GENESIS_8_BONES:
@@ -458,6 +494,8 @@ def _figure_profile(figure) -> FigureProfile:
             elbow_right_bones=["rForearmBend", "rForeArm", "rForeArmBend"],
             wrist_circ_left_bones=["lHand", "lCarpal1"],
             wrist_circ_right_bones=["rHand", "rCarpal1"],
+            shoulder_width_left_bones=["lShldrBend", "lShldr"],
+            shoulder_width_right_bones=["rShldrBend", "rShldr"],
         )
 
     return FigureProfile(
@@ -490,6 +528,8 @@ def _figure_profile(figure) -> FigureProfile:
         elbow_right_bones=["rForeArm", "rForeArmBend"],
         wrist_circ_left_bones=["lHand", "lCarpal1"],
         wrist_circ_right_bones=["rHand", "rCarpal1"],
+        shoulder_width_left_bones=["lShldrBend", "lShldr"],
+        shoulder_width_right_bones=["rShldrBend", "rShldr"],
     )
 
 
@@ -932,8 +972,10 @@ def measure_figure(
     elbow_y, elbow_source = _avg_pair_y(figure, profile.elbow_left_bones, profile.elbow_right_bones)
 
     shoulder_width_value, shoulder_width_source = _bone_pair_x_span(
-        figure, profile.shoulder_left_bones, profile.shoulder_right_bones
+        figure, profile.shoulder_width_left_bones, profile.shoulder_width_right_bones
     )
+    shoulder_xyz, shoulder_xyz_source = _avg_pair_xyz(figure, profile.shoulder_left_bones, profile.shoulder_right_bones)
+    wrist_xyz, wrist_xyz_source = _avg_pair_xyz(figure, profile.wrist_left_bones, profile.wrist_right_bones)
 
     # Figure-specific calibration shifts the sample bands toward the measurement
     # convention used by product pages / Measure Metrics.
@@ -1178,10 +1220,11 @@ def measure_figure(
         ),
         "sleeve_length": SliceMeasurement(
             name="Sleeve Length",
-            value_cm=_vertical_distance(shoulder_y, wrist_y),
-            value_in=_cm_to_in(_vertical_distance(shoulder_y, wrist_y)),
+            value_cm=_3d_distance(shoulder_xyz, wrist_xyz),
+            value_in=_cm_to_in(_3d_distance(shoulder_xyz, wrist_xyz)),
             slice_y=None,
-            source=f"{shoulder_source} -> {wrist_source}",
+            source=f"{shoulder_xyz_source} -> {wrist_xyz_source}",
+            note="3D Euclidean distance; shoulder is inner clavicle joint, not outer acromion",
         ),
         "shoulder_to_bust": SliceMeasurement(
             name="Shoulder to Bust",
