@@ -409,7 +409,7 @@ def _figure_profile(figure) -> FigureProfile:
             crotch_right_bones=["r_thigh", "rThighBend", "rThigh"],
             wrist_left_bones=["l_hand", "lHand", "lCarpal1"],
             wrist_right_bones=["r_hand", "rHand", "rCarpal1"],
-            neck_bones=["neck1", "neck2"],
+            neck_bones=["neck2", "neck1"],
             high_bust_left_bones=["l_shoulder", "lShldrBend", "lShldr"],
             high_bust_right_bones=["r_shoulder", "rShldrBend", "rShldr"],
             thigh_left_bones=["l_thigh", "lThighBend", "lThigh"],
