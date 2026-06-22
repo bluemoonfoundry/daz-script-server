@@ -149,7 +149,8 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
-## What's Coming up in v2.6.0 (available in Nightly Build)
+## What's New in v2.6.0
+(This stuff is in the Nightly Build currently, and will become part of v2.6.0 release when that release is cut)
 
 ### 💾 Scene Save Copy — `POST /scene/save-copy` + `DazScene.save_copy()`
 
