@@ -66,7 +66,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.6.0](#whats-new-in-v260)
+- [What's Coming up in v2.6.0](#whats-new-in-v260)
 - [What's New in v2.5.0](#whats-new-in-v250)
 - [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
@@ -149,7 +149,7 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
-## What's New in v2.6.0
+## What's Coming up in v2.6.0 (available in Nightly Build)
 
 ### 💾 Scene Save Copy — `POST /scene/save-copy` + `DazScene.save_copy()`
 
