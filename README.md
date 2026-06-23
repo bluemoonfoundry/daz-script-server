@@ -18,7 +18,7 @@ A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ
 
 1. Open DAZ Studio → **Window → Panes → Daz Script Server**
 2. Click **Start Server** (default: `127.0.0.1:18811`)
-3. Click **Copy** to copy your API token
+3. Click **Copy** to copy your API token (optional, but recommended for public environments)
 
 **Option A — dazpy Python SDK (recommended):**
 
