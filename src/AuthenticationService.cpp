@@ -57,7 +57,9 @@ bool AuthenticationService::loadOrGenerateToken(QStringList& outMessages)
 #endif
         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream in(&file);
-            in.setCodec("UTF-8");
+#if DAZ_SDK_MAJOR_VERSION < 6
+            in.setCodec("UTF-8"); // Qt6 QTextStream is UTF-8 by default; setCodec() was removed
+#endif
             QString loaded = in.readLine().trimmed();
             file.close();
 
@@ -106,7 +108,9 @@ bool AuthenticationService::saveToken(QString& outMessage)
         return false;
     }
     QTextStream out(&file);
-    out.setCodec("UTF-8");
+#if DAZ_SDK_MAJOR_VERSION < 6
+    out.setCodec("UTF-8"); // Qt6 QTextStream is UTF-8 by default; setCodec() was removed
+#endif
     out << m_sToken << "\n";
     file.close();
 

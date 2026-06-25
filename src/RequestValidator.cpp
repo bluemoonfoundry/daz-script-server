@@ -1,7 +1,11 @@
 #include "RequestValidator.h"
 #include "JsonStd.h"
 #include <QtCore/qfileinfo.h>
+#if DAZ_SDK_MAJOR_VERSION >= 6
+#include <QtCore/qregularexpression.h>
+#else
 #include <QtCore/qregexp.h>
+#endif
 
 ValidationResult RequestValidator::validateExecuteFields(
     const QString& scriptFile,
@@ -43,8 +47,14 @@ ValidationResult RequestValidator::validateScriptName(const QString& name)
     if (name.isEmpty())
         return ValidationResult::fail(ErrorCode::MISSING_FIELD, "Field 'name' is required");
 
+#if DAZ_SDK_MAJOR_VERSION >= 6
+    static const QRegularExpression valid("^[A-Za-z0-9_-]{1,64}$");
+    bool matches = valid.match(name).hasMatch();
+#else
     QRegExp valid("^[A-Za-z0-9_-]{1,64}$");
-    if (!valid.exactMatch(name))
+    bool matches = valid.exactMatch(name);
+#endif
+    if (!matches)
         return ValidationResult::fail(ErrorCode::INVALID_FIELD,
             "Field 'name' must be 1-64 characters: letters, digits, hyphens, underscores only");
 

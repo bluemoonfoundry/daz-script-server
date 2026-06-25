@@ -50,8 +50,8 @@ target_link_libraries(DazScriptServer
 	dzcore
 	${DZSDK_QT_CORE_TARGET}
 	${DZSDK_QT_GUI_TARGET}
-	${DZSDK_QT_SCRIPT_TARGET}
 	${DZSDK_QT_NETWORK_TARGET}
+	${DZSDK_QT_SCRIPT_TARGET}
 )
 
 if(WIN32)
@@ -59,12 +59,28 @@ if(WIN32)
 	# Emit a PDB for every build config so VS Code / WinDbg can resolve symbols.
 	target_compile_options(DazScriptServer PRIVATE /Zi)
 	target_link_options(DazScriptServer PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+	if(DAZ_SDK_VERSION STREQUAL "6")
+		target_link_libraries(DazScriptServer PRIVATE dzsdkmemory)
+	endif()
 endif()
 
-target_compile_definitions(DazScriptServer PRIVATE CPPHTTPLIB_NO_COMPRESS)
+target_compile_definitions(DazScriptServer PRIVATE
+	CPPHTTPLIB_NO_COMPRESS
+	DAZ_SDK_MAJOR_VERSION=${DAZ_SDK_VERSION}
+)
+
+# SDK6's plugin scanner only recognizes DLLs named with the "dsp_" prefix
+# (DZ_PLUGIN_PREFIX in the SDK6 CMakeLists.txt / every SDK6 sample's output
+# name) — without it, DAZ Studio 6 silently skips the DLL at startup. SDK4
+# has no such requirement, so keep its filename unprefixed/unchanged.
+if(DAZ_SDK_VERSION STREQUAL "6")
+	set(DAZSCRIPTSERVER_OUTPUT_NAME "dsp_DazScriptServer")
+else()
+	set(DAZSCRIPTSERVER_OUTPUT_NAME "DazScriptServer")
+endif()
 
 set_target_properties(DazScriptServer PROPERTIES
-	OUTPUT_NAME "DazScriptServer"
+	OUTPUT_NAME "${DAZSCRIPTSERVER_OUTPUT_NAME}"
 	PREFIX ""
 	FOLDER ""
 	PROJECT_LABEL "DazScriptServer"

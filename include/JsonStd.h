@@ -16,6 +16,17 @@
 #include <QtCore/qstring.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qmap.h>
+#include <QtCore/qbytearray.h>
+
+#if DAZ_SDK_MAJOR_VERSION >= 6
+#include <QtCore/qjsondocument.h>
+#include <QtCore/qjsonobject.h>
+#else
+// Qt 4.8 (bundled with the DAZStudio 4.5+ SDK) has no QJsonDocument — it's a
+// Qt 5.0+ class. Fall back to QtScript, same as the rest of the DS4 build.
+#include <QtScript/qscriptengine.h>
+#include <QtScript/qscriptvalue.h>
+#endif
 
 namespace JsonStd {
 
@@ -95,6 +106,56 @@ inline std::string variantToJson(const QVariant& v)
         return "\"" + escape(qstrToStd(v.toString())) + "\"";
     }
 }
+
+#if DAZ_SDK_MAJOR_VERSION >= 6
+
+// Parse a JSON object body into a QVariantMap. QJsonDocument::fromJson is
+// reentrant and has no QObject/thread affinity, so this is safe to call from
+// any thread.
+// Returns false and fills errorDetail with a human-readable message on
+// failure (object expected at the top level counts as failure too).
+inline bool parseObject(const QByteArray& jsonBody, QVariantMap& out, std::string& errorDetail)
+{
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(jsonBody, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "offset %d: ", err.offset);
+        errorDetail = buf + qstrToStd(err.error != QJsonParseError::NoError
+            ? err.errorString() : QString("expected a JSON object"));
+        return false;
+    }
+    out = doc.object().toVariantMap();
+    return true;
+}
+
+#else
+
+// Parse a JSON object body into a QVariantMap via QtScript's JS evaluator
+// (Qt 4.8 has no QJsonDocument). QScriptEngine is a QObject, so — unlike the
+// Qt6 overload above — this must only be called on the Qt main thread.
+// Returns false and fills errorDetail with a human-readable message on
+// failure (object expected at the top level counts as failure too).
+inline bool parseObject(const QByteArray& jsonBody, QVariantMap& out, std::string& errorDetail)
+{
+    QString bodyStr = QString::fromUtf8(jsonBody.constData(), jsonBody.size());
+    QScriptEngine parseEngine;
+    QScriptValue parsed = parseEngine.evaluate("(" + bodyStr + ")");
+    if (parseEngine.hasUncaughtException()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "line %d: ", parseEngine.uncaughtExceptionLineNumber());
+        errorDetail = buf + qstrToStd(parseEngine.uncaughtException().toString());
+        return false;
+    }
+    if (!parsed.isObject()) {
+        errorDetail = "expected a JSON object";
+        return false;
+    }
+    out = parsed.toVariant().toMap();
+    return true;
+}
+
+#endif
 
 // Format milliseconds-since-epoch as an ISO 8601 local-time string
 // (e.g. "2026-05-15T14:30:00").

@@ -4,7 +4,6 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/build"
 
 usage() {
     cat <<EOF
@@ -18,6 +17,7 @@ Commands:
 
 Options:
   --platform <p>     Target platform: mac (dylib) or win (dll); default: auto-detect via uname
+  --sdk-version <v>  Target DAZ Studio SDK major version: 4 or 6; default: 4
   --clean            Wipe the build directory before building
   --reconfigure      Force CMake configure even if a cache already exists
   --debug            Build Debug config instead of Release
@@ -32,13 +32,17 @@ Examples:
   ./build.sh
   ./build.sh build --platform mac --clean --debug
   ./build.sh build --platform win --clean
+  ./build.sh build --sdk-version 6 --clean
   ./build.sh install --clean
   ./build.sh clean
   ./build.sh release v1.3.0 --title "v1.3.0" --notes "Bug fixes"
   ./build.sh release v1.3.0 --no-wheel
 
 Required environment variables (loaded from .env if present):
-  DAZ_SDK_DIR          Path to the DAZStudio4.5+ SDK
+  DAZ_SDK_DIR          Path to the DAZStudio4.5+ SDK (--sdk-version 4, default)
+  DAZ_SDK_DIR_V6       Path to the Daz Studio 6.25+ SDK (--sdk-version 6)
+  QT6_DIR              Path to the Qt6 cmake dir, e.g. <qt-install>/6.10.3/msvc2022_64/lib/cmake/Qt6
+                       (--sdk-version 6 only; see CLAUDE.md for the aqtinstall command)
 
 Optional environment variables:
   DAZ_STUDIO_EXE_DIR   Path to DAZ Studio executable folder (required for install)
@@ -70,6 +74,7 @@ OPT_VERBOSE=0
 OPT_UPDATE=0
 OPT_NO_WHEEL=0
 OPT_PLATFORM=""
+OPT_SDK_VERSION="4"
 OPT_TITLE=""
 OPT_NOTES=""
 
@@ -82,6 +87,7 @@ while [[ $# -gt 0 ]]; do
         --update)      OPT_UPDATE=1;                                     shift ;;
         --no-wheel)    OPT_NO_WHEEL=1;                                   shift ;;
         --platform)    OPT_PLATFORM="${2:?'--platform requires mac or win'}"; shift 2 ;;
+        --sdk-version) OPT_SDK_VERSION="${2:?'--sdk-version requires 4 or 6'}"; shift 2 ;;
         --title)       OPT_TITLE="${2:?'--title requires a value'}";     shift 2 ;;
         --notes)       OPT_NOTES="${2:?'--notes requires a value'}";     shift 2 ;;
         --help|-h)     usage; exit 0 ;;
@@ -103,12 +109,30 @@ case "$COMMAND" in
         ;;
 esac
 
+# Validate SDK version, pick a separate build dir per version so switching
+# never reuses a stale CMakeCache.txt configured for the other SDK.
+case "$OPT_SDK_VERSION" in
+    4) BUILD_DIR="$SCRIPT_DIR/build" ;;
+    6) BUILD_DIR="$SCRIPT_DIR/build-sdk6" ;;
+    *)
+        echo "Error: --sdk-version must be '4' or '6', got '$OPT_SDK_VERSION'" >&2
+        exit 1
+        ;;
+esac
+
 # ── Environment ───────────────────────────────────────────────────────────────
 if [ -f "$SCRIPT_DIR/.env" ]; then
     . "$SCRIPT_DIR/.env"
 fi
 
-echo "DAZ_SDK_DIR: ${DAZ_SDK_DIR:-<not set>}"
+echo "SDK version: $OPT_SDK_VERSION"
+if [ "$OPT_SDK_VERSION" = "6" ]; then
+    echo "DAZ_SDK_DIR_V6: ${DAZ_SDK_DIR_V6:-<not set>}"
+    echo "QT6_DIR: ${QT6_DIR:-<not set>}"
+    DAZ_STUDIO_EXE_DIR="$DAZ_STUDIO_EXE_DIR_V6"
+else
+    echo "DAZ_SDK_DIR: ${DAZ_SDK_DIR:-<not set>}"
+fi
 echo "DAZ_STUDIO_EXE_DIR: ${DAZ_STUDIO_EXE_DIR:-<not set>}"
 
 # Detect platform (auto, then allow --platform override)
@@ -138,14 +162,19 @@ else
 fi
 
 # Artifact path (used by build output message and release command)
+# SDK6 requires the "dsp_" filename prefix for DAZ Studio to recognize the
+# plugin DLL at all (see src/CMakeLists.txt) — SDK4 keeps the plain name.
+ARTIFACT_NAME="DazScriptServer"
+[ "$OPT_SDK_VERSION" = "6" ] && ARTIFACT_NAME="dsp_DazScriptServer"
+
 if [ "$PLATFORM" = "win" ]; then
     BUILD_CONFIG="Release"
     [ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
-    ARTIFACT="$BUILD_DIR/plugin/$BUILD_CONFIG/DazScriptServer.dll"
+    ARTIFACT="$BUILD_DIR/plugin/$BUILD_CONFIG/$ARTIFACT_NAME.dll"
 else
     BUILD_CONFIG="Release"
     [ "$OPT_DEBUG" = 1 ] && BUILD_CONFIG="Debug"
-    ARTIFACT="$BUILD_DIR/plugin/DazScriptServer.dylib"
+    ARTIFACT="$BUILD_DIR/plugin/$ARTIFACT_NAME.dylib"
 fi
 
 # ── clean command ─────────────────────────────────────────────────────────────
@@ -163,8 +192,20 @@ if [ "$OPT_CLEAN" = 1 ]; then
 fi
 
 # ── CMake configure ───────────────────────────────────────────────────────────
-CMAKE_FLAGS=()
-[ -n "$DAZ_SDK_DIR" ]        && CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR")
+CMAKE_FLAGS=("-DDAZ_SDK_VERSION=$OPT_SDK_VERSION")
+if [ "$OPT_SDK_VERSION" = "6" ]; then
+    if [ -z "$DAZ_SDK_DIR_V6" ]; then
+        echo "Error: DAZ_SDK_DIR_V6 not set. Set it in .env or the environment." >&2
+        exit 1
+    fi
+    if [ -z "$QT6_DIR" ]; then
+        echo "Error: QT6_DIR not set. Set it in .env or the environment (see ./build.sh --help)." >&2
+        exit 1
+    fi
+    CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR_V6" "-DQt6_DIR=$QT6_DIR")
+else
+    [ -n "$DAZ_SDK_DIR" ] && CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR")
+fi
 [ -n "$DAZ_STUDIO_EXE_DIR" ] && CMAKE_FLAGS+=("-DDAZ_STUDIO_EXE_DIR=$DAZ_STUDIO_EXE_DIR")
 [ "$COMMAND" = "install" ]   && CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=ON")
 
@@ -194,7 +235,7 @@ BUILD_ARGS=("--build" "$BUILD_DIR" "--config" "$BUILD_CONFIG")
 if [ "$COMMAND" = "install" ]; then
     # DAZ Studio locks the plugin while running — catch this before the linker does
     if [ "$PLATFORM" = "win" ]; then
-        if tasklist //FI "IMAGENAME eq DAZStudio4.exe" 2>/dev/null | grep -qi "DAZStudio4.exe"; then
+        if tasklist //FI "IMAGENAME eq DAZStudio.exe" 2>/dev/null | grep -qi "DAZStudio.exe"; then
             echo "Error: DAZ Studio is currently running." >&2
             echo "Close DAZ Studio before installing, then re-run: ./build.sh install" >&2
             exit 1

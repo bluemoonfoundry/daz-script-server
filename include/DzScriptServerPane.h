@@ -14,6 +14,16 @@
 #include <QtCore/qtimer.h>
 #include <QtCore/qmetatype.h>
 #include <QtCore/qpointer.h>
+#if DAZ_SDK_MAJOR_VERSION >= 6
+// These widget classes moved from QtGui to QtWidgets in Qt5/6.
+#include <QtWidgets/qspinbox.h>
+#include <QtWidgets/qlineedit.h>
+#include <QtWidgets/qpushbutton.h>
+#include <QtWidgets/qlabel.h>
+#include <QtWidgets/qtextedit.h>
+#include <QtWidgets/qcheckbox.h>
+#include <QtWidgets/qgroupbox.h>
+#else
 #include <QtGui/qspinbox.h>
 #include <QtGui/qlineedit.h>
 #include <QtGui/qpushbutton.h>
@@ -21,6 +31,7 @@
 #include <QtGui/qtextedit.h>
 #include <QtGui/qcheckbox.h>
 #include <QtGui/qgroupbox.h>
+#endif
 
 #include "AuthenticationService.h"
 #include "RateLimiterService.h"
@@ -65,6 +76,8 @@ namespace ServerConfig {
     const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
 }
 
+class DzScript;
+
 class DzScriptServerPane : public DzPane {
 	Q_OBJECT
 	Q_PROPERTY(int     nPort    READ getPort    WRITE setPort)
@@ -100,7 +113,7 @@ public slots:
 	Q_INVOKABLE HttpResult handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
 	// Async enqueue helpers — called on main thread via BlockingQueuedConnection from
-	// AsyncExecuteHandler / AsyncScriptHandler so that QScriptEngine and QString work
+	// AsyncExecuteHandler / AsyncScriptHandler so that all DzScript/Qt work
 	// stays on the Qt main thread.
 	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
@@ -161,6 +174,7 @@ private:
 	void   setupRoutes();
 	void   applyPluginRoutes();
 	void   updateUI();
+	DzScript* ensurePersistentScript();
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
 	                          const QStringList& output,
@@ -189,6 +203,13 @@ private:
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
 	bool        m_bCapturingLog;
+
+	// Persistent DzScript instance, reused (via clear()) across every script
+	// execution instead of constructing/destroying one per request. All
+	// execution is already serialized onto this (the main) thread via
+	// Qt::BlockingQueuedConnection — DazScript isn't thread-safe — so reuse
+	// here is sequential, not concurrent. See runDazScript() in the .cpp.
+	DzScript* m_pPersistentScript;
 
 	// ── Settings service ─────────────────────────────────────────────────────
 	SettingsService       m_settingsService;

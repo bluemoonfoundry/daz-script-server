@@ -8,19 +8,44 @@ DazScriptServer is a DAZ Studio plugin (`.dll`/`.dylib`) that embeds an HTTP ser
 
 ## Build Commands
 
-Requires DAZ Studio 4.5+ SDK and CMake.
+Requires DAZ Studio 4.5+ SDK (or the Daz Studio 6.25+ SDK) and CMake.
 
 ```bash
-# Basic build
+# Basic build (DAZ Studio 4.x, default)
 ./build.sh
 
 # Common options
 ./build.sh install --clean           # Install to DAZ Studio (must not be running)
 ./build.sh build --clean --debug     # Clean debug build
 ./build.sh release v1.3.0           # Create GitHub release
+
+# DAZ Studio 6.x (Qt6) build
+./build.sh build --sdk-version 6 --clean
 ```
 
 Set `DAZ_STUDIO_EXE_DIR` in `.env` for automatic installation. Default: `C:\Program Files (x86)\DAZ\Studio4\plugins\`
+
+### DAZ Studio 6 (Qt6) builds
+
+SDK6 changed how Daz distributes the dev kit: it ships `dzcore`/`dzsdkmemory`
+only — no Qt `.lib`/`.cmake` files at all. Building against SDK6 requires a
+separate Qt6 devkit matching the Qt6 minor version DAZ Studio 6 bundles
+(check `Qt6Core.dll`'s file version in the DAZ Studio 6 install dir). Install
+one via [aqtinstall](https://github.com/miurahr/aqtinstall) (scriptable, also
+used in CI):
+
+```bash
+pip install aqtinstall
+aqt install-qt windows desktop 6.10.3 win64_msvc2022_64 -m qt5compat
+```
+
+Then set `DAZ_SDK_DIR_V6` and `QT6_DIR` in `.env` (see `.env` for the exact
+variable names/format) and run `./build.sh build --sdk-version 6`. At
+*runtime* the plugin resolves Qt6 symbols against DAZ Studio 6's own bundled
+DLLs already loaded in-process — the separate devkit is only needed to link
+at build time. `--sdk-version 4` and `--sdk-version 6` use separate build
+directories (`build/` vs `build-sdk6/`), so switching between them never
+reuses a stale CMake cache from the other SDK.
 
 **Test clients:** `test-simple.py`, `tests.py`, `test-client.js`, `test-client.ps1`
 

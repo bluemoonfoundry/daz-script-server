@@ -17,15 +17,31 @@
 #include <dzrendermgr.h>
 #include <dzrenderer.h>
 
+#if DAZ_SDK_MAJOR_VERSION >= 6
+// dzscript.h only forward-declares QJSValue on SDK6 (DzScript::result()
+// returns one there, replacing SDK4's QScriptValue); pull in the real type.
+#include <QtQml/qjsvalue.h>
+#include <QtCore/qjsonarray.h>
+#endif
+
 #include <QtCore/qmetaobject.h>
 #include <QtCore/qsettings.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
-#include <QtCore/qregexp.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
 #include <QtCore/qscopedpointer.h>
+#if DAZ_SDK_MAJOR_VERSION >= 6
+// QClipboard stays in QtGui; the rest moved to QtWidgets in Qt5/6.
+#include <QtGui/qclipboard.h>
+#include <QtWidgets/qboxlayout.h>
+#include <QtWidgets/qformlayout.h>
+#include <QtWidgets/qgroupbox.h>
+#include <QtWidgets/qapplication.h>
+#include <QtWidgets/qmessagebox.h>
+#include <QtWidgets/qscrollarea.h>
+#else
 #include <QtGui/qboxlayout.h>
 #include <QtGui/qformlayout.h>
 #include <QtGui/qgroupbox.h>
@@ -33,8 +49,134 @@
 #include <QtGui/qapplication.h>
 #include <QtGui/qmessagebox.h>
 #include <QtGui/qscrollarea.h>
-#include <QtScript/qscriptengine.h>
-#include <QtScript/qscriptvalue.h>
+#endif
+
+// ─── DzScript lifetime ─────────────────────────────────────────────────────────
+// On SDK6, DzScript's destructor is protected — direct `delete` no longer
+// compiles, scripts must be disposed via QObject::deleteLater() instead.
+// SDK4 keeps a public destructor, so this stays a plain `delete` there.
+struct DzScriptDeleter {
+#if DAZ_SDK_MAJOR_VERSION >= 6
+	static void cleanup(DzScript* p) { if (p) p->deleteLater(); }
+#else
+	static void cleanup(DzScript* p) { delete p; }
+#endif
+};
+
+// ─── print() output capture ────────────────────────────────────────────────────
+// dzApp::debugMsg(QString) is deprecated on SDK6 and no longer actually
+// fires (verified empirically — print() output still reaches DAZ Studio's own
+// log file, but not this signal); use the replacement debugMessage(message,
+// category) instead. onMessagePosted(const QString&) still works as the slot
+// for either signal — Qt allows connecting a slot with fewer parameters than
+// the signal it's connected to, so the extra category argument is just
+// dropped on SDK6.
+#if DAZ_SDK_MAJOR_VERSION >= 6
+#define DSS_DEBUG_SIGNAL SIGNAL(debugMessage(const QString&, const QString&))
+#else
+#define DSS_DEBUG_SIGNAL SIGNAL(debugMsg(const QString&))
+#endif
+
+// ─── DzScript execution ────────────────────────────────────────────────────────
+// Runs `script`'s already-loaded code (via setCode()/loadFromFile()) with
+// `argsMap` exposed to the script as getArguments()[0], per the documented
+// args contract.
+//
+// SDK4: DzScript::execute(args) + result() works as documented.
+// SDK6 (BETA): execute()+result() does not capture a completion value at all
+// (verified empirically — even `1+1` returns an empty result) and dzApp's
+// debugMsg signal no longer fires (replaced by debugMessage(msg, category),
+// handled separately in the caller). So on SDK6 this re-evaluates the
+// script's own source via evaluate() instead, which does return a usable
+// value, with getArguments() shimmed in as a prepended JS function since
+// evaluate() has no args parameter of its own.
+struct ScriptRunResult {
+	bool        success = false;
+	QVariant    result;
+	QString     errorMessage;
+	int         errorLine = 0;
+	QStringList output;   // SDK6 only — see below; SDK4 still uses the debugMsg signal capture
+};
+
+static ScriptRunResult runDazScript(DzScript* script, const QVariantMap& argsMap)
+{
+	ScriptRunResult r;
+#if DAZ_SDK_MAJOR_VERSION >= 6
+	// On SDK6, evaluate() (needed for a usable completion value — see above)
+	// does not route print() through any dzApp signal at all, unlike
+	// execute() (verified empirically: print() text reaches DAZ Studio's own
+	// log via execute(), but not via evaluate()). So print() itself is
+	// shimmed as a local JS function that appends to an array, and the whole
+	// thing — result, captured output, and any caught error — comes back as
+	// one JSON blob. This also sidesteps QJSValue::isError(), which only
+	// recognizes actual Error objects: a bare `throw "string"` would
+	// otherwise be missed and misreported as success.
+	QVariantList argsList;
+	argsList << QVariant(argsMap);
+	QString argsJson = QString::fromStdString(JsonStd::variantToJson(QVariant(argsList)));
+	QString codeLiteral = QString::fromStdString(
+		"\"" + JsonStd::escape(JsonStd::qstrToStd(script->getCode())) + "\"");
+	QString shimmed = QString(
+		"var __dss_output = [];\n"
+		"function print(msg) { __dss_output.push(String(msg)); }\n"
+		"function getArguments(){ return %1; }\n"
+		"var __dss_result = null, __dss_error = null, __dss_errorLine = 0;\n"
+		"try {\n"
+		"  __dss_result = eval(%2);\n"
+		"} catch (e) {\n"
+		"  __dss_error = (e && e.message !== undefined) ? String(e.message) : String(e);\n"
+		"  __dss_errorLine = (e && e.lineNumber) ? e.lineNumber : 0;\n"
+		"}\n"
+		"JSON.stringify({ result: __dss_result, output: __dss_output, "
+		"error: __dss_error, errorLine: __dss_errorLine });"
+	).arg(argsJson, codeLiteral);
+
+	QJSValue evalResult = script->evaluate(shimmed);
+	if (evalResult.isError()) {
+		// Our own wrapper failed to parse/run — a bug in the shim above,
+		// not the user's script (that path is caught by the try/catch).
+		r.errorMessage = evalResult.toString();
+		r.errorLine    = evalResult.property("lineNumber").toInt();
+	} else {
+		QJsonDocument doc = QJsonDocument::fromJson(evalResult.toString().toUtf8());
+		QJsonObject   obj = doc.object();
+		for (const QJsonValue& v : obj.value("output").toArray())
+			r.output << v.toString();
+
+		QJsonValue errVal = obj.value("error");
+		if (errVal.isNull() || errVal.isUndefined()) {
+			r.success = true;
+			r.result  = obj.value("result").toVariant();
+		} else {
+			r.errorMessage = errVal.toString();
+			r.errorLine    = obj.value("errorLine").toInt();
+		}
+	}
+#else
+	// Avoid execute(args) -> DzScriptContext::setArgs(), which corrupts
+	// dzcore's heap when called repeatedly on a reused DzScript/context
+	// (verified via live debugger: ntdll!RtlFreeHeap -> MSVCR100!free ->
+	// dzcore!DzScriptContext::setArgs -> DzScript::doExecute ->
+	// DzScript::execute, triggered by the persistent-instance reuse pattern
+	// below). Inject args via a getArguments() shim instead — same technique
+	// as the SDK6 path above — and call the no-arg execute() overload, which
+	// never touches DzScriptContext::setArgs at all.
+	QVariantList argsList;
+	argsList << QVariant(argsMap);
+	QString argsJson = QString::fromStdString(JsonStd::variantToJson(QVariant(argsList)));
+	QString shimmed = QString("function getArguments(){ return %1; }\n%2")
+		.arg(argsJson, script->getCode());
+	script->setCode(shimmed);
+	if (script->execute()) {
+		r.success = true;
+		r.result  = script->result();
+	} else {
+		r.errorMessage = script->errorMessage();
+		r.errorLine    = script->errorLine();
+	}
+#endif
+	return r;
+}
 
 // ─── ServerListenThread ───────────────────────────────────────────────────────
 // Defined here (not in the header) to keep httplib contained in this .cpp.
@@ -76,9 +218,16 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pEventBroker(nullptr)
 	, m_pRenderProgress(nullptr)
 	, m_pEventClientsLabel(nullptr)
+	, m_pPersistentScript(nullptr)
 {
 	// Register return type for BlockingQueuedConnection on execute/register handlers.
 	qRegisterMetaType<HttpResult>("HttpResult");
+
+	// m_pPersistentScript is lazily created on first use (see
+	// ensurePersistentScript()) rather than here — this constructor runs very
+	// early during DAZ Studio startup (panes get restored before the app is
+	// fully initialized), and DzScript may depend on subsystems that aren't
+	// ready yet at this point.
 
 	// Load settings and token
 	loadSettings();
@@ -87,7 +236,7 @@ DzScriptServerPane::DzScriptServerPane()
 	if (!m_auth.loadOrGenerateToken(tokenMsgs)) {
 		// Crypto API unavailable — log will be empty at this point, messages shown later
 	}
-	foreach (const QString& msg, tokenMsgs)
+	for (const QString& msg : tokenMsgs)
 		appendLog(msg);
 
 	// ── Async request manager ─────────────────────────────────────────────────
@@ -340,6 +489,16 @@ DzScriptServerPane::~DzScriptServerPane()
 		QCoreApplication::instance()->setProperty("DzScriptServerPane", QVariant());
 	stopServer();
 	saveSettings();
+	DzScriptDeleter::cleanup(m_pPersistentScript);
+}
+
+DzScript* DzScriptServerPane::ensurePersistentScript()
+{
+	if (!m_pPersistentScript) {
+		m_pPersistentScript = new DzScript("DazScriptServer");
+		m_pPersistentScript->setReuseInterpreter(true);
+	}
+	return m_pPersistentScript;
 }
 
 // ─── Start / Stop ─────────────────────────────────────────────────────────────
@@ -1298,24 +1457,18 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
 	QString requestId = MetricsCollector::generateRequestId();
 
-	// Parse JSON body (QScriptEngine is a QObject — only safe on a Qt-managed thread)
-	QString bodyStr = QString::fromUtf8(jsonBody.constData(), jsonBody.size());
-
-	QScriptEngine parseEngine;
-	QScriptValue parsed = parseEngine.evaluate("(" + bodyStr + ")");
-	if (parseEngine.hasUncaughtException()) {
-		QString detail = QString("line %1: %2")
-			.arg(parseEngine.uncaughtExceptionLineNumber())
-			.arg(parseEngine.uncaughtException().toString());
+	// Parse JSON body
+	QVariantMap bodyMap;
+	std::string parseErrDetail;
+	if (!JsonStd::parseObject(jsonBody, bodyMap, parseErrDetail)) {
 		appendLog(QString("[%1] [%2] [ERR] [0ms] [%3] JSON parse error")
 			.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 			.arg(clientIPStr).arg(requestId));
 		m_metrics.recordRequest(false);
 		return HttpResult(400,
-			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON, JsonStd::qstrToStd(detail))));
+			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON, parseErrDetail)));
 	}
 
-	QVariantMap bodyMap  = parsed.toVariant().toMap();
 	QString scriptFile   = bodyMap.value("scriptFile").toString();
 	QString scriptText   = bodyMap.value("script").toString();
 	QVariantMap argsMap  = bodyMap.value("args").toMap();
@@ -1342,17 +1495,19 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	// Capture dzApp debug output (print() in DazScript)
 	m_aCapturedLogLines.clear();
 	m_bCapturingLog = true;
-	connect(dzApp, SIGNAL(debugMsg(const QString&)),
+	connect(dzApp, DSS_DEBUG_SIGNAL,
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
 
-	QScopedPointer<DzScript> script(new DzScript());
+	// Reuse the persistent DzScript instance instead of constructing/
+	// destroying one per request — see m_pPersistentScript's declaration.
+	ensurePersistentScript()->clear();
 
 	if (!scriptFile.isEmpty()) {
 		// loadFromFile sets the filename so getScriptFileName() and relative
 		// include() calls work correctly inside the script.
-		if (!script->loadFromFile(scriptFile)) {
-			disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
+		if (!m_pPersistentScript->loadFromFile(scriptFile)) {
+			disconnect(dzApp, DSS_DEBUG_SIGNAL,
 			           this,  SLOT(onMessagePosted(const QString&)));
 			m_bCapturingLog = false;
 			m_metrics.recordRequest(false);
@@ -1361,33 +1516,28 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 					ErrorCode::SCRIPT_FILE_LOAD_FAILED, JsonStd::qstrToStd(scriptFile))));
 		}
 	} else {
-		script->setCode(scriptText);
+		m_pPersistentScript->setCode(scriptText);
 	}
 
-	// Args are passed via execute() and accessible in scripts via getArguments()[0],
-	// since DzScriptContext methods are available as globals in every DzScript.
-	QVariantList execArgs;
-	execArgs << QVariant(argsMap);
+	// Args are accessible in scripts via getArguments()[0], since
+	// DzScriptContext methods are available as globals in every DzScript.
+	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap);
+#if DAZ_SDK_MAJOR_VERSION >= 6
+	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
+#endif
 
-	QVariant scriptResult;
+	QVariant scriptResult = runResult.result;
 	QVariant errorVar;
-	bool     success = true;
+	bool     success = runResult.success;
 
-	bool executed = script->execute(execArgs);
-	if (executed) {
-		scriptResult = script->result();
-	} else {
-		success = false;
-		QString errMsg  = script->errorMessage();
-		int     errLine = script->errorLine();
-		if (errLine > 0)
-			errMsg = QString("Line %1: %2").arg(errLine).arg(errMsg);
+	if (!success) {
+		QString errMsg = runResult.errorMessage;
+		if (runResult.errorLine > 0)
+			errMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errMsg);
 		errorVar = QVariant(errMsg);
 	}
 
-	script.reset();  // Destroy script before disconnecting the signal
-
-	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
+	disconnect(dzApp, DSS_DEBUG_SIGNAL,
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
 
@@ -1424,15 +1574,13 @@ HttpResult DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, 
 {
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
 
-	QScriptEngine parseEngine;
-	QScriptValue  parsed = parseEngine.evaluate(
-		"(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
-	if (parseEngine.hasUncaughtException()) {
+	QVariantMap body;
+	std::string parseErrDetail;
+	if (!JsonStd::parseObject(jsonBody, body, parseErrDetail)) {
 		return HttpResult(400,
 			stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
 	}
 
-	QVariantMap body    = parsed.toVariant().toMap();
 	QString name        = body.value("name").toString().trimmed();
 	QString description = body.value("description").toString().trimmed();
 	QString script      = body.value("script").toString();
@@ -1490,43 +1638,39 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 	// Extract args from request body (ignore all other fields — script already resolved)
 	QVariantMap argsMap;
 	if (!requestBody.isEmpty()) {
-		QScriptEngine parseEngine;
-		QScriptValue  parsed = parseEngine.evaluate(
-			"(" + QString::fromUtf8(requestBody.constData(), requestBody.size()) + ")");
-		if (!parseEngine.hasUncaughtException())
-			argsMap = parsed.toVariant().toMap().value("args").toMap();
+		QVariantMap parsedBody;
+		std::string parseErrDetail;
+		if (JsonStd::parseObject(requestBody, parsedBody, parseErrDetail))
+			argsMap = parsedBody.value("args").toMap();
 	}
 
 	// Execute
 	m_aCapturedLogLines.clear();
 	m_bCapturingLog = true;
-	connect(dzApp, SIGNAL(debugMsg(const QString&)),
+	connect(dzApp, DSS_DEBUG_SIGNAL,
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
 
-	QScopedPointer<DzScript> script(new DzScript());
-	script->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
+	ensurePersistentScript()->clear();
+	m_pPersistentScript->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
 
-	QVariantList execArgs;
-	execArgs << QVariant(argsMap);
+	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap);
+#if DAZ_SDK_MAJOR_VERSION >= 6
+	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
+#endif
 
-	QVariant scriptResult;
+	QVariant scriptResult = runResult.result;
 	QVariant errorVar;
-	bool     success  = true;
-	bool     executed = script->execute(execArgs);
-	if (executed) {
-		scriptResult = script->result();
-	} else {
-		success = false;
-		QString errMsg  = script->errorMessage();
-		int     errLine = script->errorLine();
-		if (errLine > 0)
-			errMsg = QString("Line %1: %2").arg(errLine).arg(errMsg);
+	bool     success = runResult.success;
+
+	if (!success) {
+		QString errMsg = runResult.errorMessage;
+		if (runResult.errorLine > 0)
+			errMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errMsg);
 		errorVar = QVariant(errMsg);
 	}
 
-	script.reset();  // Destroy script before disconnecting the signal
-	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
+	disconnect(dzApp, DSS_DEBUG_SIGNAL,
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
 
@@ -1561,14 +1705,12 @@ static HttpResult buildQueuedResponse(const QString& requestId, qint64 submitted
 
 HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonBody)
 {
-	QScriptEngine parseEngine;
-	QScriptValue  parsed = parseEngine.evaluate(
-		"(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
-	if (parseEngine.hasUncaughtException()) {
+	QVariantMap body;
+	std::string parseErrDetail;
+	if (!JsonStd::parseObject(jsonBody, body, parseErrDetail)) {
 		return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
 	}
 
-	QVariantMap body       = parsed.toVariant().toMap();
 	QString     scriptText = body.value("script").toString();
 
 	ValidationResult vr = RequestValidator::validateRequiredField(scriptText, "script");
@@ -1597,11 +1739,10 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 
 	QVariantMap argsMap;
 	if (!bodyBytes.isEmpty()) {
-		QScriptEngine parseEngine;
-		QScriptValue  parsed = parseEngine.evaluate(
-			"(" + QString::fromUtf8(bodyBytes.constData(), bodyBytes.size()) + ")");
-		if (!parseEngine.hasUncaughtException())
-			argsMap = parsed.toVariant().toMap().value("args").toMap();
+		QVariantMap parsedBody;
+		std::string parseErrDetail;
+		if (JsonStd::parseObject(bodyBytes, parsedBody, parseErrDetail))
+			argsMap = parsedBody.value("args").toMap();
 	}
 
 	qint64  submittedAt  = 0;
@@ -1784,13 +1925,10 @@ static QString buildRenderScript(
 HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBody)
 {
     // ── Parse body ────────────────────────────────────────────────────────
-    QScriptEngine parseEngine;
-    QScriptValue  parsed = parseEngine.evaluate(
-        "(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
-    if (parseEngine.hasUncaughtException())
+    QVariantMap body;
+    std::string parseErrDetail;
+    if (!JsonStd::parseObject(jsonBody, body, parseErrDetail))
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
-
-    QVariantMap body = parsed.toVariant().toMap();
 
     // ── Required fields ───────────────────────────────────────────────────
     QString outputPath = body.value("output_path").toString().trimmed();
@@ -1868,10 +2006,11 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
             "  return 'OK';\n"
             "})()";
 
-        QScopedPointer<DzScript> valScript(new DzScript());
-        valScript->setCode(validateScript);
-        if (valScript->execute(QVariantList())) {
-            QString valResult = valScript->result().toString();
+        ensurePersistentScript()->clear();
+        m_pPersistentScript->setCode(validateScript);
+        ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap());
+        if (valRunResult.success) {
+            QString valResult = valRunResult.result.toString();
             if (valResult.startsWith("NOT_FOUND:")) {
                 QString missing = valResult.mid(10);
                 return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -1904,13 +2043,10 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
 HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody)
 {
     // ── Parse body ────────────────────────────────────────────────────────
-    QScriptEngine parseEngine;
-    QScriptValue  parsed = parseEngine.evaluate(
-        "(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
-    if (parseEngine.hasUncaughtException())
+    QVariantMap body;
+    std::string parseErrDetail;
+    if (!JsonStd::parseObject(jsonBody, body, parseErrDetail))
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
-
-    QVariantMap body = parsed.toVariant().toMap();
 
     // ── Parse base (all fields optional — provides defaults for variants) ─
     QVariantMap base = body.value("base").toMap();
@@ -2057,10 +2193,11 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
                 "  }\n"
                 "  return 'OK';\n"
                 "})()";
-            QScopedPointer<DzScript> valScript(new DzScript());
-            valScript->setCode(validateScript);
-            if (valScript->execute(QVariantList())) {
-                QString valResult = valScript->result().toString();
+            ensurePersistentScript()->clear();
+            m_pPersistentScript->setCode(validateScript);
+            ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap());
+            if (valRunResult.success) {
+                QString valResult = valRunResult.result.toString();
                 if (valResult.startsWith("NOT_FOUND:")) {
                     QString missing = valResult.mid(10);
                     return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -2153,7 +2290,7 @@ QString DzScriptServerPane::buildResponseJson(bool success,
 
 	// Build output array
 	QVariantList outputList;
-	foreach (const QString& line, output)
+	for (const QString& line : output)
 		outputList.append(QVariant(line));
 	json.addMember("output", QVariant(outputList));
 
@@ -2250,7 +2387,7 @@ void DzScriptServerPane::onRegenTokenClicked()
 			m_pTokenEdit->setText(m_auth.getToken());
 			appendLog("New API token generated");
 		}
-		foreach (const QString& msg, msgs)
+		for (const QString& msg : msgs)
 			appendLog(msg);
 	}
 }
@@ -2402,31 +2539,29 @@ void DzScriptServerPane::processNextAsyncRequest()
 	// Execute the script on the main thread (same path as sync handler)
 	m_aCapturedLogLines.clear();
 	m_bCapturingLog = true;
-	connect(dzApp, SIGNAL(debugMsg(const QString&)),
+	connect(dzApp, DSS_DEBUG_SIGNAL,
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
 
-	QScopedPointer<DzScript> script(new DzScript());
-	script->setCode(scriptText);
+	ensurePersistentScript()->clear();
+	m_pPersistentScript->setCode(scriptText);
 
-	QVariantList execArgs;
-	execArgs << QVariant(args);
+	ScriptRunResult runResult = runDazScript(m_pPersistentScript, args);
+#if DAZ_SDK_MAJOR_VERSION >= 6
+	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
+#endif
 
-	bool     executed = script->execute(execArgs);
-	QVariant scriptResult;
+	bool     executed    = runResult.success;
+	QVariant scriptResult = runResult.result;
 	QString  errorMsg;
-	if (executed) {
-		scriptResult = script->result();
-	} else {
-		errorMsg    = script->errorMessage();
-		int errLine = script->errorLine();
-		if (errLine > 0)
-			errorMsg = QString("Line %1: %2").arg(errLine).arg(errorMsg);
+	if (!executed) {
+		errorMsg = runResult.errorMessage;
+		if (runResult.errorLine > 0)
+			errorMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errorMsg);
 	}
 	QStringList capturedOutput = m_aCapturedLogLines;
 
-	script.reset();  // Destroy script before disconnecting the signal
-	disconnect(dzApp, SIGNAL(debugMsg(const QString&)),
+	disconnect(dzApp, DSS_DEBUG_SIGNAL,
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
 
@@ -2481,18 +2616,13 @@ void DzScriptServerPane::killRenderOnMainThread()
 HttpResult DzScriptServerPane::handleSaveCopy(const QByteArray& jsonBody)
 {
 	// ── Parse ─────────────────────────────────────────────────────────────────
-	QScriptEngine parseEngine;
-	QScriptValue  parsed = parseEngine.evaluate(
-		"(" + QString::fromUtf8(jsonBody.constData(), jsonBody.size()) + ")");
-	if (parseEngine.hasUncaughtException()) {
-		QString detail = QString("line %1: %2")
-			.arg(parseEngine.uncaughtExceptionLineNumber())
-			.arg(parseEngine.uncaughtException().toString());
+	QVariantMap body;
+	std::string parseErrDetail;
+	if (!JsonStd::parseObject(jsonBody, body, parseErrDetail)) {
 		return HttpResult(400, stdToQBA(
-			ErrorResponse::build(ErrorCode::INVALID_JSON, JsonStd::qstrToStd(detail))));
+			ErrorResponse::build(ErrorCode::INVALID_JSON, parseErrDetail)));
 	}
 
-	QVariantMap body = parsed.toVariant().toMap();
 	QString destPath = body.value("path").toString().trimmed();
 
 	if (destPath.isEmpty()) {

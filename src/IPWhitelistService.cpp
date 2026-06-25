@@ -15,8 +15,12 @@ void IPWhitelistService::setWhitelist(const QString& csvIPs)
     if (csvIPs.isEmpty())
         return;
 
+#if DAZ_SDK_MAJOR_VERSION >= 6
+    QStringList raw = csvIPs.split(',', Qt::SkipEmptyParts);
+#else
     QStringList raw = csvIPs.split(',', QString::SkipEmptyParts);
-    foreach (const QString& ip, raw) {
+#endif
+    for (const QString& ip : raw) {
         QString trimmed = ip.trimmed();
         if (!trimmed.isEmpty())
             m_aParsedIPs.push_back(JsonStd::qstrToStd(trimmed));

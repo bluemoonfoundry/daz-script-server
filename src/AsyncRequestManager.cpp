@@ -465,7 +465,7 @@ int AsyncRequestManager::cleanupExpired(qint64 ttlMs)
             if (terminal && req.completedAt > 0 && (now - req.completedAt) > ttlMs)
                 toRemove.append(it.key());
         }
-        foreach (const QString& expired, toRemove)
+        for (const QString& expired : toRemove)
             m_requests.remove(expired);
     }
     return toRemove.size();
