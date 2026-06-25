@@ -130,7 +130,7 @@ jobs:
         if: inputs.sdk-version == '6' && steps.cache-qt6.outputs.cache-hit != 'true'
         run: |
           pip install aqtinstall
-          aqt install-qt mac desktop 6.10.3 clang_64 -m qt5compat --outputdir "${{ github.workspace }}/qt6"
+          python3 -m aqt install-qt mac desktop 6.10.3 clang_64 -m qt5compat --outputdir "${{ github.workspace }}/qt6"
 
       - name: Configure CMake (v4)
         if: inputs.sdk-version != '6'
