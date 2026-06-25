@@ -11,29 +11,61 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    name: Build Windows Plugin
+  build-windows-ds4:
+    name: Build Windows Plugin (DS4)
     uses: ./.github/workflows/build-windows.yml
     with:
       configuration: Release
+      sdk-version: '4'
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-intel:
-    name: Build macOS Intel Plugin
+  build-windows-ds6:
+    name: Build Windows Plugin (DS6)
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      configuration: Release
+      sdk-version: '6'
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
+
+  build-macos-intel-ds4:
+    name: Build macOS Intel Plugin (DS4)
     uses: ./.github/workflows/build-macos.yml
     with:
       architecture: x86_64
       configuration: Release
+      sdk-version: '4'
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-arm:
-    name: Build macOS Apple Silicon Plugin
+  build-macos-arm-ds4:
+    name: Build macOS Apple Silicon Plugin (DS4)
     uses: ./.github/workflows/build-macos.yml
     with:
       architecture: arm64
       configuration: Release
+      sdk-version: '4'
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
+
+  build-macos-intel-ds6:
+    name: Build macOS Intel Plugin (DS6)
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: x86_64
+      configuration: Release
+      sdk-version: '6'
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
+
+  build-macos-arm-ds6:
+    name: Build macOS Apple Silicon Plugin (DS6)
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: arm64
+      configuration: Release
+      sdk-version: '6'
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
@@ -43,7 +75,14 @@ jobs:
 
   create-nightly-release:
     name: Create Nightly Release
-    needs: [build-windows, build-macos-intel, build-macos-arm, build-dazpy]
+    needs:
+      - build-windows-ds4
+      - build-windows-ds6
+      - build-macos-intel-ds4
+      - build-macos-arm-ds4
+      - build-macos-intel-ds6
+      - build-macos-arm-ds6
+      - build-dazpy
     runs-on: ubuntu-latest
 
     steps:
@@ -126,9 +165,17 @@ jobs:
             echo ""
             echo "## Built Artifacts"
             echo ""
-            echo "- **Windows:** \`DazScriptServer-windows.dll\`"
-            echo "- **macOS Intel:** \`DazScriptServer-macos-Intel.dylib\`"
-            echo "- **macOS Apple Silicon:** \`DazScriptServer-macos-AppleSilicon.dylib\`"
+            echo "### DAZ Studio 4.5+"
+            echo "- **Windows:** \`DazScriptServer-ds4-windows.dll\`"
+            echo "- **macOS Intel:** \`DazScriptServer-ds4-macos-Intel.dylib\`"
+            echo "- **macOS Apple Silicon:** \`DazScriptServer-ds4-macos-AppleSilicon.dylib\`"
+            echo ""
+            echo "### Daz Studio 6.25+"
+            echo "- **Windows:** \`dsp_DazScriptServer-ds6-windows.dll\`"
+            echo "- **macOS Intel:** \`dsp_DazScriptServer-ds6-macos-Intel.dylib\`"
+            echo "- **macOS Apple Silicon:** \`dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib\`"
+            echo ""
+            echo "### Python"
             echo "- **Python Package:** \`dazpy-*.whl\`"
           } > release_notes.md
 
@@ -143,17 +190,21 @@ jobs:
         run: |
           mkdir -p release-assets
 
-          # Windows DLL
-          cp artifacts/DazScriptServer-windows-Release/DazScriptServer.dll \
-             release-assets/DazScriptServer-windows.dll
+          # Windows DLLs
+          cp artifacts/DazScriptServer-windows-ds4-Release/DazScriptServer.dll \
+             release-assets/DazScriptServer-ds4-windows.dll
+          cp artifacts/DazScriptServer-windows-ds6-Release/dsp_DazScriptServer.dll \
+             release-assets/dsp_DazScriptServer-ds6-windows.dll
 
-          # macOS Intel dylib
-          cp artifacts/DazScriptServer-macos-Intel-Release/DazScriptServer.dylib \
-             release-assets/DazScriptServer-macos-Intel.dylib
-
-          # macOS Apple Silicon dylib
-          cp artifacts/DazScriptServer-macos-AppleSilicon-Release/DazScriptServer.dylib \
-             release-assets/DazScriptServer-macos-AppleSilicon.dylib
+          # macOS dylibs
+          cp artifacts/DazScriptServer-macos-Intel-ds4-Release/DazScriptServer.dylib \
+             release-assets/DazScriptServer-ds4-macos-Intel.dylib
+          cp artifacts/DazScriptServer-macos-AppleSilicon-ds4-Release/DazScriptServer.dylib \
+             release-assets/DazScriptServer-ds4-macos-AppleSilicon.dylib
+          cp artifacts/DazScriptServer-macos-Intel-ds6-Release/dsp_DazScriptServer.dylib \
+             release-assets/dsp_DazScriptServer-ds6-macos-Intel.dylib
+          cp artifacts/DazScriptServer-macos-AppleSilicon-ds6-Release/dsp_DazScriptServer.dylib \
+             release-assets/dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
 
           # dazpy wheel
           cp artifacts/dazpy-wheel/*.whl release-assets/

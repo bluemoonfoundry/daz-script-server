@@ -14,6 +14,15 @@ on:
           - macos-arm
           - dazpy
         default: 'all'
+      sdk-version:
+        description: 'DAZ Studio SDK version to build (ignored for dazpy)'
+        required: false
+        type: choice
+        options:
+          - both
+          - '4'
+          - '6'
+        default: 'both'
       configuration:
         description: 'Build configuration'
         required: false
@@ -24,32 +33,67 @@ on:
         default: 'Release'
 
 jobs:
-  build-windows:
-    name: Build Windows Plugin
-    if: inputs.platform == 'all' || inputs.platform == 'windows'
+  build-windows-ds4:
+    name: Build Windows Plugin (DS4)
+    if: (inputs.platform == 'all' || inputs.platform == 'windows') && (inputs.sdk-version == 'both' || inputs.sdk-version == '4')
     uses: ./.github/workflows/build-windows.yml
     with:
       configuration: ${{ inputs.configuration }}
+      sdk-version: '4'
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-intel:
-    name: Build macOS Intel Plugin
-    if: inputs.platform == 'all' || inputs.platform == 'macos-intel'
+  build-windows-ds6:
+    name: Build Windows Plugin (DS6)
+    if: (inputs.platform == 'all' || inputs.platform == 'windows') && (inputs.sdk-version == 'both' || inputs.sdk-version == '6')
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '6'
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
+
+  build-macos-intel-ds4:
+    name: Build macOS Intel Plugin (DS4)
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-intel') && (inputs.sdk-version == 'both' || inputs.sdk-version == '4')
     uses: ./.github/workflows/build-macos.yml
     with:
       architecture: x86_64
       configuration: ${{ inputs.configuration }}
+      sdk-version: '4'
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-arm:
-    name: Build macOS Apple Silicon Plugin
-    if: inputs.platform == 'all' || inputs.platform == 'macos-arm'
+  build-macos-intel-ds6:
+    name: Build macOS Intel Plugin (DS6)
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-intel') && (inputs.sdk-version == 'both' || inputs.sdk-version == '6')
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: x86_64
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '6'
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
+
+  build-macos-arm-ds4:
+    name: Build macOS Apple Silicon Plugin (DS4)
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-arm') && (inputs.sdk-version == 'both' || inputs.sdk-version == '4')
     uses: ./.github/workflows/build-macos.yml
     with:
       architecture: arm64
       configuration: ${{ inputs.configuration }}
+      sdk-version: '4'
+    secrets:
+      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
+
+  build-macos-arm-ds6:
+    name: Build macOS Apple Silicon Plugin (DS6)
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-arm') && (inputs.sdk-version == 'both' || inputs.sdk-version == '6')
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: arm64
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '6'
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
@@ -60,7 +104,14 @@ jobs:
 
   summary:
     name: Build Summary
-    needs: [build-windows, build-macos-intel, build-macos-arm, build-dazpy]
+    needs:
+      - build-windows-ds4
+      - build-windows-ds6
+      - build-macos-intel-ds4
+      - build-macos-intel-ds6
+      - build-macos-arm-ds4
+      - build-macos-arm-ds6
+      - build-dazpy
     if: always()
     runs-on: ubuntu-latest
 
@@ -70,22 +121,35 @@ jobs:
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Platform: ${{ inputs.platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "SDK version: ${{ inputs.sdk-version }}" >> $GITHUB_STEP_SUMMARY
           echo "Configuration: ${{ inputs.configuration }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ needs.build-windows.result }}" != "skipped" ]; then
-            echo "- Windows: ${{ needs.build-windows.result }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.build-windows-ds4.result }}" != "skipped" ]; then
+            echo "- Windows (DS4): ${{ needs.build-windows-ds4.result }}" >> $GITHUB_STEP_SUMMARY
           fi
 
-          if [ "${{ needs.build-macos-intel.result }}" != "skipped" ]; then
-            echo "- macOS Intel: ${{ needs.build-macos-intel.result }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.build-windows-ds6.result }}" != "skipped" ]; then
+            echo "- Windows (DS6): ${{ needs.build-windows-ds6.result }}" >> $GITHUB_STEP_SUMMARY
           fi
 
-          if [ "${{ needs.build-macos-arm.result }}" != "skipped" ]; then
-            echo "- macOS Apple Silicon: ${{ needs.build-macos-arm.result }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.build-macos-intel-ds4.result }}" != "skipped" ]; then
+            echo "- macOS Intel (DS4): ${{ needs.build-macos-intel-ds4.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-macos-intel-ds6.result }}" != "skipped" ]; then
+            echo "- macOS Intel (DS6): ${{ needs.build-macos-intel-ds6.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-macos-arm-ds4.result }}" != "skipped" ]; then
+            echo "- macOS Apple Silicon (DS4): ${{ needs.build-macos-arm-ds4.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-macos-arm-ds6.result }}" != "skipped" ]; then
+            echo "- macOS Apple Silicon (DS6): ${{ needs.build-macos-arm-ds6.result }}" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ "${{ needs.build-dazpy.result }}" != "skipped" ]; then

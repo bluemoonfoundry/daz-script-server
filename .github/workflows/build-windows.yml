@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: 'Release'
+      sdk-version:
+        description: 'Target DAZ Studio SDK major version (4 or 6)'
+        required: false
+        type: string
+        default: '4'
     secrets:
       sdk-repo-token:
         description: 'Token for accessing private SDK repository'
@@ -27,17 +32,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up cache key for DAZ SDK
-        id: cache-key
-        run: echo "sdk-cache-key=daz-sdk-4.5-windows-private-v1" >> $GITHUB_OUTPUT
+      - name: Set up SDK paths
+        id: sdk-paths
         shell: bash
+        run: |
+          if [ "${{ inputs.sdk-version }}" = "6" ]; then
+            echo "cache-key=daz-sdk-6-windows-private-v1" >> $GITHUB_OUTPUT
+            echo "sparse-path=daz-studio-6-sdk-win32" >> $GITHUB_OUTPUT
+            echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
+            echo "dll-name=dsp_DazScriptServer.dll" >> $GITHUB_OUTPUT
+          else
+            echo "cache-key=daz-sdk-4.5-windows-private-v1" >> $GITHUB_OUTPUT
+            echo "sparse-path=daz-studio-45-sdk-win32" >> $GITHUB_OUTPUT
+            echo "sdk-dir=DAZStudio4.5+ SDK" >> $GITHUB_OUTPUT
+            echo "dll-name=DazScriptServer.dll" >> $GITHUB_OUTPUT
+          fi
 
       - name: Cache DAZ Studio SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/DAZStudio4.5+ SDK
-          key: ${{ steps.cache-key.outputs.sdk-cache-key }}
+          path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
+          key: ${{ steps.sdk-paths.outputs.cache-key }}
 
       - name: Checkout DAZ Studio SDK repo
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -47,16 +63,17 @@ jobs:
           token: ${{ secrets.sdk-repo-token }}
           path: temp-sdk
           sparse-checkout: |
-            daz-studio-45-sdk-win32
+            ${{ steps.sdk-paths.outputs.sparse-path }}
 
       - name: Move SDK to expected location
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          mv temp-sdk/daz-studio-45-sdk-win32 "DAZStudio4.5+ SDK"
+          mv "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" "${{ steps.sdk-paths.outputs.sdk-dir }}"
           rm -rf temp-sdk
 
-      - name: Verify SDK structure
+      - name: Verify SDK structure (v4)
+        if: inputs.sdk-version != '6'
         shell: bash
         run: |
           if [ ! -d "DAZStudio4.5+ SDK/include" ]; then
@@ -69,10 +86,25 @@ jobs:
           fi
           echo "SDK structure verified"
 
+      - name: Verify SDK structure (v6)
+        if: inputs.sdk-version == '6'
+        shell: bash
+        run: |
+          if [ ! -d "Daz Studio 6 SDK/include" ]; then
+            echo "Error: SDK include directory not found"
+            exit 1
+          fi
+          if [ ! -f "Daz Studio 6 SDK/x64/lib/dzcore.lib" ]; then
+            echo "Error: dzcore.lib not found under x64/lib"
+            exit 1
+          fi
+          echo "SDK structure verified"
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
       - name: Install Visual C++ 2010 Redistributable
+        if: inputs.sdk-version != '6'
         shell: pwsh
         run: |
           # Qt 4.8 from 2014 likely needs VS 2010 redistributables
@@ -88,13 +120,40 @@ jobs:
 
           Write-Host "VC++ 2010 Redistributable installed"
 
-      - name: Configure CMake
+      - name: Cache Qt6
+        if: inputs.sdk-version == '6'
+        id: cache-qt6
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/qt6
+          key: qt6-6.10.3-win64_msvc2022_64-qt5compat-v1
+
+      - name: Install Qt6 (aqtinstall)
+        if: inputs.sdk-version == '6' && steps.cache-qt6.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          pip install aqtinstall
+          aqt install-qt windows desktop 6.10.3 win64_msvc2022_64 -m qt5compat --outputdir "${{ github.workspace }}/qt6"
+
+      - name: Configure CMake (v4)
+        if: inputs.sdk-version != '6'
         shell: pwsh
         run: |
           $env:PATH = "${{ github.workspace }}\DAZStudio4.5+ SDK\bin\x64;$env:PATH"
 
           cmake -B build -S . `
             -DDAZ_SDK_DIR="${{ github.workspace }}\DAZStudio4.5+ SDK" `
+            -DDAZ_SDK_VERSION=4 `
+            -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
+
+      - name: Configure CMake (v6)
+        if: inputs.sdk-version == '6'
+        shell: pwsh
+        run: |
+          cmake -B build -S . `
+            -DDAZ_SDK_DIR="${{ github.workspace }}\Daz Studio 6 SDK" `
+            -DDAZ_SDK_VERSION=6 `
+            -DQt6_DIR="${{ github.workspace }}\qt6\6.10.3\msvc2022_64\lib\cmake\Qt6" `
             -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
 
       - name: Build with MSBuild
@@ -105,7 +164,7 @@ jobs:
       - name: Verify build output
         shell: bash
         run: |
-          DLL_PATH="build/plugin/${{ inputs.configuration }}/DazScriptServer.dll"
+          DLL_PATH="build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}"
           if [ ! -f "$DLL_PATH" ]; then
             echo "Error: DLL not found at $DLL_PATH"
             exit 1
@@ -117,6 +176,6 @@ jobs:
         id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: DazScriptServer-windows-${{ inputs.configuration }}
-          path: build/plugin/${{ inputs.configuration }}/DazScriptServer.dll
+          name: DazScriptServer-windows-ds${{ inputs.sdk-version }}-${{ inputs.configuration }}
+          path: build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}
           if-no-files-found: error

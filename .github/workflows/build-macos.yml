@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: 'Release'
+      sdk-version:
+        description: 'Target DAZ Studio SDK major version (4 or 6)'
+        required: false
+        type: string
+        default: '4'
     secrets:
       sdk-repo-token:
         description: 'Token for accessing private SDK repository'
@@ -53,16 +58,27 @@ jobs:
               ;;
           esac
 
-      - name: Set up cache key for DAZ SDK
-        id: cache-key
-        run: echo "sdk-cache-key=daz-sdk-4.5-macos-private-v1" >> $GITHUB_OUTPUT
+      - name: Set up SDK paths
+        id: sdk-paths
+        run: |
+          if [ "${{ inputs.sdk-version }}" = "6" ]; then
+            echo "cache-key=daz-sdk-6-macos-private-v1" >> $GITHUB_OUTPUT
+            echo "sparse-path=daz-studio-6-sdk-macos" >> $GITHUB_OUTPUT
+            echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
+            echo "dylib-name=dsp_DazScriptServer.dylib" >> $GITHUB_OUTPUT
+          else
+            echo "cache-key=daz-sdk-4.5-macos-private-v1" >> $GITHUB_OUTPUT
+            echo "sparse-path=daz-studio-45-sdk-macos" >> $GITHUB_OUTPUT
+            echo "sdk-dir=DAZStudio4.5+ SDK" >> $GITHUB_OUTPUT
+            echo "dylib-name=DazScriptServer.dylib" >> $GITHUB_OUTPUT
+          fi
 
       - name: Cache DAZ Studio SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/DAZStudio4.5+ SDK
-          key: ${{ steps.cache-key.outputs.sdk-cache-key }}
+          path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
+          key: ${{ steps.sdk-paths.outputs.cache-key }}
 
       - name: Checkout DAZ Studio SDK repo
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -72,15 +88,16 @@ jobs:
           token: ${{ secrets.sdk-repo-token }}
           path: temp-sdk
           sparse-checkout: |
-            daz-studio-45-sdk-macos
+            ${{ steps.sdk-paths.outputs.sparse-path }}
 
       - name: Move SDK to expected location
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          mv temp-sdk/daz-studio-45-sdk-macos "DAZStudio4.5+ SDK"
+          mv "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" "${{ steps.sdk-paths.outputs.sdk-dir }}"
           rm -rf temp-sdk
 
-      - name: Verify SDK structure
+      - name: Verify SDK structure (v4)
+        if: inputs.sdk-version != '6'
         run: |
           if [ ! -d "DAZStudio4.5+ SDK/include" ]; then
             echo "Error: SDK include directory not found"
@@ -92,10 +109,45 @@ jobs:
           fi
           echo "SDK structure verified"
 
-      - name: Configure CMake
+      - name: Verify SDK structure (v6)
+        if: inputs.sdk-version == '6'
+        run: |
+          if [ ! -d "Daz Studio 6 SDK/include" ]; then
+            echo "Error: SDK include directory not found"
+            exit 1
+          fi
+          echo "SDK structure verified"
+
+      - name: Cache Qt6
+        if: inputs.sdk-version == '6'
+        id: cache-qt6
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/qt6
+          key: qt6-6.10.3-clang_64-qt5compat-v1
+
+      - name: Install Qt6 (aqtinstall)
+        if: inputs.sdk-version == '6' && steps.cache-qt6.outputs.cache-hit != 'true'
+        run: |
+          pip install aqtinstall
+          aqt install-qt mac desktop 6.10.3 clang_64 -m qt5compat --outputdir "${{ github.workspace }}/qt6"
+
+      - name: Configure CMake (v4)
+        if: inputs.sdk-version != '6'
         run: |
           cmake -B build -S . \
             -DDAZ_SDK_DIR="${{ github.workspace }}/DAZStudio4.5+ SDK" \
+            -DDAZ_SDK_VERSION=4 \
+            -DCMAKE_BUILD_TYPE=${{ inputs.configuration }} \
+            -DCMAKE_OSX_ARCHITECTURES="${{ steps.arch-flags.outputs.cmake-arch }}"
+
+      - name: Configure CMake (v6)
+        if: inputs.sdk-version == '6'
+        run: |
+          cmake -B build -S . \
+            -DDAZ_SDK_DIR="${{ github.workspace }}/Daz Studio 6 SDK" \
+            -DDAZ_SDK_VERSION=6 \
+            -DQt6_DIR="${{ github.workspace }}/qt6/6.10.3/macos/lib/cmake/Qt6" \
             -DCMAKE_BUILD_TYPE=${{ inputs.configuration }} \
             -DCMAKE_OSX_ARCHITECTURES="${{ steps.arch-flags.outputs.cmake-arch }}"
 
@@ -105,7 +157,7 @@ jobs:
 
       - name: Verify build output
         run: |
-          DYLIB_PATH="build/plugin/DazScriptServer.dylib"
+          DYLIB_PATH="build/plugin/${{ steps.sdk-paths.outputs.dylib-name }}"
           if [ ! -f "$DYLIB_PATH" ]; then
             echo "Error: dylib not found at $DYLIB_PATH"
             exit 1
@@ -119,6 +171,6 @@ jobs:
         id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: DazScriptServer-macos-${{ steps.arch-flags.outputs.runner-desc }}-${{ inputs.configuration }}
-          path: build/plugin/DazScriptServer.dylib
+          name: DazScriptServer-macos-${{ steps.arch-flags.outputs.runner-desc }}-ds${{ inputs.sdk-version }}-${{ inputs.configuration }}
+          path: build/plugin/${{ steps.sdk-paths.outputs.dylib-name }}
           if-no-files-found: error
