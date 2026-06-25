@@ -677,17 +677,20 @@ void DzScriptServerPane::stopServer()
 		// after all handler threads have been joined.
 	}
 
-	// 2. Stop the HTTP server: sets is_shutting_down = true so the chunked
-	//    write loops exit on their next iteration.
+	// 2. Signal the HTTP server to shut down: closes the listening socket so
+	//    the accept loop in ServerListenThread::run() unblocks and returns,
+	//    and sets is_shutting_down = true so chunked write loops exit on
+	//    their next iteration. Do NOT delete m_pServer yet — run() is still
+	//    executing on m_pServerThread and holds a raw pointer to it; deleting
+	//    it now would be a use-after-free race with that thread.
 	if (m_pServer) {
 		m_pServer->stop();
-		delete m_pServer;
-		m_pServer = nullptr;
 	}
 
-	// 3. Join the listen thread.  httplib's ThreadPool::shutdown() joins every
-	//    request-handler thread before listen() returns, so by the time wait()
-	//    completes ALL SSE resource-releaser lambdas have already run.
+	// 3. Join the listen thread before touching m_pServer again. httplib's
+	//    ThreadPool::shutdown() joins every request-handler thread before
+	//    listen() returns, so by the time wait() completes ALL SSE
+	//    resource-releaser lambdas have already run.
 	if (m_pServerThread) {
 		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
 			appendLog("[WARN] Server thread did not stop within timeout; forcing termination.");
@@ -696,6 +699,13 @@ void DzScriptServerPane::stopServer()
 		}
 		delete m_pServerThread;
 		m_pServerThread = nullptr;
+	}
+
+	// Now that run() has returned (or the thread was forcibly killed), it's
+	// safe to free the Server object.
+	if (m_pServer) {
+		delete m_pServer;
+		m_pServer = nullptr;
 	}
 
 	// 4. Now safe to delete brokers — all resource releasers have run.
