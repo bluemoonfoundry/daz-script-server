@@ -8,8 +8,7 @@
 A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests (or an optional Python library that wraps the interface and adds additional features) with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
 
 > [!NOTE]
-> Currently the plugin won't work with DAZ Studio 6. We're waiting for DS6 to stabilize a little bit before recompiling it for that platform. It's definitely on our radar though!
-
+> We are now building test versions of DS 4 and DS6 plugins for Windows, MacOS Intel, and MacOS Apple Silicon. These artifacts are available in the Nightly build for present, while we continue testing them. The next version, 2.6.0, will include them as part of the standard set of release artifact. Remember that if you want to use a newer version of the plugin you must remove any old DLL or dylib file first!
 ---
 
 ## 🚀 Quick Start
