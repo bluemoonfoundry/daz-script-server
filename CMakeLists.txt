@@ -63,9 +63,14 @@ elseif(APPLE)
 	set(CMAKE_MACOSX_RPATH TRUE)
 	set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 	if(DAZ_SDK_VERSION STREQUAL "4")
-		# SDK4's Qt4 headers need c++11; Qt6 (SDK6) needs CMAKE_CXX_STANDARD 17 above.
+		# SDK4's Qt4 headers need c++11; Qt6 (SDK6) needs CMAKE_CXX_STANDARD 17/20 above.
 		set(CMAKE_CXX_FLAGS "-std=c++11 -stdlib=libc++ ${CMAKE_CXX_FLAGS}")
 	else()
+		# Qt 6.10's qhash.h uses <ranges>-derived constructs that libc++ exposes
+		# even in C++17 mode (the header is present) but only compiles correctly
+		# in C++20 mode — bump the standard here to avoid "no template named
+		# 'QKeyValueIterator'" errors.
+		set(CMAKE_CXX_STANDARD 20)
 		set(CMAKE_CXX_FLAGS "-stdlib=libc++ ${CMAKE_CXX_FLAGS}")
 	endif()
 else()
