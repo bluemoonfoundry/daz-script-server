@@ -30,10 +30,11 @@ This document provides a visual overview of how the GitHub Actions workflows are
 ┌──────────────┐   ┌──────────────────┐   ┌──────────────┐  ┌──────────────┐
 │ build-       │   │ build-macos.yml  │   │ build-       │  │ ci.yml       │
 │ windows.yml  │   │                  │   │ dazpy.yml    │  │              │
-│              │   │ Called 3x:       │   │              │  │ Trigger:     │
-│ (Reusable)   │   │ • Intel x86_64   │   │ (Reusable)   │  │ • Push       │
-│              │   │ • ARM64          │   │              │  │ • PR         │
-│              │   │ • Universal      │   │              │  │              │
+│              │   │ Called 4x:       │   │              │  │ Trigger:     │
+│ Called 2x:   │   │ • Intel DS4      │   │ (Reusable)   │  │ • Push       │
+│ • DS4        │   │ • Intel DS6      │   │              │  │ • PR         │
+│ • DS6        │   │ • ARM64 DS4      │   │              │  │              │
+│              │   │ • ARM64 DS6      │   │              │  │              │
 └──────────────┘   └──────────────────┘   └──────────────┘  └──────────────┘
 ```
 
@@ -47,15 +48,19 @@ User pushes tag (v1.3.0)
          ▼
    release-tagged.yml triggered
          │
-         ├──► build-windows.yml ──────┐
-         │                            │
-         ├──► build-macos.yml (Intel) ┤
-         │                            │
-         ├──► build-macos.yml (ARM)   ├──► Artifacts uploaded
-         │                            │    to GitHub
-         ├──► build-macos.yml (Univ.) │
-         │                            │
-         └──► build-dazpy.yml ────────┘
+         ├──► build-windows.yml (DS4) ─────┐
+         │                                  │
+         ├──► build-windows.yml (DS6) ─────┤
+         │                                  │
+         ├──► build-macos.yml (Intel DS4) ──┤
+         │                                  │
+         ├──► build-macos.yml (Intel DS6) ──┼──► Artifacts uploaded
+         │                                  │    to GitHub
+         ├──► build-macos.yml (ARM DS4) ────┤
+         │                                  │
+         ├──► build-macos.yml (ARM DS6) ────┤
+         │                                  │
+         └──► build-dazpy.yml ──────────────┘
                      │
                      ▼
          Download all artifacts
@@ -68,10 +73,12 @@ User pushes tag (v1.3.0)
                      │
                      ▼
          Attach all artifacts:
-         • DazScriptServer-windows.dll
-         • DazScriptServer-macos-Intel.dylib
-         • DazScriptServer-macos-AppleSilicon.dylib
-         • DazScriptServer-macos-Universal.dylib
+         • DazScriptServer-ds4-windows.dll
+         • DazScriptServer-ds4-macos-Intel.dylib
+         • DazScriptServer-ds4-macos-AppleSilicon.dylib
+         • dsp_DazScriptServer-ds6-windows.dll
+         • dsp_DazScriptServer-ds6-macos-Intel.dylib
+         • dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
          • dazpy-*.whl
          • Source.zip (auto)
          • Source.tar.gz (auto)
@@ -111,16 +118,24 @@ Scheduled trigger (1 AM EST daily)
 ### build-windows.yml
 
 ```
-Input: configuration (Release/Debug)
+Input: sdk-version (4/6), configuration (Release/Debug)
    │
    ▼
-Download DAZ SDK ──► Cache for next run
+Set SDK paths and DLL name:
+ • DS4 ──► DazScriptServer.dll
+ • DS6 ──► dsp_DazScriptServer.dll
+   │
+   ▼
+Download DAZ SDK ──► Cache (version-specific) for next run
+   │
+   ▼
+Install Qt6 via aqtinstall (DS6 only) ──► Cache for next run
    │
    ▼
 Verify SDK structure
    │
    ▼
-Configure CMake
+Configure CMake (DAZ_SDK_VERSION=4 or 6)
    │
    ▼
 Build with MSBuild
@@ -129,7 +144,7 @@ Build with MSBuild
 Verify DLL exists
    │
    ▼
-Upload artifact: DazScriptServer-windows-{config}
+Upload artifact: DazScriptServer-windows-ds{version}-{config}
    │
    ▼
 Output: artifact-name
@@ -138,23 +153,30 @@ Output: artifact-name
 ### build-macos.yml
 
 ```
-Input: architecture (x86_64/arm64/universal), configuration
+Input: architecture (x86_64/arm64), sdk-version (4/6), configuration
    │
    ▼
 Select runner:
- • x86_64 ──► macos-13
+ • x86_64 ──► self-hosted macOS X64
  • arm64 ───► macos-14
- • universal ► macos-14
    │
    ▼
-Download DAZ SDK ──► Cache for next run
+Set SDK paths and dylib name:
+ • DS4 ──► DazScriptServer.dylib
+ • DS6 ──► dsp_DazScriptServer.dylib
+   │
+   ▼
+Download DAZ SDK ──► Cache (version-specific) for next run
+   │
+   ▼
+Install Qt6 via aqtinstall (DS6 only) ──► Cache for next run
    │
    ▼
 Verify SDK structure
    │
    ▼
 Configure CMake with:
- CMAKE_OSX_ARCHITECTURES={arch}
+ CMAKE_OSX_ARCHITECTURES={arch}, DAZ_SDK_VERSION={4|6}
    │
    ▼
 Build with CMake
@@ -163,7 +185,7 @@ Build with CMake
 Verify dylib with lipo
    │
    ▼
-Upload artifact: DazScriptServer-macos-{arch}-{config}
+Upload artifact: DazScriptServer-macos-{arch}-ds{version}-{config}
    │
    ▼
 Output: artifact-name
@@ -193,29 +215,21 @@ Output: artifact-name
 ## Cache Strategy
 
 ```
-┌─────────────────────────────────────────────────┐
-│              GitHub Actions Cache                │
-└─────────────────────────────────────────────────┘
-                    │
-        ┌───────────┴───────────┐
-        │                       │
-        ▼                       ▼
-┌──────────────────┐   ┌──────────────────┐
-│ Windows Cache    │   │ macOS Cache      │
-│                  │   │                  │
-│ Key:             │   │ Key:             │
-│ daz-sdk-4.5-     │   │ daz-sdk-4.5-     │
-│ windows-v1       │   │ macos-v1         │
-│                  │   │                  │
-│ Contents:        │   │ Contents:        │
-│ DAZStudio4.5+    │   │ DAZStudio4.5+    │
-│ SDK/             │   │ SDK/             │
-│ ├─ include/      │   │ ├─ include/      │
-│ ├─ lib/          │   │ ├─ lib/          │
-│ └─ bin/          │   │ └─ bin/          │
-│                  │   │                  │
-│ TTL: 7 days      │   │ TTL: 7 days      │
-└──────────────────┘   └──────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    GitHub Actions Cache                      │
+└─────────────────────────────────────────────────────────────┘
+           │                                │
+    SDK Caches (4 keys)              Qt6 Caches (2 keys, DS6 only)
+           │                                │
+    ┌──────┼──────┐               ┌─────────┴──────────┐
+    │      │      │               │                    │
+    ▼      ▼      ▼               ▼                    ▼
+ Win-DS4 Win-DS6 Mac-DS4 Mac-DS6  Win Qt6           Mac Qt6
+ private private private private  6.10.3-            6.10.3-
+ -v1     -v1     -v1     -v1      msvc2022_64        clang_64
+                                  -qt5compat-v1      -qt5compat-v1
+
+All caches TTL: 7 days
 ```
 
 ## Parallel Execution
@@ -225,17 +239,21 @@ Output: artifact-name
 ```
 Time →
 
-0:00  ┌─ build-windows ────────────────┐
+0:00  ┌─ build-windows (DS4) ──────────┐
       │                                 │
-      ├─ build-macos (Intel) ──────────┤
+      ├─ build-windows (DS6) ──────────┤
       │                                 │
-      ├─ build-macos (ARM) ────────────┤  ← All builds run in parallel
+      ├─ build-macos Intel (DS4) ───────┤
       │                                 │
-      ├─ build-macos (Universal) ──────┤
+      ├─ build-macos Intel (DS6) ───────┤  ← All 7 jobs run in parallel
+      │                                 │
+      ├─ build-macos ARM (DS4) ─────────┤
+      │                                 │
+      ├─ build-macos ARM (DS6) ─────────┤
       │                                 │
       └─ build-dazpy ──────────────────┘
 
-15:00                                  All builds complete
+20:00                                  All builds complete
                                             │
                                             ▼
                                        create-release job
@@ -350,10 +368,12 @@ Legend:
 
 ```
 GitHub Release: v1.3.0
-├── DazScriptServer-windows.dll
-├── DazScriptServer-macos-Intel.dylib
-├── DazScriptServer-macos-AppleSilicon.dylib
-├── DazScriptServer-macos-Universal.dylib
+├── DazScriptServer-ds4-windows.dll          ← DAZ Studio 4.5+
+├── DazScriptServer-ds4-macos-Intel.dylib
+├── DazScriptServer-ds4-macos-AppleSilicon.dylib
+├── dsp_DazScriptServer-ds6-windows.dll      ← DAZ Studio 6.25+
+├── dsp_DazScriptServer-ds6-macos-Intel.dylib
+├── dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
 ├── dazpy-2.6.0-py3-none-any.whl
 ├── Source code (zip)           ← Auto-generated
 └── Source code (tar.gz)        ← Auto-generated
@@ -363,10 +383,12 @@ GitHub Release: v1.3.0
 
 ```
 GitHub Release: nightly-123
-├── DazScriptServer-windows.dll
-├── DazScriptServer-macos-Intel.dylib
-├── DazScriptServer-macos-AppleSilicon.dylib
-├── DazScriptServer-macos-Universal.dylib
+├── DazScriptServer-ds4-windows.dll
+├── DazScriptServer-ds4-macos-Intel.dylib
+├── DazScriptServer-ds4-macos-AppleSilicon.dylib
+├── dsp_DazScriptServer-ds6-windows.dll
+├── dsp_DazScriptServer-ds6-macos-Intel.dylib
+├── dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
 ├── dazpy-2.6.0-py3-none-any.whl
 ├── Source code (zip)           ← Auto-generated
 └── Source code (tar.gz)        ← Auto-generated
@@ -437,8 +459,8 @@ Metadata:
 ### Current Capacity
 
 ```
-Builds per release:     5 jobs (parallel)
-Time per release:       ~15-20 minutes
+Builds per release:     7 jobs (6 plugin + 1 dazpy, all parallel)
+Time per release:       ~20-25 minutes
 Nightly frequency:      Daily (1 AM EST)
 Tagged releases:        On-demand
 
@@ -446,19 +468,8 @@ Annual estimates:
 • Nightly builds:       365 builds/year
 • Tagged releases:      ~12-24 builds/year (estimate)
 • Total runs:           ~377-389/year
-• Total minutes:        ~5,655-7,780/year
-```
-
-### Future Scaling
-
-```
-If SDK 6 is added:
-
-Builds per release:     10 jobs (2× SDK versions)
-Time per release:       ~20-25 minutes
-Cache size:             2× (separate SDK caches)
-
-Annual minutes:         ~11,310-15,560/year
+• Total minutes (metered): ~9,425-12,463/year
+  (macOS Intel jobs use self-hosted runner — no metered cost)
 ```
 
 ## Summary

@@ -9,20 +9,23 @@ This document summarizes the GitHub Actions workflows that have been implemented
 Three core build workflows that can be called by other workflows:
 
 #### `build-windows.yml`
+- Inputs: `sdk-version` (4 or 6), `configuration`
 - Builds the Windows DLL on `windows-2022` runner
 - Uses Visual Studio 2022 and MSBuild
-- Downloads and caches DAZ Studio SDK from GitHub
-- Outputs: `DazScriptServer.dll`
+- Downloads and caches DAZ Studio SDK from private `bluemoonfoundry/daz-studio-sdks` repo
+- Installs Qt6 via aqtinstall (DS6 builds only, also cached)
+- Outputs: `DazScriptServer.dll` (DS4) or `dsp_DazScriptServer.dll` (DS6)
 
 #### `build-macos.yml`
-- Builds macOS dylib for multiple architectures
+- Inputs: `architecture` (x86_64 or arm64), `sdk-version` (4 or 6), `configuration`
+- Builds macOS dylib for Intel and Apple Silicon
 - Supports:
-  - Intel (x86_64) on `macos-13`
+  - Intel (x86_64) on self-hosted macOS X64 runner (ORION)
   - Apple Silicon (arm64) on `macos-14`
-  - Universal Binary (both) on `macos-14`
 - Uses CMake with Xcode/Clang
-- Downloads and caches DAZ Studio SDK
-- Outputs: `DazScriptServer.dylib`
+- Downloads and caches DAZ Studio SDK from private repo
+- Installs Qt6 via aqtinstall (DS6 builds only, also cached)
+- Outputs: `DazScriptServer.dylib` (DS4) or `dsp_DazScriptServer.dylib` (DS6)
 
 #### `build-dazpy.yml`
 - Builds the Python wheel package
@@ -33,13 +36,15 @@ Three core build workflows that can be called by other workflows:
 
 #### `release-tagged.yml`
 Triggers on version tags (e.g., `v1.3.0`):
-- Builds all platform variants in parallel
+- Runs 6 plugin build jobs in parallel (DS4 + DS6 × Windows + macOS Intel + macOS ARM) plus dazpy
 - Generates commit summary since last release
 - Creates GitHub release with:
-  - Windows DLL
-  - macOS Intel dylib
-  - macOS Apple Silicon dylib
-  - macOS Universal Binary dylib
+  - `DazScriptServer-ds4-windows.dll`
+  - `DazScriptServer-ds4-macos-Intel.dylib`
+  - `DazScriptServer-ds4-macos-AppleSilicon.dylib`
+  - `dsp_DazScriptServer-ds6-windows.dll`
+  - `dsp_DazScriptServer-ds6-macos-Intel.dylib`
+  - `dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib`
   - dazpy wheel
   - Source archives (auto-generated)
 
@@ -75,14 +80,16 @@ Created comprehensive documentation:
 - Easy invalidation by incrementing version number
 
 ### Parallel Builds
-All platform builds run simultaneously:
-- Windows DLL
-- macOS Intel dylib
-- macOS Apple Silicon dylib
-- macOS Universal Binary dylib
+All platform builds run simultaneously (7 jobs):
+- Windows DS4 DLL
+- Windows DS6 DLL
+- macOS Intel DS4 dylib
+- macOS Intel DS6 dylib
+- macOS Apple Silicon DS4 dylib
+- macOS Apple Silicon DS6 dylib
 - dazpy wheel
 
-Total build time: ~15-20 minutes for all platforms
+Total build time: ~20-25 minutes for all platforms
 
 ### Smart Nightly Releases
 - Only creates release if there are new commits
@@ -155,13 +162,15 @@ gh run view <run-id> --log
 
 ## Build Matrix
 
-| Platform | Architecture | Runner | Build Tool | Output |
-|----------|--------------|--------|------------|--------|
-| Windows | x64 | windows-2022 | MSBuild | DazScriptServer.dll |
-| macOS | x86_64 | macos-13 | CMake | DazScriptServer-Intel.dylib |
-| macOS | arm64 | macos-14 | CMake | DazScriptServer-AppleSilicon.dylib |
-| macOS | Universal | macos-14 | CMake | DazScriptServer-Universal.dylib |
-| Python | N/A | ubuntu-latest | pip | dazpy-*.whl |
+| Platform | Architecture | SDK | Runner | Build Tool | Release Asset |
+|----------|--------------|-----|--------|------------|---------------|
+| Windows | x64 | DS4 | windows-2022 | MSBuild | `DazScriptServer-ds4-windows.dll` |
+| Windows | x64 | DS6 | windows-2022 | MSBuild | `dsp_DazScriptServer-ds6-windows.dll` |
+| macOS | x86_64 | DS4 | self-hosted X64 | CMake | `DazScriptServer-ds4-macos-Intel.dylib` |
+| macOS | x86_64 | DS6 | self-hosted X64 | CMake | `dsp_DazScriptServer-ds6-macos-Intel.dylib` |
+| macOS | arm64 | DS4 | macos-14 | CMake | `DazScriptServer-ds4-macos-AppleSilicon.dylib` |
+| macOS | arm64 | DS6 | macos-14 | CMake | `dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib` |
+| Python | N/A | N/A | ubuntu-latest | pip | `dazpy-*.whl` |
 
 ## Dependencies
 
@@ -187,7 +196,10 @@ gh run view <run-id> --log
 - Allow Actions to create releases
 
 ### Secrets
-No secrets required currently. SDK is public.
+
+| Secret | Required By | Purpose |
+|--------|-------------|---------|
+| `SDK_REPO_TOKEN` | build-windows, build-macos | Read access to `bluemoonfoundry/daz-studio-sdks` private SDK repo |
 
 ### Environment Variables
 Set automatically by workflows:
@@ -206,9 +218,9 @@ The workflows are optimized for minimal cost:
 5. **Reusable workflows**: Reduces duplication
 
 Estimated GitHub Actions minutes per run:
-- Tagged release: ~75-100 minutes total (5 parallel jobs × 15-20 min)
-- Nightly release: ~75-100 minutes total (or 0 if skipped)
-- Test build: Varies by platform selection
+- Tagged release: ~140-175 metered minutes (6 plugin jobs × 20-25 min; macOS Intel jobs use self-hosted runner at no metered cost)
+- Nightly release: same as tagged (or 0 if skipped)
+- Test build: Varies by platform and SDK version selection
 
 ## Testing Status
 
@@ -283,29 +295,24 @@ These workflows have NOT been run yet and may require adjustments:
 2. No notarization for macOS dylib
 3. No artifact attestation (supply chain security)
 4. Nightly time fixed at 1 AM EST (no DST adjustment)
-5. SDK source URL hardcoded in workflows
+5. macOS DS6 CI leg (self-hosted Intel runner ORION) needs Xcode upgrade and verification
 
 ### Future Enhancements
-1. **DAZ Studio 6 Support**
-   - Matrix build for both SDK versions
-   - Conditional artifact naming
-
-2. **Security**
+1. **Security**
    - Code signing certificates
    - macOS notarization
    - Artifact attestation
 
-3. **Testing**
+2. **Testing**
    - Automated integration tests
    - Plugin load verification
    - API endpoint testing
 
-4. **Optimization**
-   - Self-hosted runners for faster builds
+3. **Optimization**
    - Incremental builds
    - Artifact compression
 
-5. **Monitoring**
+4. **Monitoring**
    - Build failure notifications
    - Metrics tracking
    - Success rate dashboard
@@ -430,14 +437,12 @@ For questions or issues with the workflows:
 
 ## Summary
 
-A complete GitHub Actions CI/CD pipeline has been implemented with:
-- ✅ Cross-platform builds (Windows + 3 macOS variants)
+A complete GitHub Actions CI/CD pipeline is implemented with:
+- ✅ Cross-platform builds for DS4 and DS6 (Windows + macOS Intel + macOS ARM = 6 plugin jobs)
 - ✅ Automated releases (tagged + nightly)
-- ✅ SDK caching for efficiency
-- ✅ Parallel execution for speed
+- ✅ SDK caching for efficiency (separate DS4/DS6 caches; Qt6 cache for DS6)
+- ✅ Parallel execution for speed (7 jobs run simultaneously)
 - ✅ Comprehensive documentation
-- ✅ Testing workflows for validation
+- ✅ Testing workflow with per-platform and per-SDK-version selection
 
-Total files created: **8 workflow files + 3 documentation files**
-
-The workflows are ready to use, but should be tested incrementally before relying on them for production releases.
+Total workflow files: **8** | Documentation files: **4**

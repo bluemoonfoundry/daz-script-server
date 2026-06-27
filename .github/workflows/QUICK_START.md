@@ -20,8 +20,7 @@ git push origin v1.3.0
 ```
 
 The workflow will:
-- Build Windows DLL
-- Build macOS Intel, Apple Silicon, and Universal binaries
+- Build DS4 and DS6 plugin variants for Windows, macOS Intel, and macOS Apple Silicon (6 jobs in parallel)
 - Build dazpy wheel
 - Generate commit summary since last release
 - Create GitHub release with all artifacts
@@ -46,17 +45,26 @@ gh workflow run release-nightly.yml
 ### Build Plugin Locally
 
 ```bash
-# Windows
-./build.sh build --platform win --clean
+# Windows DS4 (default)
+./build.sh build --clean
 
-# macOS Intel
-./build.sh build --platform mac --clean
+# Windows DS6
+./build.sh build --sdk-version 6 --clean
 
-# macOS with specific architecture
+# macOS Intel DS4
 cmake -B build -S . \
   -DDAZ_SDK_DIR="/path/to/DAZStudio4.5+ SDK" \
-  -DCMAKE_OSX_ARCHITECTURES="arm64"
+  -DDAZ_SDK_VERSION=4 \
+  -DCMAKE_OSX_ARCHITECTURES="x86_64"
 cmake --build build --config Release
+
+# macOS Apple Silicon DS6
+cmake -B build-sdk6 -S . \
+  -DDAZ_SDK_DIR="/path/to/Daz Studio 6 SDK" \
+  -DDAZ_SDK_VERSION=6 \
+  -DQt6_DIR="/path/to/qt6/6.10.3/macos/lib/cmake/Qt6" \
+  -DCMAKE_OSX_ARCHITECTURES="arm64"
+cmake --build build-sdk6 --config Release
 ```
 
 ### Build dazpy Wheel Locally
@@ -98,16 +106,16 @@ gh release delete test-v1.3.0 --yes
 
 ### Update SDK Cache
 
-If the DAZ SDK is updated, invalidate the cache:
+If a DAZ SDK is updated, invalidate the relevant cache:
 
-1. Edit workflow files (`.github/workflows/build-*.yml`)
-2. Change cache key version:
+1. Edit the workflow file (`.github/workflows/build-windows.yml` or `build-macos.yml`)
+2. Change the cache key version for the affected SDK:
    ```yaml
-   # Old
-   key: daz-sdk-4.5-windows-v1
+   # DS4 Windows — old → new
+   key: daz-sdk-4.5-windows-private-v1  →  daz-sdk-4.5-windows-private-v2
 
-   # New
-   key: daz-sdk-4.5-windows-v2
+   # DS6 macOS — old → new
+   key: daz-sdk-6-macos-private-v1  →  daz-sdk-6-macos-private-v2
    ```
 3. Commit and push
 
@@ -124,14 +132,13 @@ Temporarily disable cache in workflow:
 
 ### Debug Build in CI
 
-Create a debug release:
+Use `test-build.yml` (manual trigger) to build a single SDK version in Debug:
 
-```yaml
-# In release-tagged.yml, change configuration
-build-windows:
-  uses: ./.github/workflows/build-windows.yml
-  with:
-    configuration: Debug  # Changed from Release
+```bash
+gh workflow run test-build.yml \
+  -f platform=windows \
+  -f sdk-version=6 \
+  -f configuration=Debug
 ```
 
 ### Skip Nightly for Testing
@@ -182,8 +189,11 @@ gh run list --workflow=release-nightly.yml --json databaseId -q '.[].databaseId'
 # Download all artifacts from latest run
 gh run download
 
-# Download specific artifact
-gh run download --name DazScriptServer-windows-Release
+# Download specific artifact (use full artifact name)
+gh run download --name DazScriptServer-windows-ds4-Release
+gh run download --name DazScriptServer-windows-ds6-Release
+gh run download --name DazScriptServer-macos-Intel-ds4-Release
+gh run download --name DazScriptServer-macos-AppleSilicon-ds6-Release
 
 # Download from specific run
 gh run download <run-id>
@@ -204,30 +214,20 @@ gh release download v1.3.0
 
 ## Troubleshooting Commands
 
-### Check SDK Repository
+### Check SDK Access
 
 ```bash
-# Verify SDK is accessible
-curl -I https://github.com/3DBreww/DAZ-Studio-SDK/archive/refs/heads/main.zip
-
-# Download SDK manually
-curl -L -o daz-sdk.zip \
-  https://github.com/3DBreww/DAZ-Studio-SDK/archive/refs/heads/main.zip
-unzip daz-sdk.zip
+# Verify SDK_REPO_TOKEN secret has access to the private repo
+gh api repos/bluemoonfoundry/daz-studio-sdks --jq '.name'
 ```
 
 ### Verify Local Build Matches CI
 
 ```bash
-# Download SDK same way CI does
-curl -L -o daz-sdk.zip \
-  https://github.com/3DBreww/DAZ-Studio-SDK/archive/refs/heads/main.zip
-unzip daz-sdk.zip
-mv DAZ-Studio-SDK-main "DAZStudio4.5+ SDK"
-
-# Build with same configuration as CI
+# Build with same configuration as CI (DS4)
 cmake -B build -S . \
   -DDAZ_SDK_DIR="${PWD}/DAZStudio4.5+ SDK" \
+  -DDAZ_SDK_VERSION=4 \
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build --config Release --verbose
@@ -236,14 +236,19 @@ cmake --build build --config Release --verbose
 ### Check Build Output
 
 ```bash
-# Windows
+# Windows DS4
 ls -lh build/plugin/Release/DazScriptServer.dll
-file build/plugin/Release/DazScriptServer.dll
 
-# macOS
+# Windows DS6
+ls -lh build-sdk6/plugin/Release/dsp_DazScriptServer.dll
+
+# macOS DS4
 ls -lh build/plugin/DazScriptServer.dylib
-file build/plugin/DazScriptServer.dylib
 lipo -info build/plugin/DazScriptServer.dylib
+
+# macOS DS6
+ls -lh build-sdk6/plugin/dsp_DazScriptServer.dylib
+lipo -info build-sdk6/plugin/dsp_DazScriptServer.dylib
 ```
 
 ## Advanced Usage
