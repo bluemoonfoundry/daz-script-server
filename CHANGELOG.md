@@ -6,16 +6,61 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **DAZ Studio 6 (Qt6) plugin** — new build target (`--sdk-version 6`) linking
+  against the DS6 SDK and the matching Qt6 devkit. At runtime the plugin resolves
+  Qt6 symbols against DAZ Studio 6's own bundled DLLs; the devkit is only needed
+  at link time. See `CLAUDE.md` for `aqtinstall`-based setup.
+- **Multi-platform release artifacts** — DS4 and DS6 plugins for Windows,
+  macOS Intel, and macOS Apple Silicon are now included in the standard release
+  (previously nightly-only). Six artifacts per release:
+  `DazScriptServer-ds{4,6}-{windows,macos-Intel,macos-AppleSilicon}.{dll,dylib}`.
 - **`POST /scene/save-copy`** — save the current scene to a new path without
   changing the scene's internal filename pointer or dirty flag. Uses
   `QFile::copy()` for clean scenes (byte-identical file, zero state change) and
   a serialise-then-restore approach for dirty scenes. Response includes a
   `method` field (`"copy"`, `"serialize"`, or `"serialize+restore"`).
-- **`DazScene.save_copy(path)`** — Python wrapper around the new endpoint with
-  full round-trip support. See `docs/examples/fundamentals/scene_save_copy.py`.
-- **Multi-platform release artifacts** — DS4 and DS6 plugins for Windows,
-  macOS Intel, and macOS Apple Silicon are now included in the standard release
-  (previously nightly-only).
+- **`DazScene.save_copy(path)`** — Python wrapper around the new endpoint.
+  See `docs/examples/fundamentals/scene_save_copy.py` for `--compare` /
+  `--dry-run` usage.
+- **`DazViewport`** — new dazpy class for capturing the DAZ Studio viewport
+  programmatically: `capture(path)`, `capture(path, backdrop_color=(R,G,B))`,
+  `capture_sprite(path)` (alpha-matted via u2net), `get_size()`, `set_size(w,h)`,
+  `is_available()`.
+- **`examples/capture_viewport.py`** — CLI for all three capture modes
+  (`raw` / `clean` / `sprite`) with `--mode`, `--output`, `--backdrop`,
+  `--no-alpha-matting`, `--daz-url`, and `--dry-run` flags.
+- **ComfyUI enhancement pipeline** (`examples/comfyui_enhance/`) — end-to-end
+  DAZ Studio → ComfyUI img2img pipeline: captures the viewport, uploads to
+  ComfyUI, queues an SDXL img2img workflow, streams progress, and saves the
+  enhanced result. Includes `--checkpoint`, `--dry-run`, and `--no-watch` flags.
+- **Body measurements — 19 new measurements** in
+  `docs/examples/body_measurements.py` for G8, G8.1, and G9 figures:
+  - *9 vertical lengths:* total height, inseam, torso length, arm length,
+    thigh, shin, forearm, upper arm, head height.
+  - *10 circumferences:* neck, chest, underbust, waist, high hip, hip, thigh,
+    knee, calf, ankle.
+  - *2 breadths:* shoulder width, across-back and across-chest.
+  - Pass `--figure-type G9F` (or `G8F`, `G9M`, etc.) to force calibration when
+    the scene label lacks a gender keyword.
+- **Jupyter notebook** (`notebooks/dazpy_intro.ipynb`) — interactive dazpy
+  exploration against a live DAZ Studio instance. Launch with `./notebook.sh`
+  (macOS/Linux) or `.\notebook.ps1` (Windows). Sections: Quick Connect → Scene
+  Info → Move/Rotate Nodes → Render → API Browser → Jupyter Introspection →
+  ipywidgets Bone Rotator → Morph/Property Explorer → Scene Tree Pretty-Printer.
+- **PyPI publishing** — `dazpy` is now published to PyPI automatically on each
+  tagged release via OIDC (no stored API keys).
+
+### Fixed
+
+- Fixed hang on server stop: listener thread is now joined before the
+  `httplib::Server` object is destroyed, preventing a crash/deadlock when
+  toggling the server off while requests are in flight.
+- Fixed body measurement bone name mismatches for G8.1 waist/underbust anchors,
+  G9 neck circumference anchor, and G9 shoulder-width bones.
+- Fixed 3D sleeve length calculation (was using a 2D projection, underestimating
+  sleeve length on posed figures).
+- Fixed high-bust anchor placed above the bust peak rather than at the shoulder
+  on some G9 figures.
 
 ## [2.4.0] - 2026-05-25
 
