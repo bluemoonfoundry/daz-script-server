@@ -2,6 +2,21 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.6.0] - 2026-06-27
+
+### Added
+
+- **`POST /scene/save-copy`** — save the current scene to a new path without
+  changing the scene's internal filename pointer or dirty flag. Uses
+  `QFile::copy()` for clean scenes (byte-identical file, zero state change) and
+  a serialise-then-restore approach for dirty scenes. Response includes a
+  `method` field (`"copy"`, `"serialize"`, or `"serialize+restore"`).
+- **`DazScene.save_copy(path)`** — Python wrapper around the new endpoint with
+  full round-trip support. See `docs/examples/fundamentals/scene_save_copy.py`.
+- **Multi-platform release artifacts** — DS4 and DS6 plugins for Windows,
+  macOS Intel, and macOS Apple Silicon are now included in the standard release
+  (previously nightly-only).
+
 ## [2.4.0] - 2026-05-25
 
 ### Added

@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.5.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.6.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -8,7 +8,7 @@
 A production-ready DAZ Studio plugin that embeds a secure HTTP server inside DAZ Studio, enabling remote execution of DazScript via HTTP POST requests (or an optional Python library that wraps the interface and adds additional features) with JSON responses. Control DAZ Studio programmatically from external tools, automation scripts, and custom applications.
 
 > [!NOTE]
-> We are now building test versions of DS 4 and DS6 plugins for Windows, MacOS Intel, and MacOS Apple Silicon. These artifacts are available in the Nightly build for present, while we continue testing them. The next version, 2.6.0, will include them as part of the standard set of release artifact. Remember that if you want to use a newer version of the plugin you must remove any old DLL or dylib file first!
+> As of v2.6.0, plugins for DS4 and DS6 on Windows, MacOS Intel, and MacOS Apple Silicon are included as part of the standard release artifacts. Remember that if you want to use a newer version of the plugin you must remove any old DLL or dylib file first!
 ---
 
 ## 🚀 Quick Start
@@ -68,7 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's Coming up in v2.6.0](#whats-new-in-v260)
+- [What's New in v2.6.0](#whats-new-in-v260)
 - [What's New in v2.5.0](#whats-new-in-v250)
 - [What's New in v2.4.0](#whats-new-in-v240)
 - [What's New in v2.3.0](#whats-new-in-v230)
@@ -152,7 +152,6 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 ---
 
 ## What's New in v2.6.0
-(This stuff is in the Nightly Build currently, and will become part of v2.6.0 release when that release is cut)
 
 ### 💾 Scene Save Copy — `POST /scene/save-copy` + `DazScene.save_copy()`
 
