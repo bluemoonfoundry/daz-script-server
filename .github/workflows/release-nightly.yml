@@ -207,7 +207,7 @@ jobs:
              release-assets/dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
 
           # dazpy wheel
-          cp artifacts/dazpy-wheel/*.whl release-assets/
+          cp artifacts/dazpy-dist/*.whl release-assets/
 
           # List all files
           echo "Release assets:"

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-windows-ds4:
@@ -71,6 +72,21 @@ jobs:
     name: Build dazpy Wheel
     uses: ./.github/workflows/build-dazpy.yml
 
+  publish-pypi:
+    name: Publish dazpy to PyPI
+    needs: build-dazpy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download dazpy dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dazpy-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
   create-release:
     name: Create GitHub Release
     needs:
@@ -81,6 +97,7 @@ jobs:
       - build-macos-intel-ds6
       - build-macos-arm-ds6
       - build-dazpy
+      - publish-pypi
     runs-on: ubuntu-latest
 
     steps:
@@ -166,7 +183,7 @@ jobs:
              release-assets/dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
 
           # dazpy wheel
-          cp artifacts/dazpy-wheel/*.whl release-assets/
+          cp artifacts/dazpy-dist/*.whl release-assets/
 
           # List all files
           echo "Release assets:"

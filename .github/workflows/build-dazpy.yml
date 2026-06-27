@@ -27,24 +27,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
 
-      - name: Build wheel
+      - name: Build wheel and sdist
         run: |
-          python -m build --wheel --outdir dist
+          python -m build --outdir dist
 
-      - name: Verify wheel
+      - name: Verify dist artifacts
         run: |
-          WHEEL_FILE=$(ls dist/dazpy-*.whl | head -1)
+          WHEEL_FILE=$(ls dist/dazpy-*.whl 2>/dev/null | head -1)
+          SDIST_FILE=$(ls dist/dazpy-*.tar.gz 2>/dev/null | head -1)
           if [ -z "$WHEEL_FILE" ]; then
             echo "Error: wheel not found in dist/"
             exit 1
           fi
-          echo "Wheel built successfully: $WHEEL_FILE"
-          ls -lh "$WHEEL_FILE"
+          if [ -z "$SDIST_FILE" ]; then
+            echo "Error: sdist not found in dist/"
+            exit 1
+          fi
+          echo "Artifacts built successfully:"
+          ls -lh dist/
 
-      - name: Upload wheel artifact
+      - name: Upload dist artifact
         id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: dazpy-wheel
-          path: dist/*.whl
+          name: dazpy-dist
+          path: dist/
           if-no-files-found: error
