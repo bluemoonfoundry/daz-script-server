@@ -84,6 +84,7 @@ from ._render_api import (
     render_variants,
 )
 from .exceptions import RenderError
+from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
 __all__ = [
@@ -156,5 +157,8 @@ __all__ = [
     "RenderError",
     "render",
     "render_variants",
+    "SceneEvent",
+    "watch_scene_events",
+    "wait_for_scene_event",
     "exceptions",
 ]

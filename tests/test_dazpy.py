@@ -18,6 +18,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from dazpy._result import ExecutionResult
 from dazpy._script_builder import ScriptBuilder
 from dazpy._batch import Batch
+from dazpy._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
+from dazpy.exceptions import ConnectionError as DazConnectionError
+from dazpy.exceptions import TimeoutError as DazTimeoutError
 from dazpy import (
     AnchorTarget,
     AxisLimit,
@@ -4239,6 +4242,100 @@ class TestDazViewport(unittest.TestCase):
         vp, client = self._make_viewport(return_value=None)
         result = vp.capture(path)
         self.assertEqual(result, path)
+
+
+class _FakeSSEResponse:
+    """Minimal stand-in for a streaming requests.Response over /scene/events."""
+
+    def __init__(self, frames):
+        # frames: list of raw SSE frame strings, e.g. 'data: {"type":"node.added",...}'
+        body = "\n\n".join(frames) + "\n\n" if frames else ""
+        self._chunks = [body.encode("utf-8")]
+        self.closed = False
+
+    def iter_content(self, chunk_size=None):
+        for chunk in self._chunks:
+            yield chunk
+
+    def close(self):
+        self.closed = True
+
+
+class TestSceneEvents(unittest.TestCase):
+    def _events_json(self, *pairs):
+        return [
+            f'data: {json.dumps({"type": t, "ts": 1000, "data": d})}'
+            for t, d in pairs
+        ]
+
+    def test_watch_scene_events_parses_frames(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(
+                ("node.added", {"node_name": "Genesis9"}),
+                ("selection.list_changed", {}),
+            )
+        )
+        events = list(watch_scene_events(client))
+        self.assertEqual(len(events), 2)
+        self.assertIsInstance(events[0], SceneEvent)
+        self.assertEqual(events[0].type, "node.added")
+        self.assertEqual(events[0].data, {"node_name": "Genesis9"})
+        self.assertEqual(events[1].type, "selection.list_changed")
+
+    def test_watch_scene_events_skips_keepalive_comments(self):
+        client = MagicMock()
+        frames = [":keepalive"] + self._events_json(("scene.loaded", {}))
+        client.stream_scene_events.return_value = _FakeSSEResponse(frames)
+        events = list(watch_scene_events(client))
+        self.assertEqual([e.type for e in events], ["scene.loaded"])
+
+    def test_watch_scene_events_filters_by_event_types(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(
+                ("node.added", {}),
+                ("node.removed", {}),
+                ("light.added", {}),
+            )
+        )
+        events = list(watch_scene_events(client, event_types={"node.removed"}))
+        self.assertEqual([e.type for e in events], ["node.removed"])
+
+    def test_watch_scene_events_closes_response(self):
+        client = MagicMock()
+        resp = _FakeSSEResponse(self._events_json(("scene.loaded", {})))
+        client.stream_scene_events.return_value = resp
+        list(watch_scene_events(client))
+        self.assertTrue(resp.closed)
+
+    def test_watch_scene_events_raises_connection_error_when_stream_unavailable(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = None
+        with self.assertRaises(DazConnectionError):
+            list(watch_scene_events(client))
+
+    def test_wait_for_scene_event_returns_matching_event(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(
+                ("node.added", {"node_name": "A"}),
+                ("node.added", {"node_name": "B"}),
+            )
+        )
+        event = wait_for_scene_event(client, "node.added", timeout=5.0)
+        self.assertEqual(event.data, {"node_name": "A"})
+        # Category should be derived from the event type for server-side filtering.
+        _, kwargs = client.stream_scene_events.call_args
+        self.assertEqual(kwargs["categories"], ["node"])
+
+    def test_wait_for_scene_event_times_out_when_stream_ends_without_match(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(("scene.loaded", {}))
+        )
+        with self.assertRaises(DazTimeoutError):
+            wait_for_scene_event(client, "node.added", timeout=1.0)
 
 
 if __name__ == "__main__":

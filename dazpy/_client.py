@@ -445,6 +445,40 @@ class DazClient:
         except _requests.exceptions.RequestException:
             return None
 
+    def stream_scene_events(
+        self,
+        categories: "list[str] | None" = None,
+        stream_timeout: "float | None" = None,
+    ) -> "object | None":
+        """Open the SSE stream for general scene-change events (GET /scene/events).
+
+        Args:
+            categories: Optional subset of event categories to subscribe to
+                (``"node"``, ``"skeleton"``, ``"light"``, ``"camera"``,
+                ``"selection"``, ``"scene"``, ``"time"``, ``"render"``).
+                ``None`` (default) subscribes to all categories.
+            stream_timeout: Socket timeout in seconds. ``None`` (default)
+                waits indefinitely — the server sends a keepalive comment
+                every 15 seconds, so the connection never idles out.
+
+        Returns:
+            A streaming :class:`requests.Response` on success, or ``None``
+            if the endpoint is unavailable. Callers must close the response
+            when done (e.g. via a ``with`` statement).
+        """
+        try:
+            params = {"filter": ",".join(categories)} if categories else None
+            resp = _requests.get(
+                f"{self._base}/scene/events",
+                headers=self._headers,
+                params=params,
+                stream=True,
+                timeout=stream_timeout,
+            )
+            return resp if resp.status_code == 200 else None
+        except _requests.exceptions.RequestException:
+            return None
+
     # ── USD export ────────────────────────────────────────────────────────────
 
     def export_usd_submit(
