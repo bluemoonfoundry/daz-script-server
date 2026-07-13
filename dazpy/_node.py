@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from ._material import DazMaterial
     from ._modifier import DazModifier
     from ._morph import DazMorph
+    from ._dforce import DazDForce
 
 
 @dataclass
@@ -167,6 +168,17 @@ class DazNode(DazElement):
         names = self._client.execute(script).value or []
         return [DazNode(self._client, NodeIdentifier(n)) for n in names]
 
+    @staticmethod
+    def _modifier_class_for(class_name: str):
+        from ._modifier import DazModifier
+        from ._morph import DazMorph
+        from ._dforce import DazDForce
+        if class_name == "DzMorph":
+            return DazMorph
+        if class_name == "DzDForceModifier":
+            return DazDForce
+        return DazModifier
+
     def _modifier_locator(self, modifier_name: str) -> str:
         return (
             f"(function(){{"
@@ -183,8 +195,6 @@ class DazNode(DazElement):
             A list of :class:`~dazpy.DazMorph` and :class:`~dazpy.DazModifier`
             instances.
         """
-        from ._modifier import DazModifier
-        from ._morph import DazMorph
         script = ScriptBuilder.node_body(
             self._identifier,
             """
@@ -202,10 +212,8 @@ class DazNode(DazElement):
         result = []
         for item in items:
             loc = self._modifier_locator(item["name"])
-            if item["className"] == "DzMorph":
-                result.append(DazMorph(self._client, loc))
-            else:
-                result.append(DazModifier(self._client, loc))
+            cls = self._modifier_class_for(item["className"])
+            result.append(cls(self._client, loc))
         return result
 
     def find_modifier(self, name: str) -> "DazModifier | None":
@@ -218,8 +226,6 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
             ``None`` if not found.
         """
-        from ._modifier import DazModifier
-        from ._morph import DazMorph
         script = ScriptBuilder.node_body(
             self._identifier,
             f"""
@@ -233,9 +239,7 @@ class DazNode(DazElement):
         if result is None:
             return None
         loc = self._modifier_locator(result["name"])
-        if result["className"] == "DzMorph":
-            return DazMorph(self._client, loc)
-        return DazModifier(self._client, loc)
+        return self._modifier_class_for(result["className"])(self._client, loc)
 
     def _material_locator(self, material_name: str) -> str:
         return (
@@ -309,8 +313,6 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
             ``None`` if no modifier with that label exists.
         """
-        from ._modifier import DazModifier
-        from ._morph import DazMorph
         script = ScriptBuilder.node_body(
             self._identifier,
             f"""
@@ -329,9 +331,7 @@ class DazNode(DazElement):
         if result is None:
             return None
         loc = self._modifier_locator(result["name"])
-        if result["className"] == "DzMorph":
-            return DazMorph(self._client, loc)
-        return DazModifier(self._client, loc)
+        return self._modifier_class_for(result["className"])(self._client, loc)
 
     def find_property(self, name: str) -> "DazProperty | None":  # noqa: F821
         """Find a node-level property by its internal name.
@@ -388,6 +388,11 @@ class DazNode(DazElement):
         """Return only the morph modifiers on this node (convenience filter)."""
         from ._morph import DazMorph
         return [m for m in self.modifiers() if isinstance(m, DazMorph)]
+
+    def dforce_modifiers(self) -> list["DazDForce"]:
+        """Return only the dForce simulation modifiers on this node (convenience filter)."""
+        from ._dforce import DazDForce
+        return [m for m in self.modifiers() if isinstance(m, DazDForce)]
 
     def set_rotation(self, x: float, y: float, z: float) -> None:
         """Set the world-space rotation using Euler angles in degrees.

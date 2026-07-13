@@ -25,6 +25,7 @@ from ._light import DazLight
 from ._material import DazMaterial
 from ._modifier import DazModifier
 from ._morph import DazMorph
+from ._dforce import DazDForce
 from ._geometry import DazGeometry
 from ._render import DazRenderSettings
 from ._viewport import DazViewport
@@ -97,6 +98,7 @@ __all__ = [
     "DazMaterial",
     "DazModifier",
     "DazMorph",
+    "DazDForce",
     "DazGeometry",
     "DazRenderSettings",
     "DazViewport",

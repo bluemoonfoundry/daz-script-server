@@ -656,3 +656,75 @@ class DazScene:
         """
         script = ScriptBuilder.iife("App.getUndoStack().redo();")
         self._client.execute(script)
+
+    # ── dForce simulation ──────────────────────────────────────────────────────
+
+    def is_simulating(self) -> bool:
+        """Return ``True`` if a dForce simulation is currently running."""
+        script = ScriptBuilder.iife("return App.getSimulationMgr().isSimulating();")
+        return bool(self._client.execute(script).value)
+
+    def clear_dforce_simulation(self) -> None:
+        """Discard all cached dForce simulation data for the active engine."""
+        script = ScriptBuilder.iife("App.getSimulationMgr().clearSimulation();")
+        self._client.execute(script)
+
+    def run_dforce_simulation(
+        self,
+        nodes: list[DazNode] | None = None,
+        *,
+        wait: bool = True,
+        timeout: float = 300.0,
+    ) -> str | None:
+        """Run a dForce simulation using the active simulation engine.
+
+        Args:
+            nodes: Optional subset of nodes to simulate via
+                ``DzSimulationEngine.customSimulate()``. ``None`` (default)
+                simulates the whole scene via ``DzSimulationMgr.simulate()``,
+                which follows the frame range configured in the Simulation
+                Settings pane.
+            wait: If ``True`` (default), block until the simulation finishes,
+                using the async execute-and-poll endpoint since dForce runs can
+                take minutes. If ``False``, submit the job and return
+                immediately.
+            timeout: Maximum seconds to wait when *wait* is ``True``.
+
+        Returns:
+            ``None`` when *wait* is ``True`` (the simulation already finished
+            by the time this call returns). When *wait* is ``False``, the
+            ``request_id`` of the submitted async job — poll it with
+            :meth:`~dazpy.DazClient.get_request_status` /
+            :meth:`~dazpy.DazClient.get_request_result`.
+
+        Raises:
+            :class:`~dazpy.exceptions.ScriptRuntimeError`: If the simulation
+                engine reports an error.
+        """
+        if nodes:
+            node_exprs = ",".join(ScriptBuilder.find_node_expr(n._identifier) for n in nodes)
+            body = f"""
+                var mgr = App.getSimulationMgr();
+                var engine = mgr.getActiveSimulationEngine();
+                if (!engine) return {{"error": "no_active_engine"}};
+                var err = engine.customSimulate([{node_exprs}]);
+                return {{"error": err ? String(err) : null}};
+            """
+        else:
+            body = """
+                var mgr = App.getSimulationMgr();
+                var err = mgr.simulate();
+                return {"error": err ? String(err) : null};
+            """
+        script = ScriptBuilder.iife(body)
+
+        if not wait:
+            return self._client.execute_async_submit(script)
+
+        from ._polling import execute_long
+        from .exceptions import ScriptRuntimeError
+        result = execute_long(self._client, script, timeout=timeout)
+        data = result.value or {}
+        if data.get("error"):
+            raise ScriptRuntimeError(f"dForce simulation failed: {data['error']}")
+        return None

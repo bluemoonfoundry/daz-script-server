@@ -21,6 +21,7 @@ from dazpy import (
     DazBone,
     DazCamera,
     DazClient,
+    DazDForce,
     DazGeometry,
     DazMaterial,
     DazModifier,
@@ -918,6 +919,73 @@ class TestDazNodeModifiers(unittest.TestCase):
         # find_modifier uses the internal name, not label — get it from the locator
         # Instead just verify modifier_label is a string on the returned object
         self.assertIsInstance(name_to_find, str)
+
+
+@skip_no_daz
+class TestDazNodeDForceModifiers(unittest.TestCase):
+    """Tests for node.dforce_modifiers() — requires a scene with a dForce garment/hair."""
+
+    @classmethod
+    def setUpClass(cls):
+        client = _client()
+        scene = DazScene(client)
+        cls.client = client
+        cls.dforce = None
+        for node in scene.nodes():
+            mods = node.dforce_modifiers()
+            if mods:
+                cls.dforce = mods[0]
+                break
+
+    def setUp(self):
+        if self.dforce is None:
+            self.skipTest("No DzDForceModifier found in scene")
+
+    def test_dforce_modifier_is_daz_dforce_instance(self):
+        self.assertIsInstance(self.dforce, DazDForce)
+
+    def test_dforce_modifier_is_also_daz_modifier(self):
+        self.assertIsInstance(self.dforce, DazModifier)
+
+    def test_freeze_simulation_is_boolean(self):
+        val = self.dforce.freeze_simulation
+        self.assertIsInstance(val, bool)
+
+    def test_freeze_unfreeze_roundtrip(self):
+        original = self.dforce.freeze_simulation
+        self.dforce.freeze()
+        self.assertTrue(self.dforce.freeze_simulation)
+        self.dforce.unfreeze()
+        self.assertFalse(self.dforce.freeze_simulation)
+        if original:
+            self.dforce.freeze()
+
+
+@skip_if_down
+@skip_no_daz
+class TestDazSceneDForceSimulation(unittest.TestCase):
+    """Tests for DazScene simulation control — DzSimulationMgr-backed methods."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = _client()
+        cls.scene = DazScene(cls.client)
+
+    def test_is_simulating_returns_bool(self):
+        self.assertIsInstance(self.scene.is_simulating(), bool)
+
+    def test_clear_dforce_simulation_does_not_raise(self):
+        self.scene.clear_dforce_simulation()
+
+    def test_run_dforce_simulation_wait_false_returns_request_id(self):
+        request_id = self.scene.run_dforce_simulation(wait=False)
+        self.assertIsInstance(request_id, str)
+        self.assertTrue(request_id)
+        # Give the engine a moment then clear so we don't leave a simulation running.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and self.scene.is_simulating():
+            time.sleep(0.5)
+        self.scene.clear_dforce_simulation()
 
 
 @skip_if_down

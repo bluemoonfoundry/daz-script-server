@@ -1640,6 +1640,63 @@ class TestDazNodeModifierMethods(unittest.TestCase):
         self.assertIn("MyMorph", loc)
         self.assertIn("getObject", loc)
 
+    def test_find_modifier_returns_daz_dforce_when_class_is_dzdforcemodifier(self):
+        from dazpy._dforce import DazDForce
+        client = _make_client({"name": "MyCloth", "className": "DzDForceModifier"})
+        node = DazNode(client, NodeIdentifier("Genesis9"))
+        mod = node.find_modifier("MyCloth")
+        self.assertIsInstance(mod, DazDForce)
+
+    def test_dforce_modifiers_filters_to_only_dzdforcemodifier(self):
+        from dazpy._dforce import DazDForce
+        client = _make_client([
+            {"name": "SomeMod", "className": "DzSubDivisionModifier"},
+            {"name": "MyMorph", "className": "DzMorph"},
+            {"name": "MyCloth", "className": "DzDForceModifier"},
+        ])
+        node = DazNode(client, NodeIdentifier("Genesis9"))
+        mods = node.dforce_modifiers()
+        self.assertEqual(len(mods), 1)
+        self.assertIsInstance(mods[0], DazDForce)
+
+
+class TestDazDForceScriptGeneration(unittest.TestCase):
+    def _make_dforce(self, return_value=None):
+        from dazpy._dforce import DazDForce
+        client = _make_client(return_value)
+        locator = 'Scene.findNode("Genesis9").getObject().findModifier("MyCloth")'
+        mod = DazDForce(client, locator)
+        return mod, client
+
+    def test_freeze_simulation_getter_calls_findPropertyByLabel(self):
+        mod, client = self._make_dforce(True)
+        val = mod.freeze_simulation
+        self.assertTrue(val)
+        script = client.execute.call_args[0][0]
+        self.assertIn("findPropertyByLabel", script)
+        self.assertIn("Freeze Simulation", script)
+
+    def test_freeze_simulation_setter_calls_setValue(self):
+        mod, client = self._make_dforce(None)
+        mod.freeze_simulation = True
+        script = client.execute.call_args[0][0]
+        self.assertIn("setValue", script)
+        self.assertIn("true", script)
+
+    def test_freeze_sets_freeze_simulation_true(self):
+        mod, client = self._make_dforce(None)
+        mod.freeze()
+        script = client.execute.call_args[0][0]
+        self.assertIn("Freeze Simulation", script)
+        self.assertIn("true", script)
+
+    def test_unfreeze_sets_freeze_simulation_false(self):
+        mod, client = self._make_dforce(None)
+        mod.unfreeze()
+        script = client.execute.call_args[0][0]
+        self.assertIn("Freeze Simulation", script)
+        self.assertIn("false", script)
+
 
 class TestDazMaterialScriptGeneration(unittest.TestCase):
     def _make_material(self, return_value=None):
@@ -2121,6 +2178,72 @@ class TestDazSceneIO(unittest.TestCase):
         script = scene._client.execute.call_args[0][0]
         self.assertIn("loopPlayback", script)
         self.assertIn("false", script)
+
+
+class TestDazSceneDForceSimulation(unittest.TestCase):
+    def _scene(self, return_value=None):
+        return DazScene(_make_client(return_value))
+
+    def test_is_simulating_true(self):
+        scene = self._scene(True)
+        self.assertTrue(scene.is_simulating())
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("getSimulationMgr", script)
+        self.assertIn("isSimulating", script)
+
+    def test_is_simulating_false(self):
+        scene = self._scene(False)
+        self.assertFalse(scene.is_simulating())
+
+    def test_clear_dforce_simulation_calls_clearSimulation(self):
+        scene = self._scene(None)
+        scene.clear_dforce_simulation()
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("getSimulationMgr", script)
+        self.assertIn("clearSimulation", script)
+
+    def test_run_dforce_simulation_wait_false_submits_async(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-123"
+        request_id = scene.run_dforce_simulation(wait=False)
+        self.assertEqual(request_id, "req-123")
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("getSimulationMgr", script)
+        self.assertIn("mgr.simulate()", script)
+
+    def test_run_dforce_simulation_with_nodes_uses_customSimulate(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-456"
+        node = DazNode(scene._client, NodeIdentifier("Skirt"))
+        scene.run_dforce_simulation(nodes=[node], wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("customSimulate", script)
+        self.assertIn("getActiveSimulationEngine", script)
+        self.assertIn("Skirt", script)
+
+    def test_run_dforce_simulation_wait_true_returns_none_on_success(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-789"
+        scene._client.get_request_result.return_value = {
+            "success": True,
+            "result": {"error": None},
+            "output": [],
+            "duration_ms": 12.0,
+        }
+        result = scene.run_dforce_simulation(wait=True)
+        self.assertIsNone(result)
+
+    def test_run_dforce_simulation_wait_true_raises_on_engine_error(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-999"
+        scene._client.get_request_result.return_value = {
+            "success": True,
+            "result": {"error": "DZ_ERROR_SOMETHING"},
+            "output": [],
+            "duration_ms": 12.0,
+        }
+        with self.assertRaises(exceptions.ScriptRuntimeError):
+            scene.run_dforce_simulation(wait=True)
 
 
 class TestDazLightScriptGeneration(unittest.TestCase):
