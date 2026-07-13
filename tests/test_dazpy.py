@@ -398,13 +398,13 @@ class TestDazScene(unittest.TestCase):
         self.assertIsInstance(camera, DazCamera)
         self.assertEqual(camera._identifier.value, "Camera")
 
-    def test_create_camera_script_uses_basic_camera_and_add_camera(self):
+    def test_create_camera_script_uses_basic_camera_and_add_node(self):
         client = _make_client("Camera")
         scene = DazScene(client)
         scene.create_camera()
         script = client.execute.call_args[0][0]
         self.assertIn("new DzBasicCamera()", script)
-        self.assertIn("Scene.addCamera(cam)", script)
+        self.assertIn("Scene.addNode(cam)", script)
 
     def test_create_camera_with_name_sets_name(self):
         client = _make_client("MyCam")
@@ -433,7 +433,7 @@ class TestDazScene(unittest.TestCase):
             scene.create_light(light_type)
             script = client.execute.call_args[0][0]
             self.assertIn(f"new {class_name}()", script)
-            self.assertIn("Scene.addLight(light)", script)
+            self.assertIn("Scene.addNode(light)", script)
 
     def test_create_light_with_name_sets_name(self):
         client = _make_client("Key Light")
@@ -2074,6 +2074,52 @@ class TestDazNodeAdditionalQueries(unittest.TestCase):
         node, client = self._node(None)
         result = node.bounding_box()
         self.assertIsNone(result)
+
+
+class TestDazNodeDeleteAndReparent(unittest.TestCase):
+    def _node(self, return_value=None):
+        client = _make_client(return_value)
+        return DazNode(client, NodeIdentifier("Prop1")), client
+
+    def test_delete_calls_scene_remove_node(self):
+        node, client = self._node(True)
+        result = node.delete()
+        self.assertTrue(result)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.removeNode(_node)", script)
+
+    def test_delete_returns_false_when_server_returns_falsy(self):
+        node, client = self._node(False)
+        self.assertFalse(node.delete())
+
+    def test_reparent_calls_remove_and_add_node_child(self):
+        node, client = self._node(None)
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        node.reparent(new_parent)
+        script = client.execute.call_args[0][0]
+        self.assertIn("removeNodeChild(_node, true)", script)
+        self.assertIn("addNodeChild(_node, true)", script)
+        self.assertIn('Scene.findNode("NewParent")', script)
+        self.assertIn("_err.valueOf()", script)
+
+    def test_reparent_preserve_world_transform_false_uses_false_flag(self):
+        node, client = self._node(None)
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        node.reparent(new_parent, preserve_world_transform=False)
+        script = client.execute.call_args[0][0]
+        self.assertIn("removeNodeChild(_node, false)", script)
+        self.assertIn("addNodeChild(_node, false)", script)
+
+    def test_reparent_raises_on_error_result(self):
+        node, client = self._node("some dz error")
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        with self.assertRaises(exceptions.ScriptRuntimeError):
+            node.reparent(new_parent)
+
+    def test_reparent_succeeds_when_result_is_none(self):
+        node, client = self._node(None)
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        node.reparent(new_parent)  # should not raise
 
 
 

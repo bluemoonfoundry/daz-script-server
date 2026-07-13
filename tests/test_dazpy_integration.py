@@ -395,6 +395,47 @@ class TestDazNodeOnFirstNode(unittest.TestCase):
             self.assertIsInstance(s[key], (int, float))
 
 
+@skip_if_down
+@skip_no_daz
+class TestDazNodeDeleteAndReparent(unittest.TestCase):
+    """Uses create_camera() to make disposable nodes so real scene content is untouched."""
+
+    def setUp(self):
+        self.scene = _scene()
+
+    def test_delete_removes_node_from_scene(self):
+        cam = self.scene.create_camera(name="_test_delete_camera")
+        before = self.scene.num_nodes()
+        result = cam.delete()
+        self.assertTrue(result)
+        self.assertEqual(self.scene.num_nodes(), before - 1)
+
+    def test_delete_nonexistent_node_returns_false(self):
+        node = DazNode(self.scene._client, NodeIdentifier("__this_node_should_never_exist_xyz__"))
+        self.assertFalse(node.delete())
+
+    def test_reparent_moves_node_under_new_parent(self):
+        parent = self.scene.create_camera(name="_test_reparent_parent")
+        child = self.scene.create_camera(name="_test_reparent_child")
+        try:
+            child.reparent(parent)
+            self.assertIn(child.name, [c.name for c in parent.children])
+        finally:
+            child.delete()
+            parent.delete()
+
+    def test_reparent_preserve_world_transform_false(self):
+        parent = self.scene.create_camera(name="_test_reparent_parent2")
+        child = self.scene.create_camera(name="_test_reparent_child2")
+        try:
+            child.set_position(5, 5, 5)
+            child.reparent(parent, preserve_world_transform=False)
+            self.assertIn(child.name, [c.name for c in parent.children])
+        finally:
+            child.delete()
+            parent.delete()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. Batch
 # ══════════════════════════════════════════════════════════════════════════════

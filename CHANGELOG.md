@@ -11,6 +11,10 @@ All notable changes to DazScript Server are documented here.
   returning `DazCamera`/`DazLight` wrappers usable with the rest of the
   existing API (`set_position`, `aim_at`, `set_color`, etc). `create_light()`
   accepts `"spot"`, `"point"`, or `"distant"`.
+- **`DazNode.delete()` / `DazNode.reparent()`** — remove a node from the
+  scene entirely, or move it to a new parent in the hierarchy via the
+  `removeNodeChild`/`addNodeChild` pattern, optionally preserving its
+  world-space transform (`preserve_world_transform=True` by default).
 
 ### Fixed
 

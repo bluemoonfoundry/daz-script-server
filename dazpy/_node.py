@@ -168,6 +168,54 @@ class DazNode(DazElement):
         names = self._client.execute(script).value or []
         return [DazNode(self._client, NodeIdentifier(n)) for n in names]
 
+    def delete(self) -> bool:
+        """Remove this node from the scene entirely.
+
+        Returns:
+            ``True`` if the node was found and removed, ``False`` otherwise.
+        """
+        script = ScriptBuilder.node_body(self._identifier, "return Scene.removeNode(_node);")
+        return bool(self._client.execute(script).value)
+
+    def reparent(self, new_parent: "DazNode", *, preserve_world_transform: bool = True) -> None:
+        """Move this node to a new position in the scene hierarchy.
+
+        Detaches the node from its current parent (if any) and attaches it
+        as a child of *new_parent*, following the ``removeNodeChild`` /
+        ``addNodeChild`` DazScript pattern.
+
+        Args:
+            new_parent: The node to reparent under.
+            preserve_world_transform: When ``True`` (default), the node keeps
+                its current world-space position/rotation/scale, adjusting
+                its local transform to compensate. When ``False``, the
+                node's local transform values are left unchanged, which may
+                move it in world space.
+
+        Raises:
+            :class:`~dazpy.exceptions.ScriptRuntimeError`: If the reparent
+                operation fails (e.g. *new_parent* cannot be found, or would
+                create a cycle).
+        """
+        from .exceptions import ScriptRuntimeError
+        parent_expr = ScriptBuilder.find_node_expr(new_parent._identifier)
+        in_place = "true" if preserve_world_transform else "false"
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"""
+            var _newParent = {parent_expr};
+            if (!_newParent) return "new parent not found";
+            var _oldParent = _node.getNodeParent();
+            if (_oldParent) _oldParent.removeNodeChild(_node, {in_place});
+            var _err = _newParent.addNodeChild(_node, {in_place});
+            var _errNum = _err ? _err.valueOf() : 0;
+            return _errNum !== 0 ? ("DzError code " + _errNum) : null;
+            """
+        )
+        result = self._client.execute(script).value
+        if result:
+            raise ScriptRuntimeError(f"reparent failed: {result}")
+
     @staticmethod
     def _modifier_class_for(class_name: str):
         from ._modifier import DazModifier

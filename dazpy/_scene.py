@@ -188,7 +188,7 @@ class DazScene:
         script = ScriptBuilder.iife(f"""
             var cam = new DzBasicCamera();
             if ({name_expr} !== null) cam.setName({name_expr});
-            Scene.addCamera(cam);
+            Scene.addNode(cam);
             return cam.getName();
         """)
         created_name = self._client.execute(script).value
@@ -219,7 +219,7 @@ class DazScene:
         script = ScriptBuilder.iife(f"""
             var light = new {class_name}();
             if ({name_expr} !== null) light.setName({name_expr});
-            Scene.addLight(light);
+            Scene.addNode(light);
             return light.getName();
         """)
         created_name = self._client.execute(script).value
