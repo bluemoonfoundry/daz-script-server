@@ -9,6 +9,21 @@ from ._script_builder import ScriptBuilder
 # Render options: mgr.getRenderOptions() → DzRenderOptions
 # imageSize is a QSize value type — read via .width/.height, write back by
 # calling setWidth/setHeight on the copy then reassigning opts.imageSize.
+#
+# Iray-specific quality/samples settings (Max Samples, Max Time, Rendering
+# Quality, ...) are not exposed on DzRenderOptions or DzIrayRenderer directly
+# — they live on the active renderer's property holder:
+# mgr.getActiveRenderer().getPropertyHolder().findProperty("Max Samples").
+# Confirmed against a live DAZ Studio instance; property names match the
+# labels shown in the Render Settings pane's Advanced tab.
+
+# (max_samples, max_time_secs, quality, quality_enable)
+_QUALITY_PRESETS = {
+    "draft":   {"max_samples": 100,  "max_time": 300,  "quality_enable": False},
+    "preview": {"max_samples": 500,  "max_time": 900,  "quality_enable": True, "quality": 2.0},
+    "good":    {"max_samples": 1500, "max_time": 3600, "quality_enable": True, "quality": 1.0},
+    "final":   {"max_samples": 5000, "max_time": 7200, "quality_enable": True, "quality": 1.0},
+}
 
 
 class DazRenderSettings:
@@ -17,6 +32,28 @@ class DazRenderSettings:
 
     def _render_mgr(self) -> str:
         return "App.getRenderMgr()"
+
+    def _iray_property_holder(self) -> str:
+        return f"{self._render_mgr()}.getActiveRenderer().getPropertyHolder()"
+
+    def _get_iray_property(self, name: str):
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_property_holder()};
+            if (!holder) return null;
+            var p = holder.findProperty({json.dumps(name)});
+            return p ? p.getValue() : null;
+        """)
+        return self._client.execute(script).value
+
+    def _set_iray_property(self, name: str, value: object) -> None:
+        serialized = ScriptBuilder.serialize_arg(value)
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_property_holder()};
+            if (!holder) return;
+            var p = holder.findProperty({json.dumps(name)});
+            if (p) p.setValue({serialized});
+        """)
+        self._client.execute(script)
 
     def is_available(self) -> bool:
         """Return True if the render manager is accessible."""
@@ -183,3 +220,55 @@ class DazRenderSettings:
             return mgr.hasRender();
         """)
         return bool(self._client.execute(script).value)
+
+    @property
+    def max_samples(self) -> int | None:
+        """Iray progressive rendering sample cap (``Max Samples`` in the Advanced tab)."""
+        result = self._get_iray_property("Max Samples")
+        return None if result is None else int(result)
+
+    @max_samples.setter
+    def max_samples(self, value: int) -> None:
+        self._set_iray_property("Max Samples", int(value))
+
+    @property
+    def max_time_secs(self) -> int | None:
+        """Iray progressive rendering time cap in seconds (``Max Time`` in the Advanced tab)."""
+        result = self._get_iray_property("Max Time")
+        return None if result is None else int(result)
+
+    @max_time_secs.setter
+    def max_time_secs(self, value: int) -> None:
+        self._set_iray_property("Max Time", int(value))
+
+    @property
+    def quality(self) -> float | None:
+        """Iray ``Rendering Quality`` convergence target (higher converges further)."""
+        result = self._get_iray_property("Rendering Quality")
+        return None if result is None else float(result)
+
+    @quality.setter
+    def quality(self, value: float) -> None:
+        self._set_iray_property("Rendering Quality", float(value))
+
+    def set_quality_preset(self, preset: str) -> None:
+        """Apply a named Iray quality preset, controlling sample count and render time.
+
+        Args:
+            preset: One of ``"draft"``, ``"preview"``, ``"good"``, ``"final"``
+                (fastest/lowest quality to slowest/highest quality).
+
+        Raises:
+            ValueError: If *preset* is not a recognized preset name.
+        """
+        settings = _QUALITY_PRESETS.get(preset)
+        if settings is None:
+            raise ValueError(
+                f"Unknown quality preset {preset!r}; expected one of "
+                f"{sorted(_QUALITY_PRESETS)}"
+            )
+        self._set_iray_property("Max Samples", settings["max_samples"])
+        self._set_iray_property("Max Time", settings["max_time"])
+        self._set_iray_property("Rendering Quality Enable", settings["quality_enable"])
+        if "quality" in settings:
+            self._set_iray_property("Rendering Quality", settings["quality"])

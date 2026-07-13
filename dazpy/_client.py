@@ -228,6 +228,25 @@ class DazClient:
             return {"status": "not_found"}
         return resp.json()
 
+    def list_requests(self, status: str | None = None) -> dict:
+        """List all tracked async requests (script and render) with their status.
+
+        Args:
+            status: Optional filter, one of ``"queued"``, ``"running"``,
+                ``"completed"``, ``"failed"``, ``"cancelled"``. Omit to list
+                requests in every status.
+
+        Returns:
+            A dict with a ``"requests"`` list (each item has ``request_id``,
+            ``status``, ``progress``, ``submitted_at``) plus ``total`` and a
+            per-status count for every status value.
+        """
+        params = {"status": status} if status else None
+        resp = self._get("/requests", params=params)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
     def cancel_request(self, request_id: str) -> bool:
         """Cancel a queued or running async request.
 
