@@ -28,7 +28,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ inputs.architecture == 'arm64' && 'macos-14' || 'macos-13' }}
+    runs-on: ${{ inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     outputs:
       artifact-name: ${{ steps.upload.outputs.artifact-name }}
 
@@ -142,7 +142,7 @@ jobs:
 
       - name: Select Xcode (v6 needs recent libc++/Clang for Qt6)
         if: steps.support.outputs.skip != 'true' && inputs.sdk-version == '6'
-        run: sudo xcode-select -s /Applications/Xcode_15.2.app
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
 
       - name: Cache Qt6
         if: steps.support.outputs.skip != 'true' && inputs.sdk-version == '6'
