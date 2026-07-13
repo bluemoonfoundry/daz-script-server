@@ -166,6 +166,65 @@ class DazScene:
             raise NodeNotFoundError(f"Camera with label not found: {label!r}")
         return DazCamera(self._client, NodeIdentifier(label, kind="label"))
 
+    _LIGHT_TYPE_CLASSES = {
+        "spot": "DzSpotLight",
+        "point": "DzPointLight",
+        "distant": "DzDistantLight",
+    }
+
+    def create_camera(self, name: str | None = None) -> "DazCamera":  # noqa: F821
+        """Create a new basic camera node and add it to the scene.
+
+        Args:
+            name: Optional internal name for the new camera. When omitted,
+                DAZ Studio assigns its default name (e.g. ``"Camera"``,
+                de-duplicated as ``"Camera 2"`` etc.).
+
+        Returns:
+            A :class:`~dazpy.DazCamera` proxy for the newly created camera.
+        """
+        from ._camera import DazCamera
+        name_expr = ScriptBuilder.escape_string(name) if name is not None else "null"
+        script = ScriptBuilder.iife(f"""
+            var cam = new DzBasicCamera();
+            if ({name_expr} !== null) cam.setName({name_expr});
+            Scene.addCamera(cam);
+            return cam.getName();
+        """)
+        created_name = self._client.execute(script).value
+        return DazCamera(self._client, NodeIdentifier(created_name))
+
+    def create_light(self, light_type: str, name: str | None = None) -> "DazLight":  # noqa: F821
+        """Create a new light node and add it to the scene.
+
+        Args:
+            light_type: One of ``"spot"``, ``"point"``, or ``"distant"``.
+            name: Optional internal name for the new light. When omitted,
+                DAZ Studio assigns its default name.
+
+        Returns:
+            A :class:`~dazpy.DazLight` proxy for the newly created light.
+
+        Raises:
+            ValueError: If *light_type* is not a recognised light type.
+        """
+        from ._light import DazLight
+        class_name = self._LIGHT_TYPE_CLASSES.get(light_type)
+        if class_name is None:
+            raise ValueError(
+                f"Unknown light_type {light_type!r}; expected one of "
+                f"{sorted(self._LIGHT_TYPE_CLASSES)}"
+            )
+        name_expr = ScriptBuilder.escape_string(name) if name is not None else "null"
+        script = ScriptBuilder.iife(f"""
+            var light = new {class_name}();
+            if ({name_expr} !== null) light.setName({name_expr});
+            Scene.addLight(light);
+            return light.getName();
+        """)
+        created_name = self._client.execute(script).value
+        return DazLight(self._client, NodeIdentifier(created_name))
+
     def find_light_by_label(self, label: str) -> "DazLight":  # noqa: F821
         """Find a light by its user-visible label.
 

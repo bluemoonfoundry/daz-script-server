@@ -390,6 +390,64 @@ class TestDazScene(unittest.TestCase):
         self.assertEqual(len(transforms), 1)
         self.assertEqual(transforms[0]["name"], "n1")
 
+    def test_create_camera_returns_daz_camera(self):
+        from dazpy._camera import DazCamera
+        client = _make_client("Camera")
+        scene = DazScene(client)
+        camera = scene.create_camera()
+        self.assertIsInstance(camera, DazCamera)
+        self.assertEqual(camera._identifier.value, "Camera")
+
+    def test_create_camera_script_uses_basic_camera_and_add_camera(self):
+        client = _make_client("Camera")
+        scene = DazScene(client)
+        scene.create_camera()
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzBasicCamera()", script)
+        self.assertIn("Scene.addCamera(cam)", script)
+
+    def test_create_camera_with_name_sets_name(self):
+        client = _make_client("MyCam")
+        scene = DazScene(client)
+        scene.create_camera(name="MyCam")
+        script = client.execute.call_args[0][0]
+        self.assertIn('cam.setName("MyCam")', script)
+
+    def test_create_light_returns_daz_light(self):
+        from dazpy._light import DazLight
+        client = _make_client("Spotlight1")
+        scene = DazScene(client)
+        light = scene.create_light("spot")
+        self.assertIsInstance(light, DazLight)
+        self.assertEqual(light._identifier.value, "Spotlight1")
+
+    def test_create_light_script_uses_correct_class_per_type(self):
+        cases = {
+            "spot": "DzSpotLight",
+            "point": "DzPointLight",
+            "distant": "DzDistantLight",
+        }
+        for light_type, class_name in cases.items():
+            client = _make_client("Light1")
+            scene = DazScene(client)
+            scene.create_light(light_type)
+            script = client.execute.call_args[0][0]
+            self.assertIn(f"new {class_name}()", script)
+            self.assertIn("Scene.addLight(light)", script)
+
+    def test_create_light_with_name_sets_name(self):
+        client = _make_client("Key Light")
+        scene = DazScene(client)
+        scene.create_light("point", name="Key Light")
+        script = client.execute.call_args[0][0]
+        self.assertIn('light.setName("Key Light")', script)
+
+    def test_create_light_invalid_type_raises(self):
+        client = _make_client(None)
+        scene = DazScene(client)
+        with self.assertRaises(ValueError):
+            scene.create_light("area")
+
 
 class TestBatch(unittest.TestCase):
     def test_batch_builds_single_script(self):

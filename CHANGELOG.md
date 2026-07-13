@@ -4,6 +4,14 @@ All notable changes to DazScript Server are documented here.
 
 ## [2.7.0] - Unreleased
 
+### Added
+
+- **`DazScene.create_camera()` / `DazScene.create_light()`** — factory
+  methods to create new camera and light nodes and add them to the scene,
+  returning `DazCamera`/`DazLight` wrappers usable with the rest of the
+  existing API (`set_position`, `aim_at`, `set_color`, etc). `create_light()`
+  accepts `"spot"`, `"point"`, or `"distant"`.
+
 ### Fixed
 
 - **`/render` camera selection** — the native render endpoint called

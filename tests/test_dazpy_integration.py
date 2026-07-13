@@ -252,6 +252,25 @@ class TestDazScene(unittest.TestCase):
         for cam in cameras:
             self.assertIsInstance(cam, DazCamera)
 
+    def test_create_camera_adds_camera_to_scene(self):
+        before = self.scene.num_nodes()
+        cam = self.scene.create_camera(name="_test_create_camera")
+        self.assertIsInstance(cam, DazCamera)
+        self.assertEqual(self.scene.num_nodes(), before + 1)
+        cam.set_position(10, 20, 30)
+        self.assertEqual(cam.position, {"x": 10.0, "y": 20.0, "z": 30.0})
+
+    def test_create_light_adds_light_to_scene(self):
+        from dazpy import DazLight
+        before = self.scene.num_nodes()
+        light = self.scene.create_light("point", name="_test_create_light")
+        self.assertIsInstance(light, DazLight)
+        self.assertEqual(self.scene.num_nodes(), before + 1)
+
+    def test_create_light_invalid_type_raises(self):
+        with self.assertRaises(ValueError):
+            self.scene.create_light("__not_a_real_type__")
+
     def test_frame_is_int(self):
         frame = self.scene.frame()
         self.assertIsInstance(frame, int)
