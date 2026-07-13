@@ -2122,6 +2122,38 @@ class TestDazNodeDeleteAndReparent(unittest.TestCase):
         node.reparent(new_parent)  # should not raise
 
 
+class TestDazPropertyKeyframes(unittest.TestCase):
+    def _prop(self, return_value=None):
+        from dazpy._property import DazProperty
+        client = _make_client(return_value)
+        prop = DazProperty(client, "_node", "XRotate")
+        return prop, client
+
+    def test_get_keys_returns_time_value_list(self):
+        prop, client = self._prop([{"time": 0, "value": 0.0}, {"time": 30, "value": 45.0}])
+        keys = prop.get_keys()
+        self.assertEqual(keys, [{"time": 0, "value": 0.0}, {"time": 30, "value": 45.0}])
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumKeys", script)
+        self.assertIn("getKeyTime", script)
+        self.assertIn("getDoubleValue", script)
+
+    def test_get_keys_empty_when_no_keys(self):
+        prop, client = self._prop([])
+        self.assertEqual(prop.get_keys(), [])
+
+    def test_remove_key_calls_delete_keys_with_same_time_twice(self):
+        prop, client = self._prop(None)
+        prop.remove_key(30)
+        script = client.execute.call_args[0][0]
+        self.assertIn("deleteKeys(30, 30)", script)
+
+    def test_clear_keys_calls_delete_all_keys(self):
+        prop, client = self._prop(None)
+        prop.clear_keys()
+        script = client.execute.call_args[0][0]
+        self.assertIn("deleteAllKeys", script)
+
 
 class TestDazSceneSelection(unittest.TestCase):
     def test_selected_nodes_calls_getSelectedNodeList(self):
