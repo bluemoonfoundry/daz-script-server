@@ -331,6 +331,63 @@ class DazClient:
             raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
+    def render_animation_submit(
+        self,
+        output_path: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        frame_padding: int = 4,
+        width: int = 0,
+        height: int = 0,
+        camera: str = "",
+        engine: str = "",
+    ) -> dict:
+        """Submit an animation render job spanning a frame range and return immediately.
+
+        Renders each frame in ``[start_frame, end_frame]`` to a separate file,
+        as a single trackable async request (mirrors :meth:`render_submit`'s
+        request-tracking shape, not :meth:`render_batch_submit`'s fan-out).
+
+        Args:
+            output_path: Output path pattern containing the literal token
+                ``"{frame}"``, e.g. ``r"C:\\tmp\\anim\\frame_{frame}.png"``.
+                The token is replaced with the frame number, zero-padded to
+                *frame_padding* digits.
+            start_frame: First frame to render (inclusive).
+            end_frame: Last frame to render (inclusive).
+            frame_padding: Zero-padding width for the frame number (default ``4``).
+            width: Image width in pixels (must be paired with *height*).
+            height: Image height in pixels (must be paired with *width*).
+            camera: Camera label to render from.
+            engine: Render engine (``"iray"``, ``"3delight"``, ``"filament"``).
+
+        Returns:
+            A dict with ``request_id``, ``status`` (``"queued"``), and
+            ``submitted_at`` keys.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On HTTP 401/403.
+        """
+        payload: dict = {
+            "output_path": output_path,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "frame_padding": frame_padding,
+        }
+        if width and height:
+            payload["width"] = width
+            payload["height"] = height
+        if camera:
+            payload["camera"] = camera
+        if engine:
+            payload["engine"] = engine
+        resp = self._post("/render/animation", payload)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
     def cancel_render(self, request_id: str) -> bool:
         """Cancel a queued or running render job.
 

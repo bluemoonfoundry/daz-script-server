@@ -121,6 +121,7 @@ public slots:
 	                                                const QByteArray& bodyBytes);
 	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
+	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody);
 
 	// Scene I/O helpers — called on main thread via BlockingQueuedConnection.
 	Q_INVOKABLE HttpResult handleSaveCopy(const QByteArray& jsonBody);
@@ -287,9 +288,10 @@ private:
 	std::unique_ptr<AsyncResultHandler>   m_pAsyncResultHandler;
 	std::unique_ptr<AsyncCancelHandler>   m_pAsyncCancelHandler;
 	std::unique_ptr<AsyncListHandler>     m_pAsyncListHandler;
-	std::unique_ptr<RenderHandler>        m_pRenderHandler;
-	std::unique_ptr<RenderBatchHandler>   m_pRenderBatchHandler;
-	std::unique_ptr<RenderCancelHandler>  m_pRenderCancelHandler;
+	std::unique_ptr<RenderHandler>          m_pRenderHandler;
+	std::unique_ptr<RenderBatchHandler>     m_pRenderBatchHandler;
+	std::unique_ptr<RenderAnimationHandler> m_pRenderAnimationHandler;
+	std::unique_ptr<RenderCancelHandler>    m_pRenderCancelHandler;
 	std::unique_ptr<SaveCopyHandler>      m_pSaveCopyHandler;
 
 	// UI widgets

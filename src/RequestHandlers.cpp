@@ -329,6 +329,19 @@ void RenderBatchHandler::handle(HttpContext& ctx)
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
+RenderAnimationHandler::RenderAnimationHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
+
+void RenderAnimationHandler::handle(HttpContext& ctx)
+{
+    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderAnimationEnqueue",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result),
+        Q_ARG(QByteArray, bodyBytes));
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 RenderCancelHandler::RenderCancelHandler(DzScriptServerPane* pane) : m_pPane(pane) {}

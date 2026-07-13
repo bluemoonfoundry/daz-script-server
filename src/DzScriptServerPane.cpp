@@ -888,6 +888,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pAsyncListHandler.reset(new AsyncListHandler(this));
 	m_pRenderHandler.reset(new RenderHandler(this));
 	m_pRenderBatchHandler.reset(new RenderBatchHandler(this));
+	m_pRenderAnimationHandler.reset(new RenderAnimationHandler(this));
 	m_pRenderCancelHandler.reset(new RenderCancelHandler(this));
 	m_pSaveCopyHandler.reset(new SaveCopyHandler(this));
 
@@ -1007,6 +1008,12 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Post("/render/batch", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (m_pBaseExecuteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	m_pServer->Post("/render/animation", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pBaseExecuteChain->run(ctx)) m_pRenderAnimationHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1941,6 +1948,91 @@ static QString buildRenderScript(
     return script;
 }
 
+// Builds the DazScript that loops a frame range, moving the scene's playhead
+// with Scene.setFrame() (confirmed in dzscene.h) and rendering one file per
+// frame. outputPattern must contain the literal token "{frame}", which is
+// replaced with the frame number zero-padded to framePadding digits.
+//
+// Restores the original current frame after the loop so the render doesn't
+// leave the scene's timeline position mutated.
+static QString buildAnimationRenderScript(
+    const QString& outputPattern,
+    int startFrame, int endFrame, int framePadding,
+    int width, int height,
+    const QString& camera,
+    const QString& engine)
+{
+    QString outputPatternEsc = QString::fromStdString(
+        JsonStd::escape(JsonStd::qstrToStd(outputPattern)));
+    QString cameraEsc = camera.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(camera))) + "\"";
+    QString engineEsc = engine.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(engine))) + "\"";
+
+    QString script;
+    script += "(function() {\n";
+    script += "  var outputPattern = \"" + outputPatternEsc + "\";\n";
+    script += "  var startFrame = " + QString::number(startFrame) + ";\n";
+    script += "  var endFrame = " + QString::number(endFrame) + ";\n";
+    script += "  var framePadding = " + QString::number(framePadding) + ";\n";
+    script += "  var cameraName = " + cameraEsc + ";\n";
+    script += "  var engineName = " + engineEsc + ";\n";
+    script += "  var width = " + QString::number(width) + ";\n";
+    script += "  var height = " + QString::number(height) + ";\n\n";
+
+    script +=
+        "  function padFrame(n, width) {\n"
+        "    var s = String(n);\n"
+        "    while (s.length < width) s = \"0\" + s;\n"
+        "    return s;\n"
+        "  }\n\n";
+
+    // ── Configure render options (shared across all frames) ───────────────
+    script +=
+        "  var renderMgr = App.getRenderMgr();\n"
+        "  var opts = renderMgr.getRenderOptions();\n"
+        "  opts.renderImgToId = 2;\n";  // DirectToFile
+    script +=
+        "  if (width > 0) opts.imageSize = new QSize(width, height);\n";
+    script +=
+        "  if (cameraName) {\n"
+        "    var cam = Scene.findCameraByLabel(cameraName);\n"
+        "    if (!cam) return {success: false, error: 'Camera not found: ' + cameraName};\n"
+        "    opts.camera = cam;\n"
+        "    var viewportMgr = MainWindow.getViewportMgr();\n"
+        "    var activeViewport = viewportMgr ? viewportMgr.getActiveViewport() : null;\n"
+        "    if (activeViewport) activeViewport.get3DViewport().setCamera(cam);\n"
+        "  }\n";
+    script +=
+        "  if (engineName) {\n"
+        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"3delight\": \"Dz3DelightRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
+        "    var engineClass = engineMap[engineName.toLowerCase()];\n"
+        "    if (engineClass) {\n"
+        "      var renderer = renderMgr.findRenderer(engineClass);\n"
+        "      if (renderer) renderMgr.setActiveRenderer(renderer);\n"
+        "    }\n"
+        "  }\n\n";
+
+    // ── Render each frame ───────────────────────────────────────────────────
+    script +=
+        "  var originalFrame = Scene.getFrame();\n"
+        "  var outputPaths = [];\n"
+        "  for (var f = startFrame; f <= endFrame; f++) {\n"
+        "    Scene.setFrame(f);\n"
+        "    var framePath = outputPattern.replace('{frame}', padFrame(f, framePadding));\n"
+        "    opts.renderImgFilename = framePath;\n"
+        "    renderMgr.doRender(opts);\n"
+        "    outputPaths.push(framePath);\n"
+        "  }\n"
+        "  Scene.setFrame(originalFrame);\n\n";
+
+    script +=
+        "  return {success: true, frame_count: outputPaths.length, output_paths: outputPaths};\n"
+        "})();\n";
+
+    return script;
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2276,6 +2368,101 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
         .arg(requestIds.size()));
 
     return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+}
+
+HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody)
+{
+    // ── Parse body ────────────────────────────────────────────────────────
+    QVariantMap body;
+    std::string parseErrDetail;
+    if (!JsonStd::parseObject(jsonBody, body, parseErrDetail))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
+
+    // ── Required fields ───────────────────────────────────────────────────
+    QString outputPath = body.value("output_path").toString().trimmed();
+    {
+        ValidationResult vr = RequestValidator::validateRequiredField(outputPath, "output_path");
+        if (!vr.valid)
+            return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
+    }
+    if (!outputPath.contains("{frame}"))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "output_path must contain the literal token {frame}")));
+
+    if (!body.contains("start_frame"))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD, "start_frame")));
+    if (!body.contains("end_frame"))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::MISSING_FIELD, "end_frame")));
+
+    int startFrame = body.value("start_frame").toInt();
+    int endFrame   = body.value("end_frame").toInt();
+    if (startFrame < 0 || endFrame < 0)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "start_frame and end_frame must be non-negative integers")));
+    if (endFrame < startFrame)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "end_frame must be >= start_frame")));
+
+    static const int MAX_ANIMATION_FRAMES = 1000;
+    int frameCount = endFrame - startFrame + 1;
+    if (frameCount > MAX_ANIMATION_FRAMES)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "frame range exceeds maximum of " + std::to_string(MAX_ANIMATION_FRAMES) + " frames")));
+
+    // ── Optional fields ───────────────────────────────────────────────────
+    int framePadding = body.contains("frame_padding") ? body.value("frame_padding").toInt() : 4;
+    if (framePadding < 1 || framePadding > 10)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "frame_padding must be between 1 and 10")));
+
+    int  width  = body.contains("width")  ? body.value("width").toInt()  : 0;
+    int  height = body.contains("height") ? body.value("height").toInt() : 0;
+    QString camera = body.value("camera").toString().trimmed();
+    QString engine = body.value("engine").toString().trimmed();
+
+    if ((width > 0) != (height > 0))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "width and height must both be provided or both omitted")));
+    if (width < 0 || height < 0)
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "width and height must be positive integers")));
+    if (!engine.isEmpty()
+            && engine != "iray" && engine != "3delight" && engine != "filament")
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "engine must be one of: iray, 3delight, filament")));
+
+    // ── Pre-flight: validate camera reference against the current scene ───
+    if (!camera.isEmpty()) {
+        QString validateScript = "(function() {\n"
+            "  return Scene.findCameraByLabel(\""
+            + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(camera)))
+            + "\") ? 'OK' : 'NOT_FOUND';\n"
+            "})()";
+        ensurePersistentScript()->clear();
+        m_pPersistentScript->setCode(validateScript);
+        ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap());
+        if (valRunResult.success && valRunResult.result.toString() == "NOT_FOUND")
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                "Camera not found in scene: " + JsonStd::qstrToStd(camera))));
+    }
+
+    // ── Generate and enqueue animation render job ─────────────────────────
+    QString renderScript = buildAnimationRenderScript(
+        outputPath, startFrame, endFrame, framePadding, width, height, camera, engine);
+
+    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd");
+    if (!sr.accepted)
+        return HttpResult(503, stdToQBA(ErrorResponse::build(
+            ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
+
+    m_pRenderProgress->setOutputPath(sr.id, outputPath);
+
+    appendLog(QString("[%1] [ANIMATION RENDER QUEUED] frames:%2-%3 output:%4 -> %5")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
+        .arg(startFrame).arg(endFrame)
+        .arg(outputPath).arg(sr.id));
+
+    return buildQueuedResponse(sr.id, sr.submittedAt);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
