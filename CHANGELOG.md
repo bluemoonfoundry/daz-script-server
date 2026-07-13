@@ -2,6 +2,24 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.7.0] - Unreleased
+
+### Fixed
+
+- **`/render` camera selection** — the native render endpoint called
+  `App.getViewportMgr()` when a `cameraName` was supplied, which is undefined
+  in this DAZ Studio version and made every camera-targeted render fail
+  immediately with a `TypeError`. Switched to `MainWindow.getViewportMgr()`,
+  matching the pattern already used by `dazpy`'s own render/viewport helpers.
+- **`/render` black output with `cameraName`** — after the above fix, renders
+  submitted with an explicit camera completed without error but produced a
+  black image, because the render camera actually read by `doRender()` comes
+  from `opts.camera`, not the viewport's active camera. The endpoint only
+  updated the viewport (`setActiveCamera`) and never set `opts.camera`, so
+  the renderer used a stale/null camera. Now sets both, matching
+  `dazpy/_render.py` and this repo's own camera-preset scripts. Affects both
+  `/render` and `/render/batch` (they share `buildRenderScript()`).
+
 ## [2.6.0] - 2026-06-27
 
 ### Added

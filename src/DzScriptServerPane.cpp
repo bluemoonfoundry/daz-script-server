@@ -1876,7 +1876,15 @@ static QString buildRenderScript(
     //   renderImgToId       Q_PROPERTY WRITE setRenderImgToId  (2 = DirectToFile)
     //   imageSize           Q_PROPERTY WRITE setImageSize (QSize)
     //   Scene.findCameraByLabel()  confirmed in dzscene.h
-    //   App.getViewportMgr().setActiveCamera()  confirmed in dzviewportmgr.h
+    //   MainWindow.getViewportMgr().getActiveViewport().get3DViewport().setCamera()
+    //     is the verified viewport-camera setter (see dazpy/_viewport.py,
+    //     vangard_daz_mcp/_registry.py's _SET_ACTIVE_CAMERA_SCRIPT). Neither
+    //     App.getViewportMgr() nor DzViewportMgr.setActiveCamera() exist on this
+    //     DAZ Studio version — both throw TypeError; don't reintroduce them.
+    //   opts.camera  is the property doRender() actually reads to pick the render
+    //     camera — setting only the viewport's active camera leaves this stale/null
+    //     and produces a black render. Must set both (see dazpy/_render.py, and
+    //     vangard_daz_mcp/_registry.py's camera-preset/render scripts).
     //   renderMgr.doRender(opts)  confirmed in dzrendermgr.h
     //   Engine switching: renderMgr.setActiveRenderer(DzRenderer*) — requires
     //     renderer lookup by class name; names are runtime-registered so not in
@@ -1897,7 +1905,12 @@ static QString buildRenderScript(
     script +=
         "  if (cameraName) {\n"
         "    var cam = Scene.findCameraByLabel(cameraName);\n"
-        "    if (cam) App.getViewportMgr().setActiveCamera(cam);\n"
+        "    if (cam) {\n"
+        "      opts.camera = cam;\n"
+        "      var viewportMgr = MainWindow.getViewportMgr();\n"
+        "      var activeViewport = viewportMgr ? viewportMgr.getActiveViewport() : null;\n"
+        "      if (activeViewport) activeViewport.get3DViewport().setCamera(cam);\n"
+        "    }\n"
         "  }\n";
 
     // Engine class name map — confirmed: iray="DzIrayRenderer".
