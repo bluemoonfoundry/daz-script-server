@@ -2122,6 +2122,56 @@ class TestDazNodeDeleteAndReparent(unittest.TestCase):
         node.reparent(new_parent)  # should not raise
 
 
+class TestDazNodeFitting(unittest.TestCase):
+    def _node(self, return_value=None):
+        client = _make_client(return_value)
+        return DazNode(client, NodeIdentifier("Outfit")), client
+
+    def test_fit_to_uses_setFollowTarget_when_available(self):
+        node, client = self._node("setFollowTarget")
+        figure = DazNode(client, NodeIdentifier("Genesis9"))
+        method = node.fit_to(figure)
+        self.assertEqual(method, "setFollowTarget")
+        script = client.execute.call_args[0][0]
+        self.assertIn("setFollowTarget(_figure)", script)
+        self.assertIn('Scene.findNode("Genesis9")', script)
+
+    def test_fit_to_raises_when_node_not_found(self):
+        node, client = self._node(None)
+        figure = DazNode(client, NodeIdentifier("Genesis9"))
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            node.fit_to(figure)
+
+    def test_unfit_returns_previous_figure_and_actions(self):
+        node, client = self._node(
+            {"previous_figure": "Genesis9", "actions": ["cleared follow target"]}
+        )
+        result = node.unfit()
+        self.assertEqual(result["previous_figure"], "Genesis9")
+        self.assertEqual(result["actions"], ["cleared follow target"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("setFollowTarget(null)", script)
+        self.assertIn("removeNodeChild(_node, true)", script)
+
+    def test_unfit_returns_defaults_when_server_returns_none(self):
+        node, client = self._node(None)
+        result = node.unfit()
+        self.assertEqual(result, {"previous_figure": None, "actions": []})
+
+    def test_fitted_items_returns_node_list(self):
+        node, client = self._node(["Outfit Top", "Hat"])
+        items = node.fitted_items()
+        self.assertEqual(len(items), 2)
+        self.assertIsInstance(items[0], DazNode)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getFollowTarget", script)
+        self.assertIn("getNodeParent", script)
+
+    def test_fitted_items_empty_when_none_fitted(self):
+        node, client = self._node([])
+        self.assertEqual(node.fitted_items(), [])
+
+
 class TestDazPropertyKeyframes(unittest.TestCase):
     def _prop(self, return_value=None):
         from dazpy._property import DazProperty
