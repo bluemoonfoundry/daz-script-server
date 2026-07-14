@@ -46,6 +46,33 @@ class DazCamera(DazNode):
         self.set_property("Depth of Field", value)
 
     @property
+    def lens_shift_x(self) -> float | None:
+        """Horizontal lens shift in millimetres (read/write).
+
+        Confirmed against a live instance: backed by ``DzCamera``'s
+        "Lens Shift X (mm)" property (``getLensShiftXControl()``), the same
+        value the render engine uses -- needed to match depth-based effects
+        (fog, DOF-driven line weight) to the actual render.
+        """
+        return self.get_property("Lens Shift X (mm)")
+
+    @lens_shift_x.setter
+    def lens_shift_x(self, value: float) -> None:
+        self.set_property("Lens Shift X (mm)", float(value))
+
+    @property
+    def lens_shift_y(self) -> float | None:
+        """Vertical lens shift in millimetres (read/write).
+
+        See :attr:`lens_shift_x`.
+        """
+        return self.get_property("Lens Shift Y (mm)")
+
+    @lens_shift_y.setter
+    def lens_shift_y(self, value: float) -> None:
+        self.set_property("Lens Shift Y (mm)", float(value))
+
+    @property
     def frame_width(self) -> float | None:
         """Sensor / film-gate width in millimetres (read-only)."""
         script = ScriptBuilder.node_body(

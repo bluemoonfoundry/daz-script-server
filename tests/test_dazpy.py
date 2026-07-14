@@ -1030,6 +1030,39 @@ class TestDazCameraScriptGeneration(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("farClippingPlane", script)
 
+    def test_lens_shift_x_getter_uses_property_label(self):
+        client = _make_client(2.5)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.lens_shift_x
+        self.assertEqual(val, 2.5)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift X (mm)", script)
+        self.assertIn("findPropertyByLabel", script)
+
+    def test_lens_shift_x_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.lens_shift_x = -1.5
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift X (mm)", script)
+        self.assertIn("-1.5", script)
+
+    def test_lens_shift_y_getter_uses_property_label(self):
+        client = _make_client(0.0)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.lens_shift_y
+        self.assertEqual(val, 0.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift Y (mm)", script)
+
+    def test_lens_shift_y_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.lens_shift_y = 3.0
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift Y (mm)", script)
+        self.assertIn("3.0", script)
+
     def test_aim_at_generates_DzVec3(self):
         client = _make_client(None)
         cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
