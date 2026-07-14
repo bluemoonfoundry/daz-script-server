@@ -1921,11 +1921,12 @@ static QString buildRenderScript(
         "  }\n";
 
     // Engine class name map — confirmed: iray="DzIrayRenderer".
-    // 3Delight and Filament class names follow the same Dz*Renderer pattern but
-    // need verification on a system with those plugins installed.
+    // Filament class name follows the same Dz*Renderer pattern but needs
+    // verification on a system with that plugin installed. 3Delight is no
+    // longer supported by DAZ Studio and is intentionally excluded.
     script +=
         "  if (engineName) {\n"
-        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"3delight\": \"Dz3DelightRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
+        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
         "    var engineClass = engineMap[engineName.toLowerCase()];\n"
         "    if (engineClass) {\n"
         "      var renderer = renderMgr.findRenderer(engineClass);\n"
@@ -2005,7 +2006,7 @@ static QString buildAnimationRenderScript(
         "  }\n";
     script +=
         "  if (engineName) {\n"
-        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"3delight\": \"Dz3DelightRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
+        "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
         "    var engineClass = engineMap[engineName.toLowerCase()];\n"
         "    if (engineClass) {\n"
         "      var renderer = renderMgr.findRenderer(engineClass);\n"
@@ -2070,9 +2071,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
             "width and height must be positive integers")));
 
     if (!engine.isEmpty()
-            && engine != "iray" && engine != "3delight" && engine != "filament")
+            && engine != "iray" && engine != "filament")
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
-            "engine must be one of: iray, 3delight, filament")));
+            "engine must be one of: iray, filament")));
 
     // ── Normalise figure list ─────────────────────────────────────────────
     // Accept {figure, morphs} single-figure shorthand or {figures:[{name,morphs},...]}
@@ -2252,9 +2253,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
                 viStr + ": width and height must be positive integers")));
         if (!engine.isEmpty()
-                && engine != "iray" && engine != "3delight" && engine != "filament")
+                && engine != "iray" && engine != "filament")
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
-                viStr + ".engine must be one of: iray, 3delight, filament")));
+                viStr + ".engine must be one of: iray, filament")));
 
         // Merge figures: variant wins if it specifies figures/figure;
         // if variant only has morphs and base has one figure, override its morphs.
@@ -2427,9 +2428,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
             "width and height must be positive integers")));
     if (!engine.isEmpty()
-            && engine != "iray" && engine != "3delight" && engine != "filament")
+            && engine != "iray" && engine != "filament")
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
-            "engine must be one of: iray, 3delight, filament")));
+            "engine must be one of: iray, filament")));
 
     // ── Pre-flight: validate camera reference against the current scene ───
     if (!camera.isEmpty()) {

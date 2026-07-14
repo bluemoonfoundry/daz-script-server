@@ -208,7 +208,7 @@ def render(
         width: Image width in pixels (must be paired with *height*).
         height: Image height in pixels (must be paired with *width*).
         camera: Camera label to render from.  Defaults to the active viewport camera.
-        engine: Render engine (``"iray"``, ``"3delight"``, ``"filament"``).
+        engine: Render engine (``"iray"``, ``"filament"``).
         iray_samples: iRay sample count (0 = use scene default).
         reset_morphs: If ``True``, reset all figure morph values to defaults
             before applying *morphs*.
