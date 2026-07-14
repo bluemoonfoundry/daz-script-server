@@ -19,6 +19,13 @@ from .exceptions import RenderError
 # Confirmed against a live DAZ Studio instance; property names match the
 # labels shown in the Render Settings pane's Advanced tab.
 
+# Mirrors the engineMap in DzScriptServerPane.cpp's render script builder --
+# keep in sync. 3Delight is no longer supported by DAZ Studio and excluded.
+_ENGINE_CLASS_TO_NAME = {
+    "DzIrayRenderer": "iray",
+    "DzFilamentRenderer": "filament",
+}
+
 # (max_samples, max_time_secs, quality, quality_enable)
 _QUALITY_PRESETS = {
     "draft":   {"max_samples": 100,  "max_time": 300,  "quality_enable": False},
@@ -134,6 +141,23 @@ class DazRenderSettings:
             return mgr.isRendering();
         """)
         return bool(self._client.execute(script).value)
+
+    def active_engine(self) -> str | None:
+        """Return the active render engine name (e.g. "iray", "filament").
+
+        Falls back to the raw DazScript class name (e.g. "DzIrayRenderer")
+        if it isn't one of the known engines.
+        """
+        script = ScriptBuilder.iife(f"""
+            var mgr = {self._render_mgr()};
+            if (!mgr) return null;
+            var renderer = mgr.getActiveRenderer();
+            return renderer ? renderer.className() : null;
+        """)
+        class_name = self._client.execute(script).value
+        if class_name is None:
+            return None
+        return _ENGINE_CLASS_TO_NAME.get(class_name, class_name)
 
     @property
     def resolution(self) -> dict | None:
