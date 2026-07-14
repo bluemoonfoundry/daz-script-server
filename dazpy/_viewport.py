@@ -9,6 +9,21 @@ _VIEWPORT_EXPR = (
     "MainWindow.getViewportMgr().getActiveViewport().get3DViewport()"
 )
 
+# Friendly aliases for Dz3DViewport.setUserDrawStyle()'s label strings.
+# Confirmed against a live instance: setUserDrawStyle() takes the exact
+# label shown in the viewport's draw-style dropdown and silently no-ops
+# (leaves the style unchanged) if the label isn't recognized -- there's no
+# script-queryable enumeration of valid labels, so this list is empirical,
+# not derived from an SDK enum. A raw label string (e.g. "NVIDIA Iray") is
+# also accepted directly.
+_DRAW_STYLE_ALIASES = {
+    "wire_bounding_box": "Wire Bounding Box",
+    "wireframe": "Wireframe",
+    "smooth_shaded": "Smooth Shaded",
+    "texture_shaded": "Texture Shaded",
+    "iray": "NVIDIA Iray",
+}
+
 
 class DazViewport:
     def __init__(self, client: DazClient | None = None):
@@ -21,6 +36,42 @@ class DazViewport:
             return (vp !== null && vp !== undefined);
         """)
         return bool(self._client.execute(script).value)
+
+    def draw_style(self) -> str | None:
+        """Return the viewport's current draw style label (e.g. "NVIDIA Iray")."""
+        script = ScriptBuilder.iife(f"""
+            var vp = {_VIEWPORT_EXPR};
+            if (!vp) return null;
+            return vp.getUserDrawStyle();
+        """)
+        return self._client.execute(script).value
+
+    def set_draw_style(self, style: str) -> None:
+        """Set the viewport's draw style (preview quality, e.g. "Wireframe" .. "NVIDIA Iray").
+
+        Accepts a friendly alias (see ``_DRAW_STYLE_ALIASES``: "wireframe",
+        "wire_bounding_box", "smooth_shaded", "texture_shaded", "iray") or a
+        raw DAZ Studio label such as "NVIDIA Iray" directly.
+
+        Raises:
+            ValueError: If the style isn't recognized. ``setUserDrawStyle()``
+                silently no-ops on an unknown label rather than erroring, so
+                this reads the style back afterward and raises if it didn't
+                change (and wasn't already the requested style).
+        """
+        resolved = _DRAW_STYLE_ALIASES.get(style.strip().lower(), style)
+        script = ScriptBuilder.iife(f"""
+            var vp = {_VIEWPORT_EXPR};
+            if (!vp) return null;
+            var before = vp.getUserDrawStyle();
+            vp.setUserDrawStyle({json.dumps(resolved)});
+            return {{before: before, after: vp.getUserDrawStyle()}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            return
+        if result["after"] != resolved and result["after"] == result["before"]:
+            raise ValueError(f"Unknown viewport draw style: {style!r}")
 
     def get_size(self) -> dict | None:
         """Return the viewport dimensions as {{width, height}}."""

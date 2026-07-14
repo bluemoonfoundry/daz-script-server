@@ -4383,6 +4383,43 @@ class TestDazViewport(unittest.TestCase):
         self.assertEqual(result, {"width": 1280, "height": 720})
         client.execute.assert_called_once()
 
+    def test_draw_style_returns_label(self):
+        vp, client = self._make_viewport(return_value="NVIDIA Iray")
+        result = vp.draw_style()
+        self.assertEqual(result, "NVIDIA Iray")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getUserDrawStyle", script)
+
+    def test_set_draw_style_resolves_alias(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "Wireframe"}
+        )
+        vp.set_draw_style("wireframe")
+        script = client.execute.call_args[0][0]
+        self.assertIn("setUserDrawStyle", script)
+        self.assertIn('"Wireframe"', script)
+
+    def test_set_draw_style_accepts_raw_label(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "Smooth Shaded"}
+        )
+        vp.set_draw_style("Smooth Shaded")
+        script = client.execute.call_args[0][0]
+        self.assertIn('"Smooth Shaded"', script)
+
+    def test_set_draw_style_raises_on_unknown_label(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "NVIDIA Iray"}
+        )
+        with self.assertRaises(ValueError):
+            vp.set_draw_style("Not A Real Style")
+
+    def test_set_draw_style_noop_when_already_set(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "NVIDIA Iray"}
+        )
+        vp.set_draw_style("iray")  # already NVIDIA Iray -- should not raise
+
     def test_set_size_raises(self):
         vp, client = self._make_viewport()
         with self.assertRaises(NotImplementedError):
