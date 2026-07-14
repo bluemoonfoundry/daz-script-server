@@ -838,6 +838,32 @@ class TestDazRenderSettings(unittest.TestCase):
             self.assertIn(canvas.name, paths[canvas.name])
             self.assertIn(canvas.canvas_type, paths[canvas.name])
 
+    def test_render_returns_outcome_with_resolved_output_path(self):
+        from dazpy._render import RenderOutcome
+        import tempfile
+
+        original_res = self.rs.resolution
+        original_samples = self.rs.max_samples
+        out_path = os.path.join(
+            tempfile.gettempdir(), "dazpy_test_render_cc5.png"
+        )
+        try:
+            self.rs.set_resolution(64, 64)
+            self.rs.max_samples = 4
+            self.rs.output_path = out_path
+            result = self.rs.render_and_wait(timeout=120)
+            self.assertIsInstance(result, RenderOutcome)
+            self.assertTrue(result.success)
+            self.assertEqual(result.output_path, out_path)
+            self.assertTrue(os.path.exists(out_path))
+        finally:
+            if original_res:
+                self.rs.set_resolution(original_res["width"], original_res["height"])
+            if original_samples is not None:
+                self.rs.max_samples = original_samples
+            if os.path.exists(out_path):
+                os.remove(out_path)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DazSkeleton / DazBone

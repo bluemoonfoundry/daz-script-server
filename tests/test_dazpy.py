@@ -1103,12 +1103,37 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertIn("applyChanges", script)
 
     def test_render_uses_doRender(self):
-        rs, client = self._make_render(True)
+        from dazpy._render import RenderOutcome
+        rs, client = self._make_render(
+            {"success": True, "output_path": "/tmp/render.png"}
+        )
         result = rs.render()
-        self.assertTrue(result)
+        self.assertEqual(
+            result, RenderOutcome(success=True, output_path="/tmp/render.png")
+        )
         script = client.execute.call_args[0][0]
         self.assertIn("doRender", script)
         self.assertNotIn("mgr.render()", script)
+
+    def test_render_returns_failure_outcome_when_doRender_fails(self):
+        from dazpy._render import RenderOutcome
+        rs, client = self._make_render(
+            {"success": False, "output_path": "/tmp/render.png"}
+        )
+        result = rs.render()
+        self.assertEqual(
+            result, RenderOutcome(success=False, output_path="/tmp/render.png")
+        )
+
+    def test_render_and_wait_returns_render_outcome(self):
+        from dazpy._render import RenderOutcome
+        rs, client = self._make_render(
+            {"success": True, "output_path": "/tmp/render.png"}
+        )
+        result = rs.render_and_wait()
+        self.assertEqual(
+            result, RenderOutcome(success=True, output_path="/tmp/render.png")
+        )
 
     def test_gamma_getter_uses_direct_property(self):
         rs, client = self._make_render(2.2)

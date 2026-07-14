@@ -66,6 +66,14 @@ class Canvas:
     index: int
 
 
+@dataclass
+class RenderOutcome:
+    """Result of a :meth:`DazRenderSettings.render` call."""
+
+    success: bool
+    output_path: str | None
+
+
 class DazRenderSettings:
     def __init__(self, client: DazClient | None = None):
         self._client = client or DazClient()
@@ -219,7 +227,7 @@ class DazRenderSettings:
         """)
         self._client.execute(script)
 
-    def render(self, camera_name: str | None = None) -> bool:
+    def render(self, camera_name: str | None = None) -> RenderOutcome:
         """Render the scene to :attr:`output_path`.
 
         DAZ Studio's ``doRender()`` only writes to disk when ``renderImgToId`` is set
@@ -231,7 +239,9 @@ class DazRenderSettings:
                 omitted the active viewport camera is used.
 
         Returns:
-            ``True`` if the render completed without error.
+            A :class:`RenderOutcome` with ``success`` and the resolved
+            ``output_path`` actually written by ``doRender()``
+            (``opts.renderImgFilename`` after the call).
         """
         if camera_name is not None:
             cam_expr = f"Scene.findCamera({json.dumps(camera_name)})"
@@ -242,9 +252,9 @@ class DazRenderSettings:
             )
         script = ScriptBuilder.iife(f"""
             var mgr = {self._render_mgr()};
-            if (!mgr) return false;
+            if (!mgr) return {{success: false, output_path: null}};
             var cam = {cam_expr};
-            if (!cam) return false;
+            if (!cam) return {{success: false, output_path: null}};
             var opts = mgr.getRenderOptions();
             opts.camera = cam;
             opts.renderImgToId = DzRenderOptions.DirectToFile;
@@ -253,13 +263,20 @@ class DazRenderSettings:
             if (vp) vp.setCamera(cam);
             var err = mgr.doRender(opts);
             if (vp && prevCam) vp.setCamera(prevCam);
-            return (err === 0 || err === true);
+            return {{
+                success: (err === 0 || err === true),
+                output_path: mgr.getRenderOptions().renderImgFilename
+            }};
         """)
-        return bool(self._client.execute(script).value)
+        result = self._client.execute(script).value or {}
+        return RenderOutcome(
+            success=bool(result.get("success", False)),
+            output_path=result.get("output_path"),
+        )
 
     def render_and_wait(
         self, poll_interval: float = 1.0, timeout: float = 600.0
-    ) -> bool:
+    ) -> RenderOutcome:
         """Alias for :meth:`render` kept for backwards compatibility.
 
         ``doRender()`` is synchronous in DAZ Studio so no polling is required.
