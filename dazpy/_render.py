@@ -25,6 +25,11 @@ _ENGINE_CLASS_TO_NAME = {
     "DzIrayRenderer": "iray",
     "DzFilamentRenderer": "filament",
 }
+_ENGINE_NAME_TO_CLASS = {v: k for k, v in _ENGINE_CLASS_TO_NAME.items()}
+
+# The two non-pluggable DzRenderOptions.renderType modes (see active_engine()
+# docstring for why these are distinct from the DzRenderer plugin lookup).
+_NON_SOFTWARE_ENGINES = {"viewport", "multi_pass_opengl"}
 
 # (max_samples, max_time_secs, quality, quality_enable)
 _QUALITY_PRESETS = {
@@ -169,6 +174,56 @@ class DazRenderSettings:
         if class_name is None:
             return None
         return _ENGINE_CLASS_TO_NAME.get(class_name, class_name)
+
+    def set_active_engine(self, engine: str) -> None:
+        """Set the active render engine.
+
+        Args:
+            engine: ``"viewport"`` or ``"multi_pass_opengl"`` to switch
+                ``DzRenderOptions.renderType`` to one of the two
+                non-pluggable modes, or a pluggable renderer name (e.g.
+                ``"iray"``, ``"filament"``, or a raw DazScript class name
+                like ``"DzIrayRenderer"``) to set ``renderType`` to
+                ``Software`` and activate that renderer.
+
+        Raises:
+            RenderError: If a pluggable renderer name doesn't resolve to a
+                renderer registered with the render manager (e.g. the
+                Filament plugin isn't installed).
+        """
+        normalized = engine.strip()
+        lower = normalized.lower()
+
+        if lower in _NON_SOFTWARE_ENGINES:
+            render_type_expr = "opts.ScreenShot" if lower == "viewport" else "opts.HardwareAssisted"
+            script = ScriptBuilder.iife(f"""
+                var mgr = {self._render_mgr()};
+                if (!mgr) return false;
+                var opts = mgr.getRenderOptions();
+                opts.renderType = {render_type_expr};
+                opts.applyChanges();
+                {self._refresh_render_settings_pane_script()}
+                return true;
+            """)
+            self._client.execute(script)
+            return
+
+        engine_class = _ENGINE_NAME_TO_CLASS.get(lower, normalized)
+        script = ScriptBuilder.iife(f"""
+            var mgr = {self._render_mgr()};
+            if (!mgr) return false;
+            var renderer = mgr.findRenderer({json.dumps(engine_class)});
+            if (!renderer) return false;
+            var opts = mgr.getRenderOptions();
+            opts.renderType = opts.Software;
+            opts.applyChanges();
+            mgr.setActiveRenderer(renderer);
+            {self._refresh_render_settings_pane_script()}
+            return true;
+        """)
+        found = self._client.execute(script).value
+        if not found:
+            raise RenderError(f"Render engine not available: {engine!r} (class {engine_class!r})")
 
     @property
     def resolution(self) -> dict | None:

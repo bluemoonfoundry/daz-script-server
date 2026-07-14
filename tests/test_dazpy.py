@@ -1212,6 +1212,41 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         val = rs.active_engine()
         self.assertEqual(val, "multi_pass_opengl")
 
+    def test_set_active_engine_iray(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("iray")
+        script = client.execute.call_args[0][0]
+        self.assertIn("findRenderer", script)
+        self.assertIn("DzIrayRenderer", script)
+        self.assertIn("setActiveRenderer", script)
+        self.assertIn("opts.Software", script)
+
+    def test_set_active_engine_raw_class_name(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("DzFilamentRenderer")
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzFilamentRenderer", script)
+
+    def test_set_active_engine_raises_when_renderer_unavailable(self):
+        from dazpy.exceptions import RenderError
+        rs, client = self._make_render(False)
+        with self.assertRaises(RenderError):
+            rs.set_active_engine("filament")
+
+    def test_set_active_engine_viewport(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("Viewport")
+        script = client.execute.call_args[0][0]
+        self.assertIn("opts.ScreenShot", script)
+        self.assertNotIn("findRenderer", script)
+
+    def test_set_active_engine_multi_pass_opengl(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("multi_pass_opengl")
+        script = client.execute.call_args[0][0]
+        self.assertIn("opts.HardwareAssisted", script)
+        self.assertNotIn("findRenderer", script)
+
     def test_has_render(self):
         rs, client = self._make_render(True)
         val = rs.has_render()
