@@ -27,7 +27,7 @@ AnchorRole = Literal[
     "custom",
 ]
 InteractionKind = Literal["PoseTarget", "ContactTarget", "LookAtTarget", "BalanceTarget", "HandTarget", "FootTarget"]
-RecipeKind = Literal["sit", "touch", "kiss", "fight", "custom"]
+RecipeKind = Literal["sit", "touch", "kiss", "fight", "handshake", "hug", "face_each_other", "custom"]
 
 
 def _normalize_name(value: str | None) -> str:
@@ -1812,6 +1812,66 @@ def build_kiss_recipe(
             HandTarget(actor_b, "l_hand" if _side_from_name(a_anchor) == "right" else "r_hand", target_figure=actor_a, target_anchor="l_shoulder" if _side_from_name(a_anchor) == "right" else "r_shoulder"),
         ],
         metadata={"interaction": "kiss"},
+    )
+
+
+def build_handshake_recipe(
+    actor_a: str,
+    actor_b: str,
+    *,
+    a_anchor: str = "r_hand",
+    b_anchor: str = "r_hand",
+) -> InteractionRecipe:
+    """Build a mirrored hand-to-hand greeting preset for two figures."""
+
+    return InteractionRecipe(
+        kind="handshake",
+        actors=[actor_a, actor_b],
+        constraints=[
+            LookAtTarget(actor_a, "head", (0.0, 0.0, 0.0)),
+            LookAtTarget(actor_b, "head", (0.0, 0.0, 0.0)),
+            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=b_anchor),
+            HandTarget(actor_b, b_anchor, target_figure=actor_a, target_anchor=a_anchor),
+        ],
+        metadata={"interaction": "handshake"},
+    )
+
+
+def build_hug_recipe(
+    actor_a: str,
+    actor_b: str,
+    *,
+    a_anchor: str = "r_hand",
+    b_anchor: str = "r_hand",
+) -> InteractionRecipe:
+    """Build a mutual arms-around-each-other embrace preset for two figures."""
+
+    a_far_shoulder = "l_shoulder" if _side_from_name(a_anchor) == "right" else "r_shoulder"
+    b_far_shoulder = "l_shoulder" if _side_from_name(b_anchor) == "right" else "r_shoulder"
+    return InteractionRecipe(
+        kind="hug",
+        actors=[actor_a, actor_b],
+        constraints=[
+            LookAtTarget(actor_a, "head", (0.0, 0.0, 0.0)),
+            LookAtTarget(actor_b, "head", (0.0, 0.0, 0.0)),
+            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=b_far_shoulder),
+            HandTarget(actor_b, b_anchor, target_figure=actor_a, target_anchor=a_far_shoulder),
+        ],
+        metadata={"interaction": "hug"},
+    )
+
+
+def build_face_each_other_recipe(actor_a: str, actor_b: str) -> InteractionRecipe:
+    """Build a mutual eye-contact preset for two figures, with no limb contact."""
+
+    return InteractionRecipe(
+        kind="face_each_other",
+        actors=[actor_a, actor_b],
+        constraints=[
+            LookAtTarget(actor_a, "head", (0.0, 0.0, 0.0)),
+            LookAtTarget(actor_b, "head", (0.0, 0.0, 0.0)),
+        ],
+        metadata={"interaction": "face_each_other"},
     )
 
 
