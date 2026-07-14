@@ -78,6 +78,40 @@ class DazElement:
         """)
         return self._client.execute(script).value or []
 
+    def numeric_properties(self) -> dict[str, object]:
+        """Return every numeric property on this element as ``{label: value}``.
+
+        Unlike :meth:`list_properties`, this fetches labels and current
+        values for all numeric (float/int/bool) properties in a single HTTP
+        round-trip — use it instead of calling :meth:`get_property` in a
+        loop over ``list_properties()`` results.
+
+        Returns:
+            A dict mapping each numeric property's display label to its
+            current value.
+        """
+        script = ScriptBuilder.iife(f"""
+            var obj = {self._locator};
+            if (!obj) return null;
+            var result = {{}};
+            for (var i = 0; i < obj.getNumProperties(); i++) {{
+                var p = obj.getProperty(i);
+                if (p.inherits("DzNumericProperty")) {{
+                    result[p.getLabel()] = p.getValue();
+                }}
+            }}
+            return result;
+        """)
+        return self._client.execute(script).value or {}
+
+    @property
+    def class_name(self) -> str | None:
+        """The DazScript class name of this element (e.g. ``"DzFigure"``, ``"DzSpotLight"``)."""
+        script = ScriptBuilder.iife(
+            f"var obj = {self._locator}; return obj ? obj.className() : null;"
+        )
+        return self._client.execute(script).value
+
     def snapshot(self, fields: list[str]) -> dict:
         """Read and cache a set of property values in a single call.
 

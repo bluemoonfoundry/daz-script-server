@@ -387,6 +387,20 @@ class TestDazNodeOnFirstNode(unittest.TestCase):
             self.assertIn("label", p)
             self.assertIn("name", p)
 
+    def test_numeric_properties_returns_dict(self):
+        props = self.node.numeric_properties()
+        self.assertIsInstance(props, dict)
+
+    def test_numeric_properties_values_are_numeric(self):
+        props = self.node.numeric_properties()
+        for label, value in list(props.items())[:5]:  # spot-check first 5
+            self.assertIsInstance(value, (int, float))
+
+    def test_class_name_is_string(self):
+        cls = self.node.class_name
+        self.assertIsInstance(cls, str)
+        self.assertTrue(cls.startswith("Dz"))
+
     def test_general_scale_is_numeric(self):
         gs = self.node.general_scale
         self.assertIsNotNone(gs)
