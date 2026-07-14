@@ -18,6 +18,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from dazpy._result import ExecutionResult
 from dazpy._script_builder import ScriptBuilder
 from dazpy._batch import Batch
+from dazpy._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
+from dazpy.exceptions import ConnectionError as DazConnectionError
+from dazpy.exceptions import TimeoutError as DazTimeoutError
 from dazpy import (
     AnchorTarget,
     AxisLimit,
@@ -389,6 +392,64 @@ class TestDazScene(unittest.TestCase):
         transforms = scene.all_node_transforms()
         self.assertEqual(len(transforms), 1)
         self.assertEqual(transforms[0]["name"], "n1")
+
+    def test_create_camera_returns_daz_camera(self):
+        from dazpy._camera import DazCamera
+        client = _make_client("Camera")
+        scene = DazScene(client)
+        camera = scene.create_camera()
+        self.assertIsInstance(camera, DazCamera)
+        self.assertEqual(camera._identifier.value, "Camera")
+
+    def test_create_camera_script_uses_basic_camera_and_add_node(self):
+        client = _make_client("Camera")
+        scene = DazScene(client)
+        scene.create_camera()
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzBasicCamera()", script)
+        self.assertIn("Scene.addNode(cam)", script)
+
+    def test_create_camera_with_name_sets_name(self):
+        client = _make_client("MyCam")
+        scene = DazScene(client)
+        scene.create_camera(name="MyCam")
+        script = client.execute.call_args[0][0]
+        self.assertIn('cam.setName("MyCam")', script)
+
+    def test_create_light_returns_daz_light(self):
+        from dazpy._light import DazLight
+        client = _make_client("Spotlight1")
+        scene = DazScene(client)
+        light = scene.create_light("spot")
+        self.assertIsInstance(light, DazLight)
+        self.assertEqual(light._identifier.value, "Spotlight1")
+
+    def test_create_light_script_uses_correct_class_per_type(self):
+        cases = {
+            "spot": "DzSpotLight",
+            "point": "DzPointLight",
+            "distant": "DzDistantLight",
+        }
+        for light_type, class_name in cases.items():
+            client = _make_client("Light1")
+            scene = DazScene(client)
+            scene.create_light(light_type)
+            script = client.execute.call_args[0][0]
+            self.assertIn(f"new {class_name}()", script)
+            self.assertIn("Scene.addNode(light)", script)
+
+    def test_create_light_with_name_sets_name(self):
+        client = _make_client("Key Light")
+        scene = DazScene(client)
+        scene.create_light("point", name="Key Light")
+        script = client.execute.call_args[0][0]
+        self.assertIn('light.setName("Key Light")', script)
+
+    def test_create_light_invalid_type_raises(self):
+        client = _make_client(None)
+        scene = DazScene(client)
+        with self.assertRaises(ValueError):
+            scene.create_light("area")
 
 
 class TestBatch(unittest.TestCase):
@@ -2017,6 +2078,134 @@ class TestDazNodeAdditionalQueries(unittest.TestCase):
         result = node.bounding_box()
         self.assertIsNone(result)
 
+
+class TestDazNodeDeleteAndReparent(unittest.TestCase):
+    def _node(self, return_value=None):
+        client = _make_client(return_value)
+        return DazNode(client, NodeIdentifier("Prop1")), client
+
+    def test_delete_calls_scene_remove_node(self):
+        node, client = self._node(True)
+        result = node.delete()
+        self.assertTrue(result)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.removeNode(_node)", script)
+
+    def test_delete_returns_false_when_server_returns_falsy(self):
+        node, client = self._node(False)
+        self.assertFalse(node.delete())
+
+    def test_reparent_calls_remove_and_add_node_child(self):
+        node, client = self._node(None)
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        node.reparent(new_parent)
+        script = client.execute.call_args[0][0]
+        self.assertIn("removeNodeChild(_node, true)", script)
+        self.assertIn("addNodeChild(_node, true)", script)
+        self.assertIn('Scene.findNode("NewParent")', script)
+        self.assertIn("_err.valueOf()", script)
+
+    def test_reparent_preserve_world_transform_false_uses_false_flag(self):
+        node, client = self._node(None)
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        node.reparent(new_parent, preserve_world_transform=False)
+        script = client.execute.call_args[0][0]
+        self.assertIn("removeNodeChild(_node, false)", script)
+        self.assertIn("addNodeChild(_node, false)", script)
+
+    def test_reparent_raises_on_error_result(self):
+        node, client = self._node("some dz error")
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        with self.assertRaises(exceptions.ScriptRuntimeError):
+            node.reparent(new_parent)
+
+    def test_reparent_succeeds_when_result_is_none(self):
+        node, client = self._node(None)
+        new_parent = DazNode(client, NodeIdentifier("NewParent"))
+        node.reparent(new_parent)  # should not raise
+
+
+class TestDazNodeFitting(unittest.TestCase):
+    def _node(self, return_value=None):
+        client = _make_client(return_value)
+        return DazNode(client, NodeIdentifier("Outfit")), client
+
+    def test_fit_to_uses_setFollowTarget_when_available(self):
+        node, client = self._node("setFollowTarget")
+        figure = DazNode(client, NodeIdentifier("Genesis9"))
+        method = node.fit_to(figure)
+        self.assertEqual(method, "setFollowTarget")
+        script = client.execute.call_args[0][0]
+        self.assertIn("setFollowTarget(_figure)", script)
+        self.assertIn('Scene.findNode("Genesis9")', script)
+
+    def test_fit_to_raises_when_node_not_found(self):
+        node, client = self._node(None)
+        figure = DazNode(client, NodeIdentifier("Genesis9"))
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            node.fit_to(figure)
+
+    def test_unfit_returns_previous_figure_and_actions(self):
+        node, client = self._node(
+            {"previous_figure": "Genesis9", "actions": ["cleared follow target"]}
+        )
+        result = node.unfit()
+        self.assertEqual(result["previous_figure"], "Genesis9")
+        self.assertEqual(result["actions"], ["cleared follow target"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("setFollowTarget(null)", script)
+        self.assertIn("removeNodeChild(_node, true)", script)
+
+    def test_unfit_returns_defaults_when_server_returns_none(self):
+        node, client = self._node(None)
+        result = node.unfit()
+        self.assertEqual(result, {"previous_figure": None, "actions": []})
+
+    def test_fitted_items_returns_node_list(self):
+        node, client = self._node(["Outfit Top", "Hat"])
+        items = node.fitted_items()
+        self.assertEqual(len(items), 2)
+        self.assertIsInstance(items[0], DazNode)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getFollowTarget", script)
+        self.assertIn("getNodeParent", script)
+
+    def test_fitted_items_empty_when_none_fitted(self):
+        node, client = self._node([])
+        self.assertEqual(node.fitted_items(), [])
+
+
+class TestDazPropertyKeyframes(unittest.TestCase):
+    def _prop(self, return_value=None):
+        from dazpy._property import DazProperty
+        client = _make_client(return_value)
+        prop = DazProperty(client, "_node", "XRotate")
+        return prop, client
+
+    def test_get_keys_returns_time_value_list(self):
+        prop, client = self._prop([{"time": 0, "value": 0.0}, {"time": 30, "value": 45.0}])
+        keys = prop.get_keys()
+        self.assertEqual(keys, [{"time": 0, "value": 0.0}, {"time": 30, "value": 45.0}])
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumKeys", script)
+        self.assertIn("getKeyTime", script)
+        self.assertIn("getDoubleValue", script)
+
+    def test_get_keys_empty_when_no_keys(self):
+        prop, client = self._prop([])
+        self.assertEqual(prop.get_keys(), [])
+
+    def test_remove_key_calls_delete_keys_with_same_time_twice(self):
+        prop, client = self._prop(None)
+        prop.remove_key(30)
+        script = client.execute.call_args[0][0]
+        self.assertIn("deleteKeys(30, 30)", script)
+
+    def test_clear_keys_calls_delete_all_keys(self):
+        prop, client = self._prop(None)
+        prop.clear_keys()
+        script = client.execute.call_args[0][0]
+        self.assertIn("deleteAllKeys", script)
 
 
 class TestDazSceneSelection(unittest.TestCase):
@@ -4053,6 +4242,100 @@ class TestDazViewport(unittest.TestCase):
         vp, client = self._make_viewport(return_value=None)
         result = vp.capture(path)
         self.assertEqual(result, path)
+
+
+class _FakeSSEResponse:
+    """Minimal stand-in for a streaming requests.Response over /scene/events."""
+
+    def __init__(self, frames):
+        # frames: list of raw SSE frame strings, e.g. 'data: {"type":"node.added",...}'
+        body = "\n\n".join(frames) + "\n\n" if frames else ""
+        self._chunks = [body.encode("utf-8")]
+        self.closed = False
+
+    def iter_content(self, chunk_size=None):
+        for chunk in self._chunks:
+            yield chunk
+
+    def close(self):
+        self.closed = True
+
+
+class TestSceneEvents(unittest.TestCase):
+    def _events_json(self, *pairs):
+        return [
+            f'data: {json.dumps({"type": t, "ts": 1000, "data": d})}'
+            for t, d in pairs
+        ]
+
+    def test_watch_scene_events_parses_frames(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(
+                ("node.added", {"node_name": "Genesis9"}),
+                ("selection.list_changed", {}),
+            )
+        )
+        events = list(watch_scene_events(client))
+        self.assertEqual(len(events), 2)
+        self.assertIsInstance(events[0], SceneEvent)
+        self.assertEqual(events[0].type, "node.added")
+        self.assertEqual(events[0].data, {"node_name": "Genesis9"})
+        self.assertEqual(events[1].type, "selection.list_changed")
+
+    def test_watch_scene_events_skips_keepalive_comments(self):
+        client = MagicMock()
+        frames = [":keepalive"] + self._events_json(("scene.loaded", {}))
+        client.stream_scene_events.return_value = _FakeSSEResponse(frames)
+        events = list(watch_scene_events(client))
+        self.assertEqual([e.type for e in events], ["scene.loaded"])
+
+    def test_watch_scene_events_filters_by_event_types(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(
+                ("node.added", {}),
+                ("node.removed", {}),
+                ("light.added", {}),
+            )
+        )
+        events = list(watch_scene_events(client, event_types={"node.removed"}))
+        self.assertEqual([e.type for e in events], ["node.removed"])
+
+    def test_watch_scene_events_closes_response(self):
+        client = MagicMock()
+        resp = _FakeSSEResponse(self._events_json(("scene.loaded", {})))
+        client.stream_scene_events.return_value = resp
+        list(watch_scene_events(client))
+        self.assertTrue(resp.closed)
+
+    def test_watch_scene_events_raises_connection_error_when_stream_unavailable(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = None
+        with self.assertRaises(DazConnectionError):
+            list(watch_scene_events(client))
+
+    def test_wait_for_scene_event_returns_matching_event(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(
+                ("node.added", {"node_name": "A"}),
+                ("node.added", {"node_name": "B"}),
+            )
+        )
+        event = wait_for_scene_event(client, "node.added", timeout=5.0)
+        self.assertEqual(event.data, {"node_name": "A"})
+        # Category should be derived from the event type for server-side filtering.
+        _, kwargs = client.stream_scene_events.call_args
+        self.assertEqual(kwargs["categories"], ["node"])
+
+    def test_wait_for_scene_event_times_out_when_stream_ends_without_match(self):
+        client = MagicMock()
+        client.stream_scene_events.return_value = _FakeSSEResponse(
+            self._events_json(("scene.loaded", {}))
+        )
+        with self.assertRaises(DazTimeoutError):
+            wait_for_scene_event(client, "node.added", timeout=1.0)
 
 
 if __name__ == "__main__":

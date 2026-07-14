@@ -195,6 +195,12 @@ class TestDazClientLowLevel(unittest.TestCase):
         with self.assertRaises(exceptions.AuthenticationError):
             bad_client.execute("(function(){ return 1; })()")
 
+    @skip_auth
+    def test_bad_token_status_raises_authentication_error(self):
+        bad_client = DazClient(token="invalid-token-000000")
+        with self.assertRaises(exceptions.AuthenticationError):
+            bad_client.status()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. DazScene
@@ -251,6 +257,25 @@ class TestDazScene(unittest.TestCase):
         self.assertIsInstance(cameras, list)
         for cam in cameras:
             self.assertIsInstance(cam, DazCamera)
+
+    def test_create_camera_adds_camera_to_scene(self):
+        before = self.scene.num_nodes()
+        cam = self.scene.create_camera(name="_test_create_camera")
+        self.assertIsInstance(cam, DazCamera)
+        self.assertEqual(self.scene.num_nodes(), before + 1)
+        cam.set_position(10, 20, 30)
+        self.assertEqual(cam.position, {"x": 10.0, "y": 20.0, "z": 30.0})
+
+    def test_create_light_adds_light_to_scene(self):
+        from dazpy import DazLight
+        before = self.scene.num_nodes()
+        light = self.scene.create_light("point", name="_test_create_light")
+        self.assertIsInstance(light, DazLight)
+        self.assertEqual(self.scene.num_nodes(), before + 1)
+
+    def test_create_light_invalid_type_raises(self):
+        with self.assertRaises(ValueError):
+            self.scene.create_light("__not_a_real_type__")
 
     def test_frame_is_int(self):
         frame = self.scene.frame()
@@ -362,6 +387,20 @@ class TestDazNodeOnFirstNode(unittest.TestCase):
             self.assertIn("label", p)
             self.assertIn("name", p)
 
+    def test_numeric_properties_returns_dict(self):
+        props = self.node.numeric_properties()
+        self.assertIsInstance(props, dict)
+
+    def test_numeric_properties_values_are_numeric(self):
+        props = self.node.numeric_properties()
+        for label, value in list(props.items())[:5]:  # spot-check first 5
+            self.assertIsInstance(value, (int, float))
+
+    def test_class_name_is_string(self):
+        cls = self.node.class_name
+        self.assertIsInstance(cls, str)
+        self.assertTrue(cls.startswith("Dz"))
+
     def test_general_scale_is_numeric(self):
         gs = self.node.general_scale
         self.assertIsNotNone(gs)
@@ -374,6 +413,47 @@ class TestDazNodeOnFirstNode(unittest.TestCase):
         for key in ("x", "y", "z", "general"):
             self.assertIn(key, s)
             self.assertIsInstance(s[key], (int, float))
+
+
+@skip_if_down
+@skip_no_daz
+class TestDazNodeDeleteAndReparent(unittest.TestCase):
+    """Uses create_camera() to make disposable nodes so real scene content is untouched."""
+
+    def setUp(self):
+        self.scene = _scene()
+
+    def test_delete_removes_node_from_scene(self):
+        cam = self.scene.create_camera(name="_test_delete_camera")
+        before = self.scene.num_nodes()
+        result = cam.delete()
+        self.assertTrue(result)
+        self.assertEqual(self.scene.num_nodes(), before - 1)
+
+    def test_delete_nonexistent_node_returns_false(self):
+        node = DazNode(self.scene._client, NodeIdentifier("__this_node_should_never_exist_xyz__"))
+        self.assertFalse(node.delete())
+
+    def test_reparent_moves_node_under_new_parent(self):
+        parent = self.scene.create_camera(name="_test_reparent_parent")
+        child = self.scene.create_camera(name="_test_reparent_child")
+        try:
+            child.reparent(parent)
+            self.assertIn(child.name, [c.name for c in parent.children])
+        finally:
+            child.delete()
+            parent.delete()
+
+    def test_reparent_preserve_world_transform_false(self):
+        parent = self.scene.create_camera(name="_test_reparent_parent2")
+        child = self.scene.create_camera(name="_test_reparent_child2")
+        try:
+            child.set_position(5, 5, 5)
+            child.reparent(parent, preserve_world_transform=False)
+            self.assertIn(child.name, [c.name for c in parent.children])
+        finally:
+            child.delete()
+            parent.delete()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

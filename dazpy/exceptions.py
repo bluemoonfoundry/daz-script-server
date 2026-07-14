@@ -17,12 +17,21 @@ class ScriptError(DazError):
         script: The DazScript source that was submitted (may be empty for
             file-based executions).
         request_id: The server-assigned request ID, useful for log correlation.
+        output: Lines written to the DAZ Studio message log before the error
+            (e.g. via print()), useful for tracing state leading up to a failure.
     """
 
-    def __init__(self, message: str, script: str = "", request_id: str = ""):
+    def __init__(
+        self,
+        message: str,
+        script: str = "",
+        request_id: str = "",
+        output: "list[str] | None" = None,
+    ):
         super().__init__(message)
         self.script = script
         self.request_id = request_id
+        self.output = output or []
 
     @property
     def diagnostic(self) -> str:
@@ -32,6 +41,8 @@ class ScriptError(DazError):
             numbered = "\n".join(f"{i+1:4d}: {line}" for i, line in enumerate(self.script.splitlines()))
             lines.append(numbered)
         lines.append(str(self))
+        if self.output:
+            lines.append("\nCaptured output:\n" + "\n".join(self.output))
         if self.request_id:
             lines.append(f"request_id: {self.request_id}")
         return "\n".join(lines)

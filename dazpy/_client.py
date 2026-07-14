@@ -37,11 +37,12 @@ def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult
 
     if not data.get("success", True):
         error_msg = data.get("error", "Script failed")
+        output = data.get("output", [])
         # SyntaxError comes from the parser; runtime errors (TypeError, ReferenceError,
         # Error, etc.) also include "Line N:" but never say "SyntaxError" explicitly.
         if "SyntaxError" in error_msg:
-            raise ScriptSyntaxError(error_msg, script=script, request_id=request_id)
-        raise ScriptRuntimeError(error_msg, script=script, request_id=request_id)
+            raise ScriptSyntaxError(error_msg, script=script, request_id=request_id, output=output)
+        raise ScriptRuntimeError(error_msg, script=script, request_id=request_id, output=output)
 
     return ExecutionResult(
         value=data.get("result"),
@@ -228,6 +229,25 @@ class DazClient:
             return {"status": "not_found"}
         return resp.json()
 
+    def list_requests(self, status: str | None = None) -> dict:
+        """List all tracked async requests (script and render) with their status.
+
+        Args:
+            status: Optional filter, one of ``"queued"``, ``"running"``,
+                ``"completed"``, ``"failed"``, ``"cancelled"``. Omit to list
+                requests in every status.
+
+        Returns:
+            A dict with a ``"requests"`` list (each item has ``request_id``,
+            ``status``, ``progress``, ``submitted_at``) plus ``total`` and a
+            per-status count for every status value.
+        """
+        params = {"status": status} if status else None
+        resp = self._get("/requests", params=params)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
     def cancel_request(self, request_id: str) -> bool:
         """Cancel a queued or running async request.
 
@@ -273,7 +293,7 @@ class DazClient:
             width: Image width in pixels (must be paired with *height*).
             height: Image height in pixels (must be paired with *width*).
             camera: Camera label to render from.
-            engine: Render engine (``"iray"``, ``"3delight"``, ``"filament"``).
+            engine: Render engine (``"iray"``, ``"filament"``).
             iray_samples: iRay sample count (0 = use scene default).
             reset_morphs: If ``True``, reset all morphs to defaults before applying.
 
@@ -331,6 +351,63 @@ class DazClient:
             raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
+    def render_animation_submit(
+        self,
+        output_path: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        frame_padding: int = 4,
+        width: int = 0,
+        height: int = 0,
+        camera: str = "",
+        engine: str = "",
+    ) -> dict:
+        """Submit an animation render job spanning a frame range and return immediately.
+
+        Renders each frame in ``[start_frame, end_frame]`` to a separate file,
+        as a single trackable async request (mirrors :meth:`render_submit`'s
+        request-tracking shape, not :meth:`render_batch_submit`'s fan-out).
+
+        Args:
+            output_path: Output path pattern containing the literal token
+                ``"{frame}"``, e.g. ``r"C:\\tmp\\anim\\frame_{frame}.png"``.
+                The token is replaced with the frame number, zero-padded to
+                *frame_padding* digits.
+            start_frame: First frame to render (inclusive).
+            end_frame: Last frame to render (inclusive).
+            frame_padding: Zero-padding width for the frame number (default ``4``).
+            width: Image width in pixels (must be paired with *height*).
+            height: Image height in pixels (must be paired with *width*).
+            camera: Camera label to render from.
+            engine: Render engine (``"iray"``, ``"filament"``).
+
+        Returns:
+            A dict with ``request_id``, ``status`` (``"queued"``), and
+            ``submitted_at`` keys.
+
+        Raises:
+            ConnectionError: If the server cannot be reached.
+            AuthenticationError: On HTTP 401/403.
+        """
+        payload: dict = {
+            "output_path": output_path,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "frame_padding": frame_padding,
+        }
+        if width and height:
+            payload["width"] = width
+            payload["height"] = height
+        if camera:
+            payload["camera"] = camera
+        if engine:
+            payload["engine"] = engine
+        resp = self._post("/render/animation", payload)
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
     def cancel_render(self, request_id: str) -> bool:
         """Cancel a queued or running render job.
 
@@ -362,6 +439,40 @@ class DazClient:
             resp = _requests.get(
                 f"{self._base}/render/{request_id}/progress",
                 headers=self._headers,
+                stream=True,
+                timeout=stream_timeout,
+            )
+            return resp if resp.status_code == 200 else None
+        except _requests.exceptions.RequestException:
+            return None
+
+    def stream_scene_events(
+        self,
+        categories: "list[str] | None" = None,
+        stream_timeout: "float | None" = None,
+    ) -> "object | None":
+        """Open the SSE stream for general scene-change events (GET /scene/events).
+
+        Args:
+            categories: Optional subset of event categories to subscribe to
+                (``"node"``, ``"skeleton"``, ``"light"``, ``"camera"``,
+                ``"selection"``, ``"scene"``, ``"time"``, ``"render"``).
+                ``None`` (default) subscribes to all categories.
+            stream_timeout: Socket timeout in seconds. ``None`` (default)
+                waits indefinitely — the server sends a keepalive comment
+                every 15 seconds, so the connection never idles out.
+
+        Returns:
+            A streaming :class:`requests.Response` on success, or ``None``
+            if the endpoint is unavailable. Callers must close the response
+            when done (e.g. via a ``with`` statement).
+        """
+        try:
+            params = {"filter": ",".join(categories)} if categories else None
+            resp = _requests.get(
+                f"{self._base}/scene/events",
+                headers=self._headers,
+                params=params,
                 stream=True,
                 timeout=stream_timeout,
             )
@@ -440,13 +551,34 @@ class DazClient:
     # ── Server health ─────────────────────────────────────────────────────────
 
     def status(self) -> dict:
-        """Return the server status dict from ``GET /status``."""
-        return self._get("/status").json()
+        """Return the server status dict from ``GET /status``.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get("/status")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
 
     def health(self) -> dict:
-        """Return the health check dict from ``GET /health``."""
-        return self._get("/health").json()
+        """Return the health check dict from ``GET /health``.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get("/health")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
 
     def metrics(self) -> dict:
-        """Return the metrics dict from ``GET /metrics``."""
-        return self._get("/metrics").json()
+        """Return the metrics dict from ``GET /metrics``.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get("/metrics")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()

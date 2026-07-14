@@ -99,3 +99,45 @@ class DazProperty(DazElement):
             f"var p = {self._locator}; return p ? p.isAnimated() : null;"
         )
         return self._client.execute(script).value
+
+    def get_keys(self) -> list[dict]:
+        """List all keyframes on this property's animation curve.
+
+        Returns:
+            A list of ``{"time": float, "value": object}`` dicts, one per
+            keyframe, ordered by time. Empty list if the property has no
+            keys or doesn't support keyframing.
+        """
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p || !p.getNumKeys) return [];
+            var n = p.getNumKeys();
+            var keys = [];
+            for (var i = 0; i < n; i++) {{
+                var t = p.getKeyTime(i);
+                keys.push({{ time: t, value: p.getDoubleValue(t) }});
+            }}
+            return keys;
+        """)
+        return self._client.execute(script).value
+
+    def remove_key(self, time: float) -> None:
+        """Remove a single keyframe at the given time.
+
+        Args:
+            time: The keyframe time in DAZ ticks. If no key exists at
+                exactly this time, this is a no-op.
+        """
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (p && p.deleteKeys) p.deleteKeys({time}, {time});
+        """)
+        self._client.execute(script)
+
+    def clear_keys(self) -> None:
+        """Remove all keyframes from this property's animation curve."""
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (p && p.deleteAllKeys) p.deleteAllKeys();
+        """)
+        self._client.execute(script)

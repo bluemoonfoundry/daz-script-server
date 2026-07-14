@@ -168,6 +168,54 @@ class DazNode(DazElement):
         names = self._client.execute(script).value or []
         return [DazNode(self._client, NodeIdentifier(n)) for n in names]
 
+    def delete(self) -> bool:
+        """Remove this node from the scene entirely.
+
+        Returns:
+            ``True`` if the node was found and removed, ``False`` otherwise.
+        """
+        script = ScriptBuilder.node_body(self._identifier, "return Scene.removeNode(_node);")
+        return bool(self._client.execute(script).value)
+
+    def reparent(self, new_parent: "DazNode", *, preserve_world_transform: bool = True) -> None:
+        """Move this node to a new position in the scene hierarchy.
+
+        Detaches the node from its current parent (if any) and attaches it
+        as a child of *new_parent*, following the ``removeNodeChild`` /
+        ``addNodeChild`` DazScript pattern.
+
+        Args:
+            new_parent: The node to reparent under.
+            preserve_world_transform: When ``True`` (default), the node keeps
+                its current world-space position/rotation/scale, adjusting
+                its local transform to compensate. When ``False``, the
+                node's local transform values are left unchanged, which may
+                move it in world space.
+
+        Raises:
+            :class:`~dazpy.exceptions.ScriptRuntimeError`: If the reparent
+                operation fails (e.g. *new_parent* cannot be found, or would
+                create a cycle).
+        """
+        from .exceptions import ScriptRuntimeError
+        parent_expr = ScriptBuilder.find_node_expr(new_parent._identifier)
+        in_place = "true" if preserve_world_transform else "false"
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"""
+            var _newParent = {parent_expr};
+            if (!_newParent) return "new parent not found";
+            var _oldParent = _node.getNodeParent();
+            if (_oldParent) _oldParent.removeNodeChild(_node, {in_place});
+            var _err = _newParent.addNodeChild(_node, {in_place});
+            var _errNum = _err ? _err.valueOf() : 0;
+            return _errNum !== 0 ? ("DzError code " + _errNum) : null;
+            """
+        )
+        result = self._client.execute(script).value
+        if result:
+            raise ScriptRuntimeError(f"reparent failed: {result}")
+
     @staticmethod
     def _modifier_class_for(class_name: str):
         from ._modifier import DazModifier
@@ -542,6 +590,131 @@ class DazNode(DazElement):
             "var bb = _node.getWSBoundingBox(); return {min: {x: bb.min.x, y: bb.min.y, z: bb.min.z}, max: {x: bb.max.x, y: bb.max.y, z: bb.max.z}};"
         )
         return self._client.execute(script).value
+
+    def fit_to(self, figure: "DazNode") -> str:
+        """Fit this clothing/hair/prop node to a base figure.
+
+        For figure-based conforming clothing and hair (nodes exposing
+        ``setFollowTarget``/``followSkeleton``), this sets the follow
+        relationship so the item deforms with the figure's pose. For plain
+        props/accessories, it falls back to parenting the item under the
+        figure, preserving its current world-space transform.
+
+        Args:
+            figure: The target base figure node. Must already be loaded
+                into the scene.
+
+        Returns:
+            The DazScript API used: ``"setFollowTarget"``,
+            ``"followSkeleton"``, or ``"addNodeChild"`` (parenting fallback).
+
+        Raises:
+            NodeNotFoundError: If this node or *figure* cannot be found.
+        """
+        from .exceptions import NodeNotFoundError
+        figure_expr = ScriptBuilder.find_node_expr(figure._identifier)
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"""
+            var _figure = {figure_expr};
+            if (!_figure) return null;
+            var _method;
+            if (typeof _node.setFollowTarget === 'function') {{
+                _node.setFollowTarget(_figure);
+                _method = "setFollowTarget";
+            }} else if (typeof _node.followSkeleton === 'function') {{
+                _node.followSkeleton(_figure);
+                _method = "followSkeleton";
+            }} else {{
+                _figure.addNodeChild(_node, true);
+                _method = "addNodeChild";
+            }}
+            return _method;
+            """
+        )
+        result = self._client.execute(script).value
+        if result is None:
+            raise NodeNotFoundError(
+                f"Could not fit node to figure: one of the nodes was not found."
+            )
+        return result
+
+    def unfit(self) -> dict:
+        """Remove this node's fitting relationship with its figure.
+
+        Clears any follow-target relationship (conforming clothing/hair)
+        and detaches this node from its parent skeleton (props), leaving it
+        as a free-standing scene node at its current world position.
+
+        Returns:
+            A dict with keys:
+
+            - ``"previous_figure"`` — internal name of the figure this node
+              was fitted to, or ``None`` if it had no fitting relationship.
+            - ``"actions"`` — list of operations performed (e.g.
+              ``["cleared follow target", "detached from parent"]``), or
+              ``[]`` if nothing was fitted.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            """
+            var _prevFigure = null;
+            var _actions = [];
+            if (typeof _node.getFollowTarget === 'function') {
+                var _ft = _node.getFollowTarget();
+                if (_ft) {
+                    _prevFigure = _ft.getName();
+                    if (typeof _node.setFollowTarget === 'function') {
+                        _node.setFollowTarget(null);
+                        _actions.push("cleared follow target");
+                    }
+                }
+            }
+            var _parent = _node.getNodeParent();
+            if (_parent && _parent.inherits && _parent.inherits("DzSkeleton")) {
+                _prevFigure = _prevFigure || _parent.getName();
+                _parent.removeNodeChild(_node, true);
+                _actions.push("detached from parent");
+            }
+            return {previous_figure: _prevFigure, actions: _actions};
+            """
+        )
+        return self._client.execute(script).value or {"previous_figure": None, "actions": []}
+
+    def fitted_items(self) -> list["DazNode"]:
+        """Return all clothing, hair, and prop nodes fitted to this figure.
+
+        A node counts as fitted if it either follows this node (figure-based
+        conforming clothing/hair) or is directly parented to it (props and
+        accessories).
+
+        Returns:
+            A list of :class:`~dazpy.DazNode` proxies for each fitted item.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            """
+            var _fitted = [];
+            var _numNodes = Scene.getNumNodes();
+            for (var i = 0; i < _numNodes; i++) {
+                var _n = Scene.getNode(i);
+                if (!_n || _n === _node) continue;
+                var _isFitted = false;
+                if (typeof _n.getFollowTarget === 'function') {
+                    var _ft = _n.getFollowTarget();
+                    if (_ft && _ft.elementID === _node.elementID) _isFitted = true;
+                }
+                if (!_isFitted && typeof _n.getNodeParent === 'function') {
+                    var _p = _n.getNodeParent();
+                    if (_p && _p.elementID === _node.elementID) _isFitted = true;
+                }
+                if (_isFitted) _fitted.push(_n.getName());
+            }
+            return _fitted;
+            """
+        )
+        names = self._client.execute(script).value or []
+        return [DazNode(self._client, NodeIdentifier(n)) for n in names]
 
     @property
     def geometry_vertex_count(self) -> int | None:
