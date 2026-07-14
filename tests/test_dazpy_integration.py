@@ -195,6 +195,12 @@ class TestDazClientLowLevel(unittest.TestCase):
         with self.assertRaises(exceptions.AuthenticationError):
             bad_client.execute("(function(){ return 1; })()")
 
+    @skip_auth
+    def test_bad_token_status_raises_authentication_error(self):
+        bad_client = DazClient(token="invalid-token-000000")
+        with self.assertRaises(exceptions.AuthenticationError):
+            bad_client.status()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. DazScene

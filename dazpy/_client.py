@@ -37,11 +37,12 @@ def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult
 
     if not data.get("success", True):
         error_msg = data.get("error", "Script failed")
+        output = data.get("output", [])
         # SyntaxError comes from the parser; runtime errors (TypeError, ReferenceError,
         # Error, etc.) also include "Line N:" but never say "SyntaxError" explicitly.
         if "SyntaxError" in error_msg:
-            raise ScriptSyntaxError(error_msg, script=script, request_id=request_id)
-        raise ScriptRuntimeError(error_msg, script=script, request_id=request_id)
+            raise ScriptSyntaxError(error_msg, script=script, request_id=request_id, output=output)
+        raise ScriptRuntimeError(error_msg, script=script, request_id=request_id, output=output)
 
     return ExecutionResult(
         value=data.get("result"),
@@ -292,7 +293,7 @@ class DazClient:
             width: Image width in pixels (must be paired with *height*).
             height: Image height in pixels (must be paired with *width*).
             camera: Camera label to render from.
-            engine: Render engine (``"iray"``, ``"3delight"``, ``"filament"``).
+            engine: Render engine (``"iray"``, ``"filament"``).
             iray_samples: iRay sample count (0 = use scene default).
             reset_morphs: If ``True``, reset all morphs to defaults before applying.
 
@@ -379,7 +380,7 @@ class DazClient:
             width: Image width in pixels (must be paired with *height*).
             height: Image height in pixels (must be paired with *width*).
             camera: Camera label to render from.
-            engine: Render engine (``"iray"``, ``"3delight"``, ``"filament"``).
+            engine: Render engine (``"iray"``, ``"filament"``).
 
         Returns:
             A dict with ``request_id``, ``status`` (``"queued"``), and
@@ -550,13 +551,34 @@ class DazClient:
     # ── Server health ─────────────────────────────────────────────────────────
 
     def status(self) -> dict:
-        """Return the server status dict from ``GET /status``."""
-        return self._get("/status").json()
+        """Return the server status dict from ``GET /status``.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get("/status")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
 
     def health(self) -> dict:
-        """Return the health check dict from ``GET /health``."""
-        return self._get("/health").json()
+        """Return the health check dict from ``GET /health``.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get("/health")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
 
     def metrics(self) -> dict:
-        """Return the metrics dict from ``GET /metrics``."""
-        return self._get("/metrics").json()
+        """Return the metrics dict from ``GET /metrics``.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+        """
+        resp = self._get("/metrics")
+        if resp.status_code in (401, 403):
+            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
