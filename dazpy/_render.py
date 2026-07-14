@@ -143,14 +143,25 @@ class DazRenderSettings:
         return bool(self._client.execute(script).value)
 
     def active_engine(self) -> str | None:
-        """Return the active render engine name (e.g. "iray", "filament").
+        """Return the active render engine name.
 
-        Falls back to the raw DazScript class name (e.g. "DzIrayRenderer")
-        if it isn't one of the known engines.
+        The Render Settings pane's "Engine" dropdown conflates two separate
+        DazScript concepts, confirmed against a live instance:
+        ``DzRenderOptions.renderType`` is a 3-value enum (ScreenShot,
+        HardwareAssisted, Software) picking *how* the scene is rendered;
+        only when it's ``Software`` does ``renderMgr.getActiveRenderer()``
+        (the pluggable Iray/Filament/... renderer) apply. Returns
+        ``"viewport"`` or ``"multi_pass_opengl"`` for the first two modes,
+        otherwise the mapped engine name (e.g. "iray", "filament"), falling
+        back to the raw DazScript class name (e.g. "DzIrayRenderer") if it
+        isn't one of the known engines.
         """
         script = ScriptBuilder.iife(f"""
             var mgr = {self._render_mgr()};
             if (!mgr) return null;
+            var opts = mgr.getRenderOptions();
+            if (opts.renderType === opts.ScreenShot) return "viewport";
+            if (opts.renderType === opts.HardwareAssisted) return "multi_pass_opengl";
             var renderer = mgr.getActiveRenderer();
             return renderer ? renderer.className() : null;
         """)

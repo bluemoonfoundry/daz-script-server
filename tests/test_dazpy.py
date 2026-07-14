@@ -1190,6 +1190,7 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("getActiveRenderer", script)
         self.assertIn("className", script)
+        self.assertIn("renderType", script)
 
     def test_active_engine_falls_back_to_raw_class_name(self):
         rs, client = self._make_render("DzSomeUnknownRenderer")
@@ -1200,6 +1201,16 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         rs, client = self._make_render(None)
         val = rs.active_engine()
         self.assertIsNone(val)
+
+    def test_active_engine_viewport_mode(self):
+        rs, client = self._make_render("viewport")
+        val = rs.active_engine()
+        self.assertEqual(val, "viewport")
+
+    def test_active_engine_multi_pass_opengl_mode(self):
+        rs, client = self._make_render("multi_pass_opengl")
+        val = rs.active_engine()
+        self.assertEqual(val, "multi_pass_opengl")
 
     def test_has_render(self):
         rs, client = self._make_render(True)
