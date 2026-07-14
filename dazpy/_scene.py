@@ -620,6 +620,129 @@ class DazScene:
             raise DazError(f"save_copy failed ({resp.status_code}): {msg}")
         return resp.json()
 
+    def _export_via_native_exporter(self, exporter_class: str, path: str, overrides: dict) -> None:
+        """Run one of DAZ Studio's built-in file exporters (``DzExportMgr``).
+
+        Confirmed against a live instance: ``App.getExportMgr()`` registers
+        exporters by class name (e.g. ``"DzFbxExporter"``, ``"DzObjExporter"``)
+        and each exposes ``getDefaultOptions(DzFileIOSettings*)`` /
+        ``writeFile(path, settings)``. Defaults are seeded from the exporter
+        itself, then *overrides* are applied by Python type (bool -> setBoolValue,
+        int -> setIntValue, float -> setFloatValue, else -> setStringValue).
+        ``RunSilent`` must be forced to 1 or the native exporter shows a modal
+        options dialog, which would hang the main thread the HTTP handler
+        blocks on.
+        """
+        settings_calls = []
+        for key, value in overrides.items():
+            js_key = json.dumps(key)
+            if isinstance(value, bool):
+                settings_calls.append(f"settings.setBoolValue({js_key}, {'true' if value else 'false'});")
+            elif isinstance(value, int):
+                settings_calls.append(f"settings.setIntValue({js_key}, {value});")
+            elif isinstance(value, float):
+                settings_calls.append(f"settings.setFloatValue({js_key}, {value});")
+            else:
+                settings_calls.append(f"settings.setStringValue({js_key}, {json.dumps(str(value))});")
+
+        script = ScriptBuilder.iife(f"""
+            var mgr = App.getExportMgr();
+            var exp = mgr.findExporterByClassName({json.dumps(exporter_class)});
+            if (!exp) return;
+            var settings = new DzFileIOSettings();
+            exp.getDefaultOptions(settings);
+            {' '.join(settings_calls)}
+            exp.writeFile({json.dumps(path)}, settings);
+        """)
+        self._client.execute(script)
+
+    def export_fbx(
+        self,
+        path: str,
+        *,
+        selected_only: bool = False,
+        include_figures: bool = True,
+        include_props: bool = False,
+        include_lights: bool = False,
+        include_cameras: bool = False,
+        include_animations: bool = False,
+        embed_textures: bool = True,
+        options: dict | None = None,
+    ) -> None:
+        """Export the scene to an FBX file via DAZ Studio's built-in FBX exporter.
+
+        This is a plain synchronous call, unlike
+        :meth:`~dazpy.DazClient.export_usd_submit` -- FBX export is a native
+        DAZ Studio exporter (``DzFbxExporter``) rather than a custom C++
+        pipeline, so there's no async job to poll.
+
+        Args:
+            path: Absolute destination path on the DAZ Studio host (should
+                end in ``.fbx``).
+            selected_only: Export only the selected node(s).
+            include_figures: Include figures (default ``True``).
+            include_props: Include prop nodes.
+            include_lights: Include scene lights.
+            include_cameras: Include cameras.
+            include_animations: Include the current animation take.
+            embed_textures: Embed texture maps into the FBX file (default ``True``).
+            options: Additional raw ``DzFileIOSettings`` overrides (e.g.
+                ``{"Format": "FBX 2014 -- Binary"}``), applied on top of the
+                exporter's own defaults and the named args above. See
+                ``DzFbxExporter.getDefaultOptions()`` for the full set of keys.
+        """
+        overrides = {
+            "IncludeSelectedOnly": selected_only,
+            "IncludeFigures": include_figures,
+            "IncludeProps": include_props,
+            "IncludeLights": include_lights,
+            "IncludeCameras": include_cameras,
+            "IncludeAnimations": include_animations,
+            "EmbedTextures": embed_textures,
+        }
+        overrides.update(options or {})
+        overrides["RunSilent"] = 1
+        self._export_via_native_exporter("DzFbxExporter", path, overrides)
+
+    def export_obj(
+        self,
+        path: str,
+        *,
+        selected_only: bool = False,
+        ignore_invisible: bool = True,
+        include_normals: bool = False,
+        collect_maps: bool = False,
+        options: dict | None = None,
+    ) -> None:
+        """Export the scene to an OBJ file via DAZ Studio's built-in OBJ exporter.
+
+        This is a plain synchronous call -- see :meth:`export_fbx` for why
+        this doesn't follow the USD export module's async job pattern.
+
+        Args:
+            path: Absolute destination path on the DAZ Studio host (should
+                end in ``.obj``).
+            selected_only: Export only the selected node(s).
+            ignore_invisible: Skip nodes hidden in the viewport (default
+                ``True``, matches the exporter's own default).
+            include_normals: Write vertex normals (``WriteVN``).
+            collect_maps: Copy referenced texture maps next to the
+                ``.obj``/``.mtl`` instead of referencing their original paths.
+            options: Additional raw ``DzFileIOSettings`` overrides, applied
+                on top of the exporter's own defaults and the named args
+                above. See ``DzObjExporter.getDefaultOptions()`` for the
+                full set of keys.
+        """
+        overrides = {
+            "SelectedOnly": selected_only,
+            "IgnoreInvisible": ignore_invisible,
+            "WriteVN": include_normals,
+            "CollectMaps": collect_maps,
+        }
+        overrides.update(options or {})
+        overrides["RunSilent"] = 1
+        self._export_via_native_exporter("DzObjExporter", path, overrides)
+
     def filename(self) -> str:
         """Return the file path of the currently loaded scene, or an empty string."""
         script = ScriptBuilder.iife("return Scene.getFilename();")

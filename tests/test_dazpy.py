@@ -41,6 +41,9 @@ from dazpy import (
     LookAtTarget,
     PoseTarget,
     build_fight_recipe,
+    build_face_each_other_recipe,
+    build_handshake_recipe,
+    build_hug_recipe,
     build_kiss_recipe,
     build_sit_recipe,
     build_touch_recipe,
@@ -702,6 +705,37 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertTrue(any(isinstance(constraint, HandTarget) for constraint in touch.constraints))
         self.assertTrue(sum(isinstance(constraint, LookAtTarget) for constraint in kiss.constraints) >= 2)
         self.assertTrue(any(isinstance(constraint, FootTarget) for constraint in fight.constraints))
+
+    def test_handshake_recipe_builder(self):
+        handshake = build_handshake_recipe("Genesis 9", "Partner")
+        self.assertEqual(handshake.kind, "handshake")
+        self.assertEqual(handshake.actors, ["Genesis 9", "Partner"])
+        hand_targets = [c for c in handshake.constraints if isinstance(c, HandTarget)]
+        self.assertEqual(len(hand_targets), 2)
+        self.assertTrue(sum(isinstance(c, LookAtTarget) for c in handshake.constraints) >= 2)
+        # Mirrored: each actor's hand targets the other actor's hand.
+        a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
+        b_target = next(c for c in hand_targets if c.figure_label == "Partner")
+        self.assertEqual(a_target.target_figure, "Partner")
+        self.assertEqual(b_target.target_figure, "Genesis 9")
+
+    def test_hug_recipe_builder(self):
+        hug = build_hug_recipe("Genesis 9", "Partner")
+        self.assertEqual(hug.kind, "hug")
+        self.assertEqual(hug.actors, ["Genesis 9", "Partner"])
+        hand_targets = [c for c in hug.constraints if isinstance(c, HandTarget)]
+        self.assertEqual(len(hand_targets), 2)
+        # Each actor's hand reaches for the *far* shoulder (arms wrap around).
+        a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
+        self.assertEqual(a_target.target_anchor, "l_shoulder")
+
+    def test_face_each_other_recipe_builder(self):
+        face = build_face_each_other_recipe("Genesis 9", "Partner")
+        self.assertEqual(face.kind, "face_each_other")
+        self.assertEqual(face.actors, ["Genesis 9", "Partner"])
+        self.assertEqual(len(face.constraints), 2)
+        self.assertTrue(all(isinstance(c, LookAtTarget) for c in face.constraints))
+        self.assertFalse(any(isinstance(c, HandTarget) for c in face.constraints))
 
     def test_prepare_interaction_recipe_compiles_targets(self):
         source_hip = _FakeBone("hip", "Hip")
@@ -2570,6 +2604,56 @@ class TestDazSceneIO(unittest.TestCase):
         script = scene._client.execute.call_args[0][0]
         self.assertIn("loopPlayback", script)
         self.assertIn("false", script)
+
+    def test_export_fbx_uses_fbx_exporter_and_defaults(self):
+        scene = self._scene(None)
+        scene.export_fbx("/out/scene.fbx")
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("DzFbxExporter", script)
+        self.assertIn("findExporterByClassName", script)
+        self.assertIn("getDefaultOptions", script)
+        self.assertIn("writeFile", script)
+        self.assertIn("/out/scene.fbx", script)
+        self.assertIn('setBoolValue("IncludeFigures", true)', script)
+        self.assertIn('setBoolValue("IncludeProps", false)', script)
+        self.assertIn('setIntValue("RunSilent", 1)', script)
+
+    def test_export_fbx_passes_named_overrides(self):
+        scene = self._scene(None)
+        scene.export_fbx(
+            "/out/scene.fbx",
+            selected_only=True,
+            include_animations=True,
+            embed_textures=False,
+        )
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('setBoolValue("IncludeSelectedOnly", true)', script)
+        self.assertIn('setBoolValue("IncludeAnimations", true)', script)
+        self.assertIn('setBoolValue("EmbedTextures", false)', script)
+
+    def test_export_fbx_accepts_raw_options_override(self):
+        scene = self._scene(None)
+        scene.export_fbx("/out/scene.fbx", options={"Format": "FBX 2014 -- Binary"})
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('setStringValue("Format", "FBX 2014 -- Binary")', script)
+
+    def test_export_obj_uses_obj_exporter_and_defaults(self):
+        scene = self._scene(None)
+        scene.export_obj("/out/scene.obj")
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("DzObjExporter", script)
+        self.assertIn("findExporterByClassName", script)
+        self.assertIn("/out/scene.obj", script)
+        self.assertIn('setBoolValue("IgnoreInvisible", true)', script)
+        self.assertIn('setIntValue("RunSilent", 1)', script)
+
+    def test_export_obj_passes_named_overrides(self):
+        scene = self._scene(None)
+        scene.export_obj("/out/scene.obj", selected_only=True, include_normals=True, collect_maps=True)
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('setBoolValue("SelectedOnly", true)', script)
+        self.assertIn('setBoolValue("WriteVN", true)', script)
+        self.assertIn('setBoolValue("CollectMaps", true)', script)
 
 
 class TestDazSceneDForceSimulation(unittest.TestCase):
