@@ -794,6 +794,50 @@ class TestDazRenderSettings(unittest.TestCase):
     def test_has_render_is_bool(self):
         self.assertIsInstance(self.rs.has_render(), bool)
 
+    def test_canvases_enabled_round_trips(self):
+        original = self.rs.canvases_enabled
+        try:
+            self.rs.canvases_enabled = False
+            self.assertFalse(self.rs.canvases_enabled)
+            self.rs.canvases_enabled = True
+            self.assertTrue(self.rs.canvases_enabled)
+        finally:
+            if original is not None:
+                self.rs.canvases_enabled = original
+
+    def test_list_canvases_returns_list_of_canvas(self):
+        from dazpy._render import Canvas
+        canvases = self.rs.list_canvases()
+        self.assertIsInstance(canvases, list)
+        for canvas in canvases:
+            self.assertIsInstance(canvas, Canvas)
+
+    def test_add_and_remove_canvas_round_trip(self):
+        from dazpy._render import Canvas
+        name = "dazpy_test_canvas_uae"
+        canvas = self.rs.add_canvas(name, "Depth")
+        self.assertIsInstance(canvas, Canvas)
+        self.assertEqual(canvas.name, name)
+        self.assertEqual(canvas.canvas_type, "Depth")
+        names = [c.name for c in self.rs.list_canvases()]
+        self.assertIn(name, names)
+
+        removed = self.rs.remove_canvas(name)
+        self.assertTrue(removed)
+        names_after = [c.name for c in self.rs.list_canvases()]
+        self.assertNotIn(name, names_after)
+
+    def test_remove_canvas_nonexistent_returns_false(self):
+        self.assertFalse(self.rs.remove_canvas("__no_such_canvas_xyz__"))
+
+    def test_canvas_output_paths_keyed_by_existing_canvas_names(self):
+        paths = self.rs.canvas_output_paths("C:/tmp/dazpy_canvas_path_test.png")
+        canvases = self.rs.list_canvases()
+        self.assertEqual(set(paths.keys()), {c.name for c in canvases})
+        for canvas in canvases:
+            self.assertIn(canvas.name, paths[canvas.name])
+            self.assertIn(canvas.canvas_type, paths[canvas.name])
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DazSkeleton / DazBone

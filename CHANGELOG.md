@@ -6,6 +6,13 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **`DazRenderSettings` Iray Canvas support** (`list_canvases()`,
+  `add_canvas()`, `remove_canvas()`, `canvases_enabled`,
+  `canvas_output_paths()`) — enumerate, create, and remove Iray Canvases
+  (normal/depth/material-ID/etc. passes) and resolve their output file paths
+  for a given render, closing GitHub issue #19's Canvas gap. Backed by
+  `App.getRenderMgr().getRenderElementObjects()[1]`, confirmed against a live
+  DAZ Studio instance — no server-side changes needed.
 - **`DazScene.create_camera()` / `DazScene.create_light()`** — factory
   methods to create new camera and light nodes and add them to the scene,
   returning `DazCamera`/`DazLight` wrappers usable with the rest of the

@@ -1165,6 +1165,87 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("hasRender", script)
 
+    def test_canvases_enabled_getter_uses_render_element_objects(self):
+        rs, client = self._make_render(True)
+        val = rs.canvases_enabled
+        self.assertTrue(val)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRenderElementObjects()[1]", script)
+        self.assertIn("renderToCanvases", script)
+
+    def test_canvases_enabled_setter_refreshes_pane(self):
+        rs, client = self._make_render(None)
+        rs.canvases_enabled = False
+        script = client.execute.call_args[0][0]
+        self.assertIn("renderToCanvases = false", script)
+        self.assertIn("DzRenderSettingsPane", script)
+        self.assertIn(".refresh()", script)
+
+    def test_list_canvases_returns_canvas_objects(self):
+        from dazpy._render import Canvas
+        rs, client = self._make_render(
+            [{"name": "Canvas1", "canvas_type": "Normal", "index": 0}]
+        )
+        canvases = rs.list_canvases()
+        self.assertEqual(canvases, [Canvas(name="Canvas1", canvas_type="Normal", index=0)])
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumCanvasDefinitions", script)
+        self.assertIn("getCanvasDefinition", script)
+        self.assertIn("canvasTypeToString", script)
+
+    def test_list_canvases_empty_when_none_configured(self):
+        rs, client = self._make_render([])
+        self.assertEqual(rs.list_canvases(), [])
+
+    def test_add_canvas_uses_find_canvas_definition_with_create(self):
+        from dazpy._render import Canvas
+        rs, client = self._make_render(
+            {"name": "DepthPass", "canvas_type": "Depth", "index": 1}
+        )
+        canvas = rs.add_canvas("DepthPass", "Depth")
+        self.assertEqual(canvas, Canvas(name="DepthPass", canvas_type="Depth", index=1))
+        script = client.execute.call_args[0][0]
+        self.assertIn("findCanvasDefinition(\"DepthPass\", true)", script)
+        self.assertIn("canvasTypeFromString(\"Depth\")", script)
+        self.assertIn(".refresh()", script)
+
+    def test_add_canvas_raises_render_error_when_unavailable(self):
+        from dazpy.exceptions import RenderError
+        rs, client = self._make_render(None)
+        with self.assertRaises(RenderError):
+            rs.add_canvas("Foo", "Beauty")
+
+    def test_remove_canvas_uses_find_canvas_definition_no_create(self):
+        rs, client = self._make_render(True)
+        result = rs.remove_canvas("Canvas1")
+        self.assertTrue(result)
+        script = client.execute.call_args[0][0]
+        self.assertIn("findCanvasDefinition(\"Canvas1\", false)", script)
+        self.assertIn("removeCanvasDefinition", script)
+        self.assertIn(".refresh()", script)
+
+    def test_remove_canvas_returns_false_when_missing(self):
+        rs, client = self._make_render(False)
+        self.assertFalse(rs.remove_canvas("NoSuchCanvas"))
+
+    def test_canvas_output_paths_derives_convention(self):
+        from dazpy._render import Canvas
+        rs, client = self._make_render(
+            [{"name": "Canvas1", "canvas_type": "Normal", "index": 0}]
+        )
+        paths = rs.canvas_output_paths("C:/tmp/out.png")
+        self.assertEqual(
+            paths,
+            {"Canvas1": "C:/tmp/out_canvases/out-Canvas1-Normal.exr"},
+        )
+
+    def test_canvas_output_paths_no_directory(self):
+        rs, client = self._make_render(
+            [{"name": "Canvas1", "canvas_type": "Depth", "index": 0}]
+        )
+        paths = rs.canvas_output_paths("out.png")
+        self.assertEqual(paths, {"Canvas1": "out_canvases/out-Canvas1-Depth.exr"})
+
 
 class TestDazSkeletonScriptGeneration(unittest.TestCase):
     def setUp(self):

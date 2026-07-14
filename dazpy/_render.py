@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from ._client import DazClient
 from ._script_builder import ScriptBuilder
+from .exceptions import RenderError
 
 # Access path: App.getRenderMgr() → DzRenderMgr
 # Render options: mgr.getRenderOptions() → DzRenderOptions
@@ -24,6 +26,44 @@ _QUALITY_PRESETS = {
     "good":    {"max_samples": 1500, "max_time": 3600, "quality_enable": True, "quality": 1.0},
     "final":   {"max_samples": 5000, "max_time": 7200, "quality_enable": True, "quality": 1.0},
 }
+
+# Iray Canvases (Render Settings > Advanced > Canvases) are not exposed on
+# DzIrayRenderer/DzRenderOptions at all -- they live on a separate
+# DzIrayPropertyHolder returned as element [1] of
+# App.getRenderMgr().getRenderElementObjects(), confirmed against a live
+# DAZ Studio instance:
+#
+#   holder.renderToCanvases            -- bool, master on/off for all canvas output
+#   holder.getNumCanvasDefinitions()    -- int
+#   holder.getCanvasDefinition(i)       -- canvas object
+#   holder.findCanvasDefinition(name, createIfMissing) -- canvas object or null
+#   holder.removeCanvasDefinition(canvas)
+#
+#   canvas.name                        -- e.g. "Canvas1", auto-generated but editable
+#   canvas.canvasType                  -- int enum (Beauty, Normal, Depth, MaterialID, ...)
+#   canvas.canvasTypeToString(int) / canvasTypeFromString(string)
+#
+# canvas.processingDisabled exists but does NOT gate render output (confirmed
+# it still renders when true) -- do not rely on it for per-canvas enable/disable.
+#
+# Each enabled canvas is written to
+#   <output_dir>/<basename>_canvases/<basename>-<canvasName>-<canvasType>.exr
+# alongside the main render output (confirmed empirically; not queryable via
+# script, so canvas_output_paths() below derives it from this convention).
+#
+# UI widgets in the Render Settings pane do not repaint after a scripted
+# property write -- MainWindow.getPaneMgr().findPane("DzRenderSettingsPane")
+# .refresh() must be called after any scripted change for the UI to reflect
+# it. Every write in this module does so as standard practice.
+
+
+@dataclass
+class Canvas:
+    """An Iray Canvas definition (extra render pass alongside the beauty image)."""
+
+    name: str
+    canvas_type: str
+    index: int
 
 
 class DazRenderSettings:
@@ -54,6 +94,20 @@ class DazRenderSettings:
             if (p) p.setValue({serialized});
         """)
         self._client.execute(script)
+
+    def _iray_render_options_holder(self) -> str:
+        # Canvas definitions live on this holder, not on getActiveRenderer()
+        # .getPropertyHolder() -- confirmed against a live instance; index 1
+        # is "NVIDIA Iray Render Options" among the 4 fixed render element
+        # groups (General Render, Iray, Tonemapper, Environment).
+        return f"{self._render_mgr()}.getRenderElementObjects()[1]"
+
+    @staticmethod
+    def _refresh_render_settings_pane_script() -> str:
+        return (
+            'var _pane = MainWindow.getPaneMgr().findPane("DzRenderSettingsPane");'
+            "if (_pane) _pane.refresh();"
+        )
 
     def is_available(self) -> bool:
         """Return True if the render manager is accessible."""
@@ -272,3 +326,134 @@ class DazRenderSettings:
         self._set_iray_property("Rendering Quality Enable", settings["quality_enable"])
         if "quality" in settings:
             self._set_iray_property("Rendering Quality", settings["quality"])
+
+    @property
+    def canvases_enabled(self) -> bool | None:
+        """Master on/off switch for all Iray Canvas output (``Render to Canvases``)."""
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_render_options_holder()};
+            if (!holder) return null;
+            return holder.renderToCanvases;
+        """)
+        result = self._client.execute(script).value
+        return None if result is None else bool(result)
+
+    @canvases_enabled.setter
+    def canvases_enabled(self, value: bool) -> None:
+        js_bool = "true" if value else "false"
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_render_options_holder()};
+            if (!holder) return;
+            holder.renderToCanvases = {js_bool};
+            {self._refresh_render_settings_pane_script()}
+        """)
+        self._client.execute(script)
+
+    def list_canvases(self) -> list[Canvas]:
+        """List the Iray Canvases currently configured on the active render."""
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_render_options_holder()};
+            if (!holder) return [];
+            var result = [];
+            var n = holder.getNumCanvasDefinitions();
+            for (var i = 0; i < n; i++) {{
+                var c = holder.getCanvasDefinition(i);
+                result.push({{
+                    name: c.name,
+                    canvas_type: c.canvasTypeToString(c.canvasType),
+                    index: c.index
+                }});
+            }}
+            return result;
+        """)
+        result = self._client.execute(script).value or []
+        return [Canvas(**c) for c in result]
+
+    def add_canvas(self, name: str, canvas_type: str) -> Canvas:
+        """Add (or reconfigure) an Iray Canvas by name.
+
+        Args:
+            name: Canvas name. If a canvas with this name already exists it is
+                reconfigured to *canvas_type* rather than duplicated.
+            canvas_type: One of ``"Beauty"``, ``"Diffuse"``, ``"Specular"``,
+                ``"Glossy"``, ``"Emission"``, ``"LightGroup"``,
+                ``"EnvironmentLighting"``, ``"LPE"``, ``"Irradiance"``,
+                ``"Alpha"``, ``"Shadow"``, ``"AmbientOcclusion"``,
+                ``"Distance"``, ``"Depth"``, ``"MaterialTag"``,
+                ``"MaterialID"``, ``"ObjectID"``, ``"Normal"``,
+                ``"TextureCoordinate"``, ``"BSDFWeight"``,
+                ``"ConvergenceHeatmap"``, ``"PostToon"``, ``"WorldPosition"``.
+
+        Returns:
+            The resulting :class:`Canvas`.
+
+        Raises:
+            RenderError: If the render manager or Iray property holder is
+                unavailable.
+        """
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_render_options_holder()};
+            if (!holder) return null;
+            var c = holder.findCanvasDefinition({json.dumps(name)}, true);
+            c.canvasType = c.canvasTypeFromString({json.dumps(canvas_type)});
+            {self._refresh_render_settings_pane_script()}
+            return {{
+                name: c.name,
+                canvas_type: c.canvasTypeToString(c.canvasType),
+                index: c.index
+            }};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            raise RenderError(
+                "Failed to add canvas: render manager or Iray property holder unavailable"
+            )
+        return Canvas(**result)
+
+    def remove_canvas(self, name: str) -> bool:
+        """Remove a configured Iray Canvas by name.
+
+        Returns:
+            ``True`` if a matching canvas was found and removed, ``False`` if
+            no canvas with *name* exists.
+        """
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._iray_render_options_holder()};
+            if (!holder) return false;
+            var c = holder.findCanvasDefinition({json.dumps(name)}, false);
+            if (!c) return false;
+            holder.removeCanvasDefinition(c);
+            {self._refresh_render_settings_pane_script()}
+            return true;
+        """)
+        return bool(self._client.execute(script).value)
+
+    def canvas_output_paths(self, output_path: str) -> dict[str, str]:
+        """Return each configured canvas's resolved output file path for a render to *output_path*.
+
+        Derived from DAZ Studio's naming convention -- canvases are written to
+        ``<dir>/<basename>_canvases/<basename>-<canvasName>-<canvasType>.exr``
+        alongside the main render output. Confirmed empirically against a live
+        render; DazScript does not expose these paths directly, so this is
+        computed rather than queried.
+
+        Args:
+            output_path: The path passed as the main render's ``output_path``
+                (i.e. what :attr:`output_path` would be set to).
+
+        Returns:
+            A dict mapping each canvas's name to its resolved output path.
+        """
+        sep_idx = max(output_path.rfind("/"), output_path.rfind("\\"))
+        directory = output_path[:sep_idx] if sep_idx >= 0 else ""
+        filename = output_path[sep_idx + 1:]
+        dot_idx = filename.rfind(".")
+        basename = filename[:dot_idx] if dot_idx >= 0 else filename
+        sep = output_path[sep_idx] if sep_idx >= 0 else "/"
+        prefix = f"{directory}{sep}" if directory else ""
+        canvases_dir = f"{basename}_canvases"
+
+        return {
+            canvas.name: f"{prefix}{canvases_dir}{sep}{basename}-{canvas.name}-{canvas.canvas_type}.exr"
+            for canvas in self.list_canvases()
+        }

@@ -27,7 +27,7 @@ from ._modifier import DazModifier
 from ._morph import DazMorph
 from ._dforce import DazDForce
 from ._geometry import DazGeometry
-from ._render import DazRenderSettings
+from ._render import DazRenderSettings, Canvas
 from ._viewport import DazViewport
 from ._timeline import DazTimeline
 from ._property import DazProperty
@@ -102,6 +102,7 @@ __all__ = [
     "DazDForce",
     "DazGeometry",
     "DazRenderSettings",
+    "Canvas",
     "DazViewport",
     "DazTimeline",
     "DazProperty",
