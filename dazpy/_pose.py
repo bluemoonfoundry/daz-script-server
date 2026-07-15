@@ -93,23 +93,36 @@ class DazPose:
                     bones[b.getName()] = [x, y, z];
             }}
 
+            // Morphs can themselves be ERC targets (e.g. a master "Character"
+            // dial that fans out to dozens of shape morphs via DzERCLink),
+            // so read raw values here for the same reason as props below.
             var morphs = {{}};
             var obj = _skel.getObject();
             if (obj) {{
                 for (var i = 0; i < obj.getNumModifiers(); i++) {{
                     var m = obj.getModifier(i);
                     if (m.className() === "DzMorph") {{
-                        var v = m.getValueChannel().getValue();
+                        var ch = m.getValueChannel();
+                        var v = (typeof ch.getRawValue === "function") ? ch.getRawValue() : ch.getValue();
                         if (Math.abs(v) > 0.0001) morphs[m.getName()] = v;
                     }}
                 }}
             }}
 
+            // Read the property's own dial setting rather than getValue()'s
+            // post-ERC computed total. Properties driven by DzERCLink
+            // controllers (e.g. a "Scale" dial fed by dozens of linked
+            // morphs) return a getValue() that already includes every
+            // controller's contribution; capturing that and writing it back
+            // via setValue() on apply() would re-add the same contributions
+            // on top, inflating the property a little more on every
+            // capture/apply cycle. getRawValue() reads only the property's
+            // own baseline and round-trips correctly regardless of ERC links.
             var props = {{}};
             for (var i = 0; i < _skel.getNumProperties(); i++) {{
                 var p = _skel.getProperty(i);
                 if (p && p.getValue) {{
-                    var v = p.getValue();
+                    var v = (typeof p.getRawValue === "function") ? p.getRawValue() : p.getValue();
                     if (typeof v === "number" && Math.abs(v) > 0.0001)
                         props[p.getName()] = v;
                 }}
@@ -246,13 +259,21 @@ class DazPose:
                 }}
             }}
 
+            // Write back to the raw dial slot, mirroring capture()'s use of
+            // getRawValue() -- see the comment there for why setValue()
+            // would double-apply ERC-controller contributions on properties
+            // like morphs or a "Scale" dial that are DzERCLink targets.
             var obj = _skel.getObject();
             if (obj) {{
                 for (var i = 0; i < obj.getNumModifiers(); i++) {{
                     var m = obj.getModifier(i);
                     if (m.className() === "DzMorph") {{
                         var v = _morphs[m.getName()];
-                        if (v !== undefined) m.getValueChannel().setValue(v);
+                        if (v !== undefined) {{
+                            var ch = m.getValueChannel();
+                            if (typeof ch.setRawValue === "function") {{ ch.setRawValue(v); }}
+                            else {{ ch.setValue(v); }}
+                        }}
                     }}
                 }}
             }}
@@ -261,7 +282,10 @@ class DazPose:
                 var p = _skel.getProperty(i);
                 if (p && p.setValue) {{
                     var v = _props[p.getName()];
-                    if (v !== undefined) p.setValue(v);
+                    if (v !== undefined) {{
+                        if (typeof p.setRawValue === "function") {{ p.setRawValue(v); }}
+                        else {{ p.setValue(v); }}
+                    }}
                 }}
             }}
 
@@ -307,13 +331,20 @@ class DazPose:
                 }}
             }}
 
+            // Write back to the raw dial slot -- see the comment in
+            // capture() for why setValue() would double-apply ERC-controller
+            // contributions on properties like morphs or a "Scale" dial that
+            // are DzERCLink targets.
             var obj = _skel.getObject();
             if (obj) {{
                 for (var i = 0; i < obj.getNumModifiers(); i++) {{
                     var m = obj.getModifier(i);
                     if (m.className() === "DzMorph") {{
                         var v = _morphs[m.getName()];
-                        m.getValueChannel().setValue(v !== undefined ? v : 0);
+                        var _v = (v !== undefined) ? v : 0;
+                        var ch = m.getValueChannel();
+                        if (typeof ch.setRawValue === "function") {{ ch.setRawValue(_v); }}
+                        else {{ ch.setValue(_v); }}
                     }}
                 }}
             }}
@@ -322,7 +353,10 @@ class DazPose:
                 var p = _skel.getProperty(i);
                 if (p && p.setValue) {{
                     var v = _props[p.getName()];
-                    if (v !== undefined) p.setValue(v);
+                    if (v !== undefined) {{
+                        if (typeof p.setRawValue === "function") {{ p.setRawValue(v); }}
+                        else {{ p.setValue(v); }}
+                    }}
                 }}
             }}
 

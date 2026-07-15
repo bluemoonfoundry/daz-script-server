@@ -13,7 +13,7 @@ Typical usage::
     figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 """
 
-__version__ = "2.6.0"
+__version__ = "2.7.0"
 
 from ._client import DazClient
 from ._scene import DazScene
@@ -74,6 +74,7 @@ from ._interaction import (
 )
 from ._undo import UndoGroup
 from ._pose import DazPose
+from ._scene_state import DazSceneState
 from ._animation import DazAnimation
 from .math3 import Vec3, Quat, BoundingBox
 from ._result import ExecutionResult
@@ -152,6 +153,7 @@ __all__ = [
     "resolve_interaction_target",
     "UndoGroup",
     "DazPose",
+    "DazSceneState",
     "DazAnimation",
     "Vec3",
     "Quat",

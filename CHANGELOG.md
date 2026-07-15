@@ -22,8 +22,35 @@ All notable changes to DazScript Server are documented here.
   scene entirely, or move it to a new parent in the hierarchy via the
   `removeNodeChild`/`addNodeChild` pattern, optionally preserving its
   world-space transform (`preserve_world_transform=True` by default).
+- **`DazProperty.raw_value`** — read/write a property's own dial value,
+  excluding any `DzERCLink` controller contributions. Use this instead of
+  `.value` whenever a save/restore round trip needs to be exact (see Fixed,
+  below, for why `.value` is unsafe for that).
+- **`DazScene.overview()`** — one-call top-level scene snapshot (root
+  figures, cameras, lights, open scene file, primary selection, node count).
+- **`DazScene.node_hierarchy(root, max_depth=None)`** — one-call descendant
+  tree rooted at a single named node (typically a figure), with a `type` on
+  every entry and an optional recursion-depth limit. Complements the
+  existing `node_tree()`, which always starts from every scene root.
+- **`DazSceneState`** — full scene checkpoint: every skeleton's complete
+  pose (via `DazPose`, so bone-level, not just the root transform) plus
+  camera and light transforms/key properties, captured and restored via
+  `raw_value` throughout so repeated capture/apply cycles are idempotent.
 
 ### Fixed
+
+- **`DazPose.capture()` / `.apply()` / `.apply_full()` inflate ERC-driven
+  properties on every round trip** — node-level properties captured via
+  `getValue()` (e.g. a "Scale" dial fed by dozens of `DzERCLink`-linked
+  morphs) return the post-ERC computed total, but `apply()`/`apply_full()`
+  wrote that total back via `setValue()`, which sets the property's raw
+  slot — so the ERC links add their contribution again on top. Each
+  capture/apply cycle compounded the drift (observed inflating a custom
+  character's Scale dial from 100% to 270% over a handful of cycles in
+  `daz-mcp-server`'s test suite, via its use of `daz_save_pose`/
+  `daz_load_pose`). Now uses `getRawValue()`/`setRawValue()` (see
+  `DazProperty.raw_value` above) for props and morphs, which round-trip
+  correctly regardless of ERC links.
 
 - **`/render` camera selection** — the native render endpoint called
   `App.getViewportMgr()` when a `cameraName` was supplied, which is undefined

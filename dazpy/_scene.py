@@ -459,6 +459,110 @@ class DazScene:
         """)
         return self._client.execute(script).value or []
 
+    def node_hierarchy(self, root: str | None = None, max_depth: int | None = None) -> dict:
+        """Return the descendant tree rooted at a single node, in one HTTP call.
+
+        Unlike :meth:`node_tree` (every root-level node in the scene), this
+        starts at one named node -- typically a figure -- and includes a
+        ``type`` (DazScript class name) on every entry and an optional
+        recursion-depth limit, which matters for deep skeletons (Genesis
+        figures have 100+ bones).
+
+        Args:
+            root: Display label or internal name of the root node. Searched
+                by label first, then internal name.
+            max_depth: Maximum recursion depth. ``None`` or ``0`` means
+                unlimited.
+
+        Returns:
+            ``{"node": label, "hierarchy": {...}, "total_descendants": int}``
+            where ``hierarchy`` is ``{"label", "name", "type", "children": [...]}``
+            (``children`` omitted for leaf nodes).
+
+        Raises:
+            NodeNotFoundError: If *root* cannot be found.
+        """
+        from .exceptions import NodeNotFoundError
+        root_json = json.dumps(root)
+        depth_js = str(int(max_depth)) if max_depth else "0"
+        script = ScriptBuilder.iife(f"""
+            var _rootLabel = {root_json};
+            var _node = Scene.findNodeByLabel(_rootLabel);
+            if (!_node) _node = Scene.findNode(_rootLabel);
+            if (!_node) return null;
+
+            var _maxDepth = {depth_js};
+            var _totalDescendants = 0;
+
+            function _build(n, depth) {{
+                if (_maxDepth > 0 && depth >= _maxDepth) return null;
+                var info = {{label: n.getLabel(), name: n.getName(), type: n.className()}};
+                var children = [];
+                for (var i = 0; i < n.getNumNodeChildren(); i++) {{
+                    _totalDescendants++;
+                    var childInfo = _build(n.getNodeChild(i), depth + 1);
+                    if (childInfo) children.push(childInfo);
+                }}
+                if (children.length > 0) info.children = children;
+                return info;
+            }}
+
+            var hierarchy = _build(_node, 0);
+            return {{node: _node.getLabel(), hierarchy: hierarchy, total_descendants: _totalDescendants}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            raise NodeNotFoundError(f"Node not found: {root!r}")
+        return result
+
+    def overview(self) -> dict:
+        """Return a lightweight, top-level snapshot of the scene in one HTTP call.
+
+        Root-level figures, all cameras, all lights, the open scene file,
+        and the primary selection -- enough to orient an agent without
+        enumerating every node (use :meth:`nodes` or :meth:`node_tree` for
+        that).
+
+        Returns:
+            ``{"scene_file", "selected_node", "figures", "cameras", "lights", "total_nodes"}``.
+            ``figures``/``cameras``/``lights`` are lists of
+            ``{"name", "label", "type"}`` (``type`` omitted for cameras).
+            Follower figures (eyelashes, tear surfaces, etc. parented under
+            another figure rather than the scene root) are excluded from
+            ``figures``.
+        """
+        script = ScriptBuilder.iife("""
+            var figures = [];
+            for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+                var s = Scene.getSkeleton(i);
+                var parent = s.getNodeParent();
+                if (parent && parent.inherits("DzFigure")) continue;
+                figures.push({name: s.getName(), label: s.getLabel(), type: s.className()});
+            }
+            var cameras = [];
+            for (var i = 0; i < Scene.getNumCameras(); i++) {
+                var c = Scene.getCamera(i);
+                cameras.push({name: c.getName(), label: c.getLabel()});
+            }
+            var lights = [];
+            for (var i = 0; i < Scene.getNumLights(); i++) {
+                var l = Scene.getLight(i);
+                lights.push({name: l.getName(), label: l.getLabel(), type: l.className()});
+            }
+            var sel = Scene.getPrimarySelection();
+            return {
+                scene_file: Scene.getFilename(),
+                selected_node: sel ? sel.getLabel() : null,
+                figures: figures,
+                cameras: cameras,
+                lights: lights,
+                total_nodes: Scene.getNumNodes()
+            };
+        """)
+        return self._client.execute(script).value or {
+            "scene_file": "", "selected_node": None, "figures": [], "cameras": [], "lights": [], "total_nodes": 0,
+        }
+
     def selected_nodes(self) -> list[DazNode]:
         """Return the currently selected nodes."""
         script = ScriptBuilder.iife("""
