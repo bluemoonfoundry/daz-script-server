@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from ._client import DazClient
 from ._script_builder import ScriptBuilder
@@ -100,6 +101,7 @@ class DazViewport:
         height: int | None = None,
         hide_overlays: bool = True,
         backdrop_color: tuple[int, int, int] | None = None,
+        convergence_wait: float = 3.0,
     ) -> str:
         """Capture the active 3D viewport to a PNG or JPEG file.
 
@@ -114,6 +116,37 @@ class DazViewport:
 
         *width* and *height* are accepted for API compatibility but ignored —
         Dz3DViewport does not expose resize via DazScript.
+
+        Two-pass capture, and why it matters
+        -------------------------------------
+        Every viewport-state change this method makes to prepare the shot
+        (toggling axesOn/floorStyle/aspectOn/thirdsGuideOn, deselecting the
+        primary selection, hiding the Tonemapper/Environment Options nodes,
+        changing the backdrop colour) invalidates DAZ Studio's Iray
+        real-time viewport preview and restarts its progressive convergence
+        from scratch. The DAZ Studio *window* keeps rendering and converges
+        within a few seconds -- but a single synchronous script that
+        invalidates the preview and then calls ``captureImage()`` on the very
+        next line grabs the framebuffer at essentially sample 0-1, before
+        Iray has produced anything but a bare geometry/silhouette pass
+        (confirmed live: clothing layers are thin/transparent enough that at
+        that sample count they don't resolve at all, making the figure look
+        nude even though it's fully clothed and visible on screen a moment
+        later). Waiting in Python *before* calling this method doesn't help,
+        because the invalidate-then-grab both happen inside that one script
+        call -- there's nothing outside it to wait on.
+
+        The fix is to split the single script into two round trips: one to
+        make the invalidating viewport-state changes (which also kicks off a
+        fresh Iray convergence pass), a real wait in between so DAZ Studio's
+        own event loop and Iray's render thread get wall-clock time to
+        converge, and a second script to grab the now-converged frame and
+        restore the original viewport state. *convergence_wait* controls the
+        pause between the two passes; raise it for complex/heavy scenes that
+        take longer to converge, or pass 0.0 to skip the wait and accept a
+        possibly-unconverged capture (e.g. when you deliberately want the
+        cheap early-sample pass, or *hide_overlays* is False and you aren't
+        invalidating anything that matters for your use case).
         """
         js_path = json.dumps(path)
 
@@ -121,13 +154,13 @@ class DazViewport:
             r, g, b = int(backdrop_color[0]), int(backdrop_color[1]), int(backdrop_color[2])
             js_hex = json.dumps(f"#{r:02x}{g:02x}{b:02x}")
             set_bg = f"var prevBg = vp.background; vp.background = new QColor({js_hex});"
-            restore_bg = "vp.background = prevBg;"
+            restore_bg_js = "vp.background = prevBg;"
         else:
             set_bg = ""
-            restore_bg = ""
+            restore_bg_js = ""
 
         if hide_overlays:
-            script = ScriptBuilder.iife(f"""
+            prepare_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
                 if (!vp) return null;
 
@@ -139,6 +172,7 @@ class DazViewport:
                 var prevToolBarMode = vp.toolBarMode;
 
                 var prevSelection = Scene.getPrimarySelection();
+                var prevSelectionName = prevSelection ? prevSelection.getName() : null;
                 var tnNode  = Scene.findNodeByLabel("Tonemapper Options");
                 var envNode = Scene.findNodeByLabel("Environment Options");
                 var prevTnVisible  = tnNode  ? tnNode.isVisibleInViewport()  : null;
@@ -157,19 +191,41 @@ class DazViewport:
                 if (envNode) envNode.setVisibleInViewport(false);
 
                 vp.updateGL();
+
+                return {{
+                    axesOn: prevAxes, floorStyle: prevFloor, showPoseTool: prevPose,
+                    aspectOn: prevAspect, thirdsGuideOn: prevThirds, toolBarMode: prevToolBarMode,
+                    selectionName: prevSelectionName,
+                    tnVisible: prevTnVisible, envVisible: prevEnvVisible
+                }};
+            """)
+            prev_state = self._client.execute(prepare_script).value or {}
+
+            if convergence_wait > 0:
+                time.sleep(convergence_wait)
+
+            finish_script = ScriptBuilder.iife(f"""
+                var vp = {_VIEWPORT_EXPR};
+                if (!vp) return null;
+                var prev = {json.dumps(prev_state)};
+
+                vp.updateGL();
                 var img = vp.captureImage();
 
-                vp.axesOn        = prevAxes;
-                vp.floorStyle    = prevFloor;
-                vp.showPoseTool  = prevPose;
-                vp.aspectOn      = prevAspect;
-                vp.thirdsGuideOn = prevThirds;
-                vp.toolBarMode   = prevToolBarMode;
-                {restore_bg}
+                vp.axesOn        = prev.axesOn;
+                vp.floorStyle    = prev.floorStyle;
+                vp.showPoseTool  = prev.showPoseTool;
+                vp.aspectOn      = prev.aspectOn;
+                vp.thirdsGuideOn = prev.thirdsGuideOn;
+                vp.toolBarMode   = prev.toolBarMode;
+                {restore_bg_js}
 
-                Scene.setPrimarySelection(prevSelection);
-                if (tnNode  && prevTnVisible  !== null) tnNode.setVisibleInViewport(prevTnVisible);
-                if (envNode && prevEnvVisible !== null) envNode.setVisibleInViewport(prevEnvVisible);
+                var prevSel = prev.selectionName ? Scene.findNode(prev.selectionName) : null;
+                Scene.setPrimarySelection(prevSel);
+                var tnNode  = Scene.findNodeByLabel("Tonemapper Options");
+                var envNode = Scene.findNodeByLabel("Environment Options");
+                if (tnNode  && prev.tnVisible  !== null) tnNode.setVisibleInViewport(prev.tnVisible);
+                if (envNode && prev.envVisible !== null) envNode.setVisibleInViewport(prev.envVisible);
 
                 vp.updateGL();
 
@@ -177,20 +233,30 @@ class DazViewport:
                 img.save({js_path});
                 return {js_path};
             """)
+            result = self._client.execute(finish_script).value
         else:
-            script = ScriptBuilder.iife(f"""
+            prepare_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
                 if (!vp) return null;
                 {set_bg}
                 vp.updateGL();
+                return true;
+            """)
+            if self._client.execute(prepare_script).value and convergence_wait > 0:
+                time.sleep(convergence_wait)
+
+            finish_script = ScriptBuilder.iife(f"""
+                var vp = {_VIEWPORT_EXPR};
+                if (!vp) return null;
+                vp.updateGL();
                 var img = vp.captureImage();
-                {restore_bg}
+                {restore_bg_js}
                 vp.updateGL();
                 if (!img) return null;
                 img.save({js_path});
                 return {js_path};
             """)
-        result = self._client.execute(script).value
+            result = self._client.execute(finish_script).value
         return str(result) if result is not None else path
 
     def capture_sprite(

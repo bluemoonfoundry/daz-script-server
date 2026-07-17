@@ -7,6 +7,7 @@ docs/_build/
 .env*
 __pycache__/
 *.pyc
+.ipynb_checkpoints/
 CMakeCache.txt
 CMakeFiles/
 *.task
