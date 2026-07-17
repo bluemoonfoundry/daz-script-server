@@ -69,6 +69,16 @@ jobs:
             echo "cmake-arch=x86_64" >> $GITHUB_OUTPUT
           fi
 
+          # DAZStudio4.5+ SDK bundles Qt 4.8, which predates Apple Silicon:
+          # its qatomic platform dispatch falls back to a bogus PowerPC
+          # atomics path on arm64 (qatomic_powerpc.h asm constraint error)
+          # rather than a real arm64 implementation. DAZ Studio 4 itself
+          # runs under Rosetta 2 on Apple Silicon same as DS6, so build
+          # x86_64 for DS4 regardless of the requested architecture too.
+          if [ "${{ inputs.sdk-version }}" = "4" ]; then
+            echo "cmake-arch=x86_64" >> $GITHUB_OUTPUT
+          fi
+
       - name: Set up SDK paths
         id: sdk-paths
         run: |
