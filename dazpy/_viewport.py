@@ -150,14 +150,17 @@ class DazViewport:
         """
         js_path = json.dumps(path)
 
+        # prevBg is captured and restored via prev_state/prep_result (round-tripped
+        # through Python as plain {r,g,b,a} JSON) rather than a JS variable, since
+        # the prepare and finish scripts are separate execute() calls with no
+        # shared JS scope -- a bare `var prevBg` in one is invisible to the other.
+        bg_capture_js = "var prevBg = vp.background;" if backdrop_color is not None else ""
+        bg_apply_js = ""
         if backdrop_color is not None:
             r, g, b = int(backdrop_color[0]), int(backdrop_color[1]), int(backdrop_color[2])
             js_hex = json.dumps(f"#{r:02x}{g:02x}{b:02x}")
-            set_bg = f"var prevBg = vp.background; vp.background = new QColor({js_hex});"
-            restore_bg_js = "vp.background = prevBg;"
-        else:
-            set_bg = ""
-            restore_bg_js = ""
+            bg_apply_js = f"vp.background = new QColor({js_hex});"
+        bg_return_field = ", bg: prevBg" if backdrop_color is not None else ""
 
         if hide_overlays:
             prepare_script = ScriptBuilder.iife(f"""
@@ -170,6 +173,7 @@ class DazViewport:
                 var prevAspect      = vp.aspectOn;
                 var prevThirds      = vp.thirdsGuideOn;
                 var prevToolBarMode = vp.toolBarMode;
+                {bg_capture_js}
 
                 var prevSelection = Scene.getPrimarySelection();
                 var prevSelectionName = prevSelection ? prevSelection.getName() : null;
@@ -184,7 +188,7 @@ class DazViewport:
                 vp.aspectOn      = false;
                 vp.thirdsGuideOn = false;
                 vp.toolBarMode   = 0;
-                {set_bg}
+                {bg_apply_js}
 
                 Scene.setPrimarySelection(null);
                 if (tnNode)  tnNode.setVisibleInViewport(false);
@@ -196,13 +200,21 @@ class DazViewport:
                     axesOn: prevAxes, floorStyle: prevFloor, showPoseTool: prevPose,
                     aspectOn: prevAspect, thirdsGuideOn: prevThirds, toolBarMode: prevToolBarMode,
                     selectionName: prevSelectionName,
-                    tnVisible: prevTnVisible, envVisible: prevEnvVisible
+                    tnVisible: prevTnVisible, envVisible: prevEnvVisible{bg_return_field}
                 }};
             """)
             prev_state = self._client.execute(prepare_script).value or {}
 
             if convergence_wait > 0:
                 time.sleep(convergence_wait)
+
+            restore_bg_js = ""
+            if backdrop_color is not None and prev_state.get("bg") is not None:
+                pb = prev_state["bg"]
+                restore_bg_js = (
+                    f"vp.background = new QColor({int(pb['r'])}, {int(pb['g'])}, "
+                    f"{int(pb['b'])}, {int(pb.get('a', 255))});"
+                )
 
             finish_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
@@ -238,12 +250,22 @@ class DazViewport:
             prepare_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
                 if (!vp) return null;
-                {set_bg}
+                {bg_capture_js}
+                {bg_apply_js}
                 vp.updateGL();
-                return true;
+                return {{"ok": true{bg_return_field}}};
             """)
-            if self._client.execute(prepare_script).value and convergence_wait > 0:
+            prep_result = self._client.execute(prepare_script).value or {}
+            if prep_result.get("ok") and convergence_wait > 0:
                 time.sleep(convergence_wait)
+
+            restore_bg_js = ""
+            if backdrop_color is not None and prep_result.get("bg") is not None:
+                pb = prep_result["bg"]
+                restore_bg_js = (
+                    f"vp.background = new QColor({int(pb['r'])}, {int(pb['g'])}, "
+                    f"{int(pb['b'])}, {int(pb.get('a', 255))});"
+                )
 
             finish_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};

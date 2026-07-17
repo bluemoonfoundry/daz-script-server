@@ -80,10 +80,17 @@ class Canvas:
 
 @dataclass
 class RenderOutcome:
-    """Result of a :meth:`DazRenderSettings.render` call."""
+    """Result of a :meth:`DazRenderSettings.render` call.
+
+    Truthiness reflects ``success`` so existing callers written against the
+    old bool-returning contract (``if rs.render():``) keep working.
+    """
 
     success: bool
     output_path: str | None
+
+    def __bool__(self) -> bool:
+        return self.success
 
 
 class DazRenderSettings:

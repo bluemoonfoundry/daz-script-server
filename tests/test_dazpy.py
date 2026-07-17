@@ -1202,6 +1202,30 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
             result, RenderOutcome(success=True, output_path="/tmp/render.png")
         )
 
+    def test_render_outcome_bool_reflects_success(self):
+        from dazpy._render import RenderOutcome
+        self.assertTrue(RenderOutcome(success=True, output_path="/tmp/render.png"))
+        self.assertFalse(RenderOutcome(success=False, output_path="/tmp/render.png"))
+        self.assertFalse(RenderOutcome(success=False, output_path=None))
+
+    def test_render_truthiness_check_reflects_failure(self):
+        # Regression: `if rs.render():` must behave like the old bool contract --
+        # a failed render must not evaluate truthy just because RenderOutcome
+        # is a non-empty object.
+        rs, client = self._make_render(
+            {"success": False, "output_path": "/tmp/render.png"}
+        )
+        outcome = rs.render()
+        if outcome:
+            self.fail("RenderOutcome(success=False) evaluated truthy")
+
+    def test_render_and_wait_truthiness_check_reflects_success(self):
+        rs, client = self._make_render(
+            {"success": True, "output_path": "/tmp/render.png"}
+        )
+        outcome = rs.render_and_wait()
+        self.assertTrue(bool(outcome))
+
     def test_gamma_getter_uses_direct_property(self):
         rs, client = self._make_render(2.2)
         val = rs.gamma
@@ -4566,6 +4590,48 @@ class TestDazViewport(unittest.TestCase):
         vp, client = self._make_viewport(return_value=None)
         result = vp.capture(path)
         self.assertEqual(result, path)
+
+    def test_capture_backdrop_color_restores_prev_bg_without_scope_error(self):
+        # Regression test: prevBg must round-trip through Python (prepare_script's
+        # returned value) rather than a bare JS `var` -- the prepare and finish
+        # scripts are separate execute() calls with no shared JS scope.
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        prev_state = {
+            "axesOn": True, "floorStyle": 1, "showPoseTool": False,
+            "aspectOn": True, "thirdsGuideOn": False, "toolBarMode": 0,
+            "selectionName": None, "tnVisible": None, "envVisible": None,
+            "bg": {"r": 10, "g": 20, "b": 30, "a": 255},
+        }
+        client.execute.side_effect = [
+            ExecutionResult(value=prev_state, output=[], request_id="x"),
+            ExecutionResult(value=path, output=[], request_id="x"),
+        ]
+        result = vp.capture(path, backdrop_color=(0, 255, 0), convergence_wait=0)
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        self.assertNotIn("prevBg", finish_script)
+        self.assertIn("new QColor(10, 20, 30, 255)", finish_script)
+
+    def test_capture_backdrop_color_no_overlays_restores_prev_bg(self):
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        client.execute.side_effect = [
+            ExecutionResult(
+                value={"ok": True, "bg": {"r": 1, "g": 2, "b": 3, "a": 255}},
+                output=[], request_id="x",
+            ),
+            ExecutionResult(value=path, output=[], request_id="x"),
+        ]
+        result = vp.capture(
+            path, hide_overlays=False, backdrop_color=(0, 255, 0), convergence_wait=0
+        )
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        self.assertNotIn("prevBg", finish_script)
+        self.assertIn("new QColor(1, 2, 3, 255)", finish_script)
 
 
 class _FakeSSEResponse:

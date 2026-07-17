@@ -39,6 +39,23 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **`DazRenderSettings.render()` / `.render_and_wait()` broke truthiness
+  callers** — these switched from returning `bool` to a `RenderOutcome`
+  dataclass with no `__bool__`, so existing code written against the old
+  contract (`if rs.render():`, including downstream projects like
+  `vangard-daz-mcp`) always evaluated truthy and silently treated failed
+  renders as successful. `RenderOutcome.__bool__` now reflects `success`, so
+  `if rs.render():` behaves the same as before; use `.success`/`.output_path`
+  directly if you need the full outcome.
+- **`DazViewport.capture(..., backdrop_color=...)` raised `ReferenceError`
+  restoring the background** — the two-pass capture's finish script
+  referenced the JS variable `prevBg`, but `prevBg` was only declared in the
+  separate prepare-script `execute()` call (a different HTTP round trip with
+  no shared JS scope), so restoring the background always threw. `prevBg` is
+  now round-tripped through Python (returned from the prepare script as
+  plain JSON, alongside `axesOn`/`selectionName`/etc.) and substituted
+  directly into the finish script.
+
 - **`DazPose.capture()` / `.apply()` / `.apply_full()` inflate ERC-driven
   properties on every round trip** — node-level properties captured via
   `getValue()` (e.g. a "Scale" dial fed by dozens of `DzERCLink`-linked
