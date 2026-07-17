@@ -182,7 +182,11 @@ class DazSceneState:
             except Exception:
                 errors.append(f"Skeleton not found: {name}")
                 continue
-            pose.apply_full(skel)
+            try:
+                pose.apply_full(skel)
+            except Exception as exc:
+                errors.append(f"Failed to restore skeleton {name}: {exc}")
+                continue
             restored.append(name)
 
         restore_script = ScriptBuilder.iife(f"""

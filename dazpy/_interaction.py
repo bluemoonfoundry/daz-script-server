@@ -1854,8 +1854,8 @@ def build_hug_recipe(
         constraints=[
             LookAtTarget(actor_a, "head", (0.0, 0.0, 0.0)),
             LookAtTarget(actor_b, "head", (0.0, 0.0, 0.0)),
-            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=b_far_shoulder),
-            HandTarget(actor_b, b_anchor, target_figure=actor_a, target_anchor=a_far_shoulder),
+            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=a_far_shoulder),
+            HandTarget(actor_b, b_anchor, target_figure=actor_a, target_anchor=b_far_shoulder),
         ],
         metadata={"interaction": "hug"},
     )

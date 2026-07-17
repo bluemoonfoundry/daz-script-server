@@ -729,6 +729,23 @@ class TestInteractionAdapter(unittest.TestCase):
         a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
         self.assertEqual(a_target.target_anchor, "l_shoulder")
 
+    def test_hug_recipe_builder_mismatched_anchors_crosses_correctly(self):
+        # Regression: with a_anchor == b_anchor (both "r_hand"), a_far_shoulder
+        # and b_far_shoulder happen to be identical, hiding a bug where the two
+        # were swapped between actors. Mismatched anchors expose it: actor_a's
+        # hand target must derive its far shoulder from actor_a's own anchor
+        # side, not actor_b's.
+        hug = build_hug_recipe(
+            "Genesis 9", "Partner", a_anchor="r_hand", b_anchor="l_hand"
+        )
+        hand_targets = [c for c in hug.constraints if isinstance(c, HandTarget)]
+        a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
+        b_target = next(c for c in hand_targets if c.figure_label == "Partner")
+        # a_anchor="r_hand" (right side) -> far shoulder is the left one.
+        self.assertEqual(a_target.target_anchor, "l_shoulder")
+        # b_anchor="l_hand" (left side) -> far shoulder is the right one.
+        self.assertEqual(b_target.target_anchor, "r_shoulder")
+
     def test_face_each_other_recipe_builder(self):
         face = build_face_each_other_recipe("Genesis 9", "Partner")
         self.assertEqual(face.kind, "face_each_other")
@@ -3702,6 +3719,22 @@ class TestDazPose(unittest.TestCase):
         # Should set 0 for bones not in the pose
         self.assertIn("setValue(0)", script)
 
+    def test_apply_full_zeroes_absent_node_properties(self):
+        # Regression: unlike the bones (explicit else-zero) and morphs (`_v =
+        # v !== undefined ? v : 0`) loops right above it, the node-property
+        # loop only wrote a value `if (v !== undefined)`, leaving properties
+        # absent from the captured pose unchanged instead of reverting to 0.
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        props_section = script[script.index("getNumProperties"):]
+        self.assertIn("var _v = (v !== undefined) ? v : 0;", props_section)
+        self.assertIn("setRawValue(_v)", props_section)
+        self.assertIn("setValue(_v)", props_section)
+        self.assertNotIn("if (v !== undefined)", props_section)
+
     # ── repr ──────────────────────────────────────────────────────────────────
 
     def test_repr(self):
@@ -4189,6 +4222,73 @@ class TestCallCounts(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("getWSPos", script)
         self.assertIn("world_position", script)
+
+
+class TestDazSceneStateApply(unittest.TestCase):
+    """Tests for DazSceneState.apply()'s per-skeleton error isolation."""
+
+    def test_apply_isolates_apply_full_error_per_skeleton(self):
+        # Regression: a mid-loop apply_full() failure (transient HTTP/DazScript
+        # error, stale skeleton reference) must not abort restoration of the
+        # remaining skeletons/cameras/lights -- it should be reported in
+        # `errors` like a missing skeleton is, per the docstring's contract.
+        from dazpy._scene_state import DazSceneState
+
+        good_pose = MagicMock()
+        bad_pose = MagicMock()
+        bad_pose.apply_full.side_effect = RuntimeError("boom")
+
+        skel_good = MagicMock()
+        skel_bad = MagicMock()
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Good": skel_good, "Bad": skel_bad,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Bad": bad_pose, "Good": good_pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        good_pose.apply_full.assert_called_once_with(skel_good)
+        bad_pose.apply_full.assert_called_once_with(skel_bad)
+        self.assertIn("Good", result["restored"])
+        self.assertNotIn("Bad", result["restored"])
+        self.assertTrue(any("Bad" in e for e in result["errors"]))
+
+    def test_apply_reports_missing_skeleton_and_continues(self):
+        from dazpy._scene_state import DazSceneState
+
+        good_pose = MagicMock()
+        missing_pose = MagicMock()
+
+        skel_good = MagicMock()
+        scene = MagicMock()
+
+        def _find_skeleton(name):
+            if name == "Missing":
+                raise LookupError("not found")
+            return skel_good
+
+        scene.find_skeleton.side_effect = _find_skeleton
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Missing": missing_pose, "Good": good_pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        missing_pose.apply_full.assert_not_called()
+        good_pose.apply_full.assert_called_once_with(skel_good)
+        self.assertIn("Good", result["restored"])
+        self.assertTrue(any("Missing" in e for e in result["errors"]))
 
 
 class TestSceneSnapshot(unittest.TestCase):

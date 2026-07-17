@@ -353,10 +353,9 @@ class DazPose:
                 var p = _skel.getProperty(i);
                 if (p && p.setValue) {{
                     var v = _props[p.getName()];
-                    if (v !== undefined) {{
-                        if (typeof p.setRawValue === "function") {{ p.setRawValue(v); }}
-                        else {{ p.setValue(v); }}
-                    }}
+                    var _v = (v !== undefined) ? v : 0;
+                    if (typeof p.setRawValue === "function") {{ p.setRawValue(_v); }}
+                    else {{ p.setValue(_v); }}
                 }}
             }}
 

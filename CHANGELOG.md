@@ -39,6 +39,31 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **`DazPose.apply_full()` didn't zero absent node properties** — the
+  node-property loop only called `setValue`/`setRawValue` `if (v !==
+  undefined)`, with no else-zero branch, unlike the bones loop (explicit
+  `else setValue(0)`) and morphs loop (`_v = v !== undefined ? v : 0`) right
+  above it in the same function. This broke the documented contract that
+  `apply_full()` drives every channel absent from the pose to zero, and also
+  affected `DazSceneState.apply()`'s "clean baseline" restore, which relies
+  on `apply_full()`. Now matches the bones/morphs pattern.
+- **`DazSceneState.apply()` didn't isolate `apply_full()` errors per
+  skeleton** — the per-skeleton try/except only wrapped
+  `scene.find_skeleton()`; a following `pose.apply_full(skel)` failure
+  (transient HTTP/DazScript error, stale skeleton reference) propagated
+  uncaught and aborted restoration of all remaining skeletons, cameras, and
+  lights, contradicting the docstring's promise that failures are reported
+  in `errors` rather than raising. Now `apply_full()` is wrapped in its own
+  try/except so a single skeleton's failure is recorded and the loop
+  continues.
+- **`build_hug_recipe()` swapped far-shoulder targets between actors** — with
+  mismatched anchors (e.g. `a_anchor="r_hand"`, `b_anchor="l_hand"`),
+  actor_a's hand target used the far shoulder derived from actor_b's anchor
+  side instead of actor_a's own, producing an anatomically wrong or
+  self-intersecting embrace. Invisible with the default `r_hand`/`r_hand`
+  anchors (both sides happen to compute the same far shoulder), which is all
+  the prior test covered. Now each actor's far shoulder is derived from its
+  own anchor's side.
 - **`DazRenderSettings.render()` / `.render_and_wait()` broke truthiness
   callers** — these switched from returning `bool` to a `RenderOutcome`
   dataclass with no `__bool__`, so existing code written against the old
