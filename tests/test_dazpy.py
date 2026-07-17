@@ -41,6 +41,9 @@ from dazpy import (
     LookAtTarget,
     PoseTarget,
     build_fight_recipe,
+    build_face_each_other_recipe,
+    build_handshake_recipe,
+    build_hug_recipe,
     build_kiss_recipe,
     build_sit_recipe,
     build_touch_recipe,
@@ -703,6 +706,54 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertTrue(sum(isinstance(constraint, LookAtTarget) for constraint in kiss.constraints) >= 2)
         self.assertTrue(any(isinstance(constraint, FootTarget) for constraint in fight.constraints))
 
+    def test_handshake_recipe_builder(self):
+        handshake = build_handshake_recipe("Genesis 9", "Partner")
+        self.assertEqual(handshake.kind, "handshake")
+        self.assertEqual(handshake.actors, ["Genesis 9", "Partner"])
+        hand_targets = [c for c in handshake.constraints if isinstance(c, HandTarget)]
+        self.assertEqual(len(hand_targets), 2)
+        self.assertTrue(sum(isinstance(c, LookAtTarget) for c in handshake.constraints) >= 2)
+        # Mirrored: each actor's hand targets the other actor's hand.
+        a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
+        b_target = next(c for c in hand_targets if c.figure_label == "Partner")
+        self.assertEqual(a_target.target_figure, "Partner")
+        self.assertEqual(b_target.target_figure, "Genesis 9")
+
+    def test_hug_recipe_builder(self):
+        hug = build_hug_recipe("Genesis 9", "Partner")
+        self.assertEqual(hug.kind, "hug")
+        self.assertEqual(hug.actors, ["Genesis 9", "Partner"])
+        hand_targets = [c for c in hug.constraints if isinstance(c, HandTarget)]
+        self.assertEqual(len(hand_targets), 2)
+        # Each actor's hand reaches for the *far* shoulder (arms wrap around).
+        a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
+        self.assertEqual(a_target.target_anchor, "l_shoulder")
+
+    def test_hug_recipe_builder_mismatched_anchors_crosses_correctly(self):
+        # Regression: with a_anchor == b_anchor (both "r_hand"), a_far_shoulder
+        # and b_far_shoulder happen to be identical, hiding a bug where the two
+        # were swapped between actors. Mismatched anchors expose it: actor_a's
+        # hand target must derive its far shoulder from actor_a's own anchor
+        # side, not actor_b's.
+        hug = build_hug_recipe(
+            "Genesis 9", "Partner", a_anchor="r_hand", b_anchor="l_hand"
+        )
+        hand_targets = [c for c in hug.constraints if isinstance(c, HandTarget)]
+        a_target = next(c for c in hand_targets if c.figure_label == "Genesis 9")
+        b_target = next(c for c in hand_targets if c.figure_label == "Partner")
+        # a_anchor="r_hand" (right side) -> far shoulder is the left one.
+        self.assertEqual(a_target.target_anchor, "l_shoulder")
+        # b_anchor="l_hand" (left side) -> far shoulder is the right one.
+        self.assertEqual(b_target.target_anchor, "r_shoulder")
+
+    def test_face_each_other_recipe_builder(self):
+        face = build_face_each_other_recipe("Genesis 9", "Partner")
+        self.assertEqual(face.kind, "face_each_other")
+        self.assertEqual(face.actors, ["Genesis 9", "Partner"])
+        self.assertEqual(len(face.constraints), 2)
+        self.assertTrue(all(isinstance(c, LookAtTarget) for c in face.constraints))
+        self.assertFalse(any(isinstance(c, HandTarget) for c in face.constraints))
+
     def test_prepare_interaction_recipe_compiles_targets(self):
         source_hip = _FakeBone("hip", "Hip")
         source_hand = _FakeBone("r_hand", "Right Hand", parent=source_hip, local_position=(1.0, 2.0, 3.0))
@@ -1030,6 +1081,39 @@ class TestDazCameraScriptGeneration(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("farClippingPlane", script)
 
+    def test_lens_shift_x_getter_uses_property_label(self):
+        client = _make_client(2.5)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.lens_shift_x
+        self.assertEqual(val, 2.5)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift X (mm)", script)
+        self.assertIn("findPropertyByLabel", script)
+
+    def test_lens_shift_x_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.lens_shift_x = -1.5
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift X (mm)", script)
+        self.assertIn("-1.5", script)
+
+    def test_lens_shift_y_getter_uses_property_label(self):
+        client = _make_client(0.0)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.lens_shift_y
+        self.assertEqual(val, 0.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift Y (mm)", script)
+
+    def test_lens_shift_y_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.lens_shift_y = 3.0
+        script = client.execute.call_args[0][0]
+        self.assertIn("Lens Shift Y (mm)", script)
+        self.assertIn("3.0", script)
+
     def test_aim_at_generates_DzVec3(self):
         client = _make_client(None)
         cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
@@ -1103,12 +1187,61 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertIn("applyChanges", script)
 
     def test_render_uses_doRender(self):
-        rs, client = self._make_render(True)
+        from dazpy._render import RenderOutcome
+        rs, client = self._make_render(
+            {"success": True, "output_path": "/tmp/render.png"}
+        )
         result = rs.render()
-        self.assertTrue(result)
+        self.assertEqual(
+            result, RenderOutcome(success=True, output_path="/tmp/render.png")
+        )
         script = client.execute.call_args[0][0]
         self.assertIn("doRender", script)
         self.assertNotIn("mgr.render()", script)
+
+    def test_render_returns_failure_outcome_when_doRender_fails(self):
+        from dazpy._render import RenderOutcome
+        rs, client = self._make_render(
+            {"success": False, "output_path": "/tmp/render.png"}
+        )
+        result = rs.render()
+        self.assertEqual(
+            result, RenderOutcome(success=False, output_path="/tmp/render.png")
+        )
+
+    def test_render_and_wait_returns_render_outcome(self):
+        from dazpy._render import RenderOutcome
+        rs, client = self._make_render(
+            {"success": True, "output_path": "/tmp/render.png"}
+        )
+        result = rs.render_and_wait()
+        self.assertEqual(
+            result, RenderOutcome(success=True, output_path="/tmp/render.png")
+        )
+
+    def test_render_outcome_bool_reflects_success(self):
+        from dazpy._render import RenderOutcome
+        self.assertTrue(RenderOutcome(success=True, output_path="/tmp/render.png"))
+        self.assertFalse(RenderOutcome(success=False, output_path="/tmp/render.png"))
+        self.assertFalse(RenderOutcome(success=False, output_path=None))
+
+    def test_render_truthiness_check_reflects_failure(self):
+        # Regression: `if rs.render():` must behave like the old bool contract --
+        # a failed render must not evaluate truthy just because RenderOutcome
+        # is a non-empty object.
+        rs, client = self._make_render(
+            {"success": False, "output_path": "/tmp/render.png"}
+        )
+        outcome = rs.render()
+        if outcome:
+            self.fail("RenderOutcome(success=False) evaluated truthy")
+
+    def test_render_and_wait_truthiness_check_reflects_success(self):
+        rs, client = self._make_render(
+            {"success": True, "output_path": "/tmp/render.png"}
+        )
+        outcome = rs.render_and_wait()
+        self.assertTrue(bool(outcome))
 
     def test_gamma_getter_uses_direct_property(self):
         rs, client = self._make_render(2.2)
@@ -1158,12 +1291,157 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("isRendering", script)
 
+    def test_active_engine_maps_known_class_name(self):
+        rs, client = self._make_render("DzIrayRenderer")
+        val = rs.active_engine()
+        self.assertEqual(val, "iray")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getActiveRenderer", script)
+        self.assertIn("className", script)
+        self.assertIn("renderType", script)
+
+    def test_active_engine_falls_back_to_raw_class_name(self):
+        rs, client = self._make_render("DzSomeUnknownRenderer")
+        val = rs.active_engine()
+        self.assertEqual(val, "DzSomeUnknownRenderer")
+
+    def test_active_engine_null_guard(self):
+        rs, client = self._make_render(None)
+        val = rs.active_engine()
+        self.assertIsNone(val)
+
+    def test_active_engine_viewport_mode(self):
+        rs, client = self._make_render("viewport")
+        val = rs.active_engine()
+        self.assertEqual(val, "viewport")
+
+    def test_active_engine_multi_pass_opengl_mode(self):
+        rs, client = self._make_render("multi_pass_opengl")
+        val = rs.active_engine()
+        self.assertEqual(val, "multi_pass_opengl")
+
+    def test_set_active_engine_iray(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("iray")
+        script = client.execute.call_args[0][0]
+        self.assertIn("findRenderer", script)
+        self.assertIn("DzIrayRenderer", script)
+        self.assertIn("setActiveRenderer", script)
+        self.assertIn("opts.Software", script)
+
+    def test_set_active_engine_raw_class_name(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("DzFilamentRenderer")
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzFilamentRenderer", script)
+
+    def test_set_active_engine_raises_when_renderer_unavailable(self):
+        from dazpy.exceptions import RenderError
+        rs, client = self._make_render(False)
+        with self.assertRaises(RenderError):
+            rs.set_active_engine("filament")
+
+    def test_set_active_engine_viewport(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("Viewport")
+        script = client.execute.call_args[0][0]
+        self.assertIn("opts.ScreenShot", script)
+        self.assertNotIn("findRenderer", script)
+
+    def test_set_active_engine_multi_pass_opengl(self):
+        rs, client = self._make_render(True)
+        rs.set_active_engine("multi_pass_opengl")
+        script = client.execute.call_args[0][0]
+        self.assertIn("opts.HardwareAssisted", script)
+        self.assertNotIn("findRenderer", script)
+
     def test_has_render(self):
         rs, client = self._make_render(True)
         val = rs.has_render()
         self.assertTrue(val)
         script = client.execute.call_args[0][0]
         self.assertIn("hasRender", script)
+
+    def test_canvases_enabled_getter_uses_render_element_objects(self):
+        rs, client = self._make_render(True)
+        val = rs.canvases_enabled
+        self.assertTrue(val)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRenderElementObjects()[1]", script)
+        self.assertIn("renderToCanvases", script)
+
+    def test_canvases_enabled_setter_refreshes_pane(self):
+        rs, client = self._make_render(None)
+        rs.canvases_enabled = False
+        script = client.execute.call_args[0][0]
+        self.assertIn("renderToCanvases = false", script)
+        self.assertIn("DzRenderSettingsPane", script)
+        self.assertIn(".refresh()", script)
+
+    def test_list_canvases_returns_canvas_objects(self):
+        from dazpy._render import Canvas
+        rs, client = self._make_render(
+            [{"name": "Canvas1", "canvas_type": "Normal", "index": 0}]
+        )
+        canvases = rs.list_canvases()
+        self.assertEqual(canvases, [Canvas(name="Canvas1", canvas_type="Normal", index=0)])
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumCanvasDefinitions", script)
+        self.assertIn("getCanvasDefinition", script)
+        self.assertIn("canvasTypeToString", script)
+
+    def test_list_canvases_empty_when_none_configured(self):
+        rs, client = self._make_render([])
+        self.assertEqual(rs.list_canvases(), [])
+
+    def test_add_canvas_uses_find_canvas_definition_with_create(self):
+        from dazpy._render import Canvas
+        rs, client = self._make_render(
+            {"name": "DepthPass", "canvas_type": "Depth", "index": 1}
+        )
+        canvas = rs.add_canvas("DepthPass", "Depth")
+        self.assertEqual(canvas, Canvas(name="DepthPass", canvas_type="Depth", index=1))
+        script = client.execute.call_args[0][0]
+        self.assertIn("findCanvasDefinition(\"DepthPass\", true)", script)
+        self.assertIn("canvasTypeFromString(\"Depth\")", script)
+        self.assertIn(".refresh()", script)
+
+    def test_add_canvas_raises_render_error_when_unavailable(self):
+        from dazpy.exceptions import RenderError
+        rs, client = self._make_render(None)
+        with self.assertRaises(RenderError):
+            rs.add_canvas("Foo", "Beauty")
+
+    def test_remove_canvas_uses_find_canvas_definition_no_create(self):
+        rs, client = self._make_render(True)
+        result = rs.remove_canvas("Canvas1")
+        self.assertTrue(result)
+        script = client.execute.call_args[0][0]
+        self.assertIn("findCanvasDefinition(\"Canvas1\", false)", script)
+        self.assertIn("removeCanvasDefinition", script)
+        self.assertIn(".refresh()", script)
+
+    def test_remove_canvas_returns_false_when_missing(self):
+        rs, client = self._make_render(False)
+        self.assertFalse(rs.remove_canvas("NoSuchCanvas"))
+
+    def test_canvas_output_paths_derives_convention(self):
+        from dazpy._render import Canvas
+        rs, client = self._make_render(
+            [{"name": "Canvas1", "canvas_type": "Normal", "index": 0}]
+        )
+        paths = rs.canvas_output_paths("C:/tmp/out.png")
+        self.assertEqual(
+            paths,
+            {"Canvas1": "C:/tmp/out_canvases/out-Canvas1-Normal.exr"},
+        )
+
+    def test_canvas_output_paths_no_directory(self):
+        rs, client = self._make_render(
+            [{"name": "Canvas1", "canvas_type": "Depth", "index": 0}]
+        )
+        paths = rs.canvas_output_paths("out.png")
+        self.assertEqual(paths, {"Canvas1": "out_canvases/out-Canvas1-Depth.exr"})
 
 
 class TestDazSkeletonScriptGeneration(unittest.TestCase):
@@ -2368,6 +2646,56 @@ class TestDazSceneIO(unittest.TestCase):
         self.assertIn("loopPlayback", script)
         self.assertIn("false", script)
 
+    def test_export_fbx_uses_fbx_exporter_and_defaults(self):
+        scene = self._scene(None)
+        scene.export_fbx("/out/scene.fbx")
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("DzFbxExporter", script)
+        self.assertIn("findExporterByClassName", script)
+        self.assertIn("getDefaultOptions", script)
+        self.assertIn("writeFile", script)
+        self.assertIn("/out/scene.fbx", script)
+        self.assertIn('setBoolValue("IncludeFigures", true)', script)
+        self.assertIn('setBoolValue("IncludeProps", false)', script)
+        self.assertIn('setIntValue("RunSilent", 1)', script)
+
+    def test_export_fbx_passes_named_overrides(self):
+        scene = self._scene(None)
+        scene.export_fbx(
+            "/out/scene.fbx",
+            selected_only=True,
+            include_animations=True,
+            embed_textures=False,
+        )
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('setBoolValue("IncludeSelectedOnly", true)', script)
+        self.assertIn('setBoolValue("IncludeAnimations", true)', script)
+        self.assertIn('setBoolValue("EmbedTextures", false)', script)
+
+    def test_export_fbx_accepts_raw_options_override(self):
+        scene = self._scene(None)
+        scene.export_fbx("/out/scene.fbx", options={"Format": "FBX 2014 -- Binary"})
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('setStringValue("Format", "FBX 2014 -- Binary")', script)
+
+    def test_export_obj_uses_obj_exporter_and_defaults(self):
+        scene = self._scene(None)
+        scene.export_obj("/out/scene.obj")
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("DzObjExporter", script)
+        self.assertIn("findExporterByClassName", script)
+        self.assertIn("/out/scene.obj", script)
+        self.assertIn('setBoolValue("IgnoreInvisible", true)', script)
+        self.assertIn('setIntValue("RunSilent", 1)', script)
+
+    def test_export_obj_passes_named_overrides(self):
+        scene = self._scene(None)
+        scene.export_obj("/out/scene.obj", selected_only=True, include_normals=True, collect_maps=True)
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('setBoolValue("SelectedOnly", true)', script)
+        self.assertIn('setBoolValue("WriteVN", true)', script)
+        self.assertIn('setBoolValue("CollectMaps", true)', script)
+
 
 class TestDazSceneDForceSimulation(unittest.TestCase):
     def _scene(self, return_value=None):
@@ -3330,6 +3658,19 @@ class TestDazPose(unittest.TestCase):
         self.assertIn("getValueChannel", script)
         self.assertIn("DzMorph", script)
 
+    def test_capture_bones_prefer_raw_value(self):
+        # Regression: bone rotation controls can be ERC targets (e.g.
+        # auto-follow bend/twist ratios), so capture() must feature-detect
+        # getRawValue() for them the same way it already does for
+        # morphs/props, instead of always reading the post-ERC getValue().
+        from dazpy import DazPose
+        skel, client = self._make_skeleton({"bones": {}, "morphs": {}, "props": {}})
+        DazPose.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn('typeof xc.getRawValue === "function"', script)
+        self.assertIn('typeof yc.getRawValue === "function"', script)
+        self.assertIn('typeof zc.getRawValue === "function"', script)
+
     def test_capture_raises_on_null_result(self):
         from dazpy import DazPose
         from dazpy.exceptions import NodeNotFoundError
@@ -3363,6 +3704,19 @@ class TestDazPose(unittest.TestCase):
         self.assertIn("-45", script)
         self.assertIn("getXRotControl", script)
 
+    def test_apply_bones_prefer_raw_value(self):
+        # Regression: apply() must feature-detect setRawValue for bone
+        # rotation controls too, not just morphs/props (see
+        # test_capture_bones_prefer_raw_value).
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"rForeArm": [0.0, 0.0, -45.0]}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn('typeof xc.setRawValue === "function"', script)
+        self.assertIn('typeof yc.setRawValue === "function"', script)
+        self.assertIn('typeof zc.setRawValue === "function"', script)
+
     def test_apply_script_contains_morph_data(self):
         from dazpy import DazPose
         pose = DazPose("Genesis 9", {}, {"PHMSmile": 0.75}, {})
@@ -3388,8 +3742,39 @@ class TestDazPose(unittest.TestCase):
         skel, client = self._make_skeleton(True)
         pose.apply_full(skel)
         script = client.execute.call_args[0][0]
-        # Should set 0 for bones not in the pose
-        self.assertIn("setValue(0)", script)
+        # Should fall back to [0, 0, 0] for bones not in the pose
+        self.assertIn("_bones[b.getName()] || [0, 0, 0]", script)
+
+    def test_apply_full_bones_prefer_raw_value(self):
+        # Regression: bone rotation controls can be ERC targets (e.g.
+        # auto-follow bend/twist ratios) just like morphs/props, so
+        # apply_full() must feature-detect setRawValue for them too instead
+        # of always using setValue(), which would re-inflate the total on
+        # every capture/apply cycle.
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"hip": [1.0, 2.0, 3.0]}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn('typeof xc.setRawValue === "function"', script)
+        self.assertIn('typeof yc.setRawValue === "function"', script)
+        self.assertIn('typeof zc.setRawValue === "function"', script)
+
+    def test_apply_full_zeroes_absent_node_properties(self):
+        # Regression: unlike the bones (explicit else-zero) and morphs (`_v =
+        # v !== undefined ? v : 0`) loops right above it, the node-property
+        # loop only wrote a value `if (v !== undefined)`, leaving properties
+        # absent from the captured pose unchanged instead of reverting to 0.
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        props_section = script[script.index("getNumProperties"):]
+        self.assertIn("var _v = (v !== undefined) ? v : 0;", props_section)
+        self.assertIn("setRawValue(_v)", props_section)
+        self.assertIn("setValue(_v)", props_section)
+        self.assertNotIn("if (v !== undefined)", props_section)
 
     # ── repr ──────────────────────────────────────────────────────────────────
 
@@ -3880,6 +4265,73 @@ class TestCallCounts(unittest.TestCase):
         self.assertIn("world_position", script)
 
 
+class TestDazSceneStateApply(unittest.TestCase):
+    """Tests for DazSceneState.apply()'s per-skeleton error isolation."""
+
+    def test_apply_isolates_apply_full_error_per_skeleton(self):
+        # Regression: a mid-loop apply_full() failure (transient HTTP/DazScript
+        # error, stale skeleton reference) must not abort restoration of the
+        # remaining skeletons/cameras/lights -- it should be reported in
+        # `errors` like a missing skeleton is, per the docstring's contract.
+        from dazpy._scene_state import DazSceneState
+
+        good_pose = MagicMock()
+        bad_pose = MagicMock()
+        bad_pose.apply_full.side_effect = RuntimeError("boom")
+
+        skel_good = MagicMock()
+        skel_bad = MagicMock()
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Good": skel_good, "Bad": skel_bad,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Bad": bad_pose, "Good": good_pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        good_pose.apply_full.assert_called_once_with(skel_good)
+        bad_pose.apply_full.assert_called_once_with(skel_bad)
+        self.assertIn("Good", result["restored"])
+        self.assertNotIn("Bad", result["restored"])
+        self.assertTrue(any("Bad" in e for e in result["errors"]))
+
+    def test_apply_reports_missing_skeleton_and_continues(self):
+        from dazpy._scene_state import DazSceneState
+
+        good_pose = MagicMock()
+        missing_pose = MagicMock()
+
+        skel_good = MagicMock()
+        scene = MagicMock()
+
+        def _find_skeleton(name):
+            if name == "Missing":
+                raise LookupError("not found")
+            return skel_good
+
+        scene.find_skeleton.side_effect = _find_skeleton
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Missing": missing_pose, "Good": good_pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        missing_pose.apply_full.assert_not_called()
+        good_pose.apply_full.assert_called_once_with(skel_good)
+        self.assertIn("Good", result["restored"])
+        self.assertTrue(any("Missing" in e for e in result["errors"]))
+
+
 class TestSceneSnapshot(unittest.TestCase):
     """Tests for DazScene.scene_snapshot() and build_rig_profiles_from_snapshot()."""
 
@@ -4213,6 +4665,43 @@ class TestDazViewport(unittest.TestCase):
         self.assertEqual(result, {"width": 1280, "height": 720})
         client.execute.assert_called_once()
 
+    def test_draw_style_returns_label(self):
+        vp, client = self._make_viewport(return_value="NVIDIA Iray")
+        result = vp.draw_style()
+        self.assertEqual(result, "NVIDIA Iray")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getUserDrawStyle", script)
+
+    def test_set_draw_style_resolves_alias(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "Wireframe"}
+        )
+        vp.set_draw_style("wireframe")
+        script = client.execute.call_args[0][0]
+        self.assertIn("setUserDrawStyle", script)
+        self.assertIn('"Wireframe"', script)
+
+    def test_set_draw_style_accepts_raw_label(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "Smooth Shaded"}
+        )
+        vp.set_draw_style("Smooth Shaded")
+        script = client.execute.call_args[0][0]
+        self.assertIn('"Smooth Shaded"', script)
+
+    def test_set_draw_style_raises_on_unknown_label(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "NVIDIA Iray"}
+        )
+        with self.assertRaises(ValueError):
+            vp.set_draw_style("Not A Real Style")
+
+    def test_set_draw_style_noop_when_already_set(self):
+        vp, client = self._make_viewport(
+            return_value={"before": "NVIDIA Iray", "after": "NVIDIA Iray"}
+        )
+        vp.set_draw_style("iray")  # already NVIDIA Iray -- should not raise
+
     def test_set_size_raises(self):
         vp, client = self._make_viewport()
         with self.assertRaises(NotImplementedError):
@@ -4242,6 +4731,100 @@ class TestDazViewport(unittest.TestCase):
         vp, client = self._make_viewport(return_value=None)
         result = vp.capture(path)
         self.assertEqual(result, path)
+
+    def test_capture_backdrop_color_restores_prev_bg_without_scope_error(self):
+        # Regression test: prevBg must round-trip through Python (prepare_script's
+        # returned value) rather than a bare JS `var` -- the prepare and finish
+        # scripts are separate execute() calls with no shared JS scope.
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        prev_state = {
+            "axesOn": True, "floorStyle": 1, "showPoseTool": False,
+            "aspectOn": True, "thirdsGuideOn": False, "toolBarMode": 0,
+            "selectionName": None, "tnVisible": None, "envVisible": None,
+            "bg": {"r": 10, "g": 20, "b": 30, "a": 255},
+        }
+        client.execute.side_effect = [
+            ExecutionResult(value=prev_state, output=[], request_id="x"),
+            ExecutionResult(value=path, output=[], request_id="x"),
+        ]
+        result = vp.capture(path, backdrop_color=(0, 255, 0), convergence_wait=0)
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        self.assertNotIn("prevBg", finish_script)
+        self.assertIn("new QColor(10, 20, 30, 255)", finish_script)
+
+    def test_capture_restores_bone_selection_via_skeleton_fallback(self):
+        # Regression: Scene.findNode() only resolves top-level scene nodes, not
+        # bones (e.g. one selected via the Joint Editor), so restoring a bone
+        # selection needs the owning skeleton's name to look it up via
+        # findBone() when the direct findNode() lookup comes back null.
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        prev_state = {
+            "axesOn": True, "floorStyle": 1, "showPoseTool": False,
+            "aspectOn": True, "thirdsGuideOn": False, "toolBarMode": 0,
+            "selectionName": "lShldrBend", "selectionSkeletonName": "Genesis9",
+            "tnVisible": None, "envVisible": None,
+        }
+        client.execute.side_effect = [
+            ExecutionResult(value=prev_state, output=[], request_id="x"),
+            ExecutionResult(value=path, output=[], request_id="x"),
+        ]
+        result = vp.capture(path, convergence_wait=0)
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        self.assertIn("selectionSkeletonName", finish_script)
+        self.assertIn("findBone", finish_script)
+
+    def test_capture_finish_script_restores_selection_even_if_vp_gone(self):
+        # Regression: if the viewport becomes unavailable during the real
+        # wall-clock convergence_wait sleep, the finish script must still
+        # restore scene-level state (selection, Tonemapper/Environment node
+        # visibility) instead of bailing out on `if (!vp) return null;`
+        # before any restoration happens.
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        prev_state = {
+            "axesOn": True, "floorStyle": 1, "showPoseTool": False,
+            "aspectOn": True, "thirdsGuideOn": False, "toolBarMode": 0,
+            "selectionName": "SomeNode", "selectionSkeletonName": None,
+            "tnVisible": True, "envVisible": True,
+        }
+        client.execute.side_effect = [
+            ExecutionResult(value=prev_state, output=[], request_id="x"),
+            ExecutionResult(value=None, output=[], request_id="x"),
+        ]
+        result = vp.capture(path, convergence_wait=0)
+        # No image captured (vp gone) -> falls back to returning the path.
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        # The vp-null guard must not short-circuit before scene-level restore.
+        self.assertNotIn("if (!vp) return null;", finish_script)
+        self.assertIn("Scene.setPrimarySelection(prevSel);", finish_script)
+        self.assertIn("if (vp) {", finish_script)
+
+    def test_capture_backdrop_color_no_overlays_restores_prev_bg(self):
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        client.execute.side_effect = [
+            ExecutionResult(
+                value={"ok": True, "bg": {"r": 1, "g": 2, "b": 3, "a": 255}},
+                output=[], request_id="x",
+            ),
+            ExecutionResult(value=path, output=[], request_id="x"),
+        ]
+        result = vp.capture(
+            path, hide_overlays=False, backdrop_color=(0, 255, 0), convergence_wait=0
+        )
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        self.assertNotIn("prevBg", finish_script)
+        self.assertIn("new QColor(1, 2, 3, 255)", finish_script)
 
 
 class _FakeSSEResponse:

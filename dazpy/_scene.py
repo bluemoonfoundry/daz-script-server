@@ -459,6 +459,110 @@ class DazScene:
         """)
         return self._client.execute(script).value or []
 
+    def node_hierarchy(self, root: str | None = None, max_depth: int | None = None) -> dict:
+        """Return the descendant tree rooted at a single node, in one HTTP call.
+
+        Unlike :meth:`node_tree` (every root-level node in the scene), this
+        starts at one named node -- typically a figure -- and includes a
+        ``type`` (DazScript class name) on every entry and an optional
+        recursion-depth limit, which matters for deep skeletons (Genesis
+        figures have 100+ bones).
+
+        Args:
+            root: Display label or internal name of the root node. Searched
+                by label first, then internal name.
+            max_depth: Maximum recursion depth. ``None`` or ``0`` means
+                unlimited.
+
+        Returns:
+            ``{"node": label, "hierarchy": {...}, "total_descendants": int}``
+            where ``hierarchy`` is ``{"label", "name", "type", "children": [...]}``
+            (``children`` omitted for leaf nodes).
+
+        Raises:
+            NodeNotFoundError: If *root* cannot be found.
+        """
+        from .exceptions import NodeNotFoundError
+        root_json = json.dumps(root)
+        depth_js = str(int(max_depth)) if max_depth else "0"
+        script = ScriptBuilder.iife(f"""
+            var _rootLabel = {root_json};
+            var _node = Scene.findNodeByLabel(_rootLabel);
+            if (!_node) _node = Scene.findNode(_rootLabel);
+            if (!_node) return null;
+
+            var _maxDepth = {depth_js};
+            var _totalDescendants = 0;
+
+            function _build(n, depth) {{
+                if (_maxDepth > 0 && depth >= _maxDepth) return null;
+                var info = {{label: n.getLabel(), name: n.getName(), type: n.className()}};
+                var children = [];
+                for (var i = 0; i < n.getNumNodeChildren(); i++) {{
+                    _totalDescendants++;
+                    var childInfo = _build(n.getNodeChild(i), depth + 1);
+                    if (childInfo) children.push(childInfo);
+                }}
+                if (children.length > 0) info.children = children;
+                return info;
+            }}
+
+            var hierarchy = _build(_node, 0);
+            return {{node: _node.getLabel(), hierarchy: hierarchy, total_descendants: _totalDescendants}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            raise NodeNotFoundError(f"Node not found: {root!r}")
+        return result
+
+    def overview(self) -> dict:
+        """Return a lightweight, top-level snapshot of the scene in one HTTP call.
+
+        Root-level figures, all cameras, all lights, the open scene file,
+        and the primary selection -- enough to orient an agent without
+        enumerating every node (use :meth:`nodes` or :meth:`node_tree` for
+        that).
+
+        Returns:
+            ``{"scene_file", "selected_node", "figures", "cameras", "lights", "total_nodes"}``.
+            ``figures``/``cameras``/``lights`` are lists of
+            ``{"name", "label", "type"}`` (``type`` omitted for cameras).
+            Follower figures (eyelashes, tear surfaces, etc. parented under
+            another figure rather than the scene root) are excluded from
+            ``figures``.
+        """
+        script = ScriptBuilder.iife("""
+            var figures = [];
+            for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+                var s = Scene.getSkeleton(i);
+                var parent = s.getNodeParent();
+                if (parent && parent.inherits("DzFigure")) continue;
+                figures.push({name: s.getName(), label: s.getLabel(), type: s.className()});
+            }
+            var cameras = [];
+            for (var i = 0; i < Scene.getNumCameras(); i++) {
+                var c = Scene.getCamera(i);
+                cameras.push({name: c.getName(), label: c.getLabel()});
+            }
+            var lights = [];
+            for (var i = 0; i < Scene.getNumLights(); i++) {
+                var l = Scene.getLight(i);
+                lights.push({name: l.getName(), label: l.getLabel(), type: l.className()});
+            }
+            var sel = Scene.getPrimarySelection();
+            return {
+                scene_file: Scene.getFilename(),
+                selected_node: sel ? sel.getLabel() : null,
+                figures: figures,
+                cameras: cameras,
+                lights: lights,
+                total_nodes: Scene.getNumNodes()
+            };
+        """)
+        return self._client.execute(script).value or {
+            "scene_file": "", "selected_node": None, "figures": [], "cameras": [], "lights": [], "total_nodes": 0,
+        }
+
     def selected_nodes(self) -> list[DazNode]:
         """Return the currently selected nodes."""
         script = ScriptBuilder.iife("""
@@ -619,6 +723,129 @@ class DazScene:
             msg = body.get("error") or body.get("detail") or resp.text[:200]
             raise DazError(f"save_copy failed ({resp.status_code}): {msg}")
         return resp.json()
+
+    def _export_via_native_exporter(self, exporter_class: str, path: str, overrides: dict) -> None:
+        """Run one of DAZ Studio's built-in file exporters (``DzExportMgr``).
+
+        Confirmed against a live instance: ``App.getExportMgr()`` registers
+        exporters by class name (e.g. ``"DzFbxExporter"``, ``"DzObjExporter"``)
+        and each exposes ``getDefaultOptions(DzFileIOSettings*)`` /
+        ``writeFile(path, settings)``. Defaults are seeded from the exporter
+        itself, then *overrides* are applied by Python type (bool -> setBoolValue,
+        int -> setIntValue, float -> setFloatValue, else -> setStringValue).
+        ``RunSilent`` must be forced to 1 or the native exporter shows a modal
+        options dialog, which would hang the main thread the HTTP handler
+        blocks on.
+        """
+        settings_calls = []
+        for key, value in overrides.items():
+            js_key = json.dumps(key)
+            if isinstance(value, bool):
+                settings_calls.append(f"settings.setBoolValue({js_key}, {'true' if value else 'false'});")
+            elif isinstance(value, int):
+                settings_calls.append(f"settings.setIntValue({js_key}, {value});")
+            elif isinstance(value, float):
+                settings_calls.append(f"settings.setFloatValue({js_key}, {value});")
+            else:
+                settings_calls.append(f"settings.setStringValue({js_key}, {json.dumps(str(value))});")
+
+        script = ScriptBuilder.iife(f"""
+            var mgr = App.getExportMgr();
+            var exp = mgr.findExporterByClassName({json.dumps(exporter_class)});
+            if (!exp) return;
+            var settings = new DzFileIOSettings();
+            exp.getDefaultOptions(settings);
+            {' '.join(settings_calls)}
+            exp.writeFile({json.dumps(path)}, settings);
+        """)
+        self._client.execute(script)
+
+    def export_fbx(
+        self,
+        path: str,
+        *,
+        selected_only: bool = False,
+        include_figures: bool = True,
+        include_props: bool = False,
+        include_lights: bool = False,
+        include_cameras: bool = False,
+        include_animations: bool = False,
+        embed_textures: bool = True,
+        options: dict | None = None,
+    ) -> None:
+        """Export the scene to an FBX file via DAZ Studio's built-in FBX exporter.
+
+        This is a plain synchronous call, unlike
+        :meth:`~dazpy.DazClient.export_usd_submit` -- FBX export is a native
+        DAZ Studio exporter (``DzFbxExporter``) rather than a custom C++
+        pipeline, so there's no async job to poll.
+
+        Args:
+            path: Absolute destination path on the DAZ Studio host (should
+                end in ``.fbx``).
+            selected_only: Export only the selected node(s).
+            include_figures: Include figures (default ``True``).
+            include_props: Include prop nodes.
+            include_lights: Include scene lights.
+            include_cameras: Include cameras.
+            include_animations: Include the current animation take.
+            embed_textures: Embed texture maps into the FBX file (default ``True``).
+            options: Additional raw ``DzFileIOSettings`` overrides (e.g.
+                ``{"Format": "FBX 2014 -- Binary"}``), applied on top of the
+                exporter's own defaults and the named args above. See
+                ``DzFbxExporter.getDefaultOptions()`` for the full set of keys.
+        """
+        overrides = {
+            "IncludeSelectedOnly": selected_only,
+            "IncludeFigures": include_figures,
+            "IncludeProps": include_props,
+            "IncludeLights": include_lights,
+            "IncludeCameras": include_cameras,
+            "IncludeAnimations": include_animations,
+            "EmbedTextures": embed_textures,
+        }
+        overrides.update(options or {})
+        overrides["RunSilent"] = 1
+        self._export_via_native_exporter("DzFbxExporter", path, overrides)
+
+    def export_obj(
+        self,
+        path: str,
+        *,
+        selected_only: bool = False,
+        ignore_invisible: bool = True,
+        include_normals: bool = False,
+        collect_maps: bool = False,
+        options: dict | None = None,
+    ) -> None:
+        """Export the scene to an OBJ file via DAZ Studio's built-in OBJ exporter.
+
+        This is a plain synchronous call -- see :meth:`export_fbx` for why
+        this doesn't follow the USD export module's async job pattern.
+
+        Args:
+            path: Absolute destination path on the DAZ Studio host (should
+                end in ``.obj``).
+            selected_only: Export only the selected node(s).
+            ignore_invisible: Skip nodes hidden in the viewport (default
+                ``True``, matches the exporter's own default).
+            include_normals: Write vertex normals (``WriteVN``).
+            collect_maps: Copy referenced texture maps next to the
+                ``.obj``/``.mtl`` instead of referencing their original paths.
+            options: Additional raw ``DzFileIOSettings`` overrides, applied
+                on top of the exporter's own defaults and the named args
+                above. See ``DzObjExporter.getDefaultOptions()`` for the
+                full set of keys.
+        """
+        overrides = {
+            "SelectedOnly": selected_only,
+            "IgnoreInvisible": ignore_invisible,
+            "WriteVN": include_normals,
+            "CollectMaps": collect_maps,
+        }
+        overrides.update(options or {})
+        overrides["RunSilent"] = 1
+        self._export_via_native_exporter("DzObjExporter", path, overrides)
 
     def filename(self) -> str:
         """Return the file path of the currently loaded scene, or an empty string."""

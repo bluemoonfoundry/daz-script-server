@@ -1,0 +1,236 @@
+{
+  "figure": "Genesis 9",
+  "profile": "Genesis 9",
+  "calibration": "heuristic",
+  "gender": null,
+  "units": "scene units (usually centimeters)",
+  "torso_only": false,
+  "figure_type": null,
+  "mesh": {
+    "vertex_count": 25182,
+    "face_count": 50312,
+    "bounds": {
+      "min_y": -0.095192477107048,
+      "max_y": 170.018997192383
+    }
+  },
+  "measurements": {
+    "height": {
+      "name": "Height",
+      "value_cm": 170.11418966949006,
+      "value_in": 66.97409042105907,
+      "slice_y": null,
+      "source": "mesh bounds",
+      "note": "min_y=-0.095, max_y=170.019"
+    },
+    "neck_circumference": {
+      "name": "Neck Circumference",
+      "value_cm": 34.41706187169997,
+      "value_in": 13.550024358936996,
+      "slice_y": 147.239196777344,
+      "source": "neck2",
+      "note": "anchor_y=146.739"
+    },
+    "high_bust_circumference": {
+      "name": "High Bust Circumference",
+      "value_cm": 116.60201457526534,
+      "value_in": 45.906304950891865,
+      "slice_y": 132.471893310547,
+      "source": "avg(l_shoulder, r_shoulder)",
+      "note": "anchor_y=135.472"
+    },
+    "bust_circumference": {
+      "name": "Bust Circumference",
+      "value_cm": 95.20038478374454,
+      "value_in": 37.48046645029312,
+      "slice_y": 126.755798339844,
+      "source": "pectoral pair (l_pectoral, r_pectoral)",
+      "note": "anchor_y=125.256"
+    },
+    "underbust_circumference": {
+      "name": "Underbust Circumference",
+      "value_cm": 73.64791356311656,
+      "value_in": 28.99524156028211,
+      "slice_y": 107.325996398926,
+      "source": "spine3",
+      "note": "anchor_y=114.326; target_cm=None"
+    },
+    "waist_circumference": {
+      "name": "Waist Circumference",
+      "value_cm": 73.64816767658984,
+      "value_in": 28.99534160495663,
+      "slice_y": 107.322799682617,
+      "source": "spine2",
+      "note": "anchor_y=106.823; target_cm=None"
+    },
+    "high_hip_circumference": {
+      "name": "High Hip Circumference",
+      "value_cm": 77.55363807964024,
+      "value_in": 30.532928377811118,
+      "slice_y": 102.4835662841797,
+      "source": "pelvis",
+      "note": "anchor_y=106.484; +7.5cm above low hip"
+    },
+    "low_hip_circumference": {
+      "name": "Low Hip Circumference",
+      "value_cm": 96.30671776249606,
+      "value_in": 37.91603061515593,
+      "slice_y": 88.9835662841797,
+      "source": "pelvis",
+      "note": "anchor_y=98.984; target_cm=None"
+    },
+    "thigh_circumference": {
+      "name": "Thigh Circumference",
+      "value_cm": 58.423682752031105,
+      "value_in": 23.00144990237445,
+      "slice_y": 80.1709823608398,
+      "source": "avg(l_thigh, r_thigh)",
+      "note": "anchor_y=88.671; scan 15cm below hip joint"
+    },
+    "knee_circumference": {
+      "name": "Knee Circumference",
+      "value_cm": 32.17682448455845,
+      "value_in": 12.668041135652933,
+      "slice_y": 44.1940002441406,
+      "source": "avg(l_shin, r_shin)",
+      "note": "anchor_y=48.194"
+    },
+    "calf_circumference": {
+      "name": "Calf Circumference",
+      "value_cm": 35.95628062450157,
+      "value_in": 14.156015993898254,
+      "slice_y": 34.6940002441406,
+      "source": "avg(l_shin, r_shin)",
+      "note": "anchor_y=48.194; scan 20cm below knee joint"
+    },
+    "ankle_circumference": {
+      "name": "Ankle Circumference",
+      "value_cm": 20.838727311727908,
+      "value_in": 8.20422335107398,
+      "slice_y": 9.44979858398438,
+      "source": "avg(l_foot, r_foot)",
+      "note": "anchor_y=6.450"
+    },
+    "upper_arm_circumference": {
+      "name": "Upper Arm Circumference",
+      "value_cm": 34.24826767166158,
+      "value_in": 13.483569949473063,
+      "slice_y": 126.561698913574,
+      "source": "avg(l_upperarm, r_upperarm)",
+      "note": "anchor_y=116.562; scan 12cm above elbow joint"
+    },
+    "elbow_circumference": {
+      "name": "Elbow Circumference",
+      "value_cm": 32.159975639945884,
+      "value_in": 12.661407732262159,
+      "slice_y": 119.561698913574,
+      "source": "avg(l_forearm, r_forearm)",
+      "note": "anchor_y=116.562"
+    },
+    "wrist_circumference": {
+      "name": "Wrist Circumference",
+      "value_cm": 18.256020967902394,
+      "value_in": 7.187409829882832,
+      "slice_y": 99.7753067016602,
+      "source": "avg(l_hand, r_hand)",
+      "note": "anchor_y=99.775"
+    },
+    "shoulder_width": {
+      "name": "Shoulder Width",
+      "value_cm": 6.90601015090942,
+      "value_in": 2.7189016342163073,
+      "slice_y": null,
+      "source": "l_shoulder -> r_shoulder",
+      "note": "bone-to-bone X span"
+    },
+    "across_back": {
+      "name": "Across Back",
+      "value_cm": 51.11035835994691,
+      "value_in": 20.12218833068776,
+      "slice_y": 131.739196777344,
+      "source": "neck2 -10cm",
+      "note": "anchor_y=136.739; X-span of torso contour at shoulder-blade level"
+    },
+    "across_chest": {
+      "name": "Across Chest",
+      "value_cm": 50.34540666547823,
+      "value_in": 19.82102624625127,
+      "slice_y": 132.471893310547,
+      "source": "avg(l_shoulder, r_shoulder)",
+      "note": "anchor_y=135.472; X-span of torso contour at high-bust level"
+    },
+    "back_waist_length": {
+      "name": "Back Waist Length",
+      "value_cm": 39.916397094727,
+      "value_in": 15.715116966427953,
+      "slice_y": null,
+      "source": "neck2 -> spine2",
+      "note": null
+    },
+    "front_waist_length": {
+      "name": "Front Waist Length",
+      "value_cm": 28.649093627929986,
+      "value_in": 11.279170719657474,
+      "slice_y": null,
+      "source": "avg(l_shoulder, r_shoulder) -> spine2",
+      "note": null
+    },
+    "torso_length": {
+      "name": "Torso Length",
+      "value_cm": 36.48832702636729,
+      "value_in": 14.365483081246964,
+      "slice_y": null,
+      "source": "avg(l_shoulder, r_shoulder) -> pelvis",
+      "note": null
+    },
+    "inseam": {
+      "name": "Inseam",
+      "value_cm": 88.76617483794685,
+      "value_in": 34.94731292832553,
+      "slice_y": null,
+      "source": "avg(l_thigh, r_thigh) -> floor",
+      "note": null
+    },
+    "outseam": {
+      "name": "Outseam",
+      "value_cm": 106.91799215972405,
+      "value_in": 42.09369770067876,
+      "slice_y": null,
+      "source": "spine2 -> floor",
+      "note": null
+    },
+    "sleeve_length": {
+      "name": "Sleeve Length",
+      "value_cm": 35.69658660888679,
+      "value_in": 14.05377425546724,
+      "slice_y": null,
+      "source": "avg(l_shoulder, r_shoulder) -> avg(l_hand, r_hand)",
+      "note": null
+    },
+    "shoulder_to_bust": {
+      "name": "Shoulder to Bust",
+      "value_cm": 10.216094970702983,
+      "value_in": 4.022084634135033,
+      "slice_y": null,
+      "source": "avg(l_shoulder, r_shoulder) -> pectoral pair (l_pectoral, r_pectoral)",
+      "note": null
+    },
+    "waist_to_hip": {
+      "name": "Waist to Hip",
+      "value_cm": 7.839233398437301,
+      "value_in": 3.0863123615894885,
+      "slice_y": null,
+      "source": "spine2 -> pelvis",
+      "note": null
+    },
+    "crotch_depth": {
+      "name": "Crotch Depth",
+      "value_cm": 18.1518173217772,
+      "value_in": 7.146384772353229,
+      "slice_y": null,
+      "source": "spine2 -> avg(l_thigh, r_thigh)",
+      "note": null
+    }
+  },
+  "clothing": null
+}
