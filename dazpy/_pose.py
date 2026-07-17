@@ -82,13 +82,18 @@ class DazPose:
             {lookup}
             if (!_skel) return null;
 
+            // Bone rotation controls can themselves be ERC targets (e.g.
+            // auto-follow bend/twist ratios common on Genesis figures, where
+            // one bone's rotation is driven off another's), so read raw
+            // values here for the same reason as morphs/props below.
             var bones = {{}};
             var all = _skel.getAllBones();
             for (var i = 0; i < all.length; i++) {{
                 var b = all[i];
-                var x = b.getXRotControl().getValue();
-                var y = b.getYRotControl().getValue();
-                var z = b.getZRotControl().getValue();
+                var xc = b.getXRotControl(), yc = b.getYRotControl(), zc = b.getZRotControl();
+                var x = (typeof xc.getRawValue === "function") ? xc.getRawValue() : xc.getValue();
+                var y = (typeof yc.getRawValue === "function") ? yc.getRawValue() : yc.getValue();
+                var z = (typeof zc.getRawValue === "function") ? zc.getRawValue() : zc.getValue();
                 if (Math.abs(x) > 0.0001 || Math.abs(y) > 0.0001 || Math.abs(z) > 0.0001)
                     bones[b.getName()] = [x, y, z];
             }}
@@ -253,9 +258,10 @@ class DazPose:
                 var b = all[i];
                 var xyz = _bones[b.getName()];
                 if (xyz !== undefined) {{
-                    b.getXRotControl().setValue(xyz[0]);
-                    b.getYRotControl().setValue(xyz[1]);
-                    b.getZRotControl().setValue(xyz[2]);
+                    var xc = b.getXRotControl(), yc = b.getYRotControl(), zc = b.getZRotControl();
+                    if (typeof xc.setRawValue === "function") {{ xc.setRawValue(xyz[0]); }} else {{ xc.setValue(xyz[0]); }}
+                    if (typeof yc.setRawValue === "function") {{ yc.setRawValue(xyz[1]); }} else {{ yc.setValue(xyz[1]); }}
+                    if (typeof zc.setRawValue === "function") {{ zc.setRawValue(xyz[2]); }} else {{ zc.setValue(xyz[2]); }}
                 }}
             }}
 
@@ -319,16 +325,11 @@ class DazPose:
             var all = _skel.getAllBones();
             for (var i = 0; i < all.length; i++) {{
                 var b = all[i];
-                var xyz = _bones[b.getName()];
-                if (xyz !== undefined) {{
-                    b.getXRotControl().setValue(xyz[0]);
-                    b.getYRotControl().setValue(xyz[1]);
-                    b.getZRotControl().setValue(xyz[2]);
-                }} else {{
-                    b.getXRotControl().setValue(0);
-                    b.getYRotControl().setValue(0);
-                    b.getZRotControl().setValue(0);
-                }}
+                var xyz = _bones[b.getName()] || [0, 0, 0];
+                var xc = b.getXRotControl(), yc = b.getYRotControl(), zc = b.getZRotControl();
+                if (typeof xc.setRawValue === "function") {{ xc.setRawValue(xyz[0]); }} else {{ xc.setValue(xyz[0]); }}
+                if (typeof yc.setRawValue === "function") {{ yc.setRawValue(xyz[1]); }} else {{ yc.setValue(xyz[1]); }}
+                if (typeof zc.setRawValue === "function") {{ zc.setRawValue(xyz[2]); }} else {{ zc.setValue(xyz[2]); }}
             }}
 
             // Write back to the raw dial slot -- see the comment in

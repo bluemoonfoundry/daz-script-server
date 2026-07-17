@@ -39,6 +39,34 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **ERC-inflation fix in `DazPose` didn't cover bone rotation channels** —
+  the earlier fix that switched morphs and node properties to
+  `getRawValue()`/`setRawValue()` left bone `XRotControl`/`YRotControl`/
+  `ZRotControl` channels on plain `getValue()`/`setValue()`. For rigs where
+  one bone's rotation is ERC-driven from another (e.g. auto-follow
+  bend/twist ratios common on Genesis figures), repeated capture/apply
+  cycles kept inflating that bone's rotation the same way the earlier fix
+  addressed for morphs/props. `capture()`/`apply()`/`apply_full()` now
+  feature-detect raw value support on bone rotation controls too.
+- **`DazViewport.capture()` left state unrestored if the viewport
+  disappeared mid-wait** — the finish script's `if (!vp) return null;` guard
+  ran before *any* of the overlay/selection/Tonemapper restore lines, so if
+  the active viewport became unavailable (closed/changed) during the real
+  wall-clock `convergence_wait` sleep between the prepare and finish scripts,
+  restoration was skipped entirely -- a state the old atomic single-script
+  capture could never leave the viewport in. Scene-level restoration
+  (primary selection, Tonemapper/Environment node visibility) no longer
+  depends on `vp` and always runs; only the viewport-specific properties and
+  the capture itself are skipped (returning no image) if `vp` is gone.
+- **`DazViewport.capture()` couldn't restore a bone selection** — the
+  two-pass capture's primary-selection restore serialises only the selected
+  node's name across the prepare/finish round trip and re-resolves it via
+  `Scene.findNode()`, which resolves top-level scene nodes but not bones or
+  other non-node selectable items (e.g. a bone selected via the Joint
+  Editor), so the original selection was silently lost after `capture()`.
+  Now also captures the owning skeleton's name for bone selections
+  (`isBoneSelectingNode()`/`getSkeleton()`) and falls back to
+  `skeleton.findBone(name)` when the direct `findNode()` lookup misses.
 - **`DazPose.apply_full()` didn't zero absent node properties** — the
   node-property loop only called `setValue`/`setRawValue` `if (v !==
   undefined)`, with no else-zero branch, unlike the bones loop (explicit

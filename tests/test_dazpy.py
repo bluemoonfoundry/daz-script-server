@@ -3658,6 +3658,19 @@ class TestDazPose(unittest.TestCase):
         self.assertIn("getValueChannel", script)
         self.assertIn("DzMorph", script)
 
+    def test_capture_bones_prefer_raw_value(self):
+        # Regression: bone rotation controls can be ERC targets (e.g.
+        # auto-follow bend/twist ratios), so capture() must feature-detect
+        # getRawValue() for them the same way it already does for
+        # morphs/props, instead of always reading the post-ERC getValue().
+        from dazpy import DazPose
+        skel, client = self._make_skeleton({"bones": {}, "morphs": {}, "props": {}})
+        DazPose.capture(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn('typeof xc.getRawValue === "function"', script)
+        self.assertIn('typeof yc.getRawValue === "function"', script)
+        self.assertIn('typeof zc.getRawValue === "function"', script)
+
     def test_capture_raises_on_null_result(self):
         from dazpy import DazPose
         from dazpy.exceptions import NodeNotFoundError
@@ -3691,6 +3704,19 @@ class TestDazPose(unittest.TestCase):
         self.assertIn("-45", script)
         self.assertIn("getXRotControl", script)
 
+    def test_apply_bones_prefer_raw_value(self):
+        # Regression: apply() must feature-detect setRawValue for bone
+        # rotation controls too, not just morphs/props (see
+        # test_capture_bones_prefer_raw_value).
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"rForeArm": [0.0, 0.0, -45.0]}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn('typeof xc.setRawValue === "function"', script)
+        self.assertIn('typeof yc.setRawValue === "function"', script)
+        self.assertIn('typeof zc.setRawValue === "function"', script)
+
     def test_apply_script_contains_morph_data(self):
         from dazpy import DazPose
         pose = DazPose("Genesis 9", {}, {"PHMSmile": 0.75}, {})
@@ -3716,8 +3742,23 @@ class TestDazPose(unittest.TestCase):
         skel, client = self._make_skeleton(True)
         pose.apply_full(skel)
         script = client.execute.call_args[0][0]
-        # Should set 0 for bones not in the pose
-        self.assertIn("setValue(0)", script)
+        # Should fall back to [0, 0, 0] for bones not in the pose
+        self.assertIn("_bones[b.getName()] || [0, 0, 0]", script)
+
+    def test_apply_full_bones_prefer_raw_value(self):
+        # Regression: bone rotation controls can be ERC targets (e.g.
+        # auto-follow bend/twist ratios) just like morphs/props, so
+        # apply_full() must feature-detect setRawValue for them too instead
+        # of always using setValue(), which would re-inflate the total on
+        # every capture/apply cycle.
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {"hip": [1.0, 2.0, 3.0]}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn('typeof xc.setRawValue === "function"', script)
+        self.assertIn('typeof yc.setRawValue === "function"', script)
+        self.assertIn('typeof zc.setRawValue === "function"', script)
 
     def test_apply_full_zeroes_absent_node_properties(self):
         # Regression: unlike the bones (explicit else-zero) and morphs (`_v =
@@ -4713,6 +4754,58 @@ class TestDazViewport(unittest.TestCase):
         finish_script = client.execute.call_args_list[1][0][0]
         self.assertNotIn("prevBg", finish_script)
         self.assertIn("new QColor(10, 20, 30, 255)", finish_script)
+
+    def test_capture_restores_bone_selection_via_skeleton_fallback(self):
+        # Regression: Scene.findNode() only resolves top-level scene nodes, not
+        # bones (e.g. one selected via the Joint Editor), so restoring a bone
+        # selection needs the owning skeleton's name to look it up via
+        # findBone() when the direct findNode() lookup comes back null.
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        prev_state = {
+            "axesOn": True, "floorStyle": 1, "showPoseTool": False,
+            "aspectOn": True, "thirdsGuideOn": False, "toolBarMode": 0,
+            "selectionName": "lShldrBend", "selectionSkeletonName": "Genesis9",
+            "tnVisible": None, "envVisible": None,
+        }
+        client.execute.side_effect = [
+            ExecutionResult(value=prev_state, output=[], request_id="x"),
+            ExecutionResult(value=path, output=[], request_id="x"),
+        ]
+        result = vp.capture(path, convergence_wait=0)
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        self.assertIn("selectionSkeletonName", finish_script)
+        self.assertIn("findBone", finish_script)
+
+    def test_capture_finish_script_restores_selection_even_if_vp_gone(self):
+        # Regression: if the viewport becomes unavailable during the real
+        # wall-clock convergence_wait sleep, the finish script must still
+        # restore scene-level state (selection, Tonemapper/Environment node
+        # visibility) instead of bailing out on `if (!vp) return null;`
+        # before any restoration happens.
+        path = "C:/tmp/snap.png"
+        vp, client = self._make_viewport()
+        prev_state = {
+            "axesOn": True, "floorStyle": 1, "showPoseTool": False,
+            "aspectOn": True, "thirdsGuideOn": False, "toolBarMode": 0,
+            "selectionName": "SomeNode", "selectionSkeletonName": None,
+            "tnVisible": True, "envVisible": True,
+        }
+        client.execute.side_effect = [
+            ExecutionResult(value=prev_state, output=[], request_id="x"),
+            ExecutionResult(value=None, output=[], request_id="x"),
+        ]
+        result = vp.capture(path, convergence_wait=0)
+        # No image captured (vp gone) -> falls back to returning the path.
+        self.assertEqual(result, path)
+
+        finish_script = client.execute.call_args_list[1][0][0]
+        # The vp-null guard must not short-circuit before scene-level restore.
+        self.assertNotIn("if (!vp) return null;", finish_script)
+        self.assertIn("Scene.setPrimarySelection(prevSel);", finish_script)
+        self.assertIn("if (vp) {", finish_script)
 
     def test_capture_backdrop_color_no_overlays_restores_prev_bg(self):
         path = "C:/tmp/snap.png"

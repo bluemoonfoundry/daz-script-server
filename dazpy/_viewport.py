@@ -177,6 +177,11 @@ class DazViewport:
 
                 var prevSelection = Scene.getPrimarySelection();
                 var prevSelectionName = prevSelection ? prevSelection.getName() : null;
+                var prevSelectionSkeletonName = null;
+                if (prevSelection && prevSelection.isBoneSelectingNode && prevSelection.isBoneSelectingNode()) {{
+                    var _selSkel = prevSelection.getSkeleton ? prevSelection.getSkeleton() : null;
+                    if (_selSkel) prevSelectionSkeletonName = _selSkel.getName();
+                }}
                 var tnNode  = Scene.findNodeByLabel("Tonemapper Options");
                 var envNode = Scene.findNodeByLabel("Environment Options");
                 var prevTnVisible  = tnNode  ? tnNode.isVisibleInViewport()  : null;
@@ -200,6 +205,7 @@ class DazViewport:
                     axesOn: prevAxes, floorStyle: prevFloor, showPoseTool: prevPose,
                     aspectOn: prevAspect, thirdsGuideOn: prevThirds, toolBarMode: prevToolBarMode,
                     selectionName: prevSelectionName,
+                    selectionSkeletonName: prevSelectionSkeletonName,
                     tnVisible: prevTnVisible, envVisible: prevEnvVisible{bg_return_field}
                 }};
             """)
@@ -216,30 +222,47 @@ class DazViewport:
                     f"{int(pb['b'])}, {int(pb.get('a', 255))});"
                 )
 
+            # vp is deliberately re-fetched (not assumed available) here: it can
+            # become unavailable (viewport closed/changed) during the real
+            # wall-clock convergence_wait sleep between this script and
+            # prepare_script. Scene-level restoration (selection, Tonemapper/
+            # Environment node visibility) doesn't depend on vp, so it always
+            # runs; only the viewport-specific properties and the capture
+            # itself are skipped if vp is gone, and the call returns null
+            # (no image) rather than leaving any restorable state stuck.
             finish_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
-                if (!vp) return null;
                 var prev = {json.dumps(prev_state)};
+                var img = null;
 
-                vp.updateGL();
-                var img = vp.captureImage();
+                if (vp) {{
+                    vp.updateGL();
+                    img = vp.captureImage();
 
-                vp.axesOn        = prev.axesOn;
-                vp.floorStyle    = prev.floorStyle;
-                vp.showPoseTool  = prev.showPoseTool;
-                vp.aspectOn      = prev.aspectOn;
-                vp.thirdsGuideOn = prev.thirdsGuideOn;
-                vp.toolBarMode   = prev.toolBarMode;
-                {restore_bg_js}
+                    vp.axesOn        = prev.axesOn;
+                    vp.floorStyle    = prev.floorStyle;
+                    vp.showPoseTool  = prev.showPoseTool;
+                    vp.aspectOn      = prev.aspectOn;
+                    vp.thirdsGuideOn = prev.thirdsGuideOn;
+                    vp.toolBarMode   = prev.toolBarMode;
+                    {restore_bg_js}
+                }}
 
-                var prevSel = prev.selectionName ? Scene.findNode(prev.selectionName) : null;
+                var prevSel = null;
+                if (prev.selectionName) {{
+                    prevSel = Scene.findNode(prev.selectionName);
+                    if (!prevSel && prev.selectionSkeletonName) {{
+                        var _selSkel = Scene.findNode(prev.selectionSkeletonName);
+                        if (_selSkel && _selSkel.findBone) prevSel = _selSkel.findBone(prev.selectionName);
+                    }}
+                }}
                 Scene.setPrimarySelection(prevSel);
                 var tnNode  = Scene.findNodeByLabel("Tonemapper Options");
                 var envNode = Scene.findNodeByLabel("Environment Options");
                 if (tnNode  && prev.tnVisible  !== null) tnNode.setVisibleInViewport(prev.tnVisible);
                 if (envNode && prev.envVisible !== null) envNode.setVisibleInViewport(prev.envVisible);
 
-                vp.updateGL();
+                if (vp) vp.updateGL();
 
                 if (!img) return null;
                 img.save({js_path});
