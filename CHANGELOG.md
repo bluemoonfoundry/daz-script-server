@@ -2,6 +2,16 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.7.2] - 2026-07-19
+
+No functional changes to `dazpy`'s behavior. `2.7.1`'s version bump missed
+three places still reading `2.7.0`: `dazpy.__version__` itself (already
+baked into the published `2.7.1` wheel, which is why this needed a new
+version rather than a doc-only fix), `openapi.yaml`'s `info.version` plus
+two response examples, and the plugin's own `DZSRV_VERSION_STR`
+(`common_version.h` — what `/status`/`/health` actually return at
+runtime). All three now correctly say `2.7.2`.
+
 ## [2.7.1] - 2026-07-19
 
 No functional changes. The `2.7.0` dazpy wheel was uploaded to PyPI before

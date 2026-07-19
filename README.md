@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.7.1** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.7.2** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -68,6 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.7.2](#whats-new-in-v272)
 - [What's New in v2.7.1](#whats-new-in-v271)
 - [What's New in v2.7.0](#whats-new-in-v270)
 - [What's New in v2.6.0](#whats-new-in-v260)
@@ -150,6 +151,18 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.7.2
+
+No functional changes to `dazpy`'s behavior. `2.7.1`'s version bump missed
+three places that still said `2.7.0`: `dazpy.__version__` itself (already
+baked into the published `2.7.1` wheel — the reason this needed a new
+version rather than a doc fix), `openapi.yaml`'s `info.version` and two
+response examples, and the plugin's own `DZSRV_VERSION_STR` (what
+`/status`/`/health` actually return at runtime). All three now correctly
+say `2.7.2`.
 
 ---
 
@@ -639,7 +652,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.7.1-py3-none-any.whl
+pip install dazpy-2.7.2-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
