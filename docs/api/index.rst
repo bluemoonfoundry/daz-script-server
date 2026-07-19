@@ -7,9 +7,12 @@ API Reference
    client
    result
    scene
+   scene_state
+   scene_events
    nodes
    skeleton
    pose
+   dforce
    animation
    camera
    light
