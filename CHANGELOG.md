@@ -2,7 +2,7 @@
 
 All notable changes to DazScript Server are documented here.
 
-## [2.7.0] - Unreleased
+## [2.7.0] - 2026-07-19
 
 ### Added
 
@@ -36,6 +36,65 @@ All notable changes to DazScript Server are documented here.
   pose (via `DazPose`, so bone-level, not just the root transform) plus
   camera and light transforms/key properties, captured and restored via
   `raw_value` throughout so repeated capture/apply cycles are idempotent.
+- **`DazCamera.lens_shift_x` / `.lens_shift_y`** — read/write properties
+  backed by `DzCamera`'s "Lens Shift X/Y (mm)" controls, the same values the
+  render engine uses — needed for depth-based effects (fog, DOF-driven line
+  weight) to match the actual render.
+- **`DazScene.export_fbx()` / `.export_obj()`** — synchronous export via DAZ
+  Studio's native `DzFbxExporter`/`DzObjExporter`, unlike the async job
+  pattern `export_usd_submit()` uses — there's no custom pipeline behind
+  these to poll on. `RunSilent` is forced on to avoid the native exporter's
+  modal options dialog hanging the HTTP handler's thread.
+- **`DazViewport.draw_style()` / `.set_draw_style()`** — controls the
+  viewport's preview quality (Wireframe .. NVIDIA Iray) via
+  `getUserDrawStyle()`/`setUserDrawStyle()`, distinct from
+  `DazRenderSettings.active_engine()` below. `set_draw_style()` reads the
+  style back after setting it and raises `ValueError` if it didn't take,
+  since `setUserDrawStyle()` silently no-ops on an unrecognized label.
+- **`DazRenderSettings.active_engine()` / `.set_active_engine()`** — query
+  and switch the Render Settings "Engine" dropdown. Correctly distinguishes
+  `DzRenderOptions.renderType` (which governs "viewport"/
+  "multi_pass_opengl") from `renderMgr.getActiveRenderer()` (which only
+  applies in Software mode) — the two are easy to conflate since the UI
+  presents them as one dropdown. `set_active_engine()` raises `RenderError`
+  for a pluggable renderer name that isn't registered (e.g. the Filament
+  plugin not installed).
+- **`DazRenderSettings` Iray quality/samples control** —
+  `max_samples`/`max_time_secs`/`quality` properties and
+  `set_quality_preset()` (draft/preview/good/final), backed by the active
+  Iray renderer's property holder since these aren't exposed on
+  `DzRenderOptions`. Plus `DazClient.list_requests()`, wrapping the existing
+  `GET /requests` endpoint to list all tracked async requests by status.
+- **Per-frame animation render submission** — `POST /render/animation` and
+  `DazClient.render_animation_submit()`, mirroring the existing
+  single-render pattern as one trackable async request that loops a
+  start/end frame range, writing each frame to `output_path` with its
+  `{frame}` token substituted (zero-padded).
+- **`DazNode.fit_to()` / `.unfit()` / `.fitted_items()`** — clothing/prop
+  fit-to-figure control, matching what `vangard-daz-mcp`'s hand-rolled
+  fit/unfit/list-fitted scripts previously did outside `dazpy`.
+- **`DazProperty.get_keys()` / `.remove_key()` / `.clear_keys()`** —
+  keyframe curve introspection and single-key removal on an animated
+  property, without hand-rolled DazScript.
+- **dForce simulation control** — a `DazDForce` modifier proxy
+  (`freeze_simulation`/`freeze()`/`unfreeze()`, backed by
+  `DzDForceModifier`'s "Freeze Simulation" property), wired into `DazNode`'s
+  modifier discrimination plus a new `dforce_modifiers()` filter, and
+  `DazScene.run_dforce_simulation()` / `.is_simulating()` /
+  `.clear_dforce_simulation()` driven by `DzSimulationMgr`. Long-running
+  simulations use the existing async execute-and-poll path.
+- **General scene-change event stream client** — `DazClient.
+  stream_scene_events()` plus `dazpy/_scene_events.py`
+  (`SceneEvent`/`watch_scene_events()`/`wait_for_scene_event()`), mirroring
+  the existing render-progress stream so callers can watch or block on
+  node/light/camera/selection/scene/time/render events over the server's
+  existing `GET /scene/events` SSE endpoint without hand-rolling SSE
+  parsing.
+- **`DazElement.numeric_properties()` / `.class_name`** —
+  `numeric_properties()` returns `{label: value}` for every numeric property
+  on an element in one round trip, instead of needing one round trip per
+  property after `list_properties()`. `class_name` exposes the DazScript
+  class name (e.g. `"DzFigure"`) for any element.
 
 ### Fixed
 
@@ -135,6 +194,20 @@ All notable changes to DazScript Server are documented here.
   the renderer used a stale/null camera. Now sets both, matching
   `dazpy/_render.py` and this repo's own camera-preset scripts. Affects both
   `/render` and `/render/batch` (they share `buildRenderScript()`).
+- **`DazClient.status()` / `.health()` / `.metrics()` misreported auth
+  failures** — these called the internal `_get()` helper directly without
+  the 401/403 check `execute()`/`render_submit()`/etc. already had, so a 401
+  with no response body surfaced as a raw JSON-decode error instead of
+  `AuthenticationError`.
+- **`ScriptError` dropped captured output on failure** — callers building
+  diagnostics from a failed script (e.g. `daz-mcp-server`'s `daz_execute`)
+  lost the `print()` output that led up to the error. `ScriptError`/
+  `ScriptRuntimeError`/`ScriptSyntaxError` now accept and surface an
+  optional `output` list via `.diagnostic`.
+- **Dropped the unsupported `3delight` render engine option** — DAZ Studio
+  no longer ships 3Delight; removed it from the engine allow-list and docs
+  so a render request naming it fails fast with a clear error instead of
+  silently mapping to a renderer that isn't there.
 
 ## [2.6.0] - 2026-06-27
 
