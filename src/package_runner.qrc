@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/package_runner">
+        <file alias="dsp_runner.py">../package_runner/dsp_runner.py</file>
+    </qresource>
+</RCC>

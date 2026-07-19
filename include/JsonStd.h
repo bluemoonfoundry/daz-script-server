@@ -107,6 +107,16 @@ inline std::string variantToJson(const QVariant& v)
     }
 }
 
+// Convenience wrapper: variantToJson() as a QByteArray, ready to write to a
+// file or use as an HTTP request/response body. Added for the Package Runner
+// epic (daz-script-server-5sw); ported back from daz-python-bridge's copy of
+// this header, which itself started as a fork of this file.
+inline QByteArray variantToJsonBytes(const QVariant& v)
+{
+    const std::string s = variantToJson(v);
+    return QByteArray(s.data(), static_cast<int>(s.size()));
+}
+
 #if DAZ_SDK_MAJOR_VERSION >= 6
 
 // Parse a JSON object body into a QVariantMap. QJsonDocument::fromJson is
