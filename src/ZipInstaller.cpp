@@ -110,6 +110,11 @@ QString newUuidNoBraces() {
 
 }  // namespace
 
+ZipInstaller::ZipInstaller(QString packagesDir)
+	: ZipInstaller(std::move(packagesDir), Limits())
+{
+}
+
 ZipInstaller::ZipInstaller(QString packagesDir, Limits limits)
 	: m_packagesDir(std::move(packagesDir))
 	, m_limits(limits)

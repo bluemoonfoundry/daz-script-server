@@ -73,7 +73,14 @@ public:
 		QString errorMessage;
 	};
 
-	explicit ZipInstaller(QString packagesDir, Limits limits = Limits());
+	// Two overloads rather than a `Limits limits = Limits()` default argument:
+	// Clang (unlike MSVC) rejects a nested struct's default member
+	// initializers used to default-construct it inside a default argument of
+	// its own enclosing class -- "needed within definition of enclosing class
+	// 'ZipInstaller'". The default-constructed Limits() lives in the .cpp,
+	// past the class body, where it's unambiguously fine.
+	explicit ZipInstaller(QString packagesDir);
+	ZipInstaller(QString packagesDir, Limits limits);
 
 	// Validates and extracts zipPath into a staging directory, then atomically
 	// renames it into <packagesDir>/<id> once every entry has passed and
