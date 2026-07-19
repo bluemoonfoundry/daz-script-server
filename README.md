@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.7.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.7.1** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -68,6 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.7.1](#whats-new-in-v271)
 - [What's New in v2.7.0](#whats-new-in-v270)
 - [What's New in v2.6.0](#whats-new-in-v260)
 - [What's New in v2.5.0](#whats-new-in-v250)
@@ -149,6 +150,16 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.7.1
+
+No functional changes. Republished to fix a stale PyPI package description —
+the `2.7.0` wheel was uploaded to PyPI before the README fixes below (in
+"What's New in v2.7.0") had landed, and PyPI has no way to update an
+already-published version's metadata. `2.7.1`'s code is identical to
+`2.7.0`'s.
 
 ---
 
@@ -628,7 +639,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.7.0-py3-none-any.whl
+pip install dazpy-2.7.1-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:

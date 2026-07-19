@@ -2,6 +2,17 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.7.1] - 2026-07-19
+
+No functional changes. The `2.7.0` dazpy wheel was uploaded to PyPI before
+a README fix landed (see `2.7.0` below), and PyPI has no way to update an
+already-published version's metadata/description — the project page stayed
+stuck showing pre-`2.7.0` text. Republished under a new version to fix the
+displayed description; `2.7.1`'s dazpy source is identical to `2.7.0`'s.
+Plugin binaries are rebuilt and retagged alongside it since this repo's
+release pipeline ties both to one version number, but contain no code
+changes either.
+
 ## [2.7.0] - 2026-07-19
 
 ### Added
