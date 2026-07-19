@@ -19,6 +19,15 @@ add_library(DazScriptServer SHARED
 	RequestValidator.cpp
 	SettingsService.cpp
 	SceneEventBroker.cpp
+	# Package Runner (daz-script-server-5sw): open a .dzpkg the same way a
+	# .dsa is opened today, run it as a one-shot subprocess against a
+	# lazily-created per-package venv. Ported from daz-python-bridge's
+	# ZipInstaller/UvBootstrapper/PluginDependencyInstaller.
+	ZipInstaller.cpp
+	miniz.c
+	PackagePaths.cpp
+	PythonToolchainBootstrapper.cpp
+	PackageDependencyInstaller.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
@@ -28,6 +37,7 @@ add_library(DazScriptServer SHARED
 	../include/MetricsCollector.h
 	../include/SecureRandom.h
 	../include/JsonBuilder.h
+	../include/JsonStd.h
 	../include/RequestHandler.h
 	../include/ErrorResponse.h
 	../include/RequestValidator.h
@@ -37,6 +47,12 @@ add_library(DazScriptServer SHARED
 	../include/ServerSettings.h
 	../include/SceneEventBroker.h
 	../include/RenderProgressBroker.h
+	../include/ZipInstaller.h
+	../include/PortableFs.h
+	../include/PackagePaths.h
+	../include/PythonToolchainBootstrapper.h
+	../include/PackageDependencyInstaller.h
+	miniz.h
 )
 
 target_include_directories(DazScriptServer
