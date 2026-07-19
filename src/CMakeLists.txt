@@ -28,6 +28,7 @@ add_library(DazScriptServer SHARED
 	PackagePaths.cpp
 	PythonToolchainBootstrapper.cpp
 	PackageDependencyInstaller.cpp
+	DzPackageInputsDialog.cpp
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
