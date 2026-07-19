@@ -42,6 +42,14 @@ QString PackagePaths::packageVenvDir(const QString &packageId) {
 	return QDir(packageDir(packageId)).filePath("venv");
 }
 
+QString PackagePaths::packageVenvPythonPath(const QString &packageId) {
+#ifdef Q_OS_WIN
+	return QDir(packageVenvDir(packageId)).filePath("Scripts/python.exe");
+#else
+	return QDir(packageVenvDir(packageId)).filePath("bin/python");
+#endif
+}
+
 bool PackagePaths::ensureBaseDirExists() {
 	QDir dir;
 	return dir.mkpath(baseDir()) && dir.mkpath(QDir(baseDir()).filePath("bin"));

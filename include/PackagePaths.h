@@ -24,6 +24,10 @@ public:
 	static QString packageDir(const QString &packageId);
 	static QString packageVenvDir(const QString &packageId);
 
+	// The venv's own python(.exe), i.e. what to spawn to run dsp_runner
+	// against this package's dependencies.
+	static QString packageVenvPythonPath(const QString &packageId);
+
 	// Ensures baseDir() (and its bin/ subdirectory) exist on disk.
 	// Returns false if creation failed.
 	static bool ensureBaseDirExists();

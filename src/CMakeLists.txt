@@ -1,4 +1,5 @@
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../include)
@@ -29,6 +30,8 @@ add_library(DazScriptServer SHARED
 	PythonToolchainBootstrapper.cpp
 	PackageDependencyInstaller.cpp
 	DzPackageInputsDialog.cpp
+	DzPackageImporter.cpp
+	package_runner.qrc
 	httplib.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
@@ -53,6 +56,8 @@ add_library(DazScriptServer SHARED
 	../include/PackagePaths.h
 	../include/PythonToolchainBootstrapper.h
 	../include/PackageDependencyInstaller.h
+	../include/DzPackageInputsDialog.h
+	../include/DzPackageImporter.h
 	miniz.h
 )
 
