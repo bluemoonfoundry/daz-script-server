@@ -17,6 +17,7 @@
 
 #include "DzPackageInputsDialog.h"
 
+#include <dzapp.h>
 #include <dzerrorcodes.h>
 
 #include <QDir>
@@ -53,6 +54,24 @@ public slots:
 		ok = success;
 		errorMessage = message;
 	}
+};
+
+// QProcess::waitForFinished() blocks the calling thread without running the
+// Qt event loop -- fatal here, since this plugin's own HTTP listener (port
+// 18811) runs on that same main-thread event loop, and every package's whole
+// point is calling back into it via dazpy. A dsp_runner subprocess spawned
+// from inside DAZ Studio would deadlock waiting for a response nothing is
+// left running to send (confirmed empirically: running dsp_runner directly
+// from a shell succeeded immediately, but the same package hung when run
+// from within DzPackageImporter::read() until now). A local QEventLoop
+// driven by QProcess::finished(), same pattern as ToolchainWaiter/
+// DependencyWaiter above, keeps the event loop alive while waiting.
+class ProcessWaiter : public QObject {
+	Q_OBJECT
+public:
+	bool finished = false;
+public slots:
+	void onFinished(int /*exitCode*/, QProcess::ExitStatus /*status*/) { finished = true; }
 };
 
 #include "DzPackageImporter.moc"
@@ -206,12 +225,18 @@ QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, cons
 	const QString inputsPath = inputsFile.fileName();
 
 	QProcess process;
+	ProcessWaiter waiter;
+	QEventLoop loop;
+	connect(&process, SIGNAL(finished(int, QProcess::ExitStatus)), &waiter, SLOT(onFinished(int, QProcess::ExitStatus)));
+	connect(&process, SIGNAL(finished(int, QProcess::ExitStatus)), &loop, SLOT(quit()));
+
 	process.start(packageVenvPython, QStringList() << dspRunnerPath << entryPointPath << inputsPath);
 	if (!process.waitForStarted(10000)) {
 		errorMessage = QString::fromLatin1("Could not launch the package's Python interpreter");
 		return QVariantMap();
 	}
-	if (!process.waitForFinished(-1)) {
+	loop.exec();
+	if (!waiter.finished) {
 		errorMessage = QString::fromLatin1("Package process did not exit cleanly");
 		return QVariantMap();
 	}
@@ -315,11 +340,22 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 		return DZ_OPERATION_FAILED_ERROR;
 	}
 
+	// A package's own print() debugging comes back as "output" -- surface it
+	// in DAZ Studio's log regardless of success/failure, same as .dsa script
+	// output would be.
+	for (const QVariant &line : envelope.value("output").toList()) {
+		dzApp->log(QString::fromLatin1("[%1] %2").arg(manifest.value("displayName").toString()).arg(line.toString()));
+	}
+
 	if (!envelope.value("success").toBool()) {
 		QMessageBox::warning(nullptr, manifest.value("displayName").toString(),
 			envelope.value("error").toString());
 		return DZ_OPERATION_FAILED_ERROR;
 	}
+
+	dzApp->log(QString::fromLatin1("[%1] Result: %2")
+		.arg(manifest.value("displayName").toString())
+		.arg(QString::fromStdString(JsonStd::variantToJson(envelope.value("result")))));
 
 	return DZ_NO_ERROR;
 }
