@@ -154,6 +154,42 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
+## Unreleased
+
+### Truthful Iray/Viewport render-engine selector
+
+`DazRenderSettings.render_engine_state()` now reads the effective
+`DzRenderOptions.renderType` value and the active renderer class/name as separate
+facts. Its schema-1 record includes the raw enum value/name, normalized
+`verified_iray` / `verified_non_iray` / `unavailable` status, and field-level
+live-readback provenance. A retained `NVIDIA Iray` active-renderer name never
+overrides a Viewport/OpenGL `renderType`.
+
+`DazRenderSettings.set_render_engine("iray" | "viewport")` is an explicit
+persistent setter. It selects the registered `DzIrayRenderer` plus `Software` for
+Iray, or `ScreenShot` for Viewport, calls `applyChanges()`, and returns only after
+exact readback. Missing renderers, mutation/apply faults, malformed replies, and
+readback disagreement raise `RenderError`; unknown engine names raise `ValueError`
+before dispatch.
+
+```python
+settings = DazRenderSettings(client)
+before = settings.render_engine_state()
+change = settings.set_render_engine("iray")
+assert change["readback"]["status"] == "verified_iray"
+```
+
+The `engine` field on `/render`, `/render/batch`, and `/render/animation` also
+accepts `viewport` and uses the same fail-closed mutation/readback rules. These
+operations intentionally persist the requested engine. DAZ documents `ScreenShot`
+and `HardwareAssisted` as Viewport/OpenGL operations and `Software` as the active
+software-renderer operation in the
+[DzRenderOptions reference](https://docs.daz3d.com/public/software/dazstudio/4/referenceguide/scripting/api_reference/object_index/renderoptions_dz);
+renderer lookup and activation are documented by
+[DzRenderMgr](https://docs.daz3d.com/public/software/dazstudio/4/referenceguide/scripting/api_reference/object_index/rendermgr_dz).
+
+---
+
 ## What's New in v2.7.2
 
 No functional changes to `dazpy`'s behavior. `2.7.1`'s version bump missed

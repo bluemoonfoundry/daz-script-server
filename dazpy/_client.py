@@ -293,7 +293,7 @@ class DazClient:
             width: Image width in pixels (must be paired with *height*).
             height: Image height in pixels (must be paired with *width*).
             camera: Camera label to render from.
-            engine: Render engine (``"iray"``, ``"filament"``).
+            engine: Render engine (``"iray"``, ``"viewport"``, ``"filament"``).
             iray_samples: iRay sample count (0 = use scene default).
             reset_morphs: If ``True``, reset all morphs to defaults before applying.
 
@@ -380,7 +380,7 @@ class DazClient:
             width: Image width in pixels (must be paired with *height*).
             height: Image height in pixels (must be paired with *width*).
             camera: Camera label to render from.
-            engine: Render engine (``"iray"``, ``"filament"``).
+            engine: Render engine (``"iray"``, ``"viewport"``, ``"filament"``).
 
         Returns:
             A dict with ``request_id``, ``status`` (``"queued"``), and

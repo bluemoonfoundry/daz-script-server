@@ -1320,6 +1320,213 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         val = rs.active_engine()
         self.assertEqual(val, "multi_pass_opengl")
 
+    @staticmethod
+    def _engine_readback(
+        render_type=2,
+        renderer_class="DzIrayRenderer",
+        renderer_name="NVIDIA Iray",
+    ):
+        return {
+            "read_schema": 1,
+            "ok": True,
+            "reason": None,
+            "render_type": render_type,
+            "active_renderer_class": renderer_class,
+            "active_renderer_name": renderer_name,
+        }
+
+    def test_render_engine_state_iray_has_exact_schema_raw_facts_and_provenance(self):
+        rs, client = self._make_render(self._engine_readback())
+
+        state = rs.render_engine_state()
+
+        self.assertEqual(
+            set(state),
+            {
+                "selector_schema",
+                "status",
+                "engine",
+                "method",
+                "reason",
+                "render_type",
+                "active_renderer",
+            },
+        )
+        self.assertEqual(state["selector_schema"], 1)
+        self.assertEqual(state["status"], "verified_iray")
+        self.assertEqual(state["engine"], "iray")
+        self.assertEqual(state["method"], "render_settings_engine_selector")
+        self.assertIsNone(state["reason"])
+        self.assertEqual(
+            state["render_type"],
+            {
+                "raw": 2,
+                "name": "Software",
+                "provenance": {
+                    "kind": "live_readback",
+                    "source": "DzRenderOptions.renderType",
+                },
+            },
+        )
+        self.assertEqual(
+            state["active_renderer"],
+            {
+                "class_name": "DzIrayRenderer",
+                "name": "NVIDIA Iray",
+                "provenance": {
+                    "kind": "live_readback",
+                    "source": "DzRenderMgr.getActiveRenderer",
+                },
+            },
+        )
+        script = client.execute.call_args[0][0]
+        self.assertIn("Number(opts.renderType)", script)
+        self.assertIn("renderer.className()", script)
+        self.assertIn("renderer.getName()", script)
+
+    def test_render_engine_state_viewport_overrules_retained_iray_identity(self):
+        rs, _client = self._make_render(self._engine_readback(render_type=0))
+        state = rs.render_engine_state()
+        self.assertEqual(state["status"], "verified_non_iray")
+        self.assertEqual(state["engine"], "viewport_gl")
+        self.assertEqual(state["render_type"]["name"], "ScreenShot")
+        self.assertEqual(state["active_renderer"]["class_name"], "DzIrayRenderer")
+
+    def test_render_engine_state_hardware_assisted_is_viewport_gl(self):
+        rs, _client = self._make_render(self._engine_readback(render_type=1))
+        state = rs.render_engine_state()
+        self.assertEqual(state["status"], "verified_non_iray")
+        self.assertEqual(state["engine"], "viewport_gl")
+        self.assertEqual(state["render_type"]["name"], "HardwareAssisted")
+
+    def test_render_engine_state_other_software_renderer_is_non_iray(self):
+        rs, _client = self._make_render(
+            self._engine_readback(
+                render_type=2,
+                renderer_class="DzFilamentRenderer",
+                renderer_name="Filament",
+            )
+        )
+        state = rs.render_engine_state()
+        self.assertEqual(state["status"], "verified_non_iray")
+        self.assertEqual(state["engine"], "other_non_iray")
+
+    def test_render_engine_state_malformed_or_missing_software_renderer_is_unavailable(self):
+        cases = [
+            None,
+            {"read_schema": 2, "ok": True},
+            self._engine_readback(render_type="2"),
+            self._engine_readback(render_type=2, renderer_class=None, renderer_name=None),
+        ]
+        for raw in cases:
+            with self.subTest(raw=raw):
+                rs, _client = self._make_render(raw)
+                state = rs.render_engine_state()
+                self.assertEqual(state["status"], "unavailable")
+                self.assertIsNone(state["engine"])
+
+    def test_set_render_engine_iray_exact_success_schema_and_operation_order(self):
+        raw = {
+            "mutation_schema": 1,
+            "ok": True,
+            "requested_engine": "iray",
+            "persisted": True,
+            "reason": None,
+            "readback": self._engine_readback(),
+        }
+        rs, client = self._make_render(raw)
+
+        result = rs.set_render_engine(" IRAY ")
+
+        self.assertEqual(
+            set(result),
+            {
+                "mutation_schema",
+                "success",
+                "requested_engine",
+                "persisted",
+                "reason",
+                "readback",
+            },
+        )
+        self.assertEqual(result["mutation_schema"], 1)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["requested_engine"], "iray")
+        self.assertTrue(result["persisted"])
+        self.assertEqual(result["readback"]["status"], "verified_iray")
+        script = client.execute.call_args[0][0]
+        set_renderer = script.index("setActiveRenderer")
+        set_render_type = script.index("opts.renderType = opts.Software")
+        self.assertLess(set_renderer, set_render_type)
+        self.assertLess(set_render_type, script.index("opts.applyChanges"))
+        self.assertLess(script.index("opts.applyChanges"), script.index("var readback"))
+
+    def test_set_render_engine_viewport_requires_exact_screenshot_readback(self):
+        raw = {
+            "mutation_schema": 1,
+            "ok": True,
+            "requested_engine": "viewport",
+            "persisted": True,
+            "reason": None,
+            "readback": self._engine_readback(render_type=0),
+        }
+        rs, client = self._make_render(raw)
+        result = rs.set_render_engine("viewport")
+        self.assertEqual(result["readback"]["engine"], "viewport_gl")
+        self.assertIn("opts.renderType = opts.ScreenShot", client.execute.call_args[0][0])
+
+    def test_set_render_engine_rejects_invalid_requests_before_dispatch(self):
+        rs, client = self._make_render(None)
+        for invalid in (None, "", "filament", "not-an-engine"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    rs.set_render_engine(invalid)
+        client.execute.assert_not_called()
+
+    def test_set_render_engine_fails_closed_for_lookup_mutation_and_apply_failures(self):
+        from dazpy.exceptions import RenderError
+
+        for reason in (
+            "iray_renderer_unavailable",
+            "mutation_failed",
+            "render_manager_unavailable",
+            "render_options_unavailable",
+        ):
+            with self.subTest(reason=reason):
+                raw = {
+                    "mutation_schema": 1,
+                    "ok": False,
+                    "requested_engine": "iray",
+                    "persisted": False,
+                    "reason": reason,
+                    "readback": self._engine_readback(),
+                }
+                rs, _client = self._make_render(raw)
+                with self.assertRaisesRegex(RenderError, reason):
+                    rs.set_render_engine("iray")
+
+    def test_set_render_engine_rejects_apply_readback_mismatch_even_if_provider_says_ok(self):
+        from dazpy.exceptions import RenderError
+
+        raw = {
+            "mutation_schema": 1,
+            "ok": True,
+            "requested_engine": "iray",
+            "persisted": True,
+            "reason": None,
+            "readback": self._engine_readback(render_type=0),
+        }
+        rs, _client = self._make_render(raw)
+        with self.assertRaisesRegex(RenderError, "readback_mismatch"):
+            rs.set_render_engine("iray")
+
+    def test_set_render_engine_rejects_malformed_mutation_schema(self):
+        from dazpy.exceptions import RenderError
+
+        rs, _client = self._make_render({"mutation_schema": 2, "ok": True})
+        with self.assertRaisesRegex(RenderError, "malformed_response"):
+            rs.set_render_engine("iray")
+
     def test_set_active_engine_iray(self):
         rs, client = self._make_render(True)
         rs.set_active_engine("iray")
