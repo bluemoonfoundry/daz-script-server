@@ -845,6 +845,9 @@ static void applyContext(const HttpContext& ctx, httplib::Response& res)
 	res.status = ctx.responseStatus;
 	if (!ctx.responseBody.empty())
 		res.set_content(ctx.responseBody, "application/json");
+	for (std::map<std::string, std::string>::const_iterator it = ctx.responseHeaders.begin();
+	     it != ctx.responseHeaders.end(); ++it)
+		res.set_header(it->first.c_str(), it->second.c_str());
 }
 
 // ─── Route setup ──────────────────────────────────────────────────────────────
@@ -2714,6 +2717,17 @@ std::string DzScriptServerPane::getMetricsJson() const
 	s += rateBuf;
 	s += "}";
 	return s;
+}
+
+bool DzScriptServerPane::isMainThreadBusy() const
+{
+	return m_pEventBroker && m_pEventBroker->isBusy();
+}
+
+std::string DzScriptServerPane::mainThreadBusyMessage() const
+{
+	if (!m_pEventBroker) return "DAZ Studio is busy";
+	return MainThreadBusy::reasonMessage(m_pEventBroker->busyReason());
 }
 
 // ─── Async Execution (main thread) ───────────────────────────────────────────

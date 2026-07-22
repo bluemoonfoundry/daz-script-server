@@ -21,6 +21,7 @@ struct HttpContext {
     std::string urlMatch;    // first regex capture group from the URL pattern
     std::map<std::string, std::string> headers;
     std::map<std::string, std::string> queryParams;
+    std::map<std::string, std::string> responseHeaders;
 
     int         responseStatus;
     std::string responseBody;
@@ -41,6 +42,9 @@ struct HttpContext {
     void respond(int status, const std::string& body) {
         responseStatus = status;
         responseBody   = body;
+    }
+    void setHeader(const std::string& name, const std::string& value) {
+        responseHeaders[name] = value;
     }
 };
 

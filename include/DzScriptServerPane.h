@@ -138,6 +138,10 @@ public:
 	std::string getHealthJson() const;
 	std::string getMetricsJson() const;
 
+	// Main-thread busy state — called from HTTP threads (lock-free atomic read via SceneEventBroker)
+	bool        isMainThreadBusy() const;
+	std::string mainThreadBusyMessage() const;
+
 	// Script Registry operations — called from HTTP threads (mutex-protected, no Qt string ops)
 	std::string                 listScriptsJson() const;
 	std::pair<int, std::string> deleteRegistryScriptJson(const std::string& id, const std::string& clientIP);
