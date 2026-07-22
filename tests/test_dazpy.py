@@ -980,6 +980,64 @@ class TestErrorMapping(unittest.TestCase):
             self.assertNotIsInstance(ctx.exception, exceptions.ScriptRuntimeError)
             self.assertEqual(ctx.exception.retry_after, 2.0)
 
+    def _busy_resp(self):
+        import requests as req
+        resp = MagicMock(spec=req.Response)
+        resp.status_code = 503
+        resp.json.return_value = {
+            "success": False,
+            "error_code": "STUDIO_BUSY",
+            "error": "DAZ Studio's main thread is busy; please retry shortly",
+            "detail": "DAZ Studio is currently rendering",
+        }
+        resp.headers = {"Retry-After": "1"}
+        resp.text = ""
+        return resp
+
+    def _success_resp(self):
+        import requests as req
+        resp = MagicMock(spec=req.Response)
+        resp.status_code = 200
+        resp.json.return_value = {"success": True, "result": 2, "output": [], "request_id": "ok1"}
+        resp.headers = {}
+        resp.text = ""
+        return resp
+
+    def _busy_client(self):
+        client = DazClient.__new__(DazClient)
+        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
+        object.__setattr__(client, "_token", "")
+        object.__setattr__(client, "_timeout", 30.0)
+        return client
+
+    def test_execute_without_retry_on_busy_raises_immediately(self):
+        client = self._busy_client()
+        with patch("dazpy._client._requests.post", return_value=self._busy_resp()) as post:
+            with self.assertRaises(exceptions.StudioBusyError):
+                client.execute("1+1;")
+            self.assertEqual(post.call_count, 1)
+
+    def test_execute_retry_on_busy_succeeds_after_retries(self):
+        client = self._busy_client()
+        responses = [self._busy_resp(), self._busy_resp(), self._success_resp()]
+        with patch("dazpy._client._requests.post", side_effect=responses) as post:
+            with patch("dazpy._client.time.sleep") as sleep:
+                result = client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
+        self.assertEqual(result.value, 2)
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_execute_retry_on_busy_gives_up_after_max_wait(self):
+        client = self._busy_client()
+        with patch("dazpy._client._requests.post", return_value=self._busy_resp()):
+            with patch("dazpy._client.time.sleep"):
+                with patch(
+                    "dazpy._client.time.monotonic",
+                    side_effect=[0.0, 0.0, 5.0, 11.0, 20.0, 20.0],
+                ):
+                    with self.assertRaises(exceptions.StudioBusyError):
+                        client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
+
     def test_connection_error(self):
         import requests as req
         client = DazClient.__new__(DazClient)
