@@ -22,3 +22,6 @@ measurements.json
 scene.usda
 *.usda
 *.usdc
+
+# Local git worktrees
+.worktrees/
