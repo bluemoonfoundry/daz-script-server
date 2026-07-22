@@ -27,6 +27,18 @@ bool MiddlewareChain::run(HttpContext& ctx) const
     return true;
 }
 
+// ─── Shared busy-check helper ──────────────────────────────────────────────────
+// Called first by every handler that would otherwise block on
+// Qt::BlockingQueuedConnection with no timeout. Returns true (and has
+// already written the 503 response) if the main thread is currently busy.
+static bool respondIfMainThreadBusy(DzScriptServerPane* pane, HttpContext& ctx)
+{
+    if (!pane->isMainThreadBusy()) return false;
+    ctx.respond(503, ErrorResponse::build(ErrorCode::STUDIO_BUSY, pane->mainThreadBusyMessage()));
+    ctx.setHeader("Retry-After", "2");
+    return true;
+}
+
 // ─── Concrete Middleware ──────────────────────────────────────────────────────
 
 IPWhitelistMiddleware::IPWhitelistMiddleware(IPWhitelistService& whitelist, DzScriptServerPane* pane)
@@ -139,6 +151,7 @@ ExecuteScriptHandler::ExecuteScriptHandler(DzScriptServerPane* pane) : m_pPane(p
 
 void ExecuteScriptHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
     HttpResult result;
@@ -192,6 +205,7 @@ ScriptExecuteHandler::ScriptExecuteHandler(DzScriptServerPane* pane) : m_pPane(p
 
 void ScriptExecuteHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     std::string scriptText;
     if (!m_pPane->lookupRegistryScript(ctx.urlMatch, scriptText)) {
         ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, ctx.urlMatch));
@@ -219,6 +233,7 @@ AsyncExecuteHandler::AsyncExecuteHandler(DzScriptServerPane* pane) : m_pPane(pan
 
 void AsyncExecuteHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncExecuteEnqueue",
@@ -234,6 +249,7 @@ AsyncScriptHandler::AsyncScriptHandler(DzScriptServerPane* pane) : m_pPane(pane)
 
 void AsyncScriptHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     std::string scriptText;
     if (!m_pPane->lookupRegistryScript(ctx.urlMatch, scriptText)) {
         ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, ctx.urlMatch));
@@ -307,6 +323,7 @@ RenderHandler::RenderHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void RenderHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderEnqueue",
@@ -320,6 +337,7 @@ RenderBatchHandler::RenderBatchHandler(DzScriptServerPane* pane) : m_pPane(pane)
 
 void RenderBatchHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderBatchEnqueue",
@@ -333,6 +351,7 @@ RenderAnimationHandler::RenderAnimationHandler(DzScriptServerPane* pane) : m_pPa
 
 void RenderAnimationHandler::handle(HttpContext& ctx)
 {
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderAnimationEnqueue",
