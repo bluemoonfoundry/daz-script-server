@@ -7,9 +7,12 @@ import requests as _requests
 
 from .exceptions import (
     AuthenticationError,
+    ConcurrencyLimitError,
     ConnectionError,
+    DazBusyError,
     ScriptRuntimeError,
     ScriptSyntaxError,
+    StudioBusyError,
     TimeoutError,
 )
 from ._result import ExecutionResult
@@ -27,10 +30,37 @@ def _load_token() -> str:
     return ""
 
 
-def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult:
+def _parse_retry_after(resp: _requests.Response) -> float:
+    raw = resp.headers.get("Retry-After", "")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def _raise_for_error(resp: _requests.Response) -> None:
+    """Raise a typed exception for authentication or server-busy responses.
+
+    Leaves 2xx responses (and DazScript's own success:false runtime/syntax
+    errors, which use HTTP 200) for the caller to handle.
+    """
     status = resp.status_code
     if status == 401 or status == 403:
         raise AuthenticationError(f"HTTP {status}: {resp.text[:200]}")
+    if status < 400:
+        return
+    data = resp.json()
+    error_code = data.get("error_code", "")
+    error_msg = data.get("error") or f"HTTP {status}"
+    retry_after = _parse_retry_after(resp)
+    if error_code == "STUDIO_BUSY":
+        raise StudioBusyError(error_msg, reason=data.get("detail", error_msg), retry_after=retry_after)
+    if error_code == "CONCURRENT_LIMIT_EXCEEDED":
+        raise ConcurrencyLimitError(error_msg, reason=error_msg, retry_after=retry_after)
+
+
+def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult:
+    _raise_for_error(resp)
 
     data = resp.json()
     request_id = data.get("request_id", "")

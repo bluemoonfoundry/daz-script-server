@@ -935,6 +935,51 @@ class TestErrorMapping(unittest.TestCase):
             with self.assertRaises(exceptions.ScriptSyntaxError):
                 client.execute("{bad syntax")
 
+    def test_studio_busy_error_503(self):
+        import requests as req
+        resp = MagicMock(spec=req.Response)
+        resp.status_code = 503
+        resp.json.return_value = {
+            "success": False,
+            "error_code": "STUDIO_BUSY",
+            "error": "DAZ Studio's main thread is busy; please retry shortly",
+            "detail": "DAZ Studio is currently loading a scene",
+        }
+        resp.headers = {"Retry-After": "2"}
+        resp.text = ""
+        client = DazClient.__new__(DazClient)
+        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
+        object.__setattr__(client, "_token", "")
+        object.__setattr__(client, "_timeout", 30.0)
+        with patch("dazpy._client._requests.post", return_value=resp):
+            with self.assertRaises(exceptions.StudioBusyError) as ctx:
+                client.execute("1+1;")
+            self.assertIsInstance(ctx.exception, exceptions.DazBusyError)
+            self.assertEqual(ctx.exception.retry_after, 2.0)
+            self.assertIn("loading a scene", ctx.exception.reason)
+
+    def test_concurrency_limit_error_429(self):
+        import requests as req
+        resp = MagicMock(spec=req.Response)
+        resp.status_code = 429
+        resp.json.return_value = {
+            "success": False,
+            "error_code": "CONCURRENT_LIMIT_EXCEEDED",
+            "error": "Server busy: maximum concurrent requests reached, please retry",
+        }
+        resp.headers = {}
+        resp.text = ""
+        client = DazClient.__new__(DazClient)
+        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
+        object.__setattr__(client, "_token", "")
+        object.__setattr__(client, "_timeout", 30.0)
+        with patch("dazpy._client._requests.post", return_value=resp):
+            with self.assertRaises(exceptions.ConcurrencyLimitError) as ctx:
+                client.execute("1+1;")
+            self.assertIsInstance(ctx.exception, exceptions.DazBusyError)
+            self.assertNotIsInstance(ctx.exception, exceptions.ScriptRuntimeError)
+            self.assertEqual(ctx.exception.retry_after, 2.0)
+
     def test_connection_error(self):
         import requests as req
         client = DazClient.__new__(DazClient)
