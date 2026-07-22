@@ -7,6 +7,8 @@
 #include <QtCore/qstring.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qtimer.h>
+#include <QtCore/qatomic.h>
+#include <string>
 
 // Forward declarations — full headers included in SceneEventBroker.cpp
 class DzNode;
@@ -31,6 +33,31 @@ namespace SceneEventFilter {
         Render    = 0x80,
         All       = 0xFF
     };
+}
+
+// ─── Main-thread busy state ────────────────────────────────────────────────
+// Tracks whether the main thread is currently inside a long synchronous
+// operation (scene load/save/clear, render) so HTTP handlers can fail fast
+// instead of blocking indefinitely on Qt::BlockingQueuedConnection.
+namespace MainThreadBusy {
+    enum Reason {
+        Idle = 0,
+        SceneLoading,
+        SceneSaving,
+        SceneClearing,
+        Rendering
+    };
+
+    // Pure function over a plain literal — safe to call from any thread.
+    inline std::string reasonMessage(Reason r) {
+        switch (r) {
+        case SceneLoading:  return "DAZ Studio is currently loading a scene";
+        case SceneSaving:   return "DAZ Studio is currently saving a scene";
+        case SceneClearing: return "DAZ Studio is currently clearing the scene";
+        case Rendering:     return "DAZ Studio is currently rendering";
+        default:            return "DAZ Studio is busy";
+        }
+    }
 }
 
 // ─── SubscriberQueue ──────────────────────────────────────────────────────────
@@ -83,6 +110,14 @@ public:
     // Returns the current number of registered SSE clients.  Thread-safe.
     int subscriberCount() const;
 
+    // Thread-safe (QAtomicInt) — safe to call from any HTTP worker thread.
+    bool isBusy() const {
+        return m_busyState.fetchAndAddOrdered(0) != static_cast<int>(MainThreadBusy::Idle);
+    }
+    MainThreadBusy::Reason busyReason() const {
+        return static_cast<MainThreadBusy::Reason>(m_busyState.fetchAndAddOrdered(0));
+    }
+
 private slots:
     // Scene lifecycle
     void onSceneLoadStarting();
@@ -129,6 +164,10 @@ private:
     QString makeEvent(const QString& type, const QString& dataJson) const;
     QString nodeInfoJson(DzNode* node) const;
 
+    void setBusyState(MainThreadBusy::Reason reason) {
+        m_busyState.fetchAndStoreOrdered(static_cast<int>(reason));
+    }
+
     QList<SubscriberQueue*> m_subscribers;
     mutable QMutex          m_subscriberMutex;
 
@@ -136,4 +175,5 @@ private:
     QTimer*  m_pSelectionDebounce;  // 50 ms single-shot, debounces selection bursts
     DzTime   m_pendingTime;
     bool     m_started;
+    mutable QAtomicInt m_busyState;  // MainThreadBusy::Reason; written on main thread only
 };
