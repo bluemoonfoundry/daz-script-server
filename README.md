@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.7.2** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.8.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -68,6 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.8.0](#whats-new-in-v280)
 - [What's New in v2.7.2](#whats-new-in-v272)
 - [What's New in v2.7.1](#whats-new-in-v271)
 - [What's New in v2.7.0](#whats-new-in-v270)
@@ -151,6 +152,50 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.8.0
+
+### 🚦 Fail Fast When DAZ Studio Is Busy — `503 STUDIO_BUSY`
+
+DAZ Studio's Qt main thread is single-threaded: if a user loads a scene,
+saves, clears the scene, or renders through the DAZ Studio UI while the
+server is also being driven remotely, requests that need the main thread
+used to block indefinitely with no signal to the caller. `/execute`,
+`/scripts/:id/execute`, the async-enqueue endpoints, and the render-submit
+endpoints now check DAZ Studio's busy state first and return `503` with
+`error_code: "STUDIO_BUSY"` (plus a `Retry-After` header) immediately
+instead of hanging.
+
+`dazpy` surfaces this as a new exception hierarchy — `DazBusyError`, with
+`StudioBusyError` (503) and `ConcurrencyLimitError` (429) subclasses, each
+carrying `reason` and `retry_after`. This also fixes a pre-existing bug
+where `429 CONCURRENT_LIMIT_EXCEEDED` responses were misreported as
+`ScriptRuntimeError`, as if the script itself had failed.
+
+```python
+from dazpy import DazClient
+from dazpy.exceptions import DazBusyError
+
+client = DazClient()
+try:
+    result = client.execute("1+1;")
+except DazBusyError as e:
+    print(f"DAZ Studio is busy: {e.reason} — retry after {e.retry_after}s")
+```
+
+Opt in to automatic retry with backoff instead of handling the exception
+yourself:
+
+```python
+result = client.execute("1+1;", retry_on_busy=True, max_wait=30.0)
+```
+
+`retry_on_busy`/`max_wait` are available on `execute`, `execute_file`,
+`execute_async_submit`, `render_submit`, `render_batch_submit`, and
+`render_animation_submit`. Retry is opt-in and off by default — callers
+(and any LLM driving them) stay informed rather than silently blocked.
 
 ---
 
@@ -652,7 +697,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.7.2-py3-none-any.whl
+pip install dazpy-2.8.0-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
