@@ -2,6 +2,33 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.8.0] - 2026-07-23
+
+DAZ Studio's Qt main thread is single-threaded: if a user drives DAZ Studio
+through its own UI (loading a scene, saving, clearing the scene, rendering)
+at the same time the HTTP API is in use, requests that need the main thread
+used to block indefinitely via `Qt::BlockingQueuedConnection`, with no
+timeout and no signal to the caller.
+
+`/execute`, `/scripts/:id/execute`, the async-enqueue endpoints, and the
+render-submit endpoints (`/render`, `/render/batch`, `/render/animation`)
+now check DAZ Studio's busy state first and fail fast with `503` and
+`error_code: "STUDIO_BUSY"` (plus a `Retry-After` header) instead of
+hanging. Busy state is tracked via `SceneEventBroker`'s existing `DzScene`
+signal connections (scene load/save/clear, render — start/finish pairs).
+
+`dazpy` gains a `DazBusyError` exception hierarchy — `StudioBusyError`
+(503) and `ConcurrencyLimitError` (429) — each carrying `reason` and
+`retry_after`. This also fixes a pre-existing bug where `429
+CONCURRENT_LIMIT_EXCEEDED` responses were misreported as
+`ScriptRuntimeError`. Opt-in `retry_on_busy`/`max_wait` keyword arguments
+(capped linear backoff, off by default) are available on `execute`,
+`execute_file`, `execute_async_submit`, `render_submit`,
+`render_batch_submit`, and `render_animation_submit`.
+
+Design: `docs/superpowers/specs/2026-07-22-studio-busy-handling-design.md`.
+Plan: `docs/superpowers/plans/2026-07-22-studio-busy-handling.md`.
+
 ## [2.7.2] - 2026-07-19
 
 No functional changes to `dazpy`'s behavior. `2.7.1`'s version bump missed

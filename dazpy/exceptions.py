@@ -10,6 +10,30 @@ class AuthenticationError(DazError):
     """Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked)."""
 
 
+class DazBusyError(DazError):
+    """Base class for transient "DAZ Studio is busy, please retry" conditions.
+
+    Attributes:
+        reason: Human-readable explanation of why the server is busy.
+        retry_after: Server-suggested seconds to wait before retrying.
+    """
+
+    def __init__(self, message: str, reason: str = "", retry_after: float = 2.0):
+        super().__init__(message)
+        self.reason = reason
+        self.retry_after = retry_after
+
+
+class StudioBusyError(DazBusyError):
+    """Raised on HTTP 503 STUDIO_BUSY: DAZ Studio's main thread is occupied
+    with a scene load, save, clear, or render and cannot service the request."""
+
+
+class ConcurrencyLimitError(DazBusyError):
+    """Raised on HTTP 429 CONCURRENT_LIMIT_EXCEEDED: too many requests are
+    already in flight against the server."""
+
+
 class ScriptError(DazError):
     """Base class for errors that originate inside a DazScript execution.
 

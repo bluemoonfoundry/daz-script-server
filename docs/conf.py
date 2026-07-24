@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "dazpy"
 copyright = "2024, Blue Moon Foundry"
 author = "Blue Moon Foundry"
-release = "2.7.2"
+release = "2.8.0"
 version = release
 
 # ── Extensions ────────────────────────────────────────────────────────────────

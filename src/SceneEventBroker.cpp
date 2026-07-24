@@ -55,6 +55,8 @@ SceneEventBroker::SceneEventBroker(QObject* parent)
     , m_pSelectionDebounce(nullptr)
     , m_pendingTime(0)
     , m_started(false)
+    , m_busyDepth(0)
+    , m_busyReason(MainThreadBusy::Idle)
 {
     m_pTimeDebounce = new QTimer(this);
     m_pTimeDebounce->setSingleShot(true);
@@ -178,14 +180,17 @@ QString SceneEventBroker::nodeInfoJson(DzNode* node) const {
 // ─── Scene lifecycle ──────────────────────────────────────────────────────────
 
 void SceneEventBroker::onSceneLoadStarting() {
+    enterBusy(MainThreadBusy::SceneLoading);
     dispatch(SceneEventFilter::Scene, makeEvent("scene.loading", "{}"));
 }
 
 void SceneEventBroker::onSceneLoaded() {
+    exitBusy();
     dispatch(SceneEventFilter::Scene, makeEvent("scene.loaded", "{}"));
 }
 
 void SceneEventBroker::onSceneSaveStarting(const QString& filename) {
+    enterBusy(MainThreadBusy::SceneSaving);
     JsonBuilder j;
     j.startObject();
     j.addMember("filename", filename);
@@ -194,6 +199,7 @@ void SceneEventBroker::onSceneSaveStarting(const QString& filename) {
 }
 
 void SceneEventBroker::onSceneSaved(const QString& filename) {
+    exitBusy();
     JsonBuilder j;
     j.startObject();
     j.addMember("filename", filename);
@@ -202,10 +208,12 @@ void SceneEventBroker::onSceneSaved(const QString& filename) {
 }
 
 void SceneEventBroker::onSceneClearStarting() {
+    enterBusy(MainThreadBusy::SceneClearing);
     dispatch(SceneEventFilter::Scene, makeEvent("scene.clear_starting", "{}"));
 }
 
 void SceneEventBroker::onSceneCleared() {
+    exitBusy();
     dispatch(SceneEventFilter::Scene, makeEvent("scene.cleared", "{}"));
 }
 
@@ -302,10 +310,12 @@ void SceneEventBroker::onPlaybackFinished() {
 // ─── Render ───────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onAboutToRender(DzRenderer* /*r*/) {
+    enterBusy(MainThreadBusy::Rendering);
     dispatch(SceneEventFilter::Render, makeEvent("render.started", "{}"));
 }
 
 void SceneEventBroker::onRenderFinished(DzRenderer* /*r*/) {
+    exitBusy();
     dispatch(SceneEventFilter::Render, makeEvent("render.finished", "{}"));
 }
 

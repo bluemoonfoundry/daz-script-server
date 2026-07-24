@@ -16,6 +16,7 @@
 #include <dzscene.h>
 #include <dzrendermgr.h>
 #include <dzrenderer.h>
+#include <dzprogress.h>
 
 #if DAZ_SDK_MAJOR_VERSION >= 6
 // dzscript.h only forward-declares QJSValue on SDK6 (DzScript::result()
@@ -845,6 +846,9 @@ static void applyContext(const HttpContext& ctx, httplib::Response& res)
 	res.status = ctx.responseStatus;
 	if (!ctx.responseBody.empty())
 		res.set_content(ctx.responseBody, "application/json");
+	for (std::map<std::string, std::string>::const_iterator it = ctx.responseHeaders.begin();
+	     it != ctx.responseHeaders.end(); ++it)
+		res.set_header(it->first.c_str(), it->second.c_str());
 }
 
 // ─── Route setup ──────────────────────────────────────────────────────────────
@@ -2714,6 +2718,24 @@ std::string DzScriptServerPane::getMetricsJson() const
 	s += rateBuf;
 	s += "}";
 	return s;
+}
+
+bool DzScriptServerPane::isMainThreadBusy() const
+{
+	if (m_pEventBroker && m_pEventBroker->isBusy()) return true;
+	// DzScene's load/save/clear/render signals don't cover every busy window --
+	// observed live: DAZ Studio keeps streaming in referenced/lazy-loaded nodes
+	// on the main thread for several seconds after sceneLoaded() fires, with no
+	// DzScene signal marking that tail. DzProgress/DzBackgroundProgress back the
+	// progress indicator DAZ Studio itself shows for exactly that kind of work,
+	// so poll it as a second, independent busy signal.
+	return DzProgress::isActive() || DzBackgroundProgress::isActive();
+}
+
+std::string DzScriptServerPane::mainThreadBusyMessage() const
+{
+	if (!m_pEventBroker) return "DAZ Studio is busy";
+	return MainThreadBusy::reasonMessage(m_pEventBroker->busyReason());
 }
 
 // ─── Async Execution (main thread) ───────────────────────────────────────────
