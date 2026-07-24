@@ -112,10 +112,10 @@ public:
 
     // Thread-safe (QAtomicInt) — safe to call from any HTTP worker thread.
     bool isBusy() const {
-        return m_busyState.fetchAndAddOrdered(0) != static_cast<int>(MainThreadBusy::Idle);
+        return m_busyDepth.fetchAndAddOrdered(0) > 0;
     }
     MainThreadBusy::Reason busyReason() const {
-        return static_cast<MainThreadBusy::Reason>(m_busyState.fetchAndAddOrdered(0));
+        return static_cast<MainThreadBusy::Reason>(m_busyReason.fetchAndAddOrdered(0));
     }
 
 private slots:
@@ -164,8 +164,21 @@ private:
     QString makeEvent(const QString& type, const QString& dataJson) const;
     QString nodeInfoJson(DzNode* node) const;
 
-    void setBusyState(MainThreadBusy::Reason reason) {
-        m_busyState.fetchAndStoreOrdered(static_cast<int>(reason));
+    // Nested operations (e.g. a scene clear that runs inside a scene load)
+    // must not let the inner operation's finish prematurely mark the main
+    // thread idle. enterBusy()/exitBusy() track a depth counter alongside
+    // the reason of the outermost active operation: only a 0->1 transition
+    // records the reason, and only a 1->0 transition clears it, so nested
+    // Starting/Finished pairs are absorbed without affecting busy state.
+    void enterBusy(MainThreadBusy::Reason reason) {
+        if (m_busyDepth.fetchAndAddOrdered(1) == 0) {
+            m_busyReason.fetchAndStoreOrdered(static_cast<int>(reason));
+        }
+    }
+    void exitBusy() {
+        if (m_busyDepth.fetchAndAddOrdered(-1) == 1) {
+            m_busyReason.fetchAndStoreOrdered(static_cast<int>(MainThreadBusy::Idle));
+        }
     }
 
     QList<SubscriberQueue*> m_subscribers;
@@ -175,5 +188,6 @@ private:
     QTimer*  m_pSelectionDebounce;  // 50 ms single-shot, debounces selection bursts
     DzTime   m_pendingTime;
     bool     m_started;
-    mutable QAtomicInt m_busyState;  // MainThreadBusy::Reason; written on main thread only
+    mutable QAtomicInt m_busyDepth;   // count of active nested busy operations; written on main thread only
+    mutable QAtomicInt m_busyReason;  // MainThreadBusy::Reason of the outermost active operation
 };

@@ -55,7 +55,8 @@ SceneEventBroker::SceneEventBroker(QObject* parent)
     , m_pSelectionDebounce(nullptr)
     , m_pendingTime(0)
     , m_started(false)
-    , m_busyState(MainThreadBusy::Idle)
+    , m_busyDepth(0)
+    , m_busyReason(MainThreadBusy::Idle)
 {
     m_pTimeDebounce = new QTimer(this);
     m_pTimeDebounce->setSingleShot(true);
@@ -179,17 +180,17 @@ QString SceneEventBroker::nodeInfoJson(DzNode* node) const {
 // ─── Scene lifecycle ──────────────────────────────────────────────────────────
 
 void SceneEventBroker::onSceneLoadStarting() {
-    setBusyState(MainThreadBusy::SceneLoading);
+    enterBusy(MainThreadBusy::SceneLoading);
     dispatch(SceneEventFilter::Scene, makeEvent("scene.loading", "{}"));
 }
 
 void SceneEventBroker::onSceneLoaded() {
-    setBusyState(MainThreadBusy::Idle);
+    exitBusy();
     dispatch(SceneEventFilter::Scene, makeEvent("scene.loaded", "{}"));
 }
 
 void SceneEventBroker::onSceneSaveStarting(const QString& filename) {
-    setBusyState(MainThreadBusy::SceneSaving);
+    enterBusy(MainThreadBusy::SceneSaving);
     JsonBuilder j;
     j.startObject();
     j.addMember("filename", filename);
@@ -198,7 +199,7 @@ void SceneEventBroker::onSceneSaveStarting(const QString& filename) {
 }
 
 void SceneEventBroker::onSceneSaved(const QString& filename) {
-    setBusyState(MainThreadBusy::Idle);
+    exitBusy();
     JsonBuilder j;
     j.startObject();
     j.addMember("filename", filename);
@@ -207,12 +208,12 @@ void SceneEventBroker::onSceneSaved(const QString& filename) {
 }
 
 void SceneEventBroker::onSceneClearStarting() {
-    setBusyState(MainThreadBusy::SceneClearing);
+    enterBusy(MainThreadBusy::SceneClearing);
     dispatch(SceneEventFilter::Scene, makeEvent("scene.clear_starting", "{}"));
 }
 
 void SceneEventBroker::onSceneCleared() {
-    setBusyState(MainThreadBusy::Idle);
+    exitBusy();
     dispatch(SceneEventFilter::Scene, makeEvent("scene.cleared", "{}"));
 }
 
@@ -309,12 +310,12 @@ void SceneEventBroker::onPlaybackFinished() {
 // ─── Render ───────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onAboutToRender(DzRenderer* /*r*/) {
-    setBusyState(MainThreadBusy::Rendering);
+    enterBusy(MainThreadBusy::Rendering);
     dispatch(SceneEventFilter::Render, makeEvent("render.started", "{}"));
 }
 
 void SceneEventBroker::onRenderFinished(DzRenderer* /*r*/) {
-    setBusyState(MainThreadBusy::Idle);
+    exitBusy();
     dispatch(SceneEventFilter::Render, makeEvent("render.finished", "{}"));
 }
 
