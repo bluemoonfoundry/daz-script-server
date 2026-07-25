@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.8.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.8.1** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -68,6 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.8.1](#whats-new-in-v281)
 - [What's New in v2.8.0](#whats-new-in-v280)
 - [What's New in v2.7.2](#whats-new-in-v272)
 - [What's New in v2.7.1](#whats-new-in-v271)
@@ -152,6 +153,42 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.8.1
+
+### Truthful Iray/Viewport render-engine selector
+
+`DazRenderSettings.render_engine_state()` now reads the effective
+`DzRenderOptions.renderType` value and the active renderer class/name as separate
+facts. Its schema-1 record includes the raw enum value/name, normalized
+`verified_iray` / `verified_non_iray` / `unavailable` status, and field-level
+live-readback provenance. A retained `NVIDIA Iray` active-renderer name never
+overrides a Viewport/OpenGL `renderType`.
+
+`DazRenderSettings.set_render_engine("iray" | "viewport")` is an explicit
+persistent setter. It selects the registered `DzIrayRenderer` plus `Software` for
+Iray, or `ScreenShot` for Viewport, calls `applyChanges()`, and returns only after
+exact readback. Missing renderers, mutation/apply faults, malformed replies, and
+readback disagreement raise `RenderError`; unknown engine names raise `ValueError`
+before dispatch.
+
+```python
+settings = DazRenderSettings(client)
+before = settings.render_engine_state()
+change = settings.set_render_engine("iray")
+assert change["readback"]["status"] == "verified_iray"
+```
+
+The `engine` field on `/render`, `/render/batch`, and `/render/animation` also
+accepts `viewport` and uses the same fail-closed mutation/readback rules. These
+operations intentionally persist the requested engine. DAZ documents `ScreenShot`
+and `HardwareAssisted` as Viewport/OpenGL operations and `Software` as the active
+software-renderer operation in the
+[DzRenderOptions reference](https://docs.daz3d.com/public/software/dazstudio/4/referenceguide/scripting/api_reference/object_index/renderoptions_dz);
+renderer lookup and activation are documented by
+[DzRenderMgr](https://docs.daz3d.com/public/software/dazstudio/4/referenceguide/scripting/api_reference/object_index/rendermgr_dz).
 
 ---
 
@@ -697,7 +734,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.8.0-py3-none-any.whl
+pip install dazpy-2.8.1-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
