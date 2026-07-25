@@ -22,7 +22,7 @@ info:
     queue behind each other. The `/execute/async` family lets callers submit
     work without blocking their HTTP connection.
 
-  version: 2.8.0
+  version: 2.8.1
   contact:
     name: Blue Moon Foundry
     url: https://github.com/bluemoonfoundry/daz-script-server/issues
@@ -64,7 +64,7 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
               example:
                 running: true
-                version: "2.8.0"
+                version: "2.8.1"
 
   /health:
     get:
@@ -81,7 +81,7 @@ paths:
                 $ref: '#/components/schemas/HealthResponse'
               example:
                 status: ok
-                version: "2.8.0"
+                version: "2.8.1"
                 running: true
                 auth_enabled: true
                 active_requests: 2

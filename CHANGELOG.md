@@ -2,6 +2,28 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.8.1] - 2026-07-24
+
+### Truthful Iray/Viewport render-engine selector
+
+`DazRenderSettings.render_engine_state()` reads `DzRenderOptions.renderType`
+and the active renderer class/name as separate facts, returning a schema-1
+record with a normalized `verified_iray` / `verified_non_iray` /
+`unavailable` status and field-level live-readback provenance. A retained
+`NVIDIA Iray` active-renderer name never overrides a Viewport/OpenGL
+`renderType`.
+
+`DazRenderSettings.set_render_engine("iray" | "viewport")` is an explicit
+persistent setter that selects the registered `DzIrayRenderer` plus
+`Software` for Iray, or `ScreenShot` for Viewport, applies the change, and
+returns only after exact readback. Missing renderers, mutation/apply
+faults, malformed replies, and readback disagreement raise `RenderError`;
+unknown engine names raise `ValueError` before dispatch.
+
+The `engine` field on `/render`, `/render/batch`, and `/render/animation`
+also accepts `viewport` and uses the same fail-closed mutation/readback
+rules.
+
 ## [2.8.0] - 2026-07-23
 
 DAZ Studio's Qt main thread is single-threaded: if a user drives DAZ Studio
