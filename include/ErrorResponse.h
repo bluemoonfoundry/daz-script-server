@@ -35,6 +35,7 @@ enum class ErrorCode {
 
     // 503 Service Unavailable
     SERVER_UNAVAILABLE,
+    STUDIO_BUSY,
 
     // 500 Internal Server Error
     INTERNAL_ERROR,

@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 import requests as _requests
 
 from .exceptions import (
     AuthenticationError,
+    ConcurrencyLimitError,
     ConnectionError,
+    DazBusyError,
     ScriptRuntimeError,
     ScriptSyntaxError,
+    StudioBusyError,
     TimeoutError,
 )
 from ._result import ExecutionResult
@@ -27,10 +31,37 @@ def _load_token() -> str:
     return ""
 
 
-def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult:
+def _parse_retry_after(resp: _requests.Response) -> float:
+    raw = resp.headers.get("Retry-After", "")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def _raise_for_error(resp: _requests.Response) -> None:
+    """Raise a typed exception for authentication or server-busy responses.
+
+    Leaves 2xx responses (and DazScript's own success:false runtime/syntax
+    errors, which use HTTP 200) for the caller to handle.
+    """
     status = resp.status_code
     if status == 401 or status == 403:
         raise AuthenticationError(f"HTTP {status}: {resp.text[:200]}")
+    if status < 400:
+        return
+    data = resp.json()
+    error_code = data.get("error_code", "")
+    error_msg = data.get("error") or f"HTTP {status}"
+    retry_after = _parse_retry_after(resp)
+    if error_code == "STUDIO_BUSY":
+        raise StudioBusyError(error_msg, reason=data.get("detail", error_msg), retry_after=retry_after)
+    if error_code == "CONCURRENT_LIMIT_EXCEEDED":
+        raise ConcurrencyLimitError(error_msg, reason=error_msg, retry_after=retry_after)
+
+
+def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult:
+    _raise_for_error(resp)
 
     data = resp.json()
     request_id = data.get("request_id", "")
@@ -118,13 +149,37 @@ class DazClient:
         except _requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
 
-    def execute(self, script: str, args: object = None) -> ExecutionResult:
+    def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
+        """Run *fn* (a zero-arg callable), retrying on DazBusyError while
+        *retry_on_busy* is true, up to *max_wait* seconds total."""
+        if not retry_on_busy:
+            return fn()
+        deadline = time.monotonic() + max_wait
+        backoff = 1.0
+        while True:
+            try:
+                return fn()
+            except DazBusyError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(backoff, remaining))
+                backoff = min(backoff + 1.0, 5.0)
+
+    def execute(
+        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+    ) -> ExecutionResult:
         """Execute a DazScript string synchronously.
 
         Args:
             script: DazScript source code to execute.
             args: Optional value passed into the script as ``getArguments()[0]``.
                 Must be JSON-serialisable.
+            retry_on_busy: If ``True``, transparently retry with backoff when
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
+                instead of raising immediately.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``, before re-raising the busy error.
 
         Returns:
             The execution result containing the script return value and any
@@ -135,20 +190,36 @@ class DazClient:
             AuthenticationError: If the token is invalid or the IP is blocked.
             ScriptSyntaxError: If the script contains a parse error.
             ScriptRuntimeError: If the script raises a runtime exception.
+            StudioBusyError: If DAZ Studio's main thread is busy and
+                *retry_on_busy* is ``False`` or *max_wait* is exceeded.
+            ConcurrencyLimitError: If too many concurrent requests are in
+                flight and *retry_on_busy* is ``False`` or *max_wait* is
+                exceeded.
             TimeoutError: If the request exceeds *timeout* seconds.
         """
         payload: dict = {"script": script}
         if args is not None:
             payload["args"] = args
-        resp = self._post("/execute", payload)
-        return _map_response(resp, script=script)
 
-    def execute_file(self, script_file: str, args: object = None) -> ExecutionResult:
+        def _do():
+            resp = self._post("/execute", payload)
+            return _map_response(resp, script=script)
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+
+    def execute_file(
+        self, script_file: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+    ) -> ExecutionResult:
         """Execute a ``.dsa`` script file that resides on the DAZ Studio host.
 
         Args:
             script_file: Absolute path to the ``.dsa`` file on the server host.
             args: Optional argument passed to the script.
+            retry_on_busy: If ``True``, transparently retry with backoff when
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
+                instead of raising immediately.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``, before re-raising the busy error.
 
         Returns:
             The execution result.
@@ -158,20 +229,36 @@ class DazClient:
             AuthenticationError: On auth failure.
             ScriptSyntaxError: On parse error.
             ScriptRuntimeError: On runtime error.
+            StudioBusyError: If DAZ Studio's main thread is busy and
+                *retry_on_busy* is ``False`` or *max_wait* is exceeded.
+            ConcurrencyLimitError: If too many concurrent requests are in
+                flight and *retry_on_busy* is ``False`` or *max_wait* is
+                exceeded.
             TimeoutError: On HTTP timeout.
         """
         payload: dict = {"scriptFile": script_file}
         if args is not None:
             payload["args"] = args
-        resp = self._post("/execute", payload)
-        return _map_response(resp)
 
-    def execute_async_submit(self, script: str, args: object = None) -> str:
+        def _do():
+            resp = self._post("/execute", payload)
+            return _map_response(resp)
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+
+    def execute_async_submit(
+        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+    ) -> str:
         """Submit a script for asynchronous execution and return immediately.
 
         Args:
             script: DazScript source code.
             args: Optional argument for the script.
+            retry_on_busy: If ``True``, transparently retry with backoff when
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
+                instead of raising immediately.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``, before re-raising the busy error.
 
         Returns:
             The server-assigned ``request_id`` string.  Use it with
@@ -181,14 +268,22 @@ class DazClient:
         Raises:
             ConnectionError: If the server cannot be reached.
             AuthenticationError: On auth failure.
+            StudioBusyError: If DAZ Studio's main thread is busy and
+                *retry_on_busy* is ``False`` or *max_wait* is exceeded.
+            ConcurrencyLimitError: If too many concurrent requests are in
+                flight and *retry_on_busy* is ``False`` or *max_wait* is
+                exceeded.
         """
         payload: dict = {"script": script}
         if args is not None:
             payload["args"] = args
-        resp = self._post("/execute/async", payload)
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}")
-        return resp.json().get("request_id", "")
+
+        def _do():
+            resp = self._post("/execute/async", payload)
+            _raise_for_error(resp)
+            return resp.json().get("request_id", "")
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def get_request_status(self, request_id: str) -> dict:
         """Return the current status of an async request.
@@ -282,6 +377,8 @@ class DazClient:
         engine: str = "",
         iray_samples: int = 0,
         reset_morphs: bool = False,
+        retry_on_busy: bool = False,
+        max_wait: float = 30.0,
     ) -> dict:
         """Submit a render job and return immediately.
 
@@ -296,6 +393,11 @@ class DazClient:
             engine: Render engine (``"iray"``, ``"viewport"``, ``"filament"``).
             iray_samples: iRay sample count (0 = use scene default).
             reset_morphs: If ``True``, reset all morphs to defaults before applying.
+            retry_on_busy: If ``True``, transparently retry with backoff when
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
+                instead of raising immediately.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``, before re-raising the busy error.
 
         Returns:
             A dict with ``request_id``, ``status`` (``"queued"``), and
@@ -304,6 +406,11 @@ class DazClient:
         Raises:
             ConnectionError: If the server cannot be reached.
             AuthenticationError: On HTTP 401/403.
+            StudioBusyError: If DAZ Studio's main thread is busy and
+                *retry_on_busy* is ``False`` or *max_wait* is exceeded.
+            ConcurrencyLimitError: If too many concurrent requests are in
+                flight and *retry_on_busy* is ``False`` or *max_wait* is
+                exceeded.
         """
         payload: dict = {"output_path": output_path}
         if width and height:
@@ -323,18 +430,28 @@ class DazClient:
             payload["figure"] = figure
             if morphs:
                 payload["morphs"] = morphs
-        resp = self._post("/render", payload)
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
 
-    def render_batch_submit(self, variants: list, base: dict | None = None) -> dict:
+        def _do():
+            resp = self._post("/render", payload)
+            _raise_for_error(resp)
+            return resp.json()
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+
+    def render_batch_submit(
+        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+    ) -> dict:
         """Submit a batch render job and return immediately.
 
         Args:
             variants: List of variant dicts, each with at least ``output_path``.
                 Supported keys mirror :meth:`render_submit` optional fields.
             base: Optional shared defaults applied to all variants.
+            retry_on_busy: If ``True``, transparently retry with backoff when
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
+                instead of raising immediately.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``, before re-raising the busy error.
 
         Returns:
             A dict with ``batch_id``, ``request_ids`` (list), and ``total`` keys.
@@ -342,14 +459,22 @@ class DazClient:
         Raises:
             ConnectionError: If the server cannot be reached.
             AuthenticationError: On HTTP 401/403.
+            StudioBusyError: If DAZ Studio's main thread is busy and
+                *retry_on_busy* is ``False`` or *max_wait* is exceeded.
+            ConcurrencyLimitError: If too many concurrent requests are in
+                flight and *retry_on_busy* is ``False`` or *max_wait* is
+                exceeded.
         """
         payload: dict = {"variants": variants}
         if base:
             payload["base"] = base
-        resp = self._post("/render/batch", payload)
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+
+        def _do():
+            resp = self._post("/render/batch", payload)
+            _raise_for_error(resp)
+            return resp.json()
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def render_animation_submit(
         self,
@@ -362,6 +487,8 @@ class DazClient:
         height: int = 0,
         camera: str = "",
         engine: str = "",
+        retry_on_busy: bool = False,
+        max_wait: float = 30.0,
     ) -> dict:
         """Submit an animation render job spanning a frame range and return immediately.
 
@@ -380,8 +507,14 @@ class DazClient:
             width: Image width in pixels (must be paired with *height*).
             height: Image height in pixels (must be paired with *width*).
             camera: Camera label to render from.
-            engine: Render engine (``"iray"``, ``"viewport"``, ``"filament"``).
 
+
+            engine: Render engine (``"iray"``, ``"viewport"``, ``"filament"``).
+            retry_on_busy: If ``True``, transparently retry with backoff when
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
+                instead of raising immediately.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``, before re-raising the busy error.
         Returns:
             A dict with ``request_id``, ``status`` (``"queued"``), and
             ``submitted_at`` keys.
@@ -389,6 +522,11 @@ class DazClient:
         Raises:
             ConnectionError: If the server cannot be reached.
             AuthenticationError: On HTTP 401/403.
+            StudioBusyError: If DAZ Studio's main thread is busy and
+                *retry_on_busy* is ``False`` or *max_wait* is exceeded.
+            ConcurrencyLimitError: If too many concurrent requests are in
+                flight and *retry_on_busy* is ``False`` or *max_wait* is
+                exceeded.
         """
         payload: dict = {
             "output_path": output_path,
@@ -403,10 +541,13 @@ class DazClient:
             payload["camera"] = camera
         if engine:
             payload["engine"] = engine
-        resp = self._post("/render/animation", payload)
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+
+        def _do():
+            resp = self._post("/render/animation", payload)
+            _raise_for_error(resp)
+            return resp.json()
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def cancel_render(self, request_id: str) -> bool:
         """Cancel a queued or running render job.
