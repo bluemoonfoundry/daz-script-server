@@ -1924,18 +1924,44 @@ static QString buildRenderScript(
         "    }\n"
         "  }\n";
 
-    // Engine class name map — confirmed: iray="DzIrayRenderer".
-    // Filament class name follows the same Dz*Renderer pattern but needs
-    // verification on a system with that plugin installed. 3Delight is no
-    // longer supported by DAZ Studio and is intentionally excluded.
+    // renderType is the effective operation selector. Active renderer identity
+    // is read separately because DAZ retains it during Viewport/OpenGL renders.
     script +=
+        "  var engineReadback = null;\n"
         "  if (engineName) {\n"
+        "    var requestedEngine = engineName.toLowerCase();\n"
         "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
-        "    var engineClass = engineMap[engineName.toLowerCase()];\n"
-        "    if (engineClass) {\n"
-        "      var renderer = renderMgr.findRenderer(engineClass);\n"
-        "      if (renderer) renderMgr.setActiveRenderer(renderer);\n"
+        "    var requestedClass = engineMap[requestedEngine];\n"
+        "    if (requestedEngine === \"viewport\") {\n"
+        "      opts.renderType = opts.ScreenShot;\n"
+        "    } else {\n"
+        "      if (!requestedClass) throw new Error(\"Unknown render engine request: \" + requestedEngine);\n"
+        "      var requestedRenderer = renderMgr.findRenderer(requestedClass);\n"
+        "      if (!requestedRenderer) throw new Error(\"Render engine is not registered: \" + requestedClass);\n"
+        "      renderMgr.setActiveRenderer(requestedRenderer);\n"
+        "      opts.renderType = opts.Software;\n"
         "    }\n"
+        "    opts.applyChanges();\n"
+        "    var effectiveType = Number(opts.renderType);\n"
+        "    var effectiveRenderer = renderMgr.getActiveRenderer();\n"
+        "    var effectiveClass = effectiveRenderer ? String(effectiveRenderer.className()) : null;\n"
+        "    var effectiveName = effectiveRenderer ? String(effectiveRenderer.getName()) : null;\n"
+        "    var exactMatch = requestedEngine === \"viewport\"\n"
+        "      ? effectiveType === Number(opts.ScreenShot)\n"
+        "      : effectiveType === Number(opts.Software) && effectiveClass === requestedClass;\n"
+        "    if (!exactMatch) throw new Error(\"Render engine readback mismatch for request: \" + requestedEngine);\n"
+        "    var typeName = effectiveType === Number(opts.ScreenShot) ? \"ScreenShot\"\n"
+        "      : effectiveType === Number(opts.HardwareAssisted) ? \"HardwareAssisted\"\n"
+        "      : effectiveType === Number(opts.Software) ? \"Software\" : null;\n"
+        "    engineReadback = {\n"
+        "      selector_schema: 1,\n"
+        "      status: requestedEngine === \"iray\" ? \"verified_iray\" : \"verified_non_iray\",\n"
+        "      engine: requestedEngine === \"iray\" ? \"iray\" : (requestedEngine === \"viewport\" ? \"viewport_gl\" : \"other_non_iray\"),\n"
+        "      method: \"render_settings_engine_selector\",\n"
+        "      reason: requestedEngine === \"iray\" ? null : \"non_iray_engine\",\n"
+        "      render_type: {raw: effectiveType, name: typeName, provenance: {kind: \"live_readback\", source: \"DzRenderOptions.renderType\"}},\n"
+        "      active_renderer: {class_name: effectiveClass, name: effectiveName, provenance: {kind: \"live_readback\", source: \"DzRenderMgr.getActiveRenderer\"}}\n"
+        "    };\n"
         "  }\n";
 
     // iray_samples: not exposed on DzRenderOptions or the DzIrayRenderer object
@@ -1947,7 +1973,7 @@ static QString buildRenderScript(
     // ── Render ────────────────────────────────────────────────────────────
     script +=
         "  renderMgr.doRender(opts);\n"
-        "  return {success: true, output_path: outputPath};\n"
+        "  return {success: true, output_path: outputPath, engine: engineReadback};\n"
         "})();\n";
 
     return script;
@@ -2009,13 +2035,41 @@ static QString buildAnimationRenderScript(
         "    if (activeViewport) activeViewport.get3DViewport().setCamera(cam);\n"
         "  }\n";
     script +=
+        "  var engineReadback = null;\n"
         "  if (engineName) {\n"
+        "    var requestedEngine = engineName.toLowerCase();\n"
         "    var engineMap = {\"iray\": \"DzIrayRenderer\", \"filament\": \"DzFilamentRenderer\"};\n"
-        "    var engineClass = engineMap[engineName.toLowerCase()];\n"
-        "    if (engineClass) {\n"
-        "      var renderer = renderMgr.findRenderer(engineClass);\n"
-        "      if (renderer) renderMgr.setActiveRenderer(renderer);\n"
+        "    var requestedClass = engineMap[requestedEngine];\n"
+        "    if (requestedEngine === \"viewport\") {\n"
+        "      opts.renderType = opts.ScreenShot;\n"
+        "    } else {\n"
+        "      if (!requestedClass) throw new Error(\"Unknown render engine request: \" + requestedEngine);\n"
+        "      var requestedRenderer = renderMgr.findRenderer(requestedClass);\n"
+        "      if (!requestedRenderer) throw new Error(\"Render engine is not registered: \" + requestedClass);\n"
+        "      renderMgr.setActiveRenderer(requestedRenderer);\n"
+        "      opts.renderType = opts.Software;\n"
         "    }\n"
+        "    opts.applyChanges();\n"
+        "    var effectiveType = Number(opts.renderType);\n"
+        "    var effectiveRenderer = renderMgr.getActiveRenderer();\n"
+        "    var effectiveClass = effectiveRenderer ? String(effectiveRenderer.className()) : null;\n"
+        "    var effectiveName = effectiveRenderer ? String(effectiveRenderer.getName()) : null;\n"
+        "    var exactMatch = requestedEngine === \"viewport\"\n"
+        "      ? effectiveType === Number(opts.ScreenShot)\n"
+        "      : effectiveType === Number(opts.Software) && effectiveClass === requestedClass;\n"
+        "    if (!exactMatch) throw new Error(\"Render engine readback mismatch for request: \" + requestedEngine);\n"
+        "    var typeName = effectiveType === Number(opts.ScreenShot) ? \"ScreenShot\"\n"
+        "      : effectiveType === Number(opts.HardwareAssisted) ? \"HardwareAssisted\"\n"
+        "      : effectiveType === Number(opts.Software) ? \"Software\" : null;\n"
+        "    engineReadback = {\n"
+        "      selector_schema: 1,\n"
+        "      status: requestedEngine === \"iray\" ? \"verified_iray\" : \"verified_non_iray\",\n"
+        "      engine: requestedEngine === \"iray\" ? \"iray\" : (requestedEngine === \"viewport\" ? \"viewport_gl\" : \"other_non_iray\"),\n"
+        "      method: \"render_settings_engine_selector\",\n"
+        "      reason: requestedEngine === \"iray\" ? null : \"non_iray_engine\",\n"
+        "      render_type: {raw: effectiveType, name: typeName, provenance: {kind: \"live_readback\", source: \"DzRenderOptions.renderType\"}},\n"
+        "      active_renderer: {class_name: effectiveClass, name: effectiveName, provenance: {kind: \"live_readback\", source: \"DzRenderMgr.getActiveRenderer\"}}\n"
+        "    };\n"
         "  }\n\n";
 
     // ── Render each frame ───────────────────────────────────────────────────
@@ -2032,7 +2086,7 @@ static QString buildAnimationRenderScript(
         "  Scene.setFrame(originalFrame);\n\n";
 
     script +=
-        "  return {success: true, frame_count: outputPaths.length, output_paths: outputPaths};\n"
+        "  return {success: true, frame_count: outputPaths.length, output_paths: outputPaths, engine: engineReadback};\n"
         "})();\n";
 
     return script;
@@ -2064,7 +2118,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
     int  iraySamples = body.contains("iray_samples") ? body.value("iray_samples").toInt() : 0;
     bool resetMorphs = body.value("reset_morphs").toBool();
     QString camera   = body.value("camera").toString().trimmed();
-    QString engine   = body.value("engine").toString().trimmed();
+    QString engine   = body.value("engine").toString().trimmed().toLower();
 
     if ((width > 0) != (height > 0))
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -2075,9 +2129,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
             "width and height must be positive integers")));
 
     if (!engine.isEmpty()
-            && engine != "iray" && engine != "filament")
+            && engine != "iray" && engine != "viewport" && engine != "filament")
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
-            "engine must be one of: iray, filament")));
+            "engine must be one of: iray, viewport, filament")));
 
     // ── Normalise figure list ─────────────────────────────────────────────
     // Accept {figure, morphs} single-figure shorthand or {figures:[{name,morphs},...]}
@@ -2176,7 +2230,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
     int     baseIraySamples = base.contains("iray_samples") ? base.value("iray_samples").toInt() : 0;
     bool    baseResetMorphs = base.value("reset_morphs").toBool();
     QString baseCamera      = base.value("camera").toString().trimmed();
-    QString baseEngine      = base.value("engine").toString().trimmed();
+    QString baseEngine      = base.value("engine").toString().trimmed().toLower();
 
     // Resolve base figures (single-figure shorthand or explicit list)
     QList<FigureSpec> baseFigures;
@@ -2248,7 +2302,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
         int     iraySamples = v.contains("iray_samples") ? v.value("iray_samples").toInt() : baseIraySamples;
         bool    resetMorphs = v.contains("reset_morphs") ? v.value("reset_morphs").toBool(): baseResetMorphs;
         QString camera      = v.contains("camera")       ? v.value("camera").toString().trimmed() : baseCamera;
-        QString engine      = v.contains("engine")       ? v.value("engine").toString().trimmed() : baseEngine;
+        QString engine      = v.contains("engine")       ? v.value("engine").toString().trimmed().toLower() : baseEngine;
 
         if ((width > 0) != (height > 0))
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -2257,9 +2311,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
                 viStr + ": width and height must be positive integers")));
         if (!engine.isEmpty()
-                && engine != "iray" && engine != "filament")
+                && engine != "iray" && engine != "viewport" && engine != "filament")
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
-                viStr + ".engine must be one of: iray, filament")));
+                viStr + ".engine must be one of: iray, viewport, filament")));
 
         // Merge figures: variant wins if it specifies figures/figure;
         // if variant only has morphs and base has one figure, override its morphs.
@@ -2423,7 +2477,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
     int  width  = body.contains("width")  ? body.value("width").toInt()  : 0;
     int  height = body.contains("height") ? body.value("height").toInt() : 0;
     QString camera = body.value("camera").toString().trimmed();
-    QString engine = body.value("engine").toString().trimmed();
+    QString engine = body.value("engine").toString().trimmed().toLower();
 
     if ((width > 0) != (height > 0))
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -2432,9 +2486,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
             "width and height must be positive integers")));
     if (!engine.isEmpty()
-            && engine != "iray" && engine != "filament")
+            && engine != "iray" && engine != "viewport" && engine != "filament")
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
-            "engine must be one of: iray, filament")));
+            "engine must be one of: iray, viewport, filament")));
 
     // ── Pre-flight: validate camera reference against the current scene ───
     if (!camera.isEmpty()) {

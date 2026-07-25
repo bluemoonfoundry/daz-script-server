@@ -31,6 +31,100 @@ _ENGINE_NAME_TO_CLASS = {v: k for k, v in _ENGINE_CLASS_TO_NAME.items()}
 # docstring for why these are distinct from the DzRenderer plugin lookup).
 _NON_SOFTWARE_ENGINES = {"viewport", "multi_pass_opengl"}
 
+_ENGINE_SELECTOR_SCHEMA = 1
+_ENGINE_MUTATION_SCHEMA = 1
+_ENGINE_SELECTOR_METHOD = "render_settings_engine_selector"
+_RENDER_TYPE_NAMES = {
+    0: "ScreenShot",
+    1: "HardwareAssisted",
+    2: "Software",
+}
+
+
+def _engine_state_unavailable(
+    reason: str,
+    *,
+    render_type: int | None = None,
+    active_renderer_class: str | None = None,
+    active_renderer_name: str | None = None,
+    facts_observed: bool = False,
+) -> dict:
+    provenance_kind = "live_readback" if facts_observed else "unavailable"
+    return {
+        "selector_schema": _ENGINE_SELECTOR_SCHEMA,
+        "status": "unavailable",
+        "engine": None,
+        "method": _ENGINE_SELECTOR_METHOD,
+        "reason": reason,
+        "render_type": {
+            "raw": render_type,
+            "name": _RENDER_TYPE_NAMES.get(render_type),
+            "provenance": {
+                "kind": provenance_kind,
+                "source": "DzRenderOptions.renderType",
+            },
+        },
+        "active_renderer": {
+            "class_name": active_renderer_class,
+            "name": active_renderer_name,
+            "provenance": {
+                "kind": provenance_kind,
+                "source": "DzRenderMgr.getActiveRenderer",
+            },
+        },
+    }
+
+
+def _normalize_engine_readback(raw: object) -> dict:
+    """Normalize one bounded live read without inferring from renderer identity alone."""
+    if not isinstance(raw, dict) or raw.get("read_schema") != 1:
+        return _engine_state_unavailable("malformed_readback")
+    if raw.get("ok") is not True:
+        reason = raw.get("reason")
+        if reason not in {
+            "render_manager_unavailable",
+            "render_options_unavailable",
+            "probe_failed",
+        }:
+            reason = "probe_failed"
+        return _engine_state_unavailable(reason)
+
+    render_type = raw.get("render_type")
+    renderer_class = raw.get("active_renderer_class")
+    renderer_name = raw.get("active_renderer_name")
+    if (
+        isinstance(render_type, bool)
+        or not isinstance(render_type, int)
+        or (renderer_class is not None and not isinstance(renderer_class, str))
+        or (renderer_name is not None and not isinstance(renderer_name, str))
+    ):
+        return _engine_state_unavailable("malformed_readback")
+
+    state = _engine_state_unavailable(
+        "unknown_render_type",
+        render_type=render_type,
+        active_renderer_class=renderer_class,
+        active_renderer_name=renderer_name,
+        facts_observed=True,
+    )
+    if render_type in (0, 1):
+        state.update(
+            status="verified_non_iray",
+            engine="viewport_gl",
+            reason="non_iray_engine",
+        )
+    elif render_type == 2 and renderer_class == "DzIrayRenderer":
+        state.update(status="verified_iray", engine="iray", reason=None)
+    elif render_type == 2 and renderer_class is not None:
+        state.update(
+            status="verified_non_iray",
+            engine="other_non_iray",
+            reason="non_iray_engine",
+        )
+    elif render_type == 2:
+        state["reason"] = "active_renderer_unavailable"
+    return state
+
 # (max_samples, max_time_secs, quality, quality_enable)
 _QUALITY_PRESETS = {
     "draft":   {"max_samples": 100,  "max_time": 300,  "quality_enable": False},
@@ -153,6 +247,170 @@ class DazRenderSettings:
             return mgr.isRendering();
         """)
         return bool(self._client.execute(script).value)
+
+    @staticmethod
+    def _engine_readback_body() -> str:
+        """DazScript body returning bounded raw selector and renderer facts."""
+        return """
+            function _readEngineFacts() {
+                try {
+                    var mgr = App.getRenderMgr();
+                    if (!mgr) return {
+                        read_schema: 1, ok: false,
+                        reason: "render_manager_unavailable",
+                        render_type: null,
+                        active_renderer_class: null,
+                        active_renderer_name: null
+                    };
+                    var opts = mgr.getRenderOptions();
+                    if (!opts) return {
+                        read_schema: 1, ok: false,
+                        reason: "render_options_unavailable",
+                        render_type: null,
+                        active_renderer_class: null,
+                        active_renderer_name: null
+                    };
+                    var renderer = mgr.getActiveRenderer();
+                    return {
+                        read_schema: 1, ok: true, reason: null,
+                        render_type: Number(opts.renderType),
+                        active_renderer_class: renderer ? String(renderer.className()) : null,
+                        active_renderer_name: renderer ? String(renderer.getName()) : null
+                    };
+                } catch (_readError) {
+                    return {
+                        read_schema: 1, ok: false, reason: "probe_failed",
+                        render_type: null,
+                        active_renderer_class: null,
+                        active_renderer_name: null
+                    };
+                }
+            }
+        """
+
+    def render_engine_state(self) -> dict:
+        """Return truthful Render Settings engine facts and a normalized verdict.
+
+        ``DzRenderOptions.renderType`` is the effective render-operation selector.
+        The active renderer class/name is returned as a separate fact and only
+        participates in normalization when ``renderType`` is ``Software``. In
+        particular, an Iray active-renderer name cannot turn a ScreenShot or
+        HardwareAssisted operation into an Iray verdict.
+        """
+        script = ScriptBuilder.iife(
+            self._engine_readback_body() + "\nreturn _readEngineFacts();"
+        )
+        return _normalize_engine_readback(self._client.execute(script).value)
+
+    def set_render_engine(self, engine: str) -> dict:
+        """Persist ``iray`` or ``viewport`` and require exact live readback.
+
+        This is an explicit persistent setter, not a transactional render helper.
+        It calls ``applyChanges()`` so the selected render operation is written via
+        DAZ's settings manager. Any lookup, mutation, apply, or readback failure
+        raises :class:`RenderError`; unknown engine names never silently continue.
+        """
+        if not isinstance(engine, str):
+            raise ValueError("engine must be 'iray' or 'viewport'")
+        requested = engine.strip().lower()
+        if requested not in {"iray", "viewport"}:
+            raise ValueError(
+                f"Unknown render engine {engine!r}; expected 'iray' or 'viewport'"
+            )
+
+        requested_js = json.dumps(requested)
+        script = ScriptBuilder.iife(
+            self._engine_readback_body()
+            + f"""
+                var requested = {requested_js};
+                var mgr = App.getRenderMgr();
+                if (!mgr) return {{
+                    mutation_schema: 1, ok: false,
+                    requested_engine: requested, persisted: false,
+                    reason: "render_manager_unavailable", readback: _readEngineFacts()
+                }};
+                var opts = mgr.getRenderOptions();
+                if (!opts) return {{
+                    mutation_schema: 1, ok: false,
+                    requested_engine: requested, persisted: false,
+                    reason: "render_options_unavailable", readback: _readEngineFacts()
+                }};
+                try {{
+                    if (requested === "iray") {{
+                        var iray = mgr.findRenderer("DzIrayRenderer");
+                        if (!iray) return {{
+                            mutation_schema: 1, ok: false,
+                            requested_engine: requested, persisted: false,
+                            reason: "iray_renderer_unavailable", readback: _readEngineFacts()
+                        }};
+                        mgr.setActiveRenderer(iray);
+                        opts.renderType = opts.Software;
+                    }} else {{
+                        opts.renderType = opts.ScreenShot;
+                    }}
+                    opts.applyChanges();
+                }} catch (_mutationError) {{
+                    return {{
+                        mutation_schema: 1, ok: false,
+                        requested_engine: requested, persisted: false,
+                        reason: "mutation_failed", readback: _readEngineFacts()
+                    }};
+                }}
+                var readback = _readEngineFacts();
+                var matches = readback.ok && (
+                    (requested === "iray"
+                        && readback.render_type === Number(opts.Software)
+                        && readback.active_renderer_class === "DzIrayRenderer")
+                    || (requested === "viewport"
+                        && readback.render_type === Number(opts.ScreenShot))
+                );
+                return {{
+                    mutation_schema: 1, ok: matches,
+                    requested_engine: requested, persisted: matches,
+                    reason: matches ? null : "readback_mismatch",
+                    readback: readback
+                }};
+            """
+        )
+        raw = self._client.execute(script).value
+        if not isinstance(raw, dict) or raw.get("mutation_schema") != 1:
+            raise RenderError("Render engine mutation failed: malformed_response")
+        readback = _normalize_engine_readback(raw.get("readback"))
+        expected = (
+            readback.get("status") == "verified_iray"
+            and readback.get("engine") == "iray"
+            and readback.get("render_type", {}).get("raw") == 2
+            and readback.get("active_renderer", {}).get("class_name")
+            == "DzIrayRenderer"
+            if requested == "iray"
+            else readback.get("status") == "verified_non_iray"
+            and readback.get("engine") == "viewport_gl"
+            and readback.get("render_type", {}).get("raw") == 0
+        )
+        if (
+            raw.get("ok") is not True
+            or raw.get("requested_engine") != requested
+            or raw.get("persisted") is not True
+            or not expected
+        ):
+            reason = raw.get("reason")
+            if reason not in {
+                "render_manager_unavailable",
+                "render_options_unavailable",
+                "iray_renderer_unavailable",
+                "mutation_failed",
+                "readback_mismatch",
+            }:
+                reason = "readback_mismatch"
+            raise RenderError(f"Render engine mutation failed: {reason}")
+        return {
+            "mutation_schema": _ENGINE_MUTATION_SCHEMA,
+            "success": True,
+            "requested_engine": requested,
+            "persisted": True,
+            "reason": None,
+            "readback": readback,
+        }
 
     def active_engine(self) -> str | None:
         """Return the active render engine name.
