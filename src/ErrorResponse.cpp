@@ -20,6 +20,7 @@ const char* ErrorResponse::codeString(ErrorCode code)
     case ErrorCode::SCRIPT_FILE_NOT_ABSOLUTE:  return "SCRIPT_FILE_NOT_ABSOLUTE";
     case ErrorCode::SCRIPT_FILE_LOAD_FAILED:   return "SCRIPT_FILE_LOAD_FAILED";
     case ErrorCode::SERVER_UNAVAILABLE:        return "SERVER_UNAVAILABLE";
+    case ErrorCode::STUDIO_BUSY:               return "STUDIO_BUSY";
     case ErrorCode::INTERNAL_ERROR:            return "INTERNAL_ERROR";
     default:                                   return "UNKNOWN_ERROR";
     }
@@ -60,6 +61,8 @@ const char* ErrorResponse::defaultMessage(ErrorCode code)
         return "Failed to load script file";
     case ErrorCode::SERVER_UNAVAILABLE:
         return "Service temporarily unavailable";
+    case ErrorCode::STUDIO_BUSY:
+        return "DAZ Studio's main thread is busy; please retry shortly";
     case ErrorCode::INTERNAL_ERROR:
         return "An internal server error occurred";
     default:
@@ -92,6 +95,7 @@ int ErrorResponse::httpStatus(ErrorCode code)
     case ErrorCode::SCRIPT_FILE_LOAD_FAILED:
         return 400;
     case ErrorCode::SERVER_UNAVAILABLE:
+    case ErrorCode::STUDIO_BUSY:
         return 503;
     case ErrorCode::INTERNAL_ERROR:
         return 500;

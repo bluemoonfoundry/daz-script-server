@@ -55,6 +55,45 @@ class DazProperty(DazElement):
         self._client.execute(script)
 
     @property
+    def raw_value(self) -> object:
+        """This property's own dial value, excluding any DzERCLink contributions.
+
+        A property driven by one or more ``DzERCLink`` controllers (for
+        example a character's "Scale" dial fed by dozens of linked morphs)
+        computes :attr:`value` as ``raw_value`` plus every controller's
+        contribution. Reading and writing :attr:`value` in a save/restore
+        round trip is therefore *not* idempotent for such properties: the
+        captured (post-ERC) total gets written back into the raw slot on
+        restore, and the ERC links add their contribution again on top,
+        inflating the property a little more on every cycle.
+
+        Use ``raw_value`` instead of :attr:`value` whenever you need a
+        snapshot/restore round trip to be exact — it reads and writes only
+        the property's own baseline and is unaffected by ERC links either
+        way. For properties without ERC links, ``raw_value`` and
+        :attr:`value` are identical. Falls back to :attr:`value` for
+        property types that don't expose a raw accessor (e.g. non-numeric
+        properties).
+        """
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p) return null;
+            return (typeof p.getRawValue === "function") ? p.getRawValue() : p.getValue();
+        """)
+        return self._client.execute(script).value
+
+    @raw_value.setter
+    def raw_value(self, v: object) -> None:
+        serialized = ScriptBuilder.serialize_arg(v)
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p) return;
+            if (typeof p.setRawValue === "function") {{ p.setRawValue({serialized}); }}
+            else {{ p.setValue({serialized}); }}
+        """)
+        self._client.execute(script)
+
+    @property
     def label(self) -> str | None:
         """The display label of this property (read-only)."""
         script = ScriptBuilder.iife(

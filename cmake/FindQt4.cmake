@@ -54,6 +54,19 @@ if(NOT TARGET Qt4::moc)
     set_property(TARGET Qt4::moc PROPERTY IMPORTED_LOCATION "${_QT_BINDIR}/moc")
 endif()
 
+# ── rcc executable (CACHE so AUTORCC picks it up) ────────────────────────────
+# Needed once the SDK4 build started compiling DzPackageImporter.cpp, which
+# embeds package_runner/dsp_runner.py via package_runner.qrc
+# (daz-script-server-5sw) -- AUTORCC looks for a Qt<major>::rcc imported
+# target by convention, same as AUTOMOC does for Qt4::moc above.
+
+set(QT_RCC_EXECUTABLE "${_QT_BINDIR}/rcc" CACHE FILEPATH "Qt4 rcc executable" FORCE)
+
+if(NOT TARGET Qt4::rcc)
+    add_executable(Qt4::rcc IMPORTED)
+    set_property(TARGET Qt4::rcc PROPERTY IMPORTED_LOCATION "${_QT_BINDIR}/rcc")
+endif()
+
 # ── Qt4 module targets ────────────────────────────────────────────────────────
 # find_library resolves <name>.framework to a path CMake treats as a framework
 # link, generating the correct -framework <name> -F <dir> flags automatically.

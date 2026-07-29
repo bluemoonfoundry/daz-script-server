@@ -10,6 +10,30 @@ class AuthenticationError(DazError):
     """Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked)."""
 
 
+class DazBusyError(DazError):
+    """Base class for transient "DAZ Studio is busy, please retry" conditions.
+
+    Attributes:
+        reason: Human-readable explanation of why the server is busy.
+        retry_after: Server-suggested seconds to wait before retrying.
+    """
+
+    def __init__(self, message: str, reason: str = "", retry_after: float = 2.0):
+        super().__init__(message)
+        self.reason = reason
+        self.retry_after = retry_after
+
+
+class StudioBusyError(DazBusyError):
+    """Raised on HTTP 503 STUDIO_BUSY: DAZ Studio's main thread is occupied
+    with a scene load, save, clear, or render and cannot service the request."""
+
+
+class ConcurrencyLimitError(DazBusyError):
+    """Raised on HTTP 429 CONCURRENT_LIMIT_EXCEEDED: too many requests are
+    already in flight against the server."""
+
+
 class ScriptError(DazError):
     """Base class for errors that originate inside a DazScript execution.
 
@@ -17,12 +41,21 @@ class ScriptError(DazError):
         script: The DazScript source that was submitted (may be empty for
             file-based executions).
         request_id: The server-assigned request ID, useful for log correlation.
+        output: Lines written to the DAZ Studio message log before the error
+            (e.g. via print()), useful for tracing state leading up to a failure.
     """
 
-    def __init__(self, message: str, script: str = "", request_id: str = ""):
+    def __init__(
+        self,
+        message: str,
+        script: str = "",
+        request_id: str = "",
+        output: "list[str] | None" = None,
+    ):
         super().__init__(message)
         self.script = script
         self.request_id = request_id
+        self.output = output or []
 
     @property
     def diagnostic(self) -> str:
@@ -32,6 +65,8 @@ class ScriptError(DazError):
             numbered = "\n".join(f"{i+1:4d}: {line}" for i, line in enumerate(self.script.splitlines()))
             lines.append(numbered)
         lines.append(str(self))
+        if self.output:
+            lines.append("\nCaptured output:\n" + "\n".join(self.output))
         if self.request_id:
             lines.append(f"request_id: {self.request_id}")
         return "\n".join(lines)

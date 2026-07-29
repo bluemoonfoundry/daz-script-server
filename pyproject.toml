@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dazpy"
-version = "2.7.0"
+version = "2.8.1"
 description = "Python SDK for the DAZ Studio Script Server"
 readme = "README.md"
 requires-python = ">=3.10"

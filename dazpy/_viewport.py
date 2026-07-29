@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from ._client import DazClient
 from ._script_builder import ScriptBuilder
@@ -8,6 +9,21 @@ from ._script_builder import ScriptBuilder
 _VIEWPORT_EXPR = (
     "MainWindow.getViewportMgr().getActiveViewport().get3DViewport()"
 )
+
+# Friendly aliases for Dz3DViewport.setUserDrawStyle()'s label strings.
+# Confirmed against a live instance: setUserDrawStyle() takes the exact
+# label shown in the viewport's draw-style dropdown and silently no-ops
+# (leaves the style unchanged) if the label isn't recognized -- there's no
+# script-queryable enumeration of valid labels, so this list is empirical,
+# not derived from an SDK enum. A raw label string (e.g. "NVIDIA Iray") is
+# also accepted directly.
+_DRAW_STYLE_ALIASES = {
+    "wire_bounding_box": "Wire Bounding Box",
+    "wireframe": "Wireframe",
+    "smooth_shaded": "Smooth Shaded",
+    "texture_shaded": "Texture Shaded",
+    "iray": "NVIDIA Iray",
+}
 
 
 class DazViewport:
@@ -21,6 +37,42 @@ class DazViewport:
             return (vp !== null && vp !== undefined);
         """)
         return bool(self._client.execute(script).value)
+
+    def draw_style(self) -> str | None:
+        """Return the viewport's current draw style label (e.g. "NVIDIA Iray")."""
+        script = ScriptBuilder.iife(f"""
+            var vp = {_VIEWPORT_EXPR};
+            if (!vp) return null;
+            return vp.getUserDrawStyle();
+        """)
+        return self._client.execute(script).value
+
+    def set_draw_style(self, style: str) -> None:
+        """Set the viewport's draw style (preview quality, e.g. "Wireframe" .. "NVIDIA Iray").
+
+        Accepts a friendly alias (see ``_DRAW_STYLE_ALIASES``: "wireframe",
+        "wire_bounding_box", "smooth_shaded", "texture_shaded", "iray") or a
+        raw DAZ Studio label such as "NVIDIA Iray" directly.
+
+        Raises:
+            ValueError: If the style isn't recognized. ``setUserDrawStyle()``
+                silently no-ops on an unknown label rather than erroring, so
+                this reads the style back afterward and raises if it didn't
+                change (and wasn't already the requested style).
+        """
+        resolved = _DRAW_STYLE_ALIASES.get(style.strip().lower(), style)
+        script = ScriptBuilder.iife(f"""
+            var vp = {_VIEWPORT_EXPR};
+            if (!vp) return null;
+            var before = vp.getUserDrawStyle();
+            vp.setUserDrawStyle({json.dumps(resolved)});
+            return {{before: before, after: vp.getUserDrawStyle()}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            return
+        if result["after"] != resolved and result["after"] == result["before"]:
+            raise ValueError(f"Unknown viewport draw style: {style!r}")
 
     def get_size(self) -> dict | None:
         """Return the viewport dimensions as {{width, height}}."""
@@ -49,6 +101,7 @@ class DazViewport:
         height: int | None = None,
         hide_overlays: bool = True,
         backdrop_color: tuple[int, int, int] | None = None,
+        convergence_wait: float = 3.0,
     ) -> str:
         """Capture the active 3D viewport to a PNG or JPEG file.
 
@@ -63,20 +116,54 @@ class DazViewport:
 
         *width* and *height* are accepted for API compatibility but ignored —
         Dz3DViewport does not expose resize via DazScript.
+
+        Two-pass capture, and why it matters
+        -------------------------------------
+        Every viewport-state change this method makes to prepare the shot
+        (toggling axesOn/floorStyle/aspectOn/thirdsGuideOn, deselecting the
+        primary selection, hiding the Tonemapper/Environment Options nodes,
+        changing the backdrop colour) invalidates DAZ Studio's Iray
+        real-time viewport preview and restarts its progressive convergence
+        from scratch. The DAZ Studio *window* keeps rendering and converges
+        within a few seconds -- but a single synchronous script that
+        invalidates the preview and then calls ``captureImage()`` on the very
+        next line grabs the framebuffer at essentially sample 0-1, before
+        Iray has produced anything but a bare geometry/silhouette pass
+        (confirmed live: clothing layers are thin/transparent enough that at
+        that sample count they don't resolve at all, making the figure look
+        nude even though it's fully clothed and visible on screen a moment
+        later). Waiting in Python *before* calling this method doesn't help,
+        because the invalidate-then-grab both happen inside that one script
+        call -- there's nothing outside it to wait on.
+
+        The fix is to split the single script into two round trips: one to
+        make the invalidating viewport-state changes (which also kicks off a
+        fresh Iray convergence pass), a real wait in between so DAZ Studio's
+        own event loop and Iray's render thread get wall-clock time to
+        converge, and a second script to grab the now-converged frame and
+        restore the original viewport state. *convergence_wait* controls the
+        pause between the two passes; raise it for complex/heavy scenes that
+        take longer to converge, or pass 0.0 to skip the wait and accept a
+        possibly-unconverged capture (e.g. when you deliberately want the
+        cheap early-sample pass, or *hide_overlays* is False and you aren't
+        invalidating anything that matters for your use case).
         """
         js_path = json.dumps(path)
 
+        # prevBg is captured and restored via prev_state/prep_result (round-tripped
+        # through Python as plain {r,g,b,a} JSON) rather than a JS variable, since
+        # the prepare and finish scripts are separate execute() calls with no
+        # shared JS scope -- a bare `var prevBg` in one is invisible to the other.
+        bg_capture_js = "var prevBg = vp.background;" if backdrop_color is not None else ""
+        bg_apply_js = ""
         if backdrop_color is not None:
             r, g, b = int(backdrop_color[0]), int(backdrop_color[1]), int(backdrop_color[2])
             js_hex = json.dumps(f"#{r:02x}{g:02x}{b:02x}")
-            set_bg = f"var prevBg = vp.background; vp.background = new QColor({js_hex});"
-            restore_bg = "vp.background = prevBg;"
-        else:
-            set_bg = ""
-            restore_bg = ""
+            bg_apply_js = f"vp.background = new QColor({js_hex});"
+        bg_return_field = ", bg: prevBg" if backdrop_color is not None else ""
 
         if hide_overlays:
-            script = ScriptBuilder.iife(f"""
+            prepare_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
                 if (!vp) return null;
 
@@ -86,8 +173,15 @@ class DazViewport:
                 var prevAspect      = vp.aspectOn;
                 var prevThirds      = vp.thirdsGuideOn;
                 var prevToolBarMode = vp.toolBarMode;
+                {bg_capture_js}
 
                 var prevSelection = Scene.getPrimarySelection();
+                var prevSelectionName = prevSelection ? prevSelection.getName() : null;
+                var prevSelectionSkeletonName = null;
+                if (prevSelection && prevSelection.isBoneSelectingNode && prevSelection.isBoneSelectingNode()) {{
+                    var _selSkel = prevSelection.getSkeleton ? prevSelection.getSkeleton() : null;
+                    if (_selSkel) prevSelectionSkeletonName = _selSkel.getName();
+                }}
                 var tnNode  = Scene.findNodeByLabel("Tonemapper Options");
                 var envNode = Scene.findNodeByLabel("Environment Options");
                 var prevTnVisible  = tnNode  ? tnNode.isVisibleInViewport()  : null;
@@ -99,47 +193,115 @@ class DazViewport:
                 vp.aspectOn      = false;
                 vp.thirdsGuideOn = false;
                 vp.toolBarMode   = 0;
-                {set_bg}
+                {bg_apply_js}
 
                 Scene.setPrimarySelection(null);
                 if (tnNode)  tnNode.setVisibleInViewport(false);
                 if (envNode) envNode.setVisibleInViewport(false);
 
                 vp.updateGL();
-                var img = vp.captureImage();
 
-                vp.axesOn        = prevAxes;
-                vp.floorStyle    = prevFloor;
-                vp.showPoseTool  = prevPose;
-                vp.aspectOn      = prevAspect;
-                vp.thirdsGuideOn = prevThirds;
-                vp.toolBarMode   = prevToolBarMode;
-                {restore_bg}
+                return {{
+                    axesOn: prevAxes, floorStyle: prevFloor, showPoseTool: prevPose,
+                    aspectOn: prevAspect, thirdsGuideOn: prevThirds, toolBarMode: prevToolBarMode,
+                    selectionName: prevSelectionName,
+                    selectionSkeletonName: prevSelectionSkeletonName,
+                    tnVisible: prevTnVisible, envVisible: prevEnvVisible{bg_return_field}
+                }};
+            """)
+            prev_state = self._client.execute(prepare_script).value or {}
 
-                Scene.setPrimarySelection(prevSelection);
-                if (tnNode  && prevTnVisible  !== null) tnNode.setVisibleInViewport(prevTnVisible);
-                if (envNode && prevEnvVisible !== null) envNode.setVisibleInViewport(prevEnvVisible);
+            if convergence_wait > 0:
+                time.sleep(convergence_wait)
 
-                vp.updateGL();
+            restore_bg_js = ""
+            if backdrop_color is not None and prev_state.get("bg") is not None:
+                pb = prev_state["bg"]
+                restore_bg_js = (
+                    f"vp.background = new QColor({int(pb['r'])}, {int(pb['g'])}, "
+                    f"{int(pb['b'])}, {int(pb.get('a', 255))});"
+                )
+
+            # vp is deliberately re-fetched (not assumed available) here: it can
+            # become unavailable (viewport closed/changed) during the real
+            # wall-clock convergence_wait sleep between this script and
+            # prepare_script. Scene-level restoration (selection, Tonemapper/
+            # Environment node visibility) doesn't depend on vp, so it always
+            # runs; only the viewport-specific properties and the capture
+            # itself are skipped if vp is gone, and the call returns null
+            # (no image) rather than leaving any restorable state stuck.
+            finish_script = ScriptBuilder.iife(f"""
+                var vp = {_VIEWPORT_EXPR};
+                var prev = {json.dumps(prev_state)};
+                var img = null;
+
+                if (vp) {{
+                    vp.updateGL();
+                    img = vp.captureImage();
+
+                    vp.axesOn        = prev.axesOn;
+                    vp.floorStyle    = prev.floorStyle;
+                    vp.showPoseTool  = prev.showPoseTool;
+                    vp.aspectOn      = prev.aspectOn;
+                    vp.thirdsGuideOn = prev.thirdsGuideOn;
+                    vp.toolBarMode   = prev.toolBarMode;
+                    {restore_bg_js}
+                }}
+
+                var prevSel = null;
+                if (prev.selectionName) {{
+                    prevSel = Scene.findNode(prev.selectionName);
+                    if (!prevSel && prev.selectionSkeletonName) {{
+                        var _selSkel = Scene.findNode(prev.selectionSkeletonName);
+                        if (_selSkel && _selSkel.findBone) prevSel = _selSkel.findBone(prev.selectionName);
+                    }}
+                }}
+                Scene.setPrimarySelection(prevSel);
+                var tnNode  = Scene.findNodeByLabel("Tonemapper Options");
+                var envNode = Scene.findNodeByLabel("Environment Options");
+                if (tnNode  && prev.tnVisible  !== null) tnNode.setVisibleInViewport(prev.tnVisible);
+                if (envNode && prev.envVisible !== null) envNode.setVisibleInViewport(prev.envVisible);
+
+                if (vp) vp.updateGL();
 
                 if (!img) return null;
                 img.save({js_path});
                 return {js_path};
             """)
+            result = self._client.execute(finish_script).value
         else:
-            script = ScriptBuilder.iife(f"""
+            prepare_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
                 if (!vp) return null;
-                {set_bg}
+                {bg_capture_js}
+                {bg_apply_js}
+                vp.updateGL();
+                return {{"ok": true{bg_return_field}}};
+            """)
+            prep_result = self._client.execute(prepare_script).value or {}
+            if prep_result.get("ok") and convergence_wait > 0:
+                time.sleep(convergence_wait)
+
+            restore_bg_js = ""
+            if backdrop_color is not None and prep_result.get("bg") is not None:
+                pb = prep_result["bg"]
+                restore_bg_js = (
+                    f"vp.background = new QColor({int(pb['r'])}, {int(pb['g'])}, "
+                    f"{int(pb['b'])}, {int(pb.get('a', 255))});"
+                )
+
+            finish_script = ScriptBuilder.iife(f"""
+                var vp = {_VIEWPORT_EXPR};
+                if (!vp) return null;
                 vp.updateGL();
                 var img = vp.captureImage();
-                {restore_bg}
+                {restore_bg_js}
                 vp.updateGL();
                 if (!img) return null;
                 img.save({js_path});
                 return {js_path};
             """)
-        result = self._client.execute(script).value
+            result = self._client.execute(finish_script).value
         return str(result) if result is not None else path
 
     def capture_sprite(

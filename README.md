@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.6.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.8.1** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -68,6 +68,11 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.8.1](#whats-new-in-v281) (Nightly Build)
+- [What's New in v2.8.0](#whats-new-in-v280)
+- [What's New in v2.7.2](#whats-new-in-v272)
+- [What's New in v2.7.1](#whats-new-in-v271)
+- [What's New in v2.7.0](#whats-new-in-v270)
 - [What's New in v2.6.0](#whats-new-in-v260)
 - [What's New in v2.5.0](#whats-new-in-v250)
 - [What's New in v2.4.0](#whats-new-in-v240)
@@ -148,6 +153,166 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.8.1
+
+### Truthful Iray/Viewport render-engine selector
+
+`DazRenderSettings.render_engine_state()` now reads the effective
+`DzRenderOptions.renderType` value and the active renderer class/name as separate
+facts. Its schema-1 record includes the raw enum value/name, normalized
+`verified_iray` / `verified_non_iray` / `unavailable` status, and field-level
+live-readback provenance. A retained `NVIDIA Iray` active-renderer name never
+overrides a Viewport/OpenGL `renderType`.
+
+`DazRenderSettings.set_render_engine("iray" | "viewport")` is an explicit
+persistent setter. It selects the registered `DzIrayRenderer` plus `Software` for
+Iray, or `ScreenShot` for Viewport, calls `applyChanges()`, and returns only after
+exact readback. Missing renderers, mutation/apply faults, malformed replies, and
+readback disagreement raise `RenderError`; unknown engine names raise `ValueError`
+before dispatch.
+
+```python
+settings = DazRenderSettings(client)
+before = settings.render_engine_state()
+change = settings.set_render_engine("iray")
+assert change["readback"]["status"] == "verified_iray"
+```
+
+The `engine` field on `/render`, `/render/batch`, and `/render/animation` also
+accepts `viewport` and uses the same fail-closed mutation/readback rules. These
+operations intentionally persist the requested engine. DAZ documents `ScreenShot`
+and `HardwareAssisted` as Viewport/OpenGL operations and `Software` as the active
+software-renderer operation in the
+[DzRenderOptions reference](https://docs.daz3d.com/public/software/dazstudio/4/referenceguide/scripting/api_reference/object_index/renderoptions_dz);
+renderer lookup and activation are documented by
+[DzRenderMgr](https://docs.daz3d.com/public/software/dazstudio/4/referenceguide/scripting/api_reference/object_index/rendermgr_dz).
+
+---
+
+## What's New in v2.8.0
+
+### 🚦 Fail Fast When DAZ Studio Is Busy — `503 STUDIO_BUSY`
+
+DAZ Studio's Qt main thread is single-threaded: if a user loads a scene,
+saves, clears the scene, or renders through the DAZ Studio UI while the
+server is also being driven remotely, requests that need the main thread
+used to block indefinitely with no signal to the caller. `/execute`,
+`/scripts/:id/execute`, the async-enqueue endpoints, and the render-submit
+endpoints now check DAZ Studio's busy state first and return `503` with
+`error_code: "STUDIO_BUSY"` (plus a `Retry-After` header) immediately
+instead of hanging.
+
+`dazpy` surfaces this as a new exception hierarchy — `DazBusyError`, with
+`StudioBusyError` (503) and `ConcurrencyLimitError` (429) subclasses, each
+carrying `reason` and `retry_after`. This also fixes a pre-existing bug
+where `429 CONCURRENT_LIMIT_EXCEEDED` responses were misreported as
+`ScriptRuntimeError`, as if the script itself had failed.
+
+```python
+from dazpy import DazClient
+from dazpy.exceptions import DazBusyError
+
+client = DazClient()
+try:
+    result = client.execute("1+1;")
+except DazBusyError as e:
+    print(f"DAZ Studio is busy: {e.reason} — retry after {e.retry_after}s")
+```
+
+Opt in to automatic retry with backoff instead of handling the exception
+yourself:
+
+```python
+result = client.execute("1+1;", retry_on_busy=True, max_wait=30.0)
+```
+
+`retry_on_busy`/`max_wait` are available on `execute`, `execute_file`,
+`execute_async_submit`, `render_submit`, `render_batch_submit`, and
+`render_animation_submit`. Retry is opt-in and off by default — callers
+(and any LLM driving them) stay informed rather than silently blocked.
+
+---
+
+## What's New in v2.7.2
+
+No functional changes to `dazpy`'s behavior. `2.7.1`'s version bump missed
+three places that still said `2.7.0`: `dazpy.__version__` itself (already
+baked into the published `2.7.1` wheel — the reason this needed a new
+version rather than a doc fix), `openapi.yaml`'s `info.version` and two
+response examples, and the plugin's own `DZSRV_VERSION_STR` (what
+`/status`/`/health` actually return at runtime). All three now correctly
+say `2.7.2`.
+
+---
+
+## What's New in v2.7.1
+
+No functional changes. Republished to fix a stale PyPI package description —
+the `2.7.0` wheel was uploaded to PyPI before the README fixes below (in
+"What's New in v2.7.0") had landed, and PyPI has no way to update an
+already-published version's metadata. `2.7.1`'s code is identical to
+`2.7.0`'s.
+
+---
+
+## What's New in v2.7.0
+
+### 🖼️ Iray Canvas Support — `DazRenderSettings`
+
+Enumerate, create, and remove Iray Canvases (normal/depth/material-ID/etc.
+render passes) and resolve their output file paths for a given render:
+
+```python
+from dazpy import DazClient, DazRenderSettings
+
+client = DazClient()
+rs = DazRenderSettings(client)
+
+rs.add_canvas("Depth")
+print(rs.list_canvases())
+print(rs.canvas_output_paths("C:/renders/shot01.png"))
+```
+
+### 📸 Scene Checkpoints — `DazSceneState`
+
+A full scene checkpoint in one call: every skeleton's complete pose
+(bone-level, via `DazPose`) plus camera and light transforms/key
+properties, captured and restored via raw property values so repeated
+capture/apply cycles are idempotent — no more creeping drift on a
+character's morph dials across repeated pose save/restore.
+
+```python
+from dazpy import DazClient, DazSceneState
+
+client = DazClient()
+state = DazSceneState(client)
+
+snapshot = state.capture()
+# ... pose the scene for a render ...
+state.apply(snapshot)   # back to exactly where you started
+```
+
+### 🧱 Scene Editing — Node Creation, Deletion, Reparenting
+
+`DazScene.create_camera()`/`create_light()`, `DazNode.delete()`, and
+`DazNode.reparent()` round out the scene graph so a script can build and
+restructure a scene, not just query and pose one.
+
+### Also in this release
+
+- **Clothing/prop fit control** — `DazNode.fit_to()`/`.unfit()`/`.fitted_items()`.
+- **dForce simulation control** — freeze/unfreeze and run/clear simulations via a new `DazDForce` proxy and `DazScene` helpers.
+- **Iray quality control** — `max_samples`/`max_time_secs`/`quality`/`set_quality_preset()` on `DazRenderSettings`, plus `active_engine()`/`set_active_engine()` to query/switch the render engine.
+- **Per-frame animation rendering** — `POST /render/animation` and `DazClient.render_animation_submit()`.
+- **Scene-change event stream** — `DazClient.stream_scene_events()` for watching or blocking on node/light/camera/selection/scene/time/render events.
+- **Camera lens shift** — `DazCamera.lens_shift_x`/`.lens_shift_y`.
+- **FBX/OBJ export** — `DazScene.export_fbx()`/`.export_obj()`.
+- **Keyframe curve introspection** — `DazProperty.get_keys()`/`.remove_key()`/`.clear_keys()`.
+- **Bulk property reads** — `DazElement.numeric_properties()` and `.class_name`.
+- A handful of correctness fixes to `DazPose`/`DazViewport.capture()` (ERC-driven property inflation, bone selection restore, backdrop restore) and render camera selection — see [CHANGELOG.md](CHANGELOG.md#270---2026-07-19) for details.
 
 ---
 
@@ -569,7 +734,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.6.0-py3-none-any.whl
+pip install dazpy-2.8.1-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:

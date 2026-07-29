@@ -4,6 +4,7 @@
 
 #include "common_version.h"
 #include "DzScriptServerPane.h"
+#include "DzPackageImporter.h"
 
 #include "dzscriptserver.h"
 
@@ -30,3 +31,4 @@ DZ_PLUGIN_DESCRIPTION(QString(
 
 DZ_PLUGIN_CLASS_GUID(DzScriptServerPane,       c3d4e5f6-a7b8-9012-cdef-123456789012);
 DZ_PLUGIN_CLASS_GUID(DzScriptServerPaneAction, d4e5f6a7-b8c9-0123-defa-234567890123);
+DZ_PLUGIN_CLASS_GUID(DzPackageImporter,        39c08604-998e-4993-bc04-18137c8f2db2);

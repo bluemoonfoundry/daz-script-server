@@ -82,34 +82,52 @@ class DazPose:
             {lookup}
             if (!_skel) return null;
 
+            // Bone rotation controls can themselves be ERC targets (e.g.
+            // auto-follow bend/twist ratios common on Genesis figures, where
+            // one bone's rotation is driven off another's), so read raw
+            // values here for the same reason as morphs/props below.
             var bones = {{}};
             var all = _skel.getAllBones();
             for (var i = 0; i < all.length; i++) {{
                 var b = all[i];
-                var x = b.getXRotControl().getValue();
-                var y = b.getYRotControl().getValue();
-                var z = b.getZRotControl().getValue();
+                var xc = b.getXRotControl(), yc = b.getYRotControl(), zc = b.getZRotControl();
+                var x = (typeof xc.getRawValue === "function") ? xc.getRawValue() : xc.getValue();
+                var y = (typeof yc.getRawValue === "function") ? yc.getRawValue() : yc.getValue();
+                var z = (typeof zc.getRawValue === "function") ? zc.getRawValue() : zc.getValue();
                 if (Math.abs(x) > 0.0001 || Math.abs(y) > 0.0001 || Math.abs(z) > 0.0001)
                     bones[b.getName()] = [x, y, z];
             }}
 
+            // Morphs can themselves be ERC targets (e.g. a master "Character"
+            // dial that fans out to dozens of shape morphs via DzERCLink),
+            // so read raw values here for the same reason as props below.
             var morphs = {{}};
             var obj = _skel.getObject();
             if (obj) {{
                 for (var i = 0; i < obj.getNumModifiers(); i++) {{
                     var m = obj.getModifier(i);
                     if (m.className() === "DzMorph") {{
-                        var v = m.getValueChannel().getValue();
+                        var ch = m.getValueChannel();
+                        var v = (typeof ch.getRawValue === "function") ? ch.getRawValue() : ch.getValue();
                         if (Math.abs(v) > 0.0001) morphs[m.getName()] = v;
                     }}
                 }}
             }}
 
+            // Read the property's own dial setting rather than getValue()'s
+            // post-ERC computed total. Properties driven by DzERCLink
+            // controllers (e.g. a "Scale" dial fed by dozens of linked
+            // morphs) return a getValue() that already includes every
+            // controller's contribution; capturing that and writing it back
+            // via setValue() on apply() would re-add the same contributions
+            // on top, inflating the property a little more on every
+            // capture/apply cycle. getRawValue() reads only the property's
+            // own baseline and round-trips correctly regardless of ERC links.
             var props = {{}};
             for (var i = 0; i < _skel.getNumProperties(); i++) {{
                 var p = _skel.getProperty(i);
                 if (p && p.getValue) {{
-                    var v = p.getValue();
+                    var v = (typeof p.getRawValue === "function") ? p.getRawValue() : p.getValue();
                     if (typeof v === "number" && Math.abs(v) > 0.0001)
                         props[p.getName()] = v;
                 }}
@@ -240,19 +258,28 @@ class DazPose:
                 var b = all[i];
                 var xyz = _bones[b.getName()];
                 if (xyz !== undefined) {{
-                    b.getXRotControl().setValue(xyz[0]);
-                    b.getYRotControl().setValue(xyz[1]);
-                    b.getZRotControl().setValue(xyz[2]);
+                    var xc = b.getXRotControl(), yc = b.getYRotControl(), zc = b.getZRotControl();
+                    if (typeof xc.setRawValue === "function") {{ xc.setRawValue(xyz[0]); }} else {{ xc.setValue(xyz[0]); }}
+                    if (typeof yc.setRawValue === "function") {{ yc.setRawValue(xyz[1]); }} else {{ yc.setValue(xyz[1]); }}
+                    if (typeof zc.setRawValue === "function") {{ zc.setRawValue(xyz[2]); }} else {{ zc.setValue(xyz[2]); }}
                 }}
             }}
 
+            // Write back to the raw dial slot, mirroring capture()'s use of
+            // getRawValue() -- see the comment there for why setValue()
+            // would double-apply ERC-controller contributions on properties
+            // like morphs or a "Scale" dial that are DzERCLink targets.
             var obj = _skel.getObject();
             if (obj) {{
                 for (var i = 0; i < obj.getNumModifiers(); i++) {{
                     var m = obj.getModifier(i);
                     if (m.className() === "DzMorph") {{
                         var v = _morphs[m.getName()];
-                        if (v !== undefined) m.getValueChannel().setValue(v);
+                        if (v !== undefined) {{
+                            var ch = m.getValueChannel();
+                            if (typeof ch.setRawValue === "function") {{ ch.setRawValue(v); }}
+                            else {{ ch.setValue(v); }}
+                        }}
                     }}
                 }}
             }}
@@ -261,7 +288,10 @@ class DazPose:
                 var p = _skel.getProperty(i);
                 if (p && p.setValue) {{
                     var v = _props[p.getName()];
-                    if (v !== undefined) p.setValue(v);
+                    if (v !== undefined) {{
+                        if (typeof p.setRawValue === "function") {{ p.setRawValue(v); }}
+                        else {{ p.setValue(v); }}
+                    }}
                 }}
             }}
 
@@ -295,25 +325,27 @@ class DazPose:
             var all = _skel.getAllBones();
             for (var i = 0; i < all.length; i++) {{
                 var b = all[i];
-                var xyz = _bones[b.getName()];
-                if (xyz !== undefined) {{
-                    b.getXRotControl().setValue(xyz[0]);
-                    b.getYRotControl().setValue(xyz[1]);
-                    b.getZRotControl().setValue(xyz[2]);
-                }} else {{
-                    b.getXRotControl().setValue(0);
-                    b.getYRotControl().setValue(0);
-                    b.getZRotControl().setValue(0);
-                }}
+                var xyz = _bones[b.getName()] || [0, 0, 0];
+                var xc = b.getXRotControl(), yc = b.getYRotControl(), zc = b.getZRotControl();
+                if (typeof xc.setRawValue === "function") {{ xc.setRawValue(xyz[0]); }} else {{ xc.setValue(xyz[0]); }}
+                if (typeof yc.setRawValue === "function") {{ yc.setRawValue(xyz[1]); }} else {{ yc.setValue(xyz[1]); }}
+                if (typeof zc.setRawValue === "function") {{ zc.setRawValue(xyz[2]); }} else {{ zc.setValue(xyz[2]); }}
             }}
 
+            // Write back to the raw dial slot -- see the comment in
+            // capture() for why setValue() would double-apply ERC-controller
+            // contributions on properties like morphs or a "Scale" dial that
+            // are DzERCLink targets.
             var obj = _skel.getObject();
             if (obj) {{
                 for (var i = 0; i < obj.getNumModifiers(); i++) {{
                     var m = obj.getModifier(i);
                     if (m.className() === "DzMorph") {{
                         var v = _morphs[m.getName()];
-                        m.getValueChannel().setValue(v !== undefined ? v : 0);
+                        var _v = (v !== undefined) ? v : 0;
+                        var ch = m.getValueChannel();
+                        if (typeof ch.setRawValue === "function") {{ ch.setRawValue(_v); }}
+                        else {{ ch.setValue(_v); }}
                     }}
                 }}
             }}
@@ -322,7 +354,9 @@ class DazPose:
                 var p = _skel.getProperty(i);
                 if (p && p.setValue) {{
                     var v = _props[p.getName()];
-                    if (v !== undefined) p.setValue(v);
+                    var _v = (v !== undefined) ? v : 0;
+                    if (typeof p.setRawValue === "function") {{ p.setRawValue(_v); }}
+                    else {{ p.setValue(_v); }}
                 }}
             }}
 

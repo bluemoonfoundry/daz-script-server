@@ -13,7 +13,7 @@ Typical usage::
     figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 """
 
-__version__ = "2.6.0"
+__version__ = "2.8.1"
 
 from ._client import DazClient
 from ._scene import DazScene
@@ -27,7 +27,7 @@ from ._modifier import DazModifier
 from ._morph import DazMorph
 from ._dforce import DazDForce
 from ._geometry import DazGeometry
-from ._render import DazRenderSettings
+from ._render import DazRenderSettings, Canvas, RenderOutcome
 from ._viewport import DazViewport
 from ._timeline import DazTimeline
 from ._property import DazProperty
@@ -58,6 +58,9 @@ from ._interaction import (
     build_rig_profile,
     build_rig_profiles_from_snapshot,
     build_fight_recipe,
+    build_face_each_other_recipe,
+    build_handshake_recipe,
+    build_hug_recipe,
     build_kiss_recipe,
     build_sit_recipe,
     build_touch_recipe,
@@ -71,6 +74,7 @@ from ._interaction import (
 )
 from ._undo import UndoGroup
 from ._pose import DazPose
+from ._scene_state import DazSceneState
 from ._animation import DazAnimation
 from .math3 import Vec3, Quat, BoundingBox
 from ._result import ExecutionResult
@@ -84,6 +88,7 @@ from ._render_api import (
     render_variants,
 )
 from .exceptions import RenderError
+from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
 __all__ = [
@@ -101,6 +106,8 @@ __all__ = [
     "DazDForce",
     "DazGeometry",
     "DazRenderSettings",
+    "Canvas",
+    "RenderOutcome",
     "DazViewport",
     "DazTimeline",
     "DazProperty",
@@ -131,6 +138,9 @@ __all__ = [
     "build_rig_profile",
     "build_rig_profiles_from_snapshot",
     "build_fight_recipe",
+    "build_face_each_other_recipe",
+    "build_handshake_recipe",
+    "build_hug_recipe",
     "build_kiss_recipe",
     "build_sit_recipe",
     "build_touch_recipe",
@@ -143,6 +153,7 @@ __all__ = [
     "resolve_interaction_target",
     "UndoGroup",
     "DazPose",
+    "DazSceneState",
     "DazAnimation",
     "Vec3",
     "Quat",
@@ -156,5 +167,8 @@ __all__ = [
     "RenderError",
     "render",
     "render_variants",
+    "SceneEvent",
+    "watch_scene_events",
+    "wait_for_scene_event",
     "exceptions",
 ]

@@ -195,6 +195,12 @@ class TestDazClientLowLevel(unittest.TestCase):
         with self.assertRaises(exceptions.AuthenticationError):
             bad_client.execute("(function(){ return 1; })()")
 
+    @skip_auth
+    def test_bad_token_status_raises_authentication_error(self):
+        bad_client = DazClient(token="invalid-token-000000")
+        with self.assertRaises(exceptions.AuthenticationError):
+            bad_client.status()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. DazScene
@@ -380,6 +386,20 @@ class TestDazNodeOnFirstNode(unittest.TestCase):
         for p in props[:5]:  # spot-check first 5
             self.assertIn("label", p)
             self.assertIn("name", p)
+
+    def test_numeric_properties_returns_dict(self):
+        props = self.node.numeric_properties()
+        self.assertIsInstance(props, dict)
+
+    def test_numeric_properties_values_are_numeric(self):
+        props = self.node.numeric_properties()
+        for label, value in list(props.items())[:5]:  # spot-check first 5
+            self.assertIsInstance(value, (int, float))
+
+    def test_class_name_is_string(self):
+        cls = self.node.class_name
+        self.assertIsInstance(cls, str)
+        self.assertTrue(cls.startswith("Dz"))
 
     def test_general_scale_is_numeric(self):
         gs = self.node.general_scale
@@ -773,6 +793,76 @@ class TestDazRenderSettings(unittest.TestCase):
 
     def test_has_render_is_bool(self):
         self.assertIsInstance(self.rs.has_render(), bool)
+
+    def test_canvases_enabled_round_trips(self):
+        original = self.rs.canvases_enabled
+        try:
+            self.rs.canvases_enabled = False
+            self.assertFalse(self.rs.canvases_enabled)
+            self.rs.canvases_enabled = True
+            self.assertTrue(self.rs.canvases_enabled)
+        finally:
+            if original is not None:
+                self.rs.canvases_enabled = original
+
+    def test_list_canvases_returns_list_of_canvas(self):
+        from dazpy._render import Canvas
+        canvases = self.rs.list_canvases()
+        self.assertIsInstance(canvases, list)
+        for canvas in canvases:
+            self.assertIsInstance(canvas, Canvas)
+
+    def test_add_and_remove_canvas_round_trip(self):
+        from dazpy._render import Canvas
+        name = "dazpy_test_canvas_uae"
+        canvas = self.rs.add_canvas(name, "Depth")
+        self.assertIsInstance(canvas, Canvas)
+        self.assertEqual(canvas.name, name)
+        self.assertEqual(canvas.canvas_type, "Depth")
+        names = [c.name for c in self.rs.list_canvases()]
+        self.assertIn(name, names)
+
+        removed = self.rs.remove_canvas(name)
+        self.assertTrue(removed)
+        names_after = [c.name for c in self.rs.list_canvases()]
+        self.assertNotIn(name, names_after)
+
+    def test_remove_canvas_nonexistent_returns_false(self):
+        self.assertFalse(self.rs.remove_canvas("__no_such_canvas_xyz__"))
+
+    def test_canvas_output_paths_keyed_by_existing_canvas_names(self):
+        paths = self.rs.canvas_output_paths("C:/tmp/dazpy_canvas_path_test.png")
+        canvases = self.rs.list_canvases()
+        self.assertEqual(set(paths.keys()), {c.name for c in canvases})
+        for canvas in canvases:
+            self.assertIn(canvas.name, paths[canvas.name])
+            self.assertIn(canvas.canvas_type, paths[canvas.name])
+
+    def test_render_returns_outcome_with_resolved_output_path(self):
+        from dazpy._render import RenderOutcome
+        import tempfile
+
+        original_res = self.rs.resolution
+        original_samples = self.rs.max_samples
+        out_path = os.path.join(
+            tempfile.gettempdir(), "dazpy_test_render_cc5.png"
+        )
+        try:
+            self.rs.set_resolution(64, 64)
+            self.rs.max_samples = 4
+            self.rs.output_path = out_path
+            result = self.rs.render_and_wait(timeout=120)
+            self.assertIsInstance(result, RenderOutcome)
+            self.assertTrue(result.success)
+            self.assertEqual(result.output_path, out_path)
+            self.assertTrue(os.path.exists(out_path))
+        finally:
+            if original_res:
+                self.rs.set_resolution(original_res["width"], original_res["height"])
+            if original_samples is not None:
+                self.rs.max_samples = original_samples
+            if os.path.exists(out_path):
+                os.remove(out_path)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
