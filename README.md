@@ -68,7 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.8.1](#whats-new-in-v281)
+- [What's New in v2.8.1](#whats-new-in-v281) (Nightly Build)
 - [What's New in v2.8.0](#whats-new-in-v280)
 - [What's New in v2.7.2](#whats-new-in-v272)
 - [What's New in v2.7.1](#whats-new-in-v271)
