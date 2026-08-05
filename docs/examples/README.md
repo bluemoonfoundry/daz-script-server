@@ -572,14 +572,17 @@ pose x expression combinations, renders front and over-the-shoulder (back)
 camera angles for every combo -- beauty image plus Normal/Depth Iray Canvas
 passes -- then stylizes each render into a "graphic-novel naturalism" look
 via a ComfyUI multi-ControlNet (normal, depth, lineart) + LoRA img2img
-workflow. Both stages are resumable (skip-by-file-existence), so a plain
-rerun after a crash or partial failure is self-healing.
+workflow -- all three passes conditioned through a single SDXL union
+ControlNet model, re-tagged per pass via `SetUnionControlNetType`. Both
+stages are resumable (skip-by-file-existence), so a plain rerun after a
+crash or partial failure is self-healing.
 
 **Prerequisites:**
 - DAZ Studio running with the DazScriptServer plugin, sprite scene already
   open with two named cameras (front + back/OTS)
 - ComfyUI running locally at `http://127.0.0.1:8188` with your graphic-novel
-  checkpoint, LoRA, and normal/depth/lineart ControlNet models installed
+  checkpoint, LoRA, and an SDXL union ControlNet model (e.g.
+  `controlnet-union-sdxl-1.0.safetensors`) installed
 - Pose and expression presets pre-authored via `author_pose_preset.py` /
   `author_expression_preset.py`
 

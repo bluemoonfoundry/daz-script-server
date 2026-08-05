@@ -16,7 +16,6 @@ def _read_daz_token() -> str:
 @dataclass
 class ControlNetPassConfig:
     weight: float = 0.5
-    model: str = ""
 
 
 @dataclass
@@ -28,6 +27,10 @@ class ComfyUIStageConfig:
     base_seed: int = 0
     steps: int = 24
     cfg: float = 7.0
+    # A single SDXL "union" ControlNet model (e.g. controlnet-union-sdxl-1.0.safetensors)
+    # loaded once and re-tagged per pass via ComfyUI's SetUnionControlNetType node --
+    # not three separate per-type models.
+    controlnet_model: str = ""
     controlnet_normal: ControlNetPassConfig = field(
         default_factory=lambda: ControlNetPassConfig(weight=0.6)
     )

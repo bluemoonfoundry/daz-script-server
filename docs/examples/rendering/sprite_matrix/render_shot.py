@@ -73,11 +73,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--cfg", type=float, default=comfy_defaults.cfg)
     p.add_argument("--positive-prompt", default=comfy_defaults.positive_prompt)
     p.add_argument("--negative-prompt", default=comfy_defaults.negative_prompt)
-    p.add_argument("--controlnet-normal-model", default=comfy_defaults.controlnet_normal.model)
+    p.add_argument(
+        "--controlnet-model",
+        default=comfy_defaults.controlnet_model,
+        help="Single SDXL union ControlNet model, re-tagged per pass via SetUnionControlNetType "
+        "(e.g. controlnet-union-sdxl-1.0.safetensors)",
+    )
     p.add_argument("--controlnet-normal-weight", type=float, default=comfy_defaults.controlnet_normal.weight)
-    p.add_argument("--controlnet-depth-model", default=comfy_defaults.controlnet_depth.model)
     p.add_argument("--controlnet-depth-weight", type=float, default=comfy_defaults.controlnet_depth.weight)
-    p.add_argument("--controlnet-lineart-model", default=comfy_defaults.controlnet_lineart.model)
     p.add_argument("--controlnet-lineart-weight", type=float, default=comfy_defaults.controlnet_lineart.weight)
 
     return p.parse_args()
@@ -182,11 +185,9 @@ def stylize_shot(args: argparse.Namespace) -> bool:
                 seed=stable_seed(args.base_seed, args.name, camera),
                 positive_prompt=args.positive_prompt,
                 negative_prompt=args.negative_prompt,
-                controlnet_normal_model=args.controlnet_normal_model,
+                controlnet_model=args.controlnet_model,
                 controlnet_normal_weight=args.controlnet_normal_weight,
-                controlnet_depth_model=args.controlnet_depth_model,
                 controlnet_depth_weight=args.controlnet_depth_weight,
-                controlnet_lineart_model=args.controlnet_lineart_model,
                 controlnet_lineart_weight=args.controlnet_lineart_weight,
             )
             prompt_id = comfy.queue_prompt(workflow)

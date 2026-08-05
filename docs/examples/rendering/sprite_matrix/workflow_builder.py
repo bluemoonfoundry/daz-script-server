@@ -31,11 +31,9 @@ def build_controlnet_workflow(
     seed: int,
     positive_prompt: str,
     negative_prompt: str,
-    controlnet_normal_model: str,
+    controlnet_model: str,
     controlnet_normal_weight: float,
-    controlnet_depth_model: str,
     controlnet_depth_weight: float,
-    controlnet_lineart_model: str,
     controlnet_lineart_weight: float,
 ) -> dict:
     """Return a ComfyUI API-format prompt dict ready for queue_prompt()."""
@@ -56,11 +54,9 @@ def build_controlnet_workflow(
     workflow["4"]["inputs"]["text"] = positive_prompt
     workflow["5"]["inputs"]["text"] = negative_prompt
 
-    workflow["21"]["inputs"]["control_net_name"] = controlnet_normal_model
+    workflow["50"]["inputs"]["control_net_name"] = controlnet_model
     workflow["22"]["inputs"]["strength"] = float(controlnet_normal_weight)
-    workflow["31"]["inputs"]["control_net_name"] = controlnet_depth_model
     workflow["32"]["inputs"]["strength"] = float(controlnet_depth_weight)
-    workflow["41"]["inputs"]["control_net_name"] = controlnet_lineart_model
     workflow["42"]["inputs"]["strength"] = float(controlnet_lineart_weight)
 
     workflow["6"]["inputs"]["steps"] = int(steps)

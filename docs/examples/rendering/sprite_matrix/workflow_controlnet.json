@@ -42,6 +42,12 @@
       "clip": ["1b", 1]
     }
   },
+  "50": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "__CONTROLNET_MODEL__"
+    }
+  },
   "20": {
     "class_type": "LoadImage",
     "inputs": {
@@ -49,9 +55,10 @@
     }
   },
   "21": {
-    "class_type": "ControlNetLoader",
+    "class_type": "SetUnionControlNetType",
     "inputs": {
-      "control_net_name": "__CONTROLNET_NORMAL_MODEL__"
+      "control_net": ["50", 0],
+      "type": "normal"
     }
   },
   "22": {
@@ -70,9 +77,10 @@
     }
   },
   "31": {
-    "class_type": "ControlNetLoader",
+    "class_type": "SetUnionControlNetType",
     "inputs": {
-      "control_net_name": "__CONTROLNET_DEPTH_MODEL__"
+      "control_net": ["50", 0],
+      "type": "depth"
     }
   },
   "32": {
@@ -91,9 +99,10 @@
     }
   },
   "41": {
-    "class_type": "ControlNetLoader",
+    "class_type": "SetUnionControlNetType",
     "inputs": {
-      "control_net_name": "__CONTROLNET_LINEART_MODEL__"
+      "control_net": ["50", 0],
+      "type": "canny/lineart/anime_lineart/mlsd"
     }
   },
   "42": {

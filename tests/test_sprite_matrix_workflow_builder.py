@@ -26,11 +26,9 @@ _DEFAULT_KWARGS = dict(
     seed=42,
     positive_prompt="graphic novel style",
     negative_prompt="photorealistic",
-    controlnet_normal_model="control-normal-xl.safetensors",
+    controlnet_model="controlnet-union-sdxl-1.0.safetensors",
     controlnet_normal_weight=0.6,
-    controlnet_depth_model="control-depth-xl.safetensors",
     controlnet_depth_weight=0.5,
-    controlnet_lineart_model="control-lineart-xl.safetensors",
     controlnet_lineart_weight=0.4,
 )
 
@@ -40,7 +38,10 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
         self.wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
 
     def test_required_node_keys(self):
-        for key in ("1", "1b", "2", "3", "4", "5", "6", "7", "8", "20", "21", "22", "30", "31", "32", "40", "41", "42"):
+        for key in (
+            "1", "1b", "2", "3", "4", "5", "6", "7", "8",
+            "20", "21", "22", "30", "31", "32", "40", "41", "42", "50",
+        ):
             self.assertIn(key, self.wf, f"Missing node {key}")
 
     def test_required_class_types(self):
@@ -52,12 +53,18 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
             "VAEEncode",
             "CLIPTextEncode",
             "ControlNetLoader",
+            "SetUnionControlNetType",
             "ControlNetApply",
             "KSampler",
             "VAEDecode",
             "SaveImage",
         ):
             self.assertIn(expected, types)
+
+    def test_only_one_controlnet_loader(self):
+        # A single shared union model, not three separate loaders.
+        loaders = [v for v in self.wf.values() if v["class_type"] == "ControlNetLoader"]
+        self.assertEqual(len(loaders), 1)
 
     def test_checkpoint_and_lora_set(self):
         self.assertEqual(self.wf["1"]["inputs"]["ckpt_name"], "gn.safetensors")
@@ -71,13 +78,20 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
         self.assertEqual(self.wf["30"]["inputs"]["image"], "depth.png")
         self.assertEqual(self.wf["40"]["inputs"]["image"], "lineart.png")
 
-    def test_controlnet_models_and_weights(self):
-        self.assertEqual(self.wf["21"]["inputs"]["control_net_name"], "control-normal-xl.safetensors")
+    def test_controlnet_model_and_weights(self):
+        self.assertEqual(self.wf["50"]["inputs"]["control_net_name"], "controlnet-union-sdxl-1.0.safetensors")
         self.assertAlmostEqual(self.wf["22"]["inputs"]["strength"], 0.6)
-        self.assertEqual(self.wf["31"]["inputs"]["control_net_name"], "control-depth-xl.safetensors")
         self.assertAlmostEqual(self.wf["32"]["inputs"]["strength"], 0.5)
-        self.assertEqual(self.wf["41"]["inputs"]["control_net_name"], "control-lineart-xl.safetensors")
         self.assertAlmostEqual(self.wf["42"]["inputs"]["strength"], 0.4)
+
+    def test_union_type_tags_per_pass(self):
+        self.assertEqual(self.wf["21"]["inputs"]["type"], "normal")
+        self.assertEqual(self.wf["31"]["inputs"]["type"], "depth")
+        self.assertEqual(self.wf["41"]["inputs"]["type"], "canny/lineart/anime_lineart/mlsd")
+        # all three re-tag the same loaded model
+        self.assertEqual(self.wf["21"]["inputs"]["control_net"], ["50", 0])
+        self.assertEqual(self.wf["31"]["inputs"]["control_net"], ["50", 0])
+        self.assertEqual(self.wf["41"]["inputs"]["control_net"], ["50", 0])
 
     def test_conditioning_chain_wired_through_all_controlnets(self):
         # positive conditioning: CLIPTextEncode(4) -> ControlNetApply(22) -> (32) -> (42) -> KSampler

@@ -23,9 +23,10 @@
     "steps": 24,
     "cfg": 7.0,
     "controlnet": {
-      "normal": { "weight": 0.6, "model": "control-normal-xl.safetensors" },
-      "depth": { "weight": 0.5, "model": "control-depth-xl.safetensors" },
-      "lineart": { "weight": 0.4, "model": "control-lineart-xl.safetensors" }
+      "model": "controlnet-union-sdxl-1.0.safetensors",
+      "normal": { "weight": 0.6 },
+      "depth": { "weight": 0.5 },
+      "lineart": { "weight": 0.4 }
     },
     "positive_prompt": "graphic novel illustration, bold ink linework, cel-shaded, dramatic hatching, naturalistic proportions",
     "negative_prompt": "photorealistic, 3d render, blurry, watermark"

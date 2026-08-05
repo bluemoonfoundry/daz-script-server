@@ -104,11 +104,9 @@ def run_stylize_stage(
                 seed=stable_seed(cfg.comfyui.base_seed, combo.id, camera),
                 positive_prompt=cfg.comfyui.positive_prompt,
                 negative_prompt=cfg.comfyui.negative_prompt,
-                controlnet_normal_model=cfg.comfyui.controlnet_normal.model,
+                controlnet_model=cfg.comfyui.controlnet_model,
                 controlnet_normal_weight=cfg.comfyui.controlnet_normal.weight,
-                controlnet_depth_model=cfg.comfyui.controlnet_depth.model,
                 controlnet_depth_weight=cfg.comfyui.controlnet_depth.weight,
-                controlnet_lineart_model=cfg.comfyui.controlnet_lineart.model,
                 controlnet_lineart_weight=cfg.comfyui.controlnet_lineart.weight,
             )
             prompt_id = comfy.queue_prompt(workflow)

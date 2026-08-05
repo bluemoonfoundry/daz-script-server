@@ -51,6 +51,7 @@ class SpecFixture:
                 "checkpoint": "gn.safetensors",
                 "denoise": 0.35,
                 "controlnet": {
+                    "model": "controlnet-union-sdxl-1.0.safetensors",
                     "normal": {"weight": 0.6},
                     "depth": {"weight": 0.5},
                     "lineart": {"weight": 0.4},
@@ -82,6 +83,14 @@ class TestLoadSpecValid(unittest.TestCase):
         self.assertEqual(cfg.figure_label, "Genesis 9")
         self.assertEqual(len(cfg.combos), 1)
         self.assertEqual(cfg.combos[0].id, "standing__calm")
+
+    def test_controlnet_model_parsed(self):
+        path = self.fixture.write_spec(self.fixture.spec_dict())
+        cfg = load_spec(path)
+        self.assertEqual(cfg.comfyui.controlnet_model, "controlnet-union-sdxl-1.0.safetensors")
+        self.assertAlmostEqual(cfg.comfyui.controlnet_normal.weight, 0.6)
+        self.assertAlmostEqual(cfg.comfyui.controlnet_depth.weight, 0.5)
+        self.assertAlmostEqual(cfg.comfyui.controlnet_lineart.weight, 0.4)
 
     def test_output_dir_resolved_relative_to_spec(self):
         path = self.fixture.write_spec(self.fixture.spec_dict())
@@ -160,6 +169,13 @@ class TestLoadSpecInvalid(unittest.TestCase):
     def test_controlnet_weight_out_of_range_rejected(self):
         data = self.fixture.spec_dict()
         data["comfyui"]["controlnet"]["normal"]["weight"] = -0.1
+        path = self.fixture.write_spec(data)
+        with self.assertRaises(SpecValidationError):
+            load_spec(path)
+
+    def test_missing_controlnet_model_rejected(self):
+        data = self.fixture.spec_dict()
+        del data["comfyui"]["controlnet"]["model"]
         path = self.fixture.write_spec(data)
         with self.assertRaises(SpecValidationError):
             load_spec(path)

@@ -14,10 +14,13 @@ camera angles for every combo, then stylizes each render into a
    Normal and Depth Iray Canvas passes (AOVs) from both cameras.
 2. **Stylize stage** (`stylize_stage.py`): converts the Normal/Depth EXR
    canvases to PNG, derives a Canny/lineart pass from the beauty render, and
-   submits a ComfyUI img2img workflow conditioned on all three
-   (normal + depth + lineart ControlNet) plus a fixed checkpoint/LoRA, so
-   pose/structure stays locked to the Daz render while the graphic-novel
-   look comes from Stable Diffusion.
+   submits a ComfyUI img2img workflow conditioned on all three passes plus a
+   fixed checkpoint/LoRA, so pose/structure stays locked to the Daz render
+   while the graphic-novel look comes from Stable Diffusion. All three
+   passes are conditioned through a single SDXL **union** ControlNet model
+   (e.g. `controlnet-union-sdxl-1.0.safetensors`), loaded once and re-tagged
+   per pass via ComfyUI's `SetUnionControlNetType` node (`normal`, `depth`,
+   `canny/lineart/anime_lineart/mlsd`) -- not three separate per-type models.
 
 ### Single-shot variant (`render_shot.py`)
 
@@ -31,9 +34,7 @@ python render_shot.py --name shot001 --output-dir C:/output/hero_sprites --dry-r
 
 python render_shot.py --name shot001 --output-dir C:/output/hero_sprites \
     --checkpoint graphicNovelStyleXL.safetensors --lora-name gn_ink_v2.safetensors \
-    --controlnet-normal-model control-normal-xl.safetensors \
-    --controlnet-depth-model control-depth-xl.safetensors \
-    --controlnet-lineart-model control-lineart-xl.safetensors
+    --controlnet-model controlnet-union-sdxl-1.0.safetensors
 ```
 
 All spec fields (resolution, engine, quality preset, camera labels, ComfyUI
@@ -61,7 +62,9 @@ command is self-healing after a crash or partial failure.
 - The scene must contain two named cameras for front and back/OTS shots
   (see `cameras.front.label` / `cameras.back.label` in the spec).
 - A running ComfyUI instance with your graphic-novel-style checkpoint, LoRA,
-  and normal/depth/lineart ControlNet models installed.
+  and an SDXL union ControlNet model (e.g. `controlnet-union-sdxl-1.0.safetensors`)
+  installed -- one model conditions all three passes (normal, depth,
+  lineart) via ComfyUI's `SetUnionControlNetType` node.
 - `pip install -r requirements.txt` (plus `dazpy` itself).
 
 ## Authoring pose and expression presets
@@ -93,8 +96,9 @@ See `example_spec.json` for a full example. Key fields:
   labels already present in the scene.
 - `render` -- resolution, engine, Iray quality preset, and which canvases
   (AOVs) to render (`Normal`, `Depth`).
-- `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, per-pass
-  ControlNet weight/model, and prompts.
+- `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, prompts,
+  and `controlnet` (a single union `model` shared by all three passes plus
+  per-pass `normal`/`depth`/`lineart` `weight`).
 - `combos` -- an explicit list of `{pose, expression, overrides?, id?}`
   entries (not a pose x expression cross product). `pose` and `expression`
   must resolve to files in the preset libraries. `overrides` is an optional

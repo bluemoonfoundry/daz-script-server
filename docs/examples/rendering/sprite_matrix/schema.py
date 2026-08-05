@@ -73,7 +73,7 @@ def _require_unit_range(value: float, field_name: str, errors: list[str]) -> Non
 def _parse_controlnet_pass(raw: dict, field_name: str, errors: list[str]) -> ControlNetPassConfig:
     weight = raw.get("weight", 0.5)
     _require_unit_range(weight, f"comfyui.controlnet.{field_name}.weight", errors)
-    return ControlNetPassConfig(weight=float(weight), model=str(raw.get("model", "")))
+    return ControlNetPassConfig(weight=float(weight))
 
 
 def load_spec(path: str | Path) -> PipelineConfig:
@@ -130,6 +130,9 @@ def load_spec(path: str | Path) -> PipelineConfig:
     denoise = comfy_raw.get("denoise", 0.35)
     _require_unit_range(denoise, "comfyui.denoise", errors)
     lora_strength = lora_raw.get("strength", 0.8)
+    controlnet_model = controlnet_raw.get("model", "")
+    if not controlnet_model:
+        errors.append("comfyui.controlnet.model is required")
 
     comfy_cfg = ComfyUIStageConfig(
         checkpoint=comfy_raw.get("checkpoint", "graphicNovelStyleXL.safetensors"),
@@ -139,6 +142,7 @@ def load_spec(path: str | Path) -> PipelineConfig:
         base_seed=int(comfy_raw.get("base_seed", 0)),
         steps=int(comfy_raw.get("steps", 24)),
         cfg=float(comfy_raw.get("cfg", 7.0)),
+        controlnet_model=controlnet_model,
         controlnet_normal=_parse_controlnet_pass(controlnet_raw.get("normal", {}), "normal", errors),
         controlnet_depth=_parse_controlnet_pass(controlnet_raw.get("depth", {}), "depth", errors),
         controlnet_lineart=_parse_controlnet_pass(controlnet_raw.get("lineart", {}), "lineart", errors),
