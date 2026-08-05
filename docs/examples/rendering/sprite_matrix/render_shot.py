@@ -99,6 +99,13 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--face-detailer-denoise", type=float, default=comfy_defaults.face_detailer_denoise)
     p.add_argument("--face-detailer-guide-size", type=float, default=comfy_defaults.face_detailer_guide_size)
+    p.add_argument(
+        "--face-detailer-bbox-dilation",
+        type=int,
+        default=comfy_defaults.face_detailer_bbox_dilation,
+        help="Pixels to dilate the detected face bbox before refining/pasting -- needs to be generous "
+        "since the face detector's bbox stops at the hairline, otherwise a color seam appears there",
+    )
 
     return p.parse_args()
 
@@ -212,6 +219,7 @@ def stylize_shot(args: argparse.Namespace) -> bool:
                 face_detailer_enabled=args.face_detailer_enabled,
                 face_detailer_denoise=args.face_detailer_denoise,
                 face_detailer_guide_size=args.face_detailer_guide_size,
+                face_detailer_bbox_dilation=args.face_detailer_bbox_dilation,
             )
             prompt_id = comfy.queue_prompt(workflow)
             comfy.save_result(prompt_id, out_path, timeout=300.0)

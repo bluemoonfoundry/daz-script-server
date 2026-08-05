@@ -47,6 +47,11 @@ class ComfyUIStageConfig:
     face_detailer_enabled: bool = True
     face_detailer_denoise: float = 0.25
     face_detailer_guide_size: float = 512.0
+    # Bbox dilation (pixels) around the detected face region before
+    # refining/pasting -- the face detector's bbox stops at the hairline, so
+    # a generous dilation is needed to push the refined region up through
+    # the whole head and avoid a visible hair-color seam at the boundary.
+    face_detailer_bbox_dilation: int = 100
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"

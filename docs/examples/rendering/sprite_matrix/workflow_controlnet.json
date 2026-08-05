@@ -148,7 +148,7 @@
       "bbox_detector": ["60", 0],
       "image": ["7", 0],
       "threshold": 0.5,
-      "dilation": 10,
+      "dilation": "__FACE_DETAILER_BBOX_DILATION__",
       "crop_factor": 3.0,
       "drop_size": 10,
       "labels": "all"

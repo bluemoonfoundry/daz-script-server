@@ -200,6 +200,18 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         self.assertAlmostEqual(wf["65"]["inputs"]["denoise"], 0.15)
         self.assertAlmostEqual(wf["65"]["inputs"]["guide_size"], 768.0)
 
+    def test_bbox_dilation_default_is_generous(self):
+        # A small dilation leaves the crown of the hair outside the
+        # refined/pasted region, producing a visible color seam at the
+        # hairline (confirmed live) -- default must be generous, not the
+        # node's own tiny default of 10.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["62"]["inputs"]["dilation"], 100)
+
+    def test_bbox_dilation_configurable(self):
+        wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "face_detailer_bbox_dilation": 150})
+        self.assertEqual(wf["62"]["inputs"]["dilation"], 150)
+
     def test_uses_same_seed_as_main_pass(self):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
         self.assertEqual(wf["65"]["inputs"]["seed"], wf["6"]["inputs"]["seed"])

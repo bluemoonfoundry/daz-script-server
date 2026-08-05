@@ -153,6 +153,7 @@ def load_spec(path: str | Path) -> PipelineConfig:
         face_detailer_enabled=bool(face_detailer_raw.get("enabled", True)),
         face_detailer_denoise=float(face_detailer_denoise),
         face_detailer_guide_size=float(face_detailer_raw.get("guide_size", 512.0)),
+        face_detailer_bbox_dilation=int(face_detailer_raw.get("bbox_dilation", 100)),
         positive_prompt=comfy_raw.get("positive_prompt", ComfyUIStageConfig.positive_prompt),
         negative_prompt=comfy_raw.get("negative_prompt", ComfyUIStageConfig.negative_prompt),
     )

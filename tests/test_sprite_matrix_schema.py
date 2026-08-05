@@ -103,15 +103,17 @@ class TestLoadSpecValid(unittest.TestCase):
         self.assertTrue(cfg.comfyui.face_detailer_enabled)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_denoise, 0.25)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_guide_size, 512.0)
+        self.assertEqual(cfg.comfyui.face_detailer_bbox_dilation, 100)
 
     def test_face_detailer_overrides_parsed(self):
         data = self.fixture.spec_dict()
-        data["comfyui"]["face_detailer"] = {"enabled": False, "denoise": 0.15, "guide_size": 768}
+        data["comfyui"]["face_detailer"] = {"enabled": False, "denoise": 0.15, "guide_size": 768, "bbox_dilation": 150}
         path = self.fixture.write_spec(data)
         cfg = load_spec(path)
         self.assertFalse(cfg.comfyui.face_detailer_enabled)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_denoise, 0.15)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_guide_size, 768.0)
+        self.assertEqual(cfg.comfyui.face_detailer_bbox_dilation, 150)
 
     def test_output_dir_resolved_relative_to_spec(self):
         path = self.fixture.write_spec(self.fixture.spec_dict())

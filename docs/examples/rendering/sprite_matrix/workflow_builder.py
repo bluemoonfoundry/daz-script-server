@@ -38,6 +38,7 @@ def build_controlnet_workflow(
     face_detailer_enabled: bool = True,
     face_detailer_denoise: float = 0.25,
     face_detailer_guide_size: float = 512.0,
+    face_detailer_bbox_dilation: int = 100,
 ) -> dict:
     """Return a ComfyUI API-format prompt dict ready for queue_prompt()."""
     with open(_TEMPLATE_PATH) as f:
@@ -95,6 +96,14 @@ def build_controlnet_workflow(
         # lineart maps don't correspond to the cropped/upscaled face
         # coordinate space -- then SEGSPaste composites it back into the
         # stylized body with feathering.
+        #
+        # The face detector's bbox only covers eyes/nose/mouth/forehead, not
+        # the crown of the hair, so a small dilation leaves a visible color
+        # seam at the hairline (the un-refined main pass invents its own
+        # hair color above the pasted region) -- confirmed live. A generous
+        # bbox_dilation pushes the refined/pasted region up through the
+        # whole head.
+        workflow["62"]["inputs"]["dilation"] = int(face_detailer_bbox_dilation)
         workflow["64"]["inputs"]["model"] = face_model_ref
         workflow["64"]["inputs"]["clip"] = face_clip_ref
         workflow["65"]["inputs"]["steps"] = int(steps)

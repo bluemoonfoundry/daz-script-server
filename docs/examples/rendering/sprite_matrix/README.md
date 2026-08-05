@@ -115,8 +115,12 @@ See `example_spec.json` for a full example. Key fields:
 - `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, prompts,
   `controlnet` (a single union `model` shared by all three passes plus
   per-pass `normal`/`depth`/`lineart` `weight`), and `face_detailer`
-  (`enabled`, `denoise`, `guide_size` -- the identity-preservation pass;
-  defaults to on with `denoise: 0.25`).
+  (`enabled`, `denoise`, `guide_size`, `bbox_dilation` -- the
+  identity-preservation pass; defaults to on with `denoise: 0.25`,
+  `bbox_dilation: 100`). `bbox_dilation` needs to be generous: the face
+  detector's bbox stops at the hairline, so a small value leaves a visible
+  color seam where the refined region ends and the un-refined main pass's
+  invented hair color begins.
 - `combos` -- an explicit list of `{pose, expression, overrides?, id?}`
   entries (not a pose x expression cross product). `pose` and `expression`
   must resolve to files in the preset libraries. `overrides` is an optional
