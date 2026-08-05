@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import paths
 from config import CAMERAS, ComfyUIStageConfig, PipelineConfig, RenderStageConfig
+from render_util import render_beauty_and_canvases
 
 
 def _parse_args() -> argparse.Namespace:
@@ -111,7 +112,6 @@ def render_shot(args: argparse.Namespace, canvases: tuple[str, ...]) -> bool:
     rs.set_active_engine(args.engine)
     rs.set_quality_preset(args.quality_preset)
     rs.set_resolution(args.width, args.height)
-    rs.canvases_enabled = bool(canvases)
     for canvas_name in canvases:
         rs.add_canvas(canvas_name, canvas_name)
 
@@ -125,8 +125,12 @@ def render_shot(args: argparse.Namespace, canvases: tuple[str, ...]) -> bool:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         t0 = time.monotonic()
         try:
-            rs.output_path = out_path
-            outcome = rs.render(camera_label=_camera_label(args, camera))
+            outcome = render_beauty_and_canvases(
+                rs,
+                output_path=out_path,
+                camera_label=_camera_label(args, camera),
+                canvases=canvases,
+            )
             if not outcome.success:
                 raise RuntimeError(f"doRender() reported failure (output_path={outcome.output_path!r})")
         except Exception as exc:  # noqa: BLE001 - continue-and-log per camera

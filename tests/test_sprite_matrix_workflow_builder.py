@@ -10,6 +10,10 @@ _SPRITE_MATRIX_DIR = os.path.join(
 )
 sys.path.insert(0, _SPRITE_MATRIX_DIR)
 
+# comfyui_enhance/workflow_builder.py shares this module name; evict any
+# stale cached entry so this file always gets its own.
+sys.modules.pop("workflow_builder", None)
+
 from workflow_builder import build_controlnet_workflow, stable_seed  # noqa: E402
 
 _DEFAULT_KWARGS = dict(

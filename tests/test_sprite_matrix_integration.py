@@ -24,6 +24,13 @@ sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, _COMFYUI_ENHANCE_DIR)
 sys.path.insert(0, _SPRITE_MATRIX_DIR)
 
+# comfyui_enhance and sprite_matrix each define config.py/workflow_builder.py
+# with the same module name but different contents; evict any stale cached
+# entry so this file's deferred imports (inside test methods, below) always
+# resolve sprite_matrix's own versions via the path order above.
+for _stale in ("config", "workflow_builder"):
+    sys.modules.pop(_stale, None)
+
 import requests as _req
 
 from dazpy import DazClient, DazScene

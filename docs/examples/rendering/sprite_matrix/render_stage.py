@@ -16,6 +16,7 @@ from dazpy import DazClient, DazRenderSettings, DazScene, DazSceneState
 import paths
 from config import CAMERAS, PipelineConfig
 from presets import apply_combo
+from render_util import render_beauty_and_canvases
 
 
 @dataclass
@@ -75,7 +76,6 @@ def run_render_stage(
     rs.set_active_engine(cfg.render.engine)
     rs.set_quality_preset(cfg.render.quality_preset)
     rs.set_resolution(cfg.render.width, cfg.render.height)
-    rs.canvases_enabled = True
     for canvas_name in cfg.render.canvases:
         rs.add_canvas(canvas_name, canvas_name)
 
@@ -103,8 +103,12 @@ def run_render_stage(
             apply_combo(skeleton, cfg.figure_label, cfg.pose_library_dir, cfg.expression_library_dir, combo)
             out_path = paths.beauty_path(cfg.output_dir, combo.id, camera)
             _ensure_parent_dir(out_path)
-            rs.output_path = out_path
-            outcome = rs.render(camera_label=cfg.camera_label(camera))
+            outcome = render_beauty_and_canvases(
+                rs,
+                output_path=out_path,
+                camera_label=cfg.camera_label(camera),
+                canvases=cfg.render.canvases,
+            )
             if not outcome.success:
                 raise RuntimeError(f"doRender() reported failure (output_path={outcome.output_path!r})")
         except Exception as exc:  # noqa: BLE001 - continue-and-log per unit

@@ -14,6 +14,11 @@ _SPRITE_MATRIX_DIR = os.path.join(
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, _SPRITE_MATRIX_DIR)
 
+# comfyui_enhance/config.py shares this module name (different PipelineConfig
+# shape); evict any stale cached entry -- render_shot.py imports config at
+# module load time, so this must run before the render_shot import below.
+sys.modules.pop("config", None)
+
 import render_shot  # noqa: E402
 
 

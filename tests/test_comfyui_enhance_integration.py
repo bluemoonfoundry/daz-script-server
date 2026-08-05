@@ -14,7 +14,13 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples", "comfyui_enhance"))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "comfyui_enhance"
+))
+
+# docs/examples/rendering/sprite_matrix/workflow_builder.py shares this module
+# name; evict any stale cached entry so this file always gets its own.
+sys.modules.pop("workflow_builder", None)
 
 import requests as _req
 
