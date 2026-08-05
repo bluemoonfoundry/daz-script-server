@@ -30,7 +30,7 @@
     },
     "face_detailer": {
       "enabled": true,
-      "denoise": 0.25,
+      "denoise": 0.15,
       "guide_size": 512,
       "bbox_dilation": 100
     },

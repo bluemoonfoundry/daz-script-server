@@ -45,7 +45,11 @@ class ComfyUIStageConfig:
     # denoise than the main pass -- keeps identity closer to the real
     # Daz-rendered face. See workflow_builder.py.
     face_detailer_enabled: bool = True
-    face_detailer_denoise: float = 0.25
+    # 0.15 chosen after live comparison against 0.25/0.15/0.10 side-by-side
+    # with the real Daz beauty render: 0.25 showed visible identity drift
+    # (heavier eyebrows, more angular jaw); 0.15 stayed close to the source
+    # while still keeping visible ink-line/cel-shaded stylization.
+    face_detailer_denoise: float = 0.15
     face_detailer_guide_size: float = 512.0
     # Bbox dilation (pixels) around the detected face region before
     # refining/pasting -- the face detector's bbox stops at the hairline, so

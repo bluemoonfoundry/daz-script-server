@@ -127,8 +127,11 @@ See `example_spec.json` for a full example. Key fields:
   `controlnet` (a single union `model` shared by all three passes plus
   per-pass `normal`/`depth`/`lineart` `weight`), and `face_detailer`
   (`enabled`, `denoise`, `guide_size`, `bbox_dilation` -- the
-  identity-preservation pass; defaults to on with `denoise: 0.25`,
-  `bbox_dilation: 100`). `bbox_dilation` needs to be generous: the face
+  identity-preservation pass; defaults to on with `denoise: 0.15`,
+  `bbox_dilation: 100`). Lower `denoise` values stay closer to the real
+  source face (less stylized) while higher values drift more but blend
+  more smoothly into the stylized body -- `0.15` was picked after a live
+  side-by-side comparison against `0.25`/`0.15`/`0.10`. `bbox_dilation` needs to be generous: the face
   detector's bbox stops at the hairline, so a small value leaves a visible
   color seam where the refined region ends and the un-refined main pass's
   invented hair color begins.
