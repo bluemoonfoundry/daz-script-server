@@ -107,11 +107,17 @@ def build_controlnet_workflow(
         # re-stylizes into a visible rectangular "box" against the clean
         # main-pass background. Fix: refine that rectangular hint into an
         # actual head/hair silhouette via SAM (SAMLoader + SAMDetectorCombined
-        # + MaskToSEGS) before SetDefaultImageForSEGS/SEGSDetailer -- the
-        # dilation/bbox_expansion below are just how generous a hint SAM gets
-        # to work with, not the final replaced region, so they can stay
-        # large enough to include the whole head without leaking into
-        # background.
+        # + MaskToSEGS) before SetDefaultImageForSEGS/SEGSDetailer.
+        # bbox_expansion (in workflow_controlnet.json, on SAMDetectorCombined)
+        # controls how generous a search HINT SAM gets -- kept large so it
+        # reliably finds the whole head/hair. Its own `dilation` and
+        # SEGSPaste's `feather`, however, must stay small: even after SAM
+        # produces a true silhouette, dilating/feathering it wider than a few
+        # pixels re-encodes a thin ring of background through the VAE round
+        # trip, which comes back very slightly darker than the untouched
+        # background -- a subtle but real "blacker than black" halo,
+        # confirmed live via pixel sampling (background pixels dipped to
+        # ~[1,1,0] against a ~[5,4,4] ambient black).
         workflow["62"]["inputs"]["dilation"] = int(face_detailer_bbox_dilation)
         workflow["64"]["inputs"]["model"] = face_model_ref
         workflow["64"]["inputs"]["clip"] = face_clip_ref

@@ -201,6 +201,18 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         self.assertEqual(wf["69"]["inputs"]["mask"], ["68", 0])
         self.assertFalse(wf["69"]["inputs"]["bbox_fill"])
 
+    def test_sam_mask_dilation_and_paste_feather_stay_tight(self):
+        # Even with a true SAM silhouette, dilating/feathering it wider than
+        # a few pixels re-encodes a thin ring of background through the VAE
+        # round trip, which comes back very slightly darker than the
+        # untouched background -- a subtle "blacker than black" halo,
+        # confirmed live via pixel sampling. bbox_expansion (the search hint
+        # SAM gets) can stay generous, but SAMDetectorCombined's own
+        # dilation and SEGSPaste's feather must stay small.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["68"]["inputs"]["dilation"], 10)
+        self.assertEqual(wf["66"]["inputs"]["feather"], 2)
+
     def test_wired_to_lora_model_and_clip_when_lora_present(self):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
         self.assertEqual(wf["64"]["inputs"]["model"], ["1b", 0])

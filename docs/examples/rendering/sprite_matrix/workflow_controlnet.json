@@ -168,7 +168,7 @@
       "segs": ["62", 0],
       "image": ["7", 0],
       "detection_hint": "center-1",
-      "dilation": 60,
+      "dilation": 10,
       "threshold": 0.5,
       "bbox_expansion": 80,
       "mask_hint_threshold": 0.7,
@@ -231,7 +231,7 @@
     "inputs": {
       "image": ["7", 0],
       "segs": ["65", 0],
-      "feather": 5,
+      "feather": 2,
       "alpha": 255
     }
   },
