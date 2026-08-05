@@ -19,6 +19,33 @@ camera angles for every combo, then stylizes each render into a
    pose/structure stays locked to the Daz render while the graphic-novel
    look comes from Stable Diffusion.
 
+### Single-shot variant (`render_shot.py`)
+
+For a one-off render -- no combo matrix, no pose/expression preset library,
+no JSON spec -- use `render_shot.py` instead of `main.py`. It assumes the
+pose and expression are already set up by hand in the live scene and starts
+directly at the render step:
+
+```bash
+python render_shot.py --name shot001 --output-dir C:/output/hero_sprites --dry-run
+
+python render_shot.py --name shot001 --output-dir C:/output/hero_sprites \
+    --checkpoint graphicNovelStyleXL.safetensors --lora-name gn_ink_v2.safetensors \
+    --controlnet-normal-model control-normal-xl.safetensors \
+    --controlnet-depth-model control-depth-xl.safetensors \
+    --controlnet-lineart-model control-lineart-xl.safetensors
+```
+
+All spec fields (resolution, engine, quality preset, camera labels, ComfyUI
+checkpoint/LoRA/ControlNet models and weights, prompts) are plain CLI flags
+instead -- run `python render_shot.py --help` for the full list. `--camera
+front|back|both` (default `both`), `--stage all|render|stylize`, `--force`,
+and `--dry-run` work the same as `main.py`. Outputs land in the same
+`<output_dir>/renders/<name>/...` / `<output_dir>/stylized/<name>/...`
+layout as the batch pipeline (with `<name>` in place of `<combo_id>`), so a
+one-off shot and a batch run can safely share an `output_dir`, and both are
+resumable the same way (skip if the output file already exists).
+
 Both stages are resumable: before doing any unit of work (one combo x one
 camera x one stage) they check whether the output file already exists and
 skip if so. There is no separate manifest -- a plain rerun of the same

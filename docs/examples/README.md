@@ -606,7 +606,13 @@ python main.py --spec spec.json --stage stylize --force
 ```
 
 See [`sprite_matrix/README.md`](sprite_matrix/README.md) for the full JSON
-spec schema and output layout.
+spec schema and output layout. For a one-off shot with no JSON spec and no
+pose/expression preset library -- assumes the pose is already set up by hand
+and starts directly at the render step -- use `render_shot.py` instead:
+
+```bash
+python render_shot.py --name shot001 --output-dir C:/output/hero_sprites --dry-run
+```
 
 **SDK features demonstrated:** `DazRenderSettings` (canvases/AOVs),
 `DazPose`, `DazSceneState`, `DazScene.find_skeleton_by_label()`.
