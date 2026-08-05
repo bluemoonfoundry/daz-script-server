@@ -50,6 +50,7 @@ Start with `fundamentals/raw_script.py` if you are new to the SDK.
 | [scene_to_usd.py](#scene_to_usdpy) | export | Exports the live scene to a Pixar USD file (meshes, UVs, cameras, lights, hair) | No |
 | [capture_viewport.py](#capture_viewportpy) | rendering | Captures the OpenGL viewport as a screenshot or transparent sprite PNG | No |
 | [comfyui_enhance/main.py](#comfyui_enhancemainpy) | rendering | Captures a viewport snapshot and enhances it via a ComfyUI img2img workflow | No |
+| [sprite_matrix/main.py](#sprite_matrixmainpy) | rendering | Batch-renders a pose x expression matrix (front + back camera) for one sprite and stylizes each via a ComfyUI multi-ControlNet graphic-novel workflow | Yes |
 | [turntable.py](#turntablepy) | rendering | Renders a 360° turntable by stepping Y rotation across N frames | Yes |
 | [multi_camera_render.py](#multi_camera_renderpy) | rendering | Renders from every camera in the scene to separate files | Yes |
 | [material_color_variations.py](#material_color_variationspy) | rendering | Renders the same scene with a list of diffuse colour swatches | Yes |
@@ -560,6 +561,55 @@ python main.py --dry-run --output C:/tmp/enhanced.png
 | `--dry-run` | off | Print plan without executing |
 
 **SDK features demonstrated:** `DazViewport.capture()`, `DazClient`.
+
+---
+
+### sprite_matrix/main.py
+
+Production pipeline for one sprite: given a scene with the sprite already
+loaded (a specific outfit, A-pose) and a JSON spec describing a matrix of
+pose x expression combinations, renders front and over-the-shoulder (back)
+camera angles for every combo -- beauty image plus Normal/Depth Iray Canvas
+passes -- then stylizes each render into a "graphic-novel naturalism" look
+via a ComfyUI multi-ControlNet (normal, depth, lineart) + LoRA img2img
+workflow. Both stages are resumable (skip-by-file-existence), so a plain
+rerun after a crash or partial failure is self-healing.
+
+**Prerequisites:**
+- DAZ Studio running with the DazScriptServer plugin, sprite scene already
+  open with two named cameras (front + back/OTS)
+- ComfyUI running locally at `http://127.0.0.1:8188` with your graphic-novel
+  checkpoint, LoRA, and normal/depth/lineart ControlNet models installed
+- Pose and expression presets pre-authored via `author_pose_preset.py` /
+  `author_expression_preset.py`
+
+**Dependencies:**
+```bash
+pip install -r sprite_matrix/requirements.txt
+```
+
+```bash
+cd docs/examples/rendering/sprite_matrix
+
+# Author presets by hand, once, ahead of a batch run
+python author_pose_preset.py --name standing_neutral --figure "Genesis 9" --library C:/presets/poses
+python author_expression_preset.py --name calm --figure "Genesis 9" --library C:/presets/expressions
+
+# Validate the spec and preview the work plan without touching either server
+python main.py --spec spec.json --dry-run
+
+# Full run: render then stylize every combo x camera
+python main.py --spec spec.json
+
+# Iterate on ComfyUI prompt/LoRA tuning without re-rendering Daz
+python main.py --spec spec.json --stage stylize --force
+```
+
+See [`sprite_matrix/README.md`](sprite_matrix/README.md) for the full JSON
+spec schema and output layout.
+
+**SDK features demonstrated:** `DazRenderSettings` (canvases/AOVs),
+`DazPose`, `DazSceneState`, `DazScene.find_skeleton_by_label()`.
 
 ---
 

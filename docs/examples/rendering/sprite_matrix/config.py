@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+
+def _read_daz_token() -> str:
+    token_path = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+    try:
+        with open(token_path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+@dataclass
+class ControlNetPassConfig:
+    weight: float = 0.5
+    model: str = ""
+
+
+@dataclass
+class ComfyUIStageConfig:
+    checkpoint: str = "graphicNovelStyleXL.safetensors"
+    lora_name: str = ""
+    lora_strength: float = 0.8
+    denoise: float = 0.35
+    base_seed: int = 0
+    steps: int = 24
+    cfg: float = 7.0
+    controlnet_normal: ControlNetPassConfig = field(
+        default_factory=lambda: ControlNetPassConfig(weight=0.6)
+    )
+    controlnet_depth: ControlNetPassConfig = field(
+        default_factory=lambda: ControlNetPassConfig(weight=0.5)
+    )
+    controlnet_lineart: ControlNetPassConfig = field(
+        default_factory=lambda: ControlNetPassConfig(weight=0.4)
+    )
+    positive_prompt: str = (
+        "graphic novel illustration, bold ink linework, cel-shaded, "
+        "dramatic hatching, naturalistic proportions"
+    )
+    negative_prompt: str = "photorealistic, 3d render, blurry, watermark"
+
+
+@dataclass
+class RenderStageConfig:
+    width: int = 1536
+    height: int = 2048
+    engine: str = "iray"
+    quality_preset: str = "good"
+    canvases: tuple[str, ...] = ("Normal", "Depth")
+
+
+@dataclass
+class PipelineConfig:
+    scene_path: str = ""
+    figure_label: str = ""
+    output_dir: str = ""
+    pose_library_dir: str = ""
+    expression_library_dir: str = ""
+    camera_front_label: str = "Character Camera - Front"
+    camera_back_label: str = "Character Camera - Back"
+
+    daz_url: str = "http://127.0.0.1:18811"
+    daz_token: str = field(default_factory=_read_daz_token)
+    daz_render_timeout_secs: float = 3700.0
+    comfyui_url: str = "http://127.0.0.1:8188"
+
+    render: RenderStageConfig = field(default_factory=RenderStageConfig)
+    comfyui: ComfyUIStageConfig = field(default_factory=ComfyUIStageConfig)
+
+    combos: list = field(default_factory=list)
+
+    def camera_label(self, camera: str) -> str:
+        if camera == "front":
+            return self.camera_front_label
+        if camera == "back":
+            return self.camera_back_label
+        raise ValueError(f"Unknown camera {camera!r}; expected 'front' or 'back'")
+
+
+CAMERAS: tuple[str, ...] = ("front", "back")

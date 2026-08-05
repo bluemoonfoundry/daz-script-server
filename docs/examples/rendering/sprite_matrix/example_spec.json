@@ -1,0 +1,43 @@
+{
+  "scene_path": "C:/scenes/hero_a_pose.duf",
+  "sprite": { "figure_label": "Genesis 9" },
+  "output_dir": "output",
+  "pose_library_dir": "example_presets/poses",
+  "expression_library_dir": "example_presets/expressions",
+  "cameras": {
+    "front": { "label": "Character Camera - Front" },
+    "back": { "label": "Character Camera - Back" }
+  },
+  "render": {
+    "width": 1536,
+    "height": 2048,
+    "engine": "iray",
+    "quality_preset": "good",
+    "canvases": ["Normal", "Depth"]
+  },
+  "comfyui": {
+    "checkpoint": "graphicNovelStyleXL.safetensors",
+    "lora": { "name": "gn_ink_v2.safetensors", "strength": 0.8 },
+    "denoise": 0.35,
+    "base_seed": 1000,
+    "steps": 24,
+    "cfg": 7.0,
+    "controlnet": {
+      "normal": { "weight": 0.6, "model": "control-normal-xl.safetensors" },
+      "depth": { "weight": 0.5, "model": "control-depth-xl.safetensors" },
+      "lineart": { "weight": 0.4, "model": "control-lineart-xl.safetensors" }
+    },
+    "positive_prompt": "graphic novel illustration, bold ink linework, cel-shaded, dramatic hatching, naturalistic proportions",
+    "negative_prompt": "photorealistic, 3d render, blurry, watermark"
+  },
+  "combos": [
+    { "pose": "standing_neutral", "expression": "calm" },
+    { "pose": "combat_ready", "expression": "angry" },
+    {
+      "pose": "combat_ready",
+      "expression": "angry",
+      "id": "combat_ready__angry__intense",
+      "overrides": { "morphs": { "Brow Lower": 0.9 } }
+    }
+  ]
+}

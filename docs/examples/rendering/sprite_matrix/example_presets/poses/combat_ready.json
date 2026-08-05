@@ -1,0 +1,10 @@
+{
+  "figure": "Genesis 9",
+  "bones": {
+    "lShldrBend": [0, 0, -25],
+    "rShldrBend": [0, 0, 25],
+    "hip": [0, 0, 0]
+  },
+  "morphs": {},
+  "props": {}
+}

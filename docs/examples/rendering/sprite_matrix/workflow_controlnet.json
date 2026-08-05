@@ -1,0 +1,137 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "__CHECKPOINT__"
+    }
+  },
+  "1b": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["1", 1],
+      "lora_name": "__LORA_NAME__",
+      "strength_model": "__LORA_STRENGTH__",
+      "strength_clip": "__LORA_STRENGTH__"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__INPUT_IMAGE__"
+    }
+  },
+  "3": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["2", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__POSITIVE_PROMPT__",
+      "clip": ["1b", 1]
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__NEGATIVE_PROMPT__",
+      "clip": ["1b", 1]
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__NORMAL_IMAGE__"
+    }
+  },
+  "21": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "__CONTROLNET_NORMAL_MODEL__"
+    }
+  },
+  "22": {
+    "class_type": "ControlNetApply",
+    "inputs": {
+      "conditioning": ["4", 0],
+      "control_net": ["21", 0],
+      "image": ["20", 0],
+      "strength": "__CONTROLNET_NORMAL_WEIGHT__"
+    }
+  },
+  "30": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__DEPTH_IMAGE__"
+    }
+  },
+  "31": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "__CONTROLNET_DEPTH_MODEL__"
+    }
+  },
+  "32": {
+    "class_type": "ControlNetApply",
+    "inputs": {
+      "conditioning": ["22", 0],
+      "control_net": ["31", 0],
+      "image": ["30", 0],
+      "strength": "__CONTROLNET_DEPTH_WEIGHT__"
+    }
+  },
+  "40": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__LINEART_IMAGE__"
+    }
+  },
+  "41": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "__CONTROLNET_LINEART_MODEL__"
+    }
+  },
+  "42": {
+    "class_type": "ControlNetApply",
+    "inputs": {
+      "conditioning": ["32", 0],
+      "control_net": ["41", 0],
+      "image": ["40", 0],
+      "strength": "__CONTROLNET_LINEART_WEIGHT__"
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1b", 0],
+      "positive": ["42", 0],
+      "negative": ["5", 0],
+      "latent_image": ["3", 0],
+      "seed": 0,
+      "steps": "__STEPS__",
+      "cfg": "__CFG__",
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": "__DENOISE__"
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["6", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["7", 0],
+      "filename_prefix": "sprite_matrix"
+    }
+  }
+}
