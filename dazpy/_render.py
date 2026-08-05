@@ -582,7 +582,9 @@ class DazRenderSettings:
         """)
         self._client.execute(script)
 
-    def render(self, camera_name: str | None = None) -> RenderOutcome:
+    def render(
+        self, camera_name: str | None = None, camera_label: str | None = None
+    ) -> RenderOutcome:
         """Render the scene to :attr:`output_path`.
 
         DAZ Studio's ``doRender()`` only writes to disk when ``renderImgToId`` is set
@@ -590,15 +592,34 @@ class DazRenderSettings:
         render options and the active viewport before the call.
 
         Args:
-            camera_name: Internal name of the camera node to render from.  When
-                omitted the active viewport camera is used.
+            camera_name: Internal name of the camera node to render from.
+                Internal names are not guaranteed unique -- e.g. duplicating a
+                camera node in the Scene panel copies its internal name too,
+                only the display label is forced unique -- so this can
+                silently resolve to the wrong node when duplicates exist.
+                Prefer *camera_label* unless you specifically need
+                name-based lookup. Mutually exclusive with *camera_label*.
+            camera_label: User-visible label of the camera node to render
+                from (the same value shown in the Scene panel, resolved via
+                ``Scene.findCameraByLabel()``). Labels are kept unique by
+                DAZ Studio even when internal names collide, so this is the
+                more reliable way to target a specific camera. Mutually
+                exclusive with *camera_name*. When neither is given the
+                active viewport camera is used.
 
         Returns:
             A :class:`RenderOutcome` with ``success`` and the resolved
             ``output_path`` actually written by ``doRender()``
             (``opts.renderImgFilename`` after the call).
+
+        Raises:
+            ValueError: If both *camera_name* and *camera_label* are given.
         """
-        if camera_name is not None:
+        if camera_name is not None and camera_label is not None:
+            raise ValueError("Pass at most one of camera_name or camera_label")
+        if camera_label is not None:
+            cam_expr = f"Scene.findCameraByLabel({json.dumps(camera_label)})"
+        elif camera_name is not None:
             cam_expr = f"Scene.findCamera({json.dumps(camera_name)})"
         else:
             cam_expr = (

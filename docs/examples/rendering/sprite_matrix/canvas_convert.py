@@ -11,6 +11,12 @@ from __future__ import annotations
 
 import os
 
+# The official opencv-python wheel ships OpenEXR support disabled by default
+# (hardening after historical OpenEXR CVEs) -- must opt in before cv2 loads
+# its codec plugins. Safe here: these EXRs are Iray Canvas outputs this
+# pipeline renders itself, not untrusted input.
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+
 import cv2
 import numpy as np
 

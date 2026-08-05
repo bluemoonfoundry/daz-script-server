@@ -42,9 +42,21 @@ def build_controlnet_workflow(
     workflow = copy.deepcopy(workflow)
 
     workflow["1"]["inputs"]["ckpt_name"] = checkpoint_name
-    workflow["1b"]["inputs"]["lora_name"] = lora_name
-    workflow["1b"]["inputs"]["strength_model"] = float(lora_strength)
-    workflow["1b"]["inputs"]["strength_clip"] = float(lora_strength)
+
+    if lora_name:
+        workflow["1b"]["inputs"]["lora_name"] = lora_name
+        workflow["1b"]["inputs"]["strength_model"] = float(lora_strength)
+        workflow["1b"]["inputs"]["strength_clip"] = float(lora_strength)
+    else:
+        # ComfyUI's LoraLoader has no valid empty-string option when zero
+        # LoRAs are installed (its dropdown enum is simply []), so an unused
+        # loader node fails prompt validation outright rather than being a
+        # harmless no-op. Drop the node and rewire its consumers straight to
+        # the checkpoint's MODEL/CLIP outputs instead.
+        del workflow["1b"]
+        workflow["4"]["inputs"]["clip"] = ["1", 1]
+        workflow["5"]["inputs"]["clip"] = ["1", 1]
+        workflow["6"]["inputs"]["model"] = ["1", 0]
 
     workflow["2"]["inputs"]["image"] = beauty_image_ref
     workflow["20"]["inputs"]["image"] = normal_image_ref

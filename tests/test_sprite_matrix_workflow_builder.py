@@ -120,6 +120,25 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
         self.assertAlmostEqual(wf2["6"]["inputs"]["denoise"], 0.9)
 
 
+class TestBuildControlnetWorkflowNoLora(unittest.TestCase):
+    """ComfyUI's LoraLoader rejects an empty lora_name outright when zero
+    LoRAs are installed (its dropdown enum is []), so the node must be
+    dropped entirely rather than wired in with an empty string."""
+
+    def setUp(self):
+        self.wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "lora_name": ""})
+
+    def test_lora_node_absent(self):
+        self.assertNotIn("1b", self.wf)
+        types = {v["class_type"] for v in self.wf.values()}
+        self.assertNotIn("LoraLoader", types)
+
+    def test_consumers_rewired_to_checkpoint(self):
+        self.assertEqual(self.wf["4"]["inputs"]["clip"], ["1", 1])
+        self.assertEqual(self.wf["5"]["inputs"]["clip"], ["1", 1])
+        self.assertEqual(self.wf["6"]["inputs"]["model"], ["1", 0])
+
+
 class TestStableSeed(unittest.TestCase):
     def test_deterministic_for_same_inputs(self):
         s1 = stable_seed(1000, "combo_a", "front")

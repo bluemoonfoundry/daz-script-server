@@ -126,7 +126,7 @@ def render_shot(args: argparse.Namespace, canvases: tuple[str, ...]) -> bool:
         t0 = time.monotonic()
         try:
             rs.output_path = out_path
-            outcome = rs.render(camera_name=_camera_label(args, camera))
+            outcome = rs.render(camera_label=_camera_label(args, camera))
             if not outcome.success:
                 raise RuntimeError(f"doRender() reported failure (output_path={outcome.output_path!r})")
         except Exception as exc:  # noqa: BLE001 - continue-and-log per camera

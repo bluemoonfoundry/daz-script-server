@@ -1302,6 +1302,25 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertIn("doRender", script)
         self.assertNotIn("mgr.render()", script)
 
+    def test_render_camera_name_uses_findCamera(self):
+        rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
+        rs.render(camera_name="Camera")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.findCamera(", script)
+        self.assertNotIn("findCameraByLabel", script)
+
+    def test_render_camera_label_uses_findCameraByLabel(self):
+        rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
+        rs.render(camera_label="Front Camera")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.findCameraByLabel(", script)
+        self.assertIn("Front Camera", script)
+
+    def test_render_camera_name_and_label_mutually_exclusive(self):
+        rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
+        with self.assertRaises(ValueError):
+            rs.render(camera_name="Camera", camera_label="Front Camera")
+
     def test_render_returns_failure_outcome_when_doRender_fails(self):
         from dazpy._render import RenderOutcome
         rs, client = self._make_render(

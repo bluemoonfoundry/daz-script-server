@@ -104,7 +104,7 @@ def run_render_stage(
             out_path = paths.beauty_path(cfg.output_dir, combo.id, camera)
             _ensure_parent_dir(out_path)
             rs.output_path = out_path
-            outcome = rs.render(camera_name=cfg.camera_label(camera))
+            outcome = rs.render(camera_label=cfg.camera_label(camera))
             if not outcome.success:
                 raise RuntimeError(f"doRender() reported failure (output_path={outcome.output_path!r})")
         except Exception as exc:  # noqa: BLE001 - continue-and-log per unit
