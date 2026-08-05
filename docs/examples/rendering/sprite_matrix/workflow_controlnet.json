@@ -154,10 +154,42 @@
       "labels": "all"
     }
   },
+  "67": {
+    "class_type": "SAMLoader",
+    "inputs": {
+      "model_name": "sam_vit_b_01ec64.pth",
+      "device_mode": "AUTO"
+    }
+  },
+  "68": {
+    "class_type": "SAMDetectorCombined",
+    "inputs": {
+      "sam_model": ["67", 0],
+      "segs": ["62", 0],
+      "image": ["7", 0],
+      "detection_hint": "center-1",
+      "dilation": 60,
+      "threshold": 0.5,
+      "bbox_expansion": 80,
+      "mask_hint_threshold": 0.7,
+      "mask_hint_use_negative": "False"
+    }
+  },
+  "69": {
+    "class_type": "MaskToSEGS",
+    "inputs": {
+      "mask": ["68", 0],
+      "combined": false,
+      "crop_factor": 3.0,
+      "bbox_fill": false,
+      "drop_size": 10,
+      "contour_fill": false
+    }
+  },
   "63": {
     "class_type": "SetDefaultImageForSEGS",
     "inputs": {
-      "segs": ["62", 0],
+      "segs": ["69", 0],
       "image": ["2", 0],
       "override": true
     }

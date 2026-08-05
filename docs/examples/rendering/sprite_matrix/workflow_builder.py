@@ -97,12 +97,21 @@ def build_controlnet_workflow(
         # coordinate space -- then SEGSPaste composites it back into the
         # stylized body with feathering.
         #
-        # The face detector's bbox only covers eyes/nose/mouth/forehead, not
-        # the crown of the hair, so a small dilation leaves a visible color
-        # seam at the hairline (the un-refined main pass invents its own
-        # hair color above the pasted region) -- confirmed live. A generous
-        # bbox_dilation pushes the refined/pasted region up through the
-        # whole head.
+        # UltralyticsDetectorProvider's face_yolov8m.pt is bbox-only (no real
+        # segmentation), so BboxDetectorSEGS's mask is a plain rectangle.
+        # That caused two live-confirmed problems: too small a dilation
+        # leaves a color seam at the hairline (the un-refined main pass
+        # invents its own hair color above the pasted rectangle), but
+        # enlarging dilation enough to cover the hair also pulls in
+        # surrounding black background, which SEGSDetailer then subtly
+        # re-stylizes into a visible rectangular "box" against the clean
+        # main-pass background. Fix: refine that rectangular hint into an
+        # actual head/hair silhouette via SAM (SAMLoader + SAMDetectorCombined
+        # + MaskToSEGS) before SetDefaultImageForSEGS/SEGSDetailer -- the
+        # dilation/bbox_expansion below are just how generous a hint SAM gets
+        # to work with, not the final replaced region, so they can stay
+        # large enough to include the whole head without leaking into
+        # background.
         workflow["62"]["inputs"]["dilation"] = int(face_detailer_bbox_dilation)
         workflow["64"]["inputs"]["model"] = face_model_ref
         workflow["64"]["inputs"]["clip"] = face_clip_ref
@@ -113,7 +122,7 @@ def build_controlnet_workflow(
         workflow["65"]["inputs"]["seed"] = int(seed)
         workflow["8"]["inputs"]["images"] = ["66", 0]
     else:
-        for node_id in ("60", "62", "63", "64", "65", "66"):
+        for node_id in ("60", "62", "63", "64", "65", "66", "67", "68", "69"):
             del workflow[node_id]
 
     return workflow

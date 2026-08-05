@@ -27,10 +27,19 @@ camera angles for every combo, then stylizes each render into a
    face recognizable, so it detects the face in the stylized output, but
    then re-stylizes a crop taken from the *original* Daz beauty render (not
    the already-stylized image) at a lower denoise, and pastes it back in.
-   Requires ComfyUI's Impact Pack with the separately-installed
+   Because the face detector (`UltralyticsDetectorProvider`/
+   `bbox/face_yolov8m.pt`) only produces a rectangular bounding box, that
+   rectangle is refined into an actual head/hair silhouette via SAM
+   (`SAMLoader` + `SAMDetectorCombined` + `MaskToSEGS`) before the crop-swap
+   -- a plain rectangular mask either cuts off the hair (leaving a
+   hair-color seam at the boundary) or, if dilated enough to cover it,
+   pulls in surrounding background that gets subtly re-stylized into a
+   visible box artifact. Both were confirmed live before adding the SAM
+   step. Requires ComfyUI's Impact Pack with the separately-installed
    [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
-   (`UltralyticsDetectorProvider`) and a `bbox/face_yolov8m.pt` model in
-   `models/ultralytics/bbox/`.
+   (`UltralyticsDetectorProvider`), a `bbox/face_yolov8m.pt` model in
+   `models/ultralytics/bbox/`, and a SAM model (e.g.
+   `sam_vit_b_01ec64.pth`) in `models/sams/`.
 
 ### Single-shot variant (`render_shot.py`)
 
@@ -77,8 +86,10 @@ command is self-healing after a crash or partial failure.
   lineart) via ComfyUI's `SetUnionControlNetType` node.
 - For the face identity pass (on by default): ComfyUI's Impact Pack plus the
   separately-installed [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
-  custom node (provides `UltralyticsDetectorProvider`) and a
-  `bbox/face_yolov8m.pt` model in `models/ultralytics/bbox/`. Disable via
+  custom node (provides `UltralyticsDetectorProvider`), a
+  `bbox/face_yolov8m.pt` model in `models/ultralytics/bbox/`, and a SAM
+  model (e.g. `sam_vit_b_01ec64.pth`, loadable via Impact Pack's built-in
+  `SAMLoader`) in `models/sams/`. Disable via
   `comfyui.face_detailer.enabled: false` in the spec, or
   `--no-face-detailer` for `render_shot.py`, if these aren't installed.
 - `pip install -r requirements.txt` (plus `dazpy` itself).

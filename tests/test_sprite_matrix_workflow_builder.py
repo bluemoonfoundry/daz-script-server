@@ -45,7 +45,7 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
         for key in (
             "1", "1b", "2", "3", "4", "5", "6", "7", "8",
             "20", "21", "22", "30", "31", "32", "40", "41", "42", "50",
-            "60", "62", "63", "64", "65", "66",
+            "60", "62", "63", "64", "65", "66", "67", "68", "69",
         ):
             self.assertIn(key, self.wf, f"Missing node {key}")
 
@@ -65,6 +65,9 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
             "SaveImage",
             "UltralyticsDetectorProvider",
             "BboxDetectorSEGS",
+            "SAMLoader",
+            "SAMDetectorCombined",
+            "MaskToSEGS",
             "SetDefaultImageForSEGS",
             "ToBasicPipe",
             "SEGSDetailer",
@@ -177,10 +180,26 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         # low-denoise refine of the wrong face would just polish the wrong
         # face rather than pull it back toward the real identity.
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
-        self.assertEqual(wf["63"]["inputs"]["segs"], ["62", 0])
+        self.assertEqual(wf["63"]["inputs"]["segs"], ["69", 0])
         self.assertEqual(wf["63"]["inputs"]["image"], ["2", 0])
         self.assertTrue(wf["63"]["inputs"]["override"])
         self.assertEqual(wf["65"]["inputs"]["segs"], ["63", 0])
+
+    def test_sam_refines_bbox_into_precise_silhouette(self):
+        # UltralyticsDetectorProvider's face_yolov8m.pt is bbox-only, so
+        # BboxDetectorSEGS's mask is a plain rectangle. A dilation generous
+        # enough to cover the hair also pulls in surrounding background,
+        # which SEGSDetailer then visibly re-stylizes into a rectangular
+        # "box" artifact against the clean background (confirmed live).
+        # SAM refines that rectangular hint into an actual head/hair
+        # silhouette before the crop-source swap.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["67"]["inputs"]["model_name"], "sam_vit_b_01ec64.pth")
+        self.assertEqual(wf["68"]["inputs"]["sam_model"], ["67", 0])
+        self.assertEqual(wf["68"]["inputs"]["segs"], ["62", 0])
+        self.assertEqual(wf["68"]["inputs"]["image"], ["7", 0])
+        self.assertEqual(wf["69"]["inputs"]["mask"], ["68", 0])
+        self.assertFalse(wf["69"]["inputs"]["bbox_fill"])
 
     def test_wired_to_lora_model_and_clip_when_lora_present(self):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
@@ -223,11 +242,14 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
 
     def test_disabled_removes_nodes_and_reverts_save_image(self):
         wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "face_detailer_enabled": False})
-        for node_id in ("60", "62", "63", "64", "65", "66"):
+        for node_id in ("60", "62", "63", "64", "65", "66", "67", "68", "69"):
             self.assertNotIn(node_id, wf)
         self.assertEqual(wf["8"]["inputs"]["images"], ["7", 0])
         types = {v["class_type"] for v in wf.values()}
-        for class_type in ("UltralyticsDetectorProvider", "BboxDetectorSEGS", "SEGSDetailer", "SEGSPaste"):
+        for class_type in (
+            "UltralyticsDetectorProvider", "BboxDetectorSEGS", "SAMLoader",
+            "SAMDetectorCombined", "MaskToSEGS", "SEGSDetailer", "SEGSPaste",
+        ):
             self.assertNotIn(class_type, types)
 
 
