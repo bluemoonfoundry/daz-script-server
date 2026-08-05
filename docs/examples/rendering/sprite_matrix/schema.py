@@ -134,6 +134,10 @@ def load_spec(path: str | Path) -> PipelineConfig:
     if not controlnet_model:
         errors.append("comfyui.controlnet.model is required")
 
+    face_detailer_raw = comfy_raw.get("face_detailer", {})
+    face_detailer_denoise = face_detailer_raw.get("denoise", 0.25)
+    _require_unit_range(face_detailer_denoise, "comfyui.face_detailer.denoise", errors)
+
     comfy_cfg = ComfyUIStageConfig(
         checkpoint=comfy_raw.get("checkpoint", "graphicNovelStyleXL.safetensors"),
         lora_name=lora_raw.get("name", ""),
@@ -146,6 +150,9 @@ def load_spec(path: str | Path) -> PipelineConfig:
         controlnet_normal=_parse_controlnet_pass(controlnet_raw.get("normal", {}), "normal", errors),
         controlnet_depth=_parse_controlnet_pass(controlnet_raw.get("depth", {}), "depth", errors),
         controlnet_lineart=_parse_controlnet_pass(controlnet_raw.get("lineart", {}), "lineart", errors),
+        face_detailer_enabled=bool(face_detailer_raw.get("enabled", True)),
+        face_detailer_denoise=float(face_detailer_denoise),
+        face_detailer_guide_size=float(face_detailer_raw.get("guide_size", 512.0)),
         positive_prompt=comfy_raw.get("positive_prompt", ComfyUIStageConfig.positive_prompt),
         negative_prompt=comfy_raw.get("negative_prompt", ComfyUIStageConfig.negative_prompt),
     )

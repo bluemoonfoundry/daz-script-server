@@ -136,6 +136,73 @@
       "vae": ["1", 2]
     }
   },
+  "60": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "bbox/face_yolov8m.pt"
+    }
+  },
+  "62": {
+    "class_type": "BboxDetectorSEGS",
+    "inputs": {
+      "bbox_detector": ["60", 0],
+      "image": ["7", 0],
+      "threshold": 0.5,
+      "dilation": 10,
+      "crop_factor": 3.0,
+      "drop_size": 10,
+      "labels": "all"
+    }
+  },
+  "63": {
+    "class_type": "SetDefaultImageForSEGS",
+    "inputs": {
+      "segs": ["62", 0],
+      "image": ["2", 0],
+      "override": true
+    }
+  },
+  "64": {
+    "class_type": "ToBasicPipe",
+    "inputs": {
+      "model": ["1b", 0],
+      "clip": ["1b", 1],
+      "vae": ["1", 2],
+      "positive": ["4", 0],
+      "negative": ["5", 0]
+    }
+  },
+  "65": {
+    "class_type": "SEGSDetailer",
+    "inputs": {
+      "image": ["7", 0],
+      "segs": ["63", 0],
+      "guide_size": "__FACE_DETAILER_GUIDE_SIZE__",
+      "guide_size_for": true,
+      "max_size": 1024,
+      "seed": 0,
+      "steps": "__STEPS__",
+      "cfg": "__CFG__",
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": "__FACE_DETAILER_DENOISE__",
+      "noise_mask": true,
+      "force_inpaint": true,
+      "basic_pipe": ["64", 0],
+      "refiner_ratio": 0.2,
+      "batch_size": 1,
+      "cycle": 1
+    }
+  },
+  "66": {
+    "class_type": "SEGSPaste",
+    "inputs": {
+      "image": ["7", 0],
+      "segs": ["65", 0],
+      "feather": 5,
+      "alpha": 255
+    }
+  },
   "8": {
     "class_type": "SaveImage",
     "inputs": {

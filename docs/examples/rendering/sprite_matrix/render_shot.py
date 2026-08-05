@@ -84,6 +84,22 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--controlnet-depth-weight", type=float, default=comfy_defaults.controlnet_depth.weight)
     p.add_argument("--controlnet-lineart-weight", type=float, default=comfy_defaults.controlnet_lineart.weight)
 
+    p.add_argument(
+        "--face-detailer",
+        dest="face_detailer_enabled",
+        action="store_true",
+        default=comfy_defaults.face_detailer_enabled,
+        help="Enable the FaceDetailer second pass (crop+refine the face at lower denoise for identity retention)",
+    )
+    p.add_argument(
+        "--no-face-detailer",
+        dest="face_detailer_enabled",
+        action="store_false",
+        help="Disable the FaceDetailer second pass",
+    )
+    p.add_argument("--face-detailer-denoise", type=float, default=comfy_defaults.face_detailer_denoise)
+    p.add_argument("--face-detailer-guide-size", type=float, default=comfy_defaults.face_detailer_guide_size)
+
     return p.parse_args()
 
 
@@ -193,6 +209,9 @@ def stylize_shot(args: argparse.Namespace) -> bool:
                 controlnet_normal_weight=args.controlnet_normal_weight,
                 controlnet_depth_weight=args.controlnet_depth_weight,
                 controlnet_lineart_weight=args.controlnet_lineart_weight,
+                face_detailer_enabled=args.face_detailer_enabled,
+                face_detailer_denoise=args.face_detailer_denoise,
+                face_detailer_guide_size=args.face_detailer_guide_size,
             )
             prompt_id = comfy.queue_prompt(workflow)
             comfy.save_result(prompt_id, out_path, timeout=300.0)

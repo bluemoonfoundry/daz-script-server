@@ -21,6 +21,16 @@ camera angles for every combo, then stylizes each render into a
    (e.g. `controlnet-union-sdxl-1.0.safetensors`), loaded once and re-tagged
    per pass via ComfyUI's `SetUnionControlNetType` node (`normal`, `depth`,
    `canny/lineart/anime_lineart/mlsd`) -- not three separate per-type models.
+3. **Face identity pass** (enabled by default, `comfyui.face_detailer` in the
+   spec / `--face-detailer`/`--no-face-detailer` for `render_shot.py`): the
+   main pass has little resolution or conditioning signal to keep a small
+   face recognizable, so it detects the face in the stylized output, but
+   then re-stylizes a crop taken from the *original* Daz beauty render (not
+   the already-stylized image) at a lower denoise, and pastes it back in.
+   Requires ComfyUI's Impact Pack with the separately-installed
+   [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
+   (`UltralyticsDetectorProvider`) and a `bbox/face_yolov8m.pt` model in
+   `models/ultralytics/bbox/`.
 
 ### Single-shot variant (`render_shot.py`)
 
@@ -65,6 +75,12 @@ command is self-healing after a crash or partial failure.
   and an SDXL union ControlNet model (e.g. `controlnet-union-sdxl-1.0.safetensors`)
   installed -- one model conditions all three passes (normal, depth,
   lineart) via ComfyUI's `SetUnionControlNetType` node.
+- For the face identity pass (on by default): ComfyUI's Impact Pack plus the
+  separately-installed [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
+  custom node (provides `UltralyticsDetectorProvider`) and a
+  `bbox/face_yolov8m.pt` model in `models/ultralytics/bbox/`. Disable via
+  `comfyui.face_detailer.enabled: false` in the spec, or
+  `--no-face-detailer` for `render_shot.py`, if these aren't installed.
 - `pip install -r requirements.txt` (plus `dazpy` itself).
 
 ## Authoring pose and expression presets
@@ -97,8 +113,10 @@ See `example_spec.json` for a full example. Key fields:
 - `render` -- resolution, engine, Iray quality preset, and which canvases
   (AOVs) to render (`Normal`, `Depth`).
 - `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, prompts,
-  and `controlnet` (a single union `model` shared by all three passes plus
-  per-pass `normal`/`depth`/`lineart` `weight`).
+  `controlnet` (a single union `model` shared by all three passes plus
+  per-pass `normal`/`depth`/`lineart` `weight`), and `face_detailer`
+  (`enabled`, `denoise`, `guide_size` -- the identity-preservation pass;
+  defaults to on with `denoise: 0.25`).
 - `combos` -- an explicit list of `{pose, expression, overrides?, id?}`
   entries (not a pose x expression cross product). `pose` and `expression`
   must resolve to files in the preset libraries. `overrides` is an optional

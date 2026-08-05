@@ -40,6 +40,13 @@ class ComfyUIStageConfig:
     controlnet_lineart: ControlNetPassConfig = field(
         default_factory=lambda: ControlNetPassConfig(weight=0.4)
     )
+    # FaceDetailer second pass: detects the face in the stylized output,
+    # crops+upscales it, and re-runs KSampler on just that region at a lower
+    # denoise than the main pass -- keeps identity closer to the real
+    # Daz-rendered face. See workflow_builder.py.
+    face_detailer_enabled: bool = True
+    face_detailer_denoise: float = 0.25
+    face_detailer_guide_size: float = 512.0
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"

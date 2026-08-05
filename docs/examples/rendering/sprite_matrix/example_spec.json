@@ -28,6 +28,11 @@
       "depth": { "weight": 0.5 },
       "lineart": { "weight": 0.4 }
     },
+    "face_detailer": {
+      "enabled": true,
+      "denoise": 0.25,
+      "guide_size": 512
+    },
     "positive_prompt": "graphic novel illustration, bold ink linework, cel-shaded, dramatic hatching, naturalistic proportions",
     "negative_prompt": "photorealistic, 3d render, blurry, watermark"
   },

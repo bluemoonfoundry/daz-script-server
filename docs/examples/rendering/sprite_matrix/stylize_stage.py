@@ -108,6 +108,9 @@ def run_stylize_stage(
                 controlnet_normal_weight=cfg.comfyui.controlnet_normal.weight,
                 controlnet_depth_weight=cfg.comfyui.controlnet_depth.weight,
                 controlnet_lineart_weight=cfg.comfyui.controlnet_lineart.weight,
+                face_detailer_enabled=cfg.comfyui.face_detailer_enabled,
+                face_detailer_denoise=cfg.comfyui.face_detailer_denoise,
+                face_detailer_guide_size=cfg.comfyui.face_detailer_guide_size,
             )
             prompt_id = comfy.queue_prompt(workflow)
             comfy.save_result(prompt_id, out_path, timeout=300.0)
