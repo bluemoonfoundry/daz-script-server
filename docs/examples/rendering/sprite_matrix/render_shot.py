@@ -106,6 +106,13 @@ def _parse_args() -> argparse.Namespace:
         help="Pixels to dilate the detected face bbox before refining/pasting -- needs to be generous "
         "since the face detector's bbox stops at the hairline, otherwise a color seam appears there",
     )
+    p.add_argument(
+        "--face-detailer-faceid-weight",
+        type=float,
+        default=comfy_defaults.face_detailer_faceid_weight,
+        help="IPAdapter FaceID conditioning strength for the face-identity pass "
+        "(0 = no identity conditioning, higher = stronger identity lock)",
+    )
 
     return p.parse_args()
 
@@ -220,6 +227,7 @@ def stylize_shot(args: argparse.Namespace) -> bool:
                 face_detailer_denoise=args.face_detailer_denoise,
                 face_detailer_guide_size=args.face_detailer_guide_size,
                 face_detailer_bbox_dilation=args.face_detailer_bbox_dilation,
+                face_detailer_faceid_weight=args.face_detailer_faceid_weight,
             )
             prompt_id = comfy.queue_prompt(workflow)
             comfy.save_result(prompt_id, out_path, timeout=300.0)

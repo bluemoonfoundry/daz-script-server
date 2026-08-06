@@ -45,10 +45,10 @@ class ComfyUIStageConfig:
     # denoise than the main pass -- keeps identity closer to the real
     # Daz-rendered face. See workflow_builder.py.
     face_detailer_enabled: bool = True
-    # 0.15 chosen after live comparison against 0.25/0.15/0.10 side-by-side
-    # with the real Daz beauty render: 0.25 showed visible identity drift
-    # (heavier eyebrows, more angular jaw); 0.15 stayed close to the source
-    # while still keeping visible ink-line/cel-shaded stylization.
+    # Re-tuned in Task 7 of docs/superpowers/plans/2026-08-05-faceid-conditioning.md
+    # once FaceID conditioning decouples identity from denoise -- expected
+    # to land higher than the previous 0.15 (chosen back when low denoise
+    # was the only identity-preservation mechanism available).
     face_detailer_denoise: float = 0.15
     face_detailer_guide_size: float = 512.0
     # Bbox dilation (pixels) around the detected face region before
@@ -56,6 +56,11 @@ class ComfyUIStageConfig:
     # a generous dilation is needed to push the refined region up through
     # the whole head and avoid a visible hair-color seam at the boundary.
     face_detailer_bbox_dilation: int = 100
+    # IPAdapter FaceID's own conditioning strength (0 = no identity
+    # conditioning, higher = stronger identity lock at the cost of the
+    # model's freedom to stylize). Live-tuned in Task 7 alongside
+    # face_detailer_denoise -- the two interact.
+    face_detailer_faceid_weight: float = 1.0
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"
