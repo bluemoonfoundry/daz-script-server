@@ -122,7 +122,13 @@ def run_stylize_stage(
                     face_detailer_controlnet_lineart_weight=cfg.comfyui.face_detailer_controlnet_lineart_weight,
                 )
                 prompt_id = comfy.queue_prompt(workflow)
-                comfy.save_result(prompt_id, out_path, timeout=300.0)
+                # 600s, not 300s: under VRAM contention with other GPU
+                # processes (e.g. a live Daz Studio Iray session holding
+                # memory), ComfyUI falls back to slow "dynamic VRAM
+                # loading" model paging -- confirmed live, a single prompt
+                # took 513s under contention that normally completes in
+                # well under a minute.
+                comfy.save_result(prompt_id, out_path, timeout=600.0)
 
             try:
                 _run(cfg.comfyui.face_detailer_enabled)

@@ -252,7 +252,9 @@ def stylize_shot(args: argparse.Namespace) -> bool:
                     face_detailer_controlnet_lineart_weight=args.face_detailer_controlnet_lineart_weight,
                 )
                 prompt_id = comfy.queue_prompt(workflow)
-                comfy.save_result(prompt_id, out_path, timeout=300.0)
+                # See stylize_stage.py's run_stylize_stage for why this is
+                # 600s, not 300s.
+                comfy.save_result(prompt_id, out_path, timeout=600.0)
 
             note = ""
             try:
