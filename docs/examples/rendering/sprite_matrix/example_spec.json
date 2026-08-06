@@ -33,7 +33,10 @@
       "denoise": 0.35,
       "guide_size": 512,
       "bbox_dilation": 100,
-      "faceid_weight": 1.0
+      "faceid_weight": 1.0,
+      "controlnet_normal_weight": 1.0,
+      "controlnet_depth_weight": 0.8,
+      "controlnet_lineart_weight": 0.6
     },
     "positive_prompt": "graphic novel illustration, bold ink linework, cel-shaded, dramatic hatching, naturalistic proportions",
     "negative_prompt": "photorealistic, 3d render, blurry, watermark"

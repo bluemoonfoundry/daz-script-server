@@ -113,6 +113,24 @@ def _parse_args() -> argparse.Namespace:
         help="IPAdapter FaceID conditioning strength for the face-identity pass "
         "(0 = no identity conditioning, higher = stronger identity lock)",
     )
+    p.add_argument(
+        "--face-detailer-controlnet-normal-weight",
+        type=float,
+        default=comfy_defaults.face_detailer_controlnet_normal_weight,
+        help="Per-region ControlNet strength (normal map) for the face-identity pass",
+    )
+    p.add_argument(
+        "--face-detailer-controlnet-depth-weight",
+        type=float,
+        default=comfy_defaults.face_detailer_controlnet_depth_weight,
+        help="Per-region ControlNet strength (depth map) for the face-identity pass",
+    )
+    p.add_argument(
+        "--face-detailer-controlnet-lineart-weight",
+        type=float,
+        default=comfy_defaults.face_detailer_controlnet_lineart_weight,
+        help="Per-region ControlNet strength (lineart map) for the face-identity pass",
+    )
 
     return p.parse_args()
 
@@ -229,6 +247,9 @@ def stylize_shot(args: argparse.Namespace) -> bool:
                     face_detailer_guide_size=args.face_detailer_guide_size,
                     face_detailer_bbox_dilation=args.face_detailer_bbox_dilation,
                     face_detailer_faceid_weight=args.face_detailer_faceid_weight,
+                    face_detailer_controlnet_normal_weight=args.face_detailer_controlnet_normal_weight,
+                    face_detailer_controlnet_depth_weight=args.face_detailer_controlnet_depth_weight,
+                    face_detailer_controlnet_lineart_weight=args.face_detailer_controlnet_lineart_weight,
                 )
                 prompt_id = comfy.queue_prompt(workflow)
                 comfy.save_result(prompt_id, out_path, timeout=300.0)

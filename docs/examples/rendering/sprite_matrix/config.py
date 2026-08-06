@@ -73,6 +73,19 @@ class ComfyUIStageConfig:
     # indistinguishable identity fidelity across the tested grid, so 1.0
     # (the middle, safest value) was kept as the default.
     face_detailer_faceid_weight: float = 1.0
+    # Per-region ControlNet conditioning strength for the face-identity
+    # pass's SEGSDetailer sampling (normal/depth/lineart, matched to the
+    # SAM-refined crop via Impact Pack's ImpactControlNetApplyAdvancedSEGS).
+    # Without this, the face pass has zero ControlNet guidance and renders
+    # visibly flatter/shinier skin than the ink-hatched body regardless of
+    # denoise/faceid_weight -- see
+    # docs/superpowers/plans/2026-08-05-face-detailer-controlnet.md. Live-
+    # tuned in Task 5 of that plan; provisional defaults below (1.0/0.8/0.6)
+    # are one notch above the main pass's own 0.6/0.5/0.4, per the spike
+    # that motivated this plan.
+    face_detailer_controlnet_normal_weight: float = 1.0
+    face_detailer_controlnet_depth_weight: float = 0.8
+    face_detailer_controlnet_lineart_weight: float = 0.6
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"
