@@ -80,12 +80,17 @@ class ComfyUIStageConfig:
     # visibly flatter/shinier skin than the ink-hatched body regardless of
     # denoise/faceid_weight -- see
     # docs/superpowers/plans/2026-08-05-face-detailer-controlnet.md. Live-
-    # tuned in Task 5 of that plan; provisional defaults below (1.0/0.8/0.6)
-    # are one notch above the main pass's own 0.6/0.5/0.4, per the spike
-    # that motivated this plan.
-    face_detailer_controlnet_normal_weight: float = 1.0
-    face_detailer_controlnet_depth_weight: float = 0.8
-    face_detailer_controlnet_lineart_weight: float = 0.6
+    # tuned in Task 5 of that plan against two characters (abby_b, jason_a):
+    # a three-point grid (matching the main pass's own 0.6/0.5/0.4, a
+    # provisional 1.0/0.8/0.6, and 1.4/1.1/0.9) showed strength scaling
+    # directly with visible ink-hatching texture on both the face and the
+    # neck/collar transition, with 1.4/1.1/0.9 clearly the closest match to
+    # the body's own stylization on both characters and no visible identity
+    # loss or regression of prior fixes (hair-color seam, background box,
+    # blacker-than-black halo) at that strength.
+    face_detailer_controlnet_normal_weight: float = 1.4
+    face_detailer_controlnet_depth_weight: float = 1.1
+    face_detailer_controlnet_lineart_weight: float = 0.9
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"

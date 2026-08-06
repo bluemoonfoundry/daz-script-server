@@ -339,9 +339,9 @@ class TestBuildControlnetWorkflowFaceDetailerControlNet(unittest.TestCase):
 
     def test_controlnet_weights_default(self):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
-        self.assertAlmostEqual(wf["73"]["inputs"]["strength"], 1.0)
-        self.assertAlmostEqual(wf["74"]["inputs"]["strength"], 0.8)
-        self.assertAlmostEqual(wf["75"]["inputs"]["strength"], 0.6)
+        self.assertAlmostEqual(wf["73"]["inputs"]["strength"], 1.4)
+        self.assertAlmostEqual(wf["74"]["inputs"]["strength"], 1.1)
+        self.assertAlmostEqual(wf["75"]["inputs"]["strength"], 0.9)
 
     def test_controlnet_chain_fixed_percent_literals(self):
         # start_percent/end_percent are fixed (not config knobs) per the

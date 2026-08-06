@@ -57,6 +57,27 @@ camera angles for every combo, then stylizes each render into a
    body pass) -- see the "Known limitation" note below for the resulting
    trade-off.
 
+   Even with FaceID conditioning and matched denoise, the face pass
+   initially still rendered visibly flatter/shinier skin than the
+   ink-hatched body -- confirmed live via a real seam at the neck/collar
+   boundary. Root cause: `SEGSDetailer`'s `basic_pipe` carries the raw,
+   un-conditioned prompt straight into `ToBasicPipe`; the main pass's own
+   `ControlNetApply` chain (normal/depth/lineart) conditions the
+   whole-image sampler's positive conditioning object, which the
+   per-segment `SEGSDetailer` re-sampling never sees. Fixed by attaching
+   per-segment ControlNet conditioning directly onto the SEGS list via
+   Impact Pack's `ImpactControlNetApplyAdvancedSEGS`, inserted between
+   `MaskToSEGS` and `SEGSDetailer` -- it internally crops/resizes the same
+   normal/depth/lineart maps the main pass uses to match each segment's
+   crop region, solving the coordinate-space mismatch that made adding a
+   full `ControlNetApply` to this pass impractical in the first place. New
+   config knobs `face_detailer_controlnet_normal_weight`/`_depth_weight`/
+   `_lineart_weight` control this pass's ControlNet strength independently
+   of the main pass's own `controlnet.normal`/`depth`/`lineart` weights --
+   live tuning across two characters found the face crop's cropped/upscaled
+   scale wants noticeably stronger conditioning than the main pass's
+   full-body scale (`1.4`/`1.1`/`0.9` vs. the main pass's `0.6`/`0.5`/`0.4`).
+
    **Known limitation:** the FaceID embedding encodes facial features only,
    not hair color. Since the crop still covers hair (needed to avoid the
    seam artifact above) but the pass no longer starts from real pixels,
@@ -174,25 +195,35 @@ See `example_spec.json` for a full example. Key fields:
 - `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, prompts,
   `controlnet` (a single union `model` shared by all three passes plus
   per-pass `normal`/`depth`/`lineart` `weight`), and `face_detailer`
-  (`enabled`, `denoise`, `guide_size`, `bbox_dilation`, `faceid_weight` --
-  the identity-preservation pass; defaults to on with `denoise: 0.35`,
-  `bbox_dilation: 100`, `faceid_weight: 1.0`). Identity comes from an
-  IPAdapter FaceID embedding (see "Face identity pass" above), which
-  decouples it from `denoise` -- so `denoise` can now match the body pass's
-  own stylization level instead of staying low. `0.35` was picked after a
-  live comparison grid (`denoise` in `0.25`/`0.35` x `faceid_weight` in
+  (`enabled`, `denoise`, `guide_size`, `bbox_dilation`, `faceid_weight`,
+  `controlnet_normal_weight`/`controlnet_depth_weight`/
+  `controlnet_lineart_weight` -- the identity-preservation pass; defaults
+  to on with `denoise: 0.35`, `bbox_dilation: 100`, `faceid_weight: 1.0`,
+  `controlnet_normal_weight: 1.4`, `controlnet_depth_weight: 1.1`,
+  `controlnet_lineart_weight: 0.9`). Identity comes from an IPAdapter
+  FaceID embedding (see "Face identity pass" above), which decouples it
+  from `denoise` -- so `denoise` can now match the body pass's own
+  stylization level instead of staying low. `0.35` was picked after a live
+  comparison grid (`denoise` in `0.25`/`0.35` x `faceid_weight` in
   `0.8`/`1.0`/`1.2`) run against two different characters: it produced
   ink-hatching texture on the face comparable to the body without visible
   identity loss at any tested `faceid_weight`. `faceid_weight` controls
   IPAdapter FaceID's own conditioning strength (0 = no identity
   conditioning, higher = stronger identity lock); `1.0` was kept as the
   default since `0.8`/`1.0`/`1.2` were visually indistinguishable in the
-  tested grid. `bbox_dilation` needs to be generous: the face detector's
-  bbox stops at the hairline, so a small value leaves a visible color seam
-  where the refined region ends and the un-refined main pass's invented
-  hair color begins -- note that a generous dilation also means hair color
-  is subject to the identity pass's own drift; see the known limitation
-  above.
+  tested grid. The three `controlnet_*_weight` fields control the
+  per-region ControlNet conditioning described in "Face identity pass"
+  above (0 = no ControlNet guidance for this pass, higher = more strongly
+  forced to match the body's own ink-hatching); a live grid run against the
+  same two characters found `1.4`/`1.1`/`0.9` -- noticeably stronger than
+  the main pass's own `0.6`/`0.5`/`0.4` -- gave the closest match to the
+  body's stylization without identity loss or reintroducing any
+  previously-fixed artifact. `bbox_dilation` needs to be generous: the face
+  detector's bbox stops at the hairline, so a small value leaves a visible
+  color seam where the refined region ends and the un-refined main pass's
+  invented hair color begins -- note that a generous dilation also means
+  hair color is subject to the identity pass's own drift; see the known
+  limitation above.
 - `combos` -- an explicit list of `{pose, expression, overrides?, id?}`
   entries (not a pose x expression cross product). `pose` and `expression`
   must resolve to files in the preset libraries. `overrides` is an optional

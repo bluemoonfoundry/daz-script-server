@@ -138,9 +138,9 @@ def load_spec(path: str | Path) -> PipelineConfig:
     face_detailer_denoise = face_detailer_raw.get("denoise", 0.35)
     _require_unit_range(face_detailer_denoise, "comfyui.face_detailer.denoise", errors)
     face_detailer_faceid_weight = face_detailer_raw.get("faceid_weight", 1.0)
-    face_detailer_controlnet_normal_weight = face_detailer_raw.get("controlnet_normal_weight", 1.0)
-    face_detailer_controlnet_depth_weight = face_detailer_raw.get("controlnet_depth_weight", 0.8)
-    face_detailer_controlnet_lineart_weight = face_detailer_raw.get("controlnet_lineart_weight", 0.6)
+    face_detailer_controlnet_normal_weight = face_detailer_raw.get("controlnet_normal_weight", 1.4)
+    face_detailer_controlnet_depth_weight = face_detailer_raw.get("controlnet_depth_weight", 1.1)
+    face_detailer_controlnet_lineart_weight = face_detailer_raw.get("controlnet_lineart_weight", 0.9)
 
     comfy_cfg = ComfyUIStageConfig(
         checkpoint=comfy_raw.get("checkpoint", "graphicNovelStyleXL.safetensors"),

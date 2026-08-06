@@ -105,9 +105,9 @@ class TestLoadSpecValid(unittest.TestCase):
         self.assertAlmostEqual(cfg.comfyui.face_detailer_guide_size, 512.0)
         self.assertEqual(cfg.comfyui.face_detailer_bbox_dilation, 100)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_faceid_weight, 1.0)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_normal_weight, 1.0)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_depth_weight, 0.8)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_lineart_weight, 0.6)
+        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_normal_weight, 1.4)
+        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_depth_weight, 1.1)
+        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_lineart_weight, 0.9)
 
     def test_face_detailer_overrides_parsed(self):
         data = self.fixture.spec_dict()

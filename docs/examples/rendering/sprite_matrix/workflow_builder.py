@@ -40,9 +40,9 @@ def build_controlnet_workflow(
     face_detailer_guide_size: float = 512.0,
     face_detailer_bbox_dilation: int = 100,
     face_detailer_faceid_weight: float = 1.0,
-    face_detailer_controlnet_normal_weight: float = 1.0,
-    face_detailer_controlnet_depth_weight: float = 0.8,
-    face_detailer_controlnet_lineart_weight: float = 0.6,
+    face_detailer_controlnet_normal_weight: float = 1.4,
+    face_detailer_controlnet_depth_weight: float = 1.1,
+    face_detailer_controlnet_lineart_weight: float = 0.9,
 ) -> dict:
     """Return a ComfyUI API-format prompt dict ready for queue_prompt()."""
     with open(_TEMPLATE_PATH) as f:
