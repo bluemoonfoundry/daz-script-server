@@ -45,7 +45,7 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
         for key in (
             "1", "1b", "2", "3", "4", "5", "6", "7", "8",
             "20", "21", "22", "30", "31", "32", "40", "41", "42", "50",
-            "60", "62", "63", "64", "65", "66", "67", "68", "69",
+            "60", "62", "64", "65", "66", "67", "68", "69", "70", "71", "72",
         ):
             self.assertIn(key, self.wf, f"Missing node {key}")
 
@@ -68,7 +68,9 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
             "SAMLoader",
             "SAMDetectorCombined",
             "MaskToSEGS",
-            "SetDefaultImageForSEGS",
+            "IPAdapterInsightFaceLoader",
+            "IPAdapterUnifiedLoaderFaceID",
+            "IPAdapterFaceID",
             "ToBasicPipe",
             "SEGSDetailer",
             "SEGSPaste",
@@ -153,7 +155,7 @@ class TestBuildControlnetWorkflowNoLora(unittest.TestCase):
         self.assertEqual(self.wf["6"]["inputs"]["model"], ["1", 0])
 
     def test_face_detailer_also_rewired_to_checkpoint(self):
-        self.assertEqual(self.wf["64"]["inputs"]["model"], ["1", 0])
+        self.assertEqual(self.wf["71"]["inputs"]["model"], ["1", 0])
         self.assertEqual(self.wf["64"]["inputs"]["clip"], ["1", 1])
 
 
@@ -174,16 +176,32 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
         self.assertEqual(wf["62"]["inputs"]["image"], ["7", 0])
 
-    def test_crop_source_swapped_to_original_beauty_render(self):
-        # The whole point: refine pixels cropped from the REAL Daz render
-        # (node "2"), not from the already-stylized/drifted output -- a
-        # low-denoise refine of the wrong face would just polish the wrong
-        # face rather than pull it back toward the real identity.
+    def test_segs_detailer_reads_segs_directly_from_masktosegs(self):
+        # No more SetDefaultImageForSEGS pixel-source swap -- identity now
+        # comes from FaceID embedding conditioning on the model, not from
+        # sourcing crop pixels from the real beauty render.
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
-        self.assertEqual(wf["63"]["inputs"]["segs"], ["69", 0])
-        self.assertEqual(wf["63"]["inputs"]["image"], ["2", 0])
-        self.assertTrue(wf["63"]["inputs"]["override"])
-        self.assertEqual(wf["65"]["inputs"]["segs"], ["63", 0])
+        self.assertEqual(wf["65"]["inputs"]["segs"], ["69", 0])
+        self.assertNotIn("63", wf)
+
+    def test_faceid_conditioned_on_original_beauty_render(self):
+        # The identity reference photo for FaceID's embedding extraction is
+        # the ORIGINAL Daz beauty render (node "2"), not the stylized output
+        # -- this is what anchors identity now that SetDefaultImageForSEGS
+        # is gone.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["72"]["inputs"]["image"], ["2", 0])
+        self.assertEqual(wf["72"]["inputs"]["insightface"], ["70", 0])
+        self.assertEqual(wf["72"]["inputs"]["model"], ["71", 0])
+        self.assertEqual(wf["72"]["inputs"]["ipadapter"], ["71", 1])
+
+    def test_faceid_patched_model_feeds_basic_pipe(self):
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["64"]["inputs"]["model"], ["72", 0])
+
+    def test_faceid_weight_configurable(self):
+        wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "face_detailer_faceid_weight": 0.75})
+        self.assertAlmostEqual(wf["72"]["inputs"]["weight"], 0.75)
 
     def test_sam_refines_bbox_into_precise_silhouette(self):
         # UltralyticsDetectorProvider's face_yolov8m.pt is bbox-only, so
@@ -215,7 +233,7 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
 
     def test_wired_to_lora_model_and_clip_when_lora_present(self):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
-        self.assertEqual(wf["64"]["inputs"]["model"], ["1b", 0])
+        self.assertEqual(wf["71"]["inputs"]["model"], ["1b", 0])
         self.assertEqual(wf["64"]["inputs"]["clip"], ["1b", 1])
 
     def test_uses_plain_non_controlnet_conditioning(self):
@@ -254,13 +272,14 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
 
     def test_disabled_removes_nodes_and_reverts_save_image(self):
         wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "face_detailer_enabled": False})
-        for node_id in ("60", "62", "63", "64", "65", "66", "67", "68", "69"):
+        for node_id in ("60", "62", "64", "65", "66", "67", "68", "69", "70", "71", "72"):
             self.assertNotIn(node_id, wf)
         self.assertEqual(wf["8"]["inputs"]["images"], ["7", 0])
         types = {v["class_type"] for v in wf.values()}
         for class_type in (
             "UltralyticsDetectorProvider", "BboxDetectorSEGS", "SAMLoader",
             "SAMDetectorCombined", "MaskToSEGS", "SEGSDetailer", "SEGSPaste",
+            "IPAdapterInsightFaceLoader", "IPAdapterUnifiedLoaderFaceID", "IPAdapterFaceID",
         ):
             self.assertNotIn(class_type, types)
 
