@@ -24,22 +24,47 @@ camera angles for every combo, then stylizes each render into a
 3. **Face identity pass** (enabled by default, `comfyui.face_detailer` in the
    spec / `--face-detailer`/`--no-face-detailer` for `render_shot.py`): the
    main pass has little resolution or conditioning signal to keep a small
-   face recognizable, so it detects the face in the stylized output, but
-   then re-stylizes a crop taken from the *original* Daz beauty render (not
-   the already-stylized image) at a lower denoise, and pastes it back in.
-   Because the face detector (`UltralyticsDetectorProvider`/
-   `bbox/face_yolov8m.pt`) only produces a rectangular bounding box, that
-   rectangle is refined into an actual head/hair silhouette via SAM
-   (`SAMLoader` + `SAMDetectorCombined` + `MaskToSEGS`) before the crop-swap
-   -- a plain rectangular mask either cuts off the hair (leaving a
-   hair-color seam at the boundary) or, if dilated enough to cover it,
-   pulls in surrounding background that gets subtly re-stylized into a
-   visible box artifact. Both were confirmed live before adding the SAM
-   step. Requires ComfyUI's Impact Pack with the separately-installed
+   face recognizable, so it detects the face in the stylized output and
+   re-runs the sampler on just that region. Because the face detector
+   (`UltralyticsDetectorProvider`/`bbox/face_yolov8m.pt`) only produces a
+   rectangular bounding box, that rectangle is refined into an actual
+   head/hair silhouette via SAM (`SAMLoader` + `SAMDetectorCombined` +
+   `MaskToSEGS`) before refining -- a plain rectangular mask either cuts off
+   the hair (leaving a hair-color seam at the boundary) or, if dilated
+   enough to cover it, pulls in surrounding background that gets subtly
+   re-stylized into a visible box artifact. Both were confirmed live before
+   adding the SAM step. Requires ComfyUI's Impact Pack with the
+   separately-installed
    [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
    (`UltralyticsDetectorProvider`), a `bbox/face_yolov8m.pt` model in
    `models/ultralytics/bbox/`, and a SAM model (e.g.
    `sam_vit_b_01ec64.pth`) in `models/sams/`.
+
+   Identity is preserved via **IPAdapter FaceID** conditioning, not by
+   starting the crop from real source pixels. The refinement's sampling
+   model is patched with a face-recognition embedding (via `insightface`,
+   `IPAdapterInsightFaceLoader` -> `IPAdapterUnifiedLoaderFaceID` ->
+   `IPAdapterFaceID`) extracted from the original Daz beauty render, so the
+   face pass can run at a denoise that actually matches the body's own
+   stylization instead of needing to stay low to avoid drifting off the
+   real photo. An earlier version sourced the crop's pixels from the real
+   beauty render (`SetDefaultImageForSEGS`) and relied on low denoise
+   (`0.15`) alone for identity; a live comparison confirmed that had a hard
+   ceiling -- at low denoise there's no room for the ink cross-hatching the
+   body gets at its own denoise, producing a visibly smoother/more
+   photoreal face than the stylized body. FaceID conditioning decouples the
+   two, so the default `face_detailer.denoise` is now `0.35` (matching the
+   body pass) -- see the `faceid_weight` entry below for the resulting
+   trade-off.
+
+   **Known limitation:** the FaceID embedding encodes facial features only,
+   not hair color. Since the crop still covers hair (needed to avoid the
+   seam artifact above) but the pass no longer starts from real pixels,
+   hair color is unconstrained during refinement and can drift from the
+   source -- confirmed live on a grey-haired test character, whose hair
+   rendered brown/blonde across the entire tested denoise/`faceid_weight`
+   grid. This is a known, accepted trade-off of this mechanism, not a bug
+   to be tuned away with these knobs.
 
 ### Single-shot variant (`render_shot.py`)
 
@@ -92,6 +117,20 @@ command is self-healing after a crash or partial failure.
   `SAMLoader`) in `models/sams/`. Disable via
   `comfyui.face_detailer.enabled: false` in the spec, or
   `--no-face-detailer` for `render_shot.py`, if these aren't installed.
+- Also for the face identity pass: [ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus)
+  with the `insightface` Python package installed into ComfyUI's own
+  Python environment (`pip install insightface`; the default provider is
+  `"CPU"` to avoid an additional CUDA-build `onnxruntime` dependency), plus
+  the FaceID SDXL model files from
+  [h94/IP-Adapter-FaceID](https://huggingface.co/h94/IP-Adapter-FaceID):
+  `ip-adapter-faceid-plusv2_sdxl.bin` in `models/ipadapter/` and
+  `ip-adapter-faceid-plusv2_sdxl_lora.safetensors` in `models/loras/`. Also
+  requires a ViT-H CLIP vision model in `models/clip_vision/` whose
+  filename IPAdapter_plus recognizes (matching `ViT-H-14`/`s32B-b79K`, or
+  `ipadapter`+`sd15` -- e.g. `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors`);
+  if you already have a same-content file under a different name, a
+  same-volume hardlink under the expected name works and needs no
+  ComfyUI restart.
 - `pip install -r requirements.txt` (plus `dazpy` itself).
 
 ## Authoring pose and expression presets
@@ -126,15 +165,25 @@ See `example_spec.json` for a full example. Key fields:
 - `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, prompts,
   `controlnet` (a single union `model` shared by all three passes plus
   per-pass `normal`/`depth`/`lineart` `weight`), and `face_detailer`
-  (`enabled`, `denoise`, `guide_size`, `bbox_dilation` -- the
-  identity-preservation pass; defaults to on with `denoise: 0.15`,
-  `bbox_dilation: 100`). Lower `denoise` values stay closer to the real
-  source face (less stylized) while higher values drift more but blend
-  more smoothly into the stylized body -- `0.15` was picked after a live
-  side-by-side comparison against `0.25`/`0.15`/`0.10`. `bbox_dilation` needs to be generous: the face
-  detector's bbox stops at the hairline, so a small value leaves a visible
-  color seam where the refined region ends and the un-refined main pass's
-  invented hair color begins.
+  (`enabled`, `denoise`, `guide_size`, `bbox_dilation`, `faceid_weight` --
+  the identity-preservation pass; defaults to on with `denoise: 0.35`,
+  `bbox_dilation: 100`, `faceid_weight: 1.0`). Identity comes from an
+  IPAdapter FaceID embedding (see "Face identity pass" above), which
+  decouples it from `denoise` -- so `denoise` can now match the body pass's
+  own stylization level instead of staying low. `0.35` was picked after a
+  live comparison grid (`denoise` in `0.25`/`0.35` x `faceid_weight` in
+  `0.8`/`1.0`/`1.2`) run against two different characters: it produced
+  ink-hatching texture on the face comparable to the body without visible
+  identity loss at any tested `faceid_weight`. `faceid_weight` controls
+  IPAdapter FaceID's own conditioning strength (0 = no identity
+  conditioning, higher = stronger identity lock); `1.0` was kept as the
+  default since `0.8`/`1.0`/`1.2` were visually indistinguishable in the
+  tested grid. `bbox_dilation` needs to be generous: the face detector's
+  bbox stops at the hairline, so a small value leaves a visible color seam
+  where the refined region ends and the un-refined main pass's invented
+  hair color begins -- note that a generous dilation also means hair color
+  is subject to the identity pass's own drift; see the known limitation
+  above.
 - `combos` -- an explicit list of `{pose, expression, overrides?, id?}`
   entries (not a pose x expression cross product). `pose` and `expression`
   must resolve to files in the preset libraries. `overrides` is an optional

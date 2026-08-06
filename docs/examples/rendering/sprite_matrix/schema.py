@@ -135,7 +135,7 @@ def load_spec(path: str | Path) -> PipelineConfig:
         errors.append("comfyui.controlnet.model is required")
 
     face_detailer_raw = comfy_raw.get("face_detailer", {})
-    face_detailer_denoise = face_detailer_raw.get("denoise", 0.15)
+    face_detailer_denoise = face_detailer_raw.get("denoise", 0.35)
     _require_unit_range(face_detailer_denoise, "comfyui.face_detailer.denoise", errors)
     face_detailer_faceid_weight = face_detailer_raw.get("faceid_weight", 1.0)
 

@@ -45,11 +45,21 @@ class ComfyUIStageConfig:
     # denoise than the main pass -- keeps identity closer to the real
     # Daz-rendered face. See workflow_builder.py.
     face_detailer_enabled: bool = True
-    # Re-tuned in Task 7 of docs/superpowers/plans/2026-08-05-faceid-conditioning.md
-    # once FaceID conditioning decouples identity from denoise -- expected
-    # to land higher than the previous 0.15 (chosen back when low denoise
-    # was the only identity-preservation mechanism available).
-    face_detailer_denoise: float = 0.15
+    # Live-tuned in Task 7 of docs/superpowers/plans/2026-08-05-faceid-conditioning.md
+    # by comparing a denoise x faceid_weight grid against two characters
+    # (abby_b, jason_a) once FaceID conditioning decoupled identity from
+    # denoise. 0.35 -- matching the main body pass's own denoise -- produced
+    # ink-hatching texture on the face comparable to the body, closing the
+    # earlier photoreal-face-on-hatched-body mismatch, without visible loss
+    # of facial identity at any weight in the tested grid. Note: this pass's
+    # SAM-refined crop covers hair as well as face (see
+    # face_detailer_bbox_dilation below), and IPAdapter FaceID's embedding
+    # only encodes facial features, not hair color -- so hair color is *not*
+    # locked to the source and can drift under restyling (confirmed on
+    # jason_a's grey hair rendering brown/blonde across the whole tested
+    # denoise/weight grid, independent of both knobs). Accepted as a known
+    # limitation of this mechanism; see README.md.
+    face_detailer_denoise: float = 0.35
     face_detailer_guide_size: float = 512.0
     # Bbox dilation (pixels) around the detected face region before
     # refining/pasting -- the face detector's bbox stops at the hairline, so
@@ -59,7 +69,9 @@ class ComfyUIStageConfig:
     # IPAdapter FaceID's own conditioning strength (0 = no identity
     # conditioning, higher = stronger identity lock at the cost of the
     # model's freedom to stylize). Live-tuned in Task 7 alongside
-    # face_detailer_denoise -- the two interact.
+    # face_detailer_denoise: weight 0.8/1.0/1.2 produced visually
+    # indistinguishable identity fidelity across the tested grid, so 1.0
+    # (the middle, safest value) was kept as the default.
     face_detailer_faceid_weight: float = 1.0
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "

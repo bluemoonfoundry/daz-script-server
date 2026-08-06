@@ -101,7 +101,7 @@ class TestLoadSpecValid(unittest.TestCase):
         path = self.fixture.write_spec(self.fixture.spec_dict())
         cfg = load_spec(path)
         self.assertTrue(cfg.comfyui.face_detailer_enabled)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_denoise, 0.15)
+        self.assertAlmostEqual(cfg.comfyui.face_detailer_denoise, 0.35)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_guide_size, 512.0)
         self.assertEqual(cfg.comfyui.face_detailer_bbox_dilation, 100)
         self.assertAlmostEqual(cfg.comfyui.face_detailer_faceid_weight, 1.0)

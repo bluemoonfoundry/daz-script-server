@@ -30,7 +30,7 @@
     },
     "face_detailer": {
       "enabled": true,
-      "denoise": 0.15,
+      "denoise": 0.35,
       "guide_size": 512,
       "bbox_dilation": 100,
       "faceid_weight": 1.0
