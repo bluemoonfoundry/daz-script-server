@@ -175,7 +175,7 @@ def render_shot(args: argparse.Namespace, canvases: tuple[str, ...]) -> bool:
 
 def stylize_shot(args: argparse.Namespace) -> bool:
     from canvas_convert import convert_depth_exr_to_png, convert_normal_exr_to_png, derive_lineart
-    from comfyui_client import ComfyUIClient
+    from comfyui_client import ComfyUIClient, ComfyUIExecutionError
     from workflow_builder import build_controlnet_workflow, stable_seed
 
     comfy = ComfyUIClient(base_url=args.comfyui_url)
@@ -205,39 +205,53 @@ def stylize_shot(args: argparse.Namespace) -> bool:
             depth_ref = comfy.upload_image(depth_png)
             lineart_ref = comfy.upload_image(lineart_png)
 
-            workflow = build_controlnet_workflow(
-                beauty_image_ref=beauty_ref,
-                normal_image_ref=normal_ref,
-                depth_image_ref=depth_ref,
-                lineart_image_ref=lineart_ref,
-                checkpoint_name=args.checkpoint,
-                lora_name=args.lora_name,
-                lora_strength=args.lora_strength,
-                denoise=args.denoise,
-                steps=args.steps,
-                cfg=args.cfg,
-                seed=stable_seed(args.base_seed, args.name, camera),
-                positive_prompt=args.positive_prompt,
-                negative_prompt=args.negative_prompt,
-                controlnet_model=args.controlnet_model,
-                controlnet_normal_weight=args.controlnet_normal_weight,
-                controlnet_depth_weight=args.controlnet_depth_weight,
-                controlnet_lineart_weight=args.controlnet_lineart_weight,
-                face_detailer_enabled=args.face_detailer_enabled,
-                face_detailer_denoise=args.face_detailer_denoise,
-                face_detailer_guide_size=args.face_detailer_guide_size,
-                face_detailer_bbox_dilation=args.face_detailer_bbox_dilation,
-                face_detailer_faceid_weight=args.face_detailer_faceid_weight,
-            )
-            prompt_id = comfy.queue_prompt(workflow)
-            comfy.save_result(prompt_id, out_path, timeout=300.0)
+            def _run(face_detailer_enabled: bool) -> None:
+                workflow = build_controlnet_workflow(
+                    beauty_image_ref=beauty_ref,
+                    normal_image_ref=normal_ref,
+                    depth_image_ref=depth_ref,
+                    lineart_image_ref=lineart_ref,
+                    checkpoint_name=args.checkpoint,
+                    lora_name=args.lora_name,
+                    lora_strength=args.lora_strength,
+                    denoise=args.denoise,
+                    steps=args.steps,
+                    cfg=args.cfg,
+                    seed=stable_seed(args.base_seed, args.name, camera),
+                    positive_prompt=args.positive_prompt,
+                    negative_prompt=args.negative_prompt,
+                    controlnet_model=args.controlnet_model,
+                    controlnet_normal_weight=args.controlnet_normal_weight,
+                    controlnet_depth_weight=args.controlnet_depth_weight,
+                    controlnet_lineart_weight=args.controlnet_lineart_weight,
+                    face_detailer_enabled=face_detailer_enabled,
+                    face_detailer_denoise=args.face_detailer_denoise,
+                    face_detailer_guide_size=args.face_detailer_guide_size,
+                    face_detailer_bbox_dilation=args.face_detailer_bbox_dilation,
+                    face_detailer_faceid_weight=args.face_detailer_faceid_weight,
+                )
+                prompt_id = comfy.queue_prompt(workflow)
+                comfy.save_result(prompt_id, out_path, timeout=300.0)
+
+            note = ""
+            try:
+                _run(args.face_detailer_enabled)
+            except ComfyUIExecutionError as exc:
+                if not args.face_detailer_enabled:
+                    raise
+                # See stylize_stage.py's run_stylize_stage for why this
+                # retry exists: IPAdapterFaceID needs InsightFace to find a
+                # face in the original beauty render, which isn't
+                # guaranteed (e.g. an over-the-shoulder/back camera shot).
+                _run(False)
+                note = f" (face-identity pass skipped: {exc})"
         except Exception as exc:  # noqa: BLE001 - continue-and-log per camera
             any_failed = True
             print(f"stylize {args.name} {camera} ... FAIL: {exc}", file=sys.stderr)
             continue
 
         duration_ms = (time.monotonic() - t0) * 1000
-        print(f"stylize {args.name} {camera} ... OK ({duration_ms:.0f}ms)")
+        print(f"stylize {args.name} {camera} ... OK ({duration_ms:.0f}ms){note}")
 
     return not any_failed
 

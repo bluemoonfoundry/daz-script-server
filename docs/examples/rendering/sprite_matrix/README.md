@@ -66,6 +66,15 @@ camera angles for every combo, then stylizes each render into a
    grid. This is a known, accepted trade-off of this mechanism, not a bug
    to be tuned away with these knobs.
 
+   **Shots with no visible face** (e.g. an over-the-shoulder/back camera
+   angle) can't produce a FaceID embedding at all -- `InsightFace: No face
+   detected.` -- since there's nothing for it to extract from the beauty
+   render. `stylize_stage.py`/`render_shot.py` detect this specific ComfyUI
+   execution failure and automatically retry that shot with the whole face
+   identity pass disabled rather than failing the unit; the result still
+   lands at the normal output path, with a `(face-identity pass skipped:
+   ...)` note in the progress line.
+
 ### Single-shot variant (`render_shot.py`)
 
 For a one-off render -- no combo matrix, no pose/expression preset library,

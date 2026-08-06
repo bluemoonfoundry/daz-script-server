@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "comfyui_enhance"
 ))
 
-from comfyui_client import ComfyUIClient, ComfyUIError
+from comfyui_client import ComfyUIClient, ComfyUIError, ComfyUIExecutionError
 
 
 def _mock_resp(status_code: int = 200, json_data: object = None, content: bytes = b""):
@@ -108,6 +108,40 @@ class TestComfyUIClientWait(unittest.TestCase):
             client = ComfyUIClient()
             with self.assertRaises(TimeoutError):
                 client.wait_for_result("pid", timeout=1.0)
+
+    def test_wait_raises_execution_error_promptly_not_timeout(self):
+        # A failed prompt's history entry never gets "outputs" -- without
+        # status_str=="error" detection this would spin until the timeout
+        # instead of failing fast.
+        entry = {
+            "status": {
+                "status_str": "error",
+                "completed": False,
+                "messages": [
+                    ["execution_error", {
+                        "node_type": "IPAdapterFaceID",
+                        "exception_message": "InsightFace: No face detected.",
+                    }],
+                ],
+            },
+        }
+        with patch("requests.get", return_value=_mock_resp(json_data={"pid": entry})), \
+             patch("time.sleep"):
+            client = ComfyUIClient()
+            with self.assertRaises(ComfyUIExecutionError) as ctx:
+                client.wait_for_result("pid", timeout=10.0)
+        self.assertEqual(ctx.exception.node_type, "IPAdapterFaceID")
+        self.assertEqual(ctx.exception.message, "InsightFace: No face detected.")
+
+    def test_wait_execution_error_falls_back_when_messages_unrecognized(self):
+        entry = {"status": {"status_str": "error", "completed": False, "messages": []}}
+        with patch("requests.get", return_value=_mock_resp(json_data={"pid": entry})), \
+             patch("time.sleep"):
+            client = ComfyUIClient()
+            with self.assertRaises(ComfyUIExecutionError) as ctx:
+                client.wait_for_result("pid", timeout=10.0)
+        self.assertEqual(ctx.exception.node_type, "?")
+        self.assertEqual(ctx.exception.message, "unknown error")
 
 
 class TestComfyUIClientDownload(unittest.TestCase):

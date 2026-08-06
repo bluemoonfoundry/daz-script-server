@@ -12,6 +12,19 @@ class ComfyUIError(Exception):
     pass
 
 
+class ComfyUIExecutionError(ComfyUIError):
+    """A queued prompt reached ComfyUI's terminal 'error' status during
+    execution (e.g. a node raised an exception) -- distinct from a
+    TimeoutError, which means the prompt never reached a terminal state at
+    all within the polling window."""
+
+    def __init__(self, prompt_id: str, node_type: str, message: str):
+        self.prompt_id = prompt_id
+        self.node_type = node_type
+        self.message = message
+        super().__init__(f"ComfyUI prompt {prompt_id} failed in {node_type}: {message}")
+
+
 class ComfyUIClient:
     def __init__(
         self,
@@ -60,7 +73,14 @@ class ComfyUIClient:
     def wait_for_result(
         self, prompt_id: str, timeout: float = 120.0
     ) -> dict:
-        """Poll history until the prompt completes. Returns the outputs dict."""
+        """Poll history until the prompt completes. Returns the outputs dict.
+
+        Raises ComfyUIExecutionError promptly if a node raises during
+        execution (status_str == "error") rather than polling to timeout --
+        a failed prompt's "outputs" stays empty forever, so without this
+        check every execution error would otherwise look identical to a
+        prompt that's merely still running, all the way until `timeout`.
+        """
         deadline = time.monotonic() + timeout
         delay = 0.5
         while time.monotonic() < deadline:
@@ -68,6 +88,8 @@ class ComfyUIClient:
             entry = history.get(prompt_id)
             if entry and entry.get("outputs"):
                 return entry["outputs"]
+            if entry and entry.get("status", {}).get("status_str") == "error":
+                raise ComfyUIExecutionError(prompt_id, *_extract_execution_error(entry))
             time.sleep(delay)
             delay = min(delay * 1.5, 2.0)
         raise TimeoutError(f"ComfyUI prompt {prompt_id} did not complete within {timeout}s")
@@ -105,3 +127,13 @@ class ComfyUIClient:
                     folder_type=img.get("type", "output"),
                 )
         raise ComfyUIError("No output images found in prompt result")
+
+
+def _extract_execution_error(entry: dict) -> tuple[str, str]:
+    """Pull (node_type, exception_message) out of a failed history entry's
+    status.messages list. Falls back to generic text if the shape ever
+    changes -- this is best-effort diagnostic detail, not load-bearing."""
+    for msg_type, payload in entry.get("status", {}).get("messages", []):
+        if msg_type == "execution_error":
+            return payload.get("node_type", "?"), payload.get("exception_message", "unknown error")
+    return "?", "unknown error"

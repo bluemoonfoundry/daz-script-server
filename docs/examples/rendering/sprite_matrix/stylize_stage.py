@@ -10,7 +10,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from comfyui_client import ComfyUIClient
+from comfyui_client import ComfyUIClient, ComfyUIExecutionError
 
 import paths
 from canvas_convert import convert_depth_exr_to_png, convert_normal_exr_to_png, derive_lineart
@@ -25,6 +25,8 @@ class StylizeUnitResult:
     status: str  # "stylized", "skipped", "failed"
     duration_ms: float = 0.0
     error: str = ""
+    note: str = ""  # non-fatal detail on an otherwise successful unit, e.g.
+    # "face-identity pass skipped: <reason>" when the FaceID retry fires
 
 
 @dataclass
@@ -73,6 +75,7 @@ def run_stylize_stage(
             continue
 
         t0 = time.monotonic()
+        note = ""
         try:
             beauty = paths.beauty_path(cfg.output_dir, combo.id, camera)
             normal_exr = paths.canvas_path(cfg.output_dir, combo.id, camera, "Normal", "Normal")
@@ -90,32 +93,49 @@ def run_stylize_stage(
             depth_ref = comfy.upload_image(depth_png)
             lineart_ref = comfy.upload_image(lineart_png)
 
-            workflow = build_controlnet_workflow(
-                beauty_image_ref=beauty_ref,
-                normal_image_ref=normal_ref,
-                depth_image_ref=depth_ref,
-                lineart_image_ref=lineart_ref,
-                checkpoint_name=cfg.comfyui.checkpoint,
-                lora_name=cfg.comfyui.lora_name,
-                lora_strength=cfg.comfyui.lora_strength,
-                denoise=cfg.comfyui.denoise,
-                steps=cfg.comfyui.steps,
-                cfg=cfg.comfyui.cfg,
-                seed=stable_seed(cfg.comfyui.base_seed, combo.id, camera),
-                positive_prompt=cfg.comfyui.positive_prompt,
-                negative_prompt=cfg.comfyui.negative_prompt,
-                controlnet_model=cfg.comfyui.controlnet_model,
-                controlnet_normal_weight=cfg.comfyui.controlnet_normal.weight,
-                controlnet_depth_weight=cfg.comfyui.controlnet_depth.weight,
-                controlnet_lineart_weight=cfg.comfyui.controlnet_lineart.weight,
-                face_detailer_enabled=cfg.comfyui.face_detailer_enabled,
-                face_detailer_denoise=cfg.comfyui.face_detailer_denoise,
-                face_detailer_guide_size=cfg.comfyui.face_detailer_guide_size,
-                face_detailer_bbox_dilation=cfg.comfyui.face_detailer_bbox_dilation,
-                face_detailer_faceid_weight=cfg.comfyui.face_detailer_faceid_weight,
-            )
-            prompt_id = comfy.queue_prompt(workflow)
-            comfy.save_result(prompt_id, out_path, timeout=300.0)
+            def _run(face_detailer_enabled: bool) -> None:
+                workflow = build_controlnet_workflow(
+                    beauty_image_ref=beauty_ref,
+                    normal_image_ref=normal_ref,
+                    depth_image_ref=depth_ref,
+                    lineart_image_ref=lineart_ref,
+                    checkpoint_name=cfg.comfyui.checkpoint,
+                    lora_name=cfg.comfyui.lora_name,
+                    lora_strength=cfg.comfyui.lora_strength,
+                    denoise=cfg.comfyui.denoise,
+                    steps=cfg.comfyui.steps,
+                    cfg=cfg.comfyui.cfg,
+                    seed=stable_seed(cfg.comfyui.base_seed, combo.id, camera),
+                    positive_prompt=cfg.comfyui.positive_prompt,
+                    negative_prompt=cfg.comfyui.negative_prompt,
+                    controlnet_model=cfg.comfyui.controlnet_model,
+                    controlnet_normal_weight=cfg.comfyui.controlnet_normal.weight,
+                    controlnet_depth_weight=cfg.comfyui.controlnet_depth.weight,
+                    controlnet_lineart_weight=cfg.comfyui.controlnet_lineart.weight,
+                    face_detailer_enabled=face_detailer_enabled,
+                    face_detailer_denoise=cfg.comfyui.face_detailer_denoise,
+                    face_detailer_guide_size=cfg.comfyui.face_detailer_guide_size,
+                    face_detailer_bbox_dilation=cfg.comfyui.face_detailer_bbox_dilation,
+                    face_detailer_faceid_weight=cfg.comfyui.face_detailer_faceid_weight,
+                )
+                prompt_id = comfy.queue_prompt(workflow)
+                comfy.save_result(prompt_id, out_path, timeout=300.0)
+
+            try:
+                _run(cfg.comfyui.face_detailer_enabled)
+            except ComfyUIExecutionError as exc:
+                if not cfg.comfyui.face_detailer_enabled:
+                    raise
+                # The face-identity pass's IPAdapterFaceID node needs
+                # InsightFace to find a face in the ORIGINAL beauty render;
+                # that's not guaranteed (e.g. an over-the-shoulder/back
+                # camera shot has no face at all). The old low-denoise
+                # mechanism degraded past a missing face silently -- FaceID
+                # conditioning cannot, since it's the exact thing that
+                # crashes. Retry once with the whole pass off rather than
+                # failing this unit outright.
+                _run(False)
+                note = f" (face-identity pass skipped: {exc})"
         except Exception as exc:  # noqa: BLE001 - continue-and-log per unit
             duration_ms = (time.monotonic() - t0) * 1000
             summary.results.append(StylizeUnitResult(combo.id, camera, "failed", duration_ms, str(exc)))
@@ -123,8 +143,8 @@ def run_stylize_stage(
             continue
 
         duration_ms = (time.monotonic() - t0) * 1000
-        summary.results.append(StylizeUnitResult(combo.id, camera, "stylized", duration_ms))
-        _report(on_progress, i, total, combo.id, camera, f"OK ({duration_ms:.0f}ms)")
+        summary.results.append(StylizeUnitResult(combo.id, camera, "stylized", duration_ms, note=note))
+        _report(on_progress, i, total, combo.id, camera, f"OK ({duration_ms:.0f}ms){note}")
 
     return summary
 
