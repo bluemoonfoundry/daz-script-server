@@ -186,18 +186,41 @@
       "contour_fill": false
     }
   },
-  "63": {
-    "class_type": "SetDefaultImageForSEGS",
+  "70": {
+    "class_type": "IPAdapterInsightFaceLoader",
     "inputs": {
-      "segs": ["69", 0],
+      "provider": "CPU"
+    }
+  },
+  "71": {
+    "class_type": "IPAdapterUnifiedLoaderFaceID",
+    "inputs": {
+      "model": ["1b", 0],
+      "preset": "FACEID PLUS V2",
+      "lora_strength": 0.6,
+      "provider": "CPU"
+    }
+  },
+  "72": {
+    "class_type": "IPAdapterFaceID",
+    "inputs": {
+      "model": ["71", 0],
+      "ipadapter": ["71", 1],
+      "insightface": ["70", 0],
       "image": ["2", 0],
-      "override": true
+      "weight": "__FACE_DETAILER_FACEID_WEIGHT__",
+      "weight_faceidv2": 1.0,
+      "weight_type": "linear",
+      "combine_embeds": "concat",
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "embeds_scaling": "V only"
     }
   },
   "64": {
     "class_type": "ToBasicPipe",
     "inputs": {
-      "model": ["1b", 0],
+      "model": ["72", 0],
       "clip": ["1b", 1],
       "vae": ["1", 2],
       "positive": ["4", 0],
@@ -208,7 +231,7 @@
     "class_type": "SEGSDetailer",
     "inputs": {
       "image": ["7", 0],
-      "segs": ["63", 0],
+      "segs": ["69", 0],
       "guide_size": "__FACE_DETAILER_GUIDE_SIZE__",
       "guide_size_for": true,
       "max_size": 1024,
