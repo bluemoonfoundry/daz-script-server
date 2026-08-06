@@ -494,7 +494,7 @@ and after the existing `self.assertAlmostEqual(cfg.comfyui.face_detailer_faceid_
 cd Y:/working/BlueMoonFoundry/daz-script-server
 python -m pytest tests/test_sprite_matrix_*.py -q
 ```
-Expected: all tests pass (previous baseline was 104 passed, 1 skipped; this task adds 7 new tests to `test_sprite_matrix_workflow_builder.py` -- Step 1's rename doesn't change the count -- and extends 2 existing tests in `test_sprite_matrix_schema.py` with more assertions -- expect 111 passed, 1 skipped).
+Expected: all tests pass (baseline before this task is 90 passed, 1 skipped -- confirmed by running `python -m pytest tests/test_sprite_matrix_*.py -q` fresh on this plan's worktree before Task 1 started; this task adds 7 new tests to `test_sprite_matrix_workflow_builder.py` -- Step 1's rename doesn't change the count -- and extends 2 existing tests in `test_sprite_matrix_schema.py` with more assertions -- expect 97 passed, 1 skipped).
 
 - [ ] **Step 8: Commit**
 
