@@ -45,7 +45,7 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
         for key in (
             "1", "1b", "2", "3", "4", "5", "6", "7", "8",
             "20", "21", "22", "30", "31", "32", "40", "41", "42", "50",
-            "60", "62", "64", "65", "66", "67", "68", "69", "70", "71", "72",
+            "60", "62", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74", "75",
         ):
             self.assertIn(key, self.wf, f"Missing node {key}")
 
@@ -74,6 +74,7 @@ class TestBuildControlnetWorkflow(unittest.TestCase):
             "ToBasicPipe",
             "SEGSDetailer",
             "SEGSPaste",
+            "ImpactControlNetApplyAdvancedSEGS",
         ):
             self.assertIn(expected, types)
 
@@ -176,12 +177,13 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
         self.assertEqual(wf["62"]["inputs"]["image"], ["7", 0])
 
-    def test_segs_detailer_reads_segs_directly_from_masktosegs(self):
-        # No more SetDefaultImageForSEGS pixel-source swap -- identity now
-        # comes from FaceID embedding conditioning on the model, not from
-        # sourcing crop pixels from the real beauty render.
+    def test_segs_detailer_does_not_use_old_setdefaultimage_swap(self):
+        # No more SetDefaultImageForSEGS pixel-source swap -- identity comes
+        # from FaceID embedding conditioning on the model, not from sourcing
+        # crop pixels from the real beauty render. (segs now flows through
+        # the ControlNet-on-SEGS chain before reaching SEGSDetailer -- see
+        # TestBuildControlnetWorkflowFaceDetailerControlNet for that wiring.)
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
-        self.assertEqual(wf["65"]["inputs"]["segs"], ["69", 0])
         self.assertNotIn("63", wf)
 
     def test_faceid_conditioned_on_original_beauty_render(self):
@@ -282,7 +284,7 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
 
     def test_disabled_removes_nodes_and_reverts_save_image(self):
         wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "face_detailer_enabled": False})
-        for node_id in ("60", "62", "64", "65", "66", "67", "68", "69", "70", "71", "72"):
+        for node_id in ("60", "62", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74", "75"):
             self.assertNotIn(node_id, wf)
         self.assertEqual(wf["8"]["inputs"]["images"], ["7", 0])
         types = {v["class_type"] for v in wf.values()}
@@ -290,8 +292,64 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
             "UltralyticsDetectorProvider", "BboxDetectorSEGS", "SAMLoader",
             "SAMDetectorCombined", "MaskToSEGS", "SEGSDetailer", "SEGSPaste",
             "IPAdapterInsightFaceLoader", "IPAdapterUnifiedLoaderFaceID", "IPAdapterFaceID",
+            "ImpactControlNetApplyAdvancedSEGS",
         ):
             self.assertNotIn(class_type, types)
+
+
+class TestBuildControlnetWorkflowFaceDetailerControlNet(unittest.TestCase):
+    def test_segs_detailer_reads_segs_from_controlnet_chain(self):
+        # "65"'s segs now comes from the end of the ControlNet-on-SEGS
+        # chain (node "75"), not directly from MaskToSEGS (node "69") --
+        # the chain inserts per-segment ControlNet conditioning in between.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["65"]["inputs"]["segs"], ["75", 0])
+
+    def test_controlnet_chain_wired_in_order(self):
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["73"]["inputs"]["segs"], ["69", 0])
+        self.assertEqual(wf["74"]["inputs"]["segs"], ["73", 0])
+        self.assertEqual(wf["75"]["inputs"]["segs"], ["74", 0])
+
+    def test_controlnet_chain_reuses_main_pass_retagged_controlnets(self):
+        # Reuses the SAME SetUnionControlNetType outputs (21/31/41) the main
+        # pass uses -- no separate ControlNetLoader/SetUnionControlNetType
+        # for the face pass, which would load the model a second time.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["73"]["inputs"]["control_net"], ["21", 0])
+        self.assertEqual(wf["74"]["inputs"]["control_net"], ["31", 0])
+        self.assertEqual(wf["75"]["inputs"]["control_net"], ["41", 0])
+
+    def test_controlnet_chain_reuses_main_pass_source_images(self):
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["73"]["inputs"]["control_image"], ["20", 0])
+        self.assertEqual(wf["74"]["inputs"]["control_image"], ["30", 0])
+        self.assertEqual(wf["75"]["inputs"]["control_image"], ["40", 0])
+
+    def test_controlnet_weights_configurable(self):
+        wf = build_controlnet_workflow(**{
+            **_DEFAULT_KWARGS,
+            "face_detailer_controlnet_normal_weight": 0.9,
+            "face_detailer_controlnet_depth_weight": 0.7,
+            "face_detailer_controlnet_lineart_weight": 0.5,
+        })
+        self.assertAlmostEqual(wf["73"]["inputs"]["strength"], 0.9)
+        self.assertAlmostEqual(wf["74"]["inputs"]["strength"], 0.7)
+        self.assertAlmostEqual(wf["75"]["inputs"]["strength"], 0.5)
+
+    def test_controlnet_weights_default(self):
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertAlmostEqual(wf["73"]["inputs"]["strength"], 1.0)
+        self.assertAlmostEqual(wf["74"]["inputs"]["strength"], 0.8)
+        self.assertAlmostEqual(wf["75"]["inputs"]["strength"], 0.6)
+
+    def test_controlnet_chain_fixed_percent_literals(self):
+        # start_percent/end_percent are fixed (not config knobs) per the
+        # design spec.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        for node_id in ("73", "74", "75"):
+            self.assertAlmostEqual(wf[node_id]["inputs"]["start_percent"], 0.0)
+            self.assertAlmostEqual(wf[node_id]["inputs"]["end_percent"], 1.0)
 
 
 class TestStableSeed(unittest.TestCase):
