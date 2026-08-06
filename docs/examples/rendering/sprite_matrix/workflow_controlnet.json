@@ -1,4 +1,4 @@
-{
+﻿{
   "1": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
@@ -186,6 +186,39 @@
       "contour_fill": false
     }
   },
+  "73": {
+    "class_type": "ImpactControlNetApplyAdvancedSEGS",
+    "inputs": {
+      "segs": ["69", 0],
+      "control_net": ["21", 0],
+      "strength": "__FACE_DETAILER_CONTROLNET_NORMAL_WEIGHT__",
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "control_image": ["20", 0]
+    }
+  },
+  "74": {
+    "class_type": "ImpactControlNetApplyAdvancedSEGS",
+    "inputs": {
+      "segs": ["73", 0],
+      "control_net": ["31", 0],
+      "strength": "__FACE_DETAILER_CONTROLNET_DEPTH_WEIGHT__",
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "control_image": ["30", 0]
+    }
+  },
+  "75": {
+    "class_type": "ImpactControlNetApplyAdvancedSEGS",
+    "inputs": {
+      "segs": ["74", 0],
+      "control_net": ["41", 0],
+      "strength": "__FACE_DETAILER_CONTROLNET_LINEART_WEIGHT__",
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "control_image": ["40", 0]
+    }
+  },
   "70": {
     "class_type": "IPAdapterInsightFaceLoader",
     "inputs": {
@@ -231,7 +264,7 @@
     "class_type": "SEGSDetailer",
     "inputs": {
       "image": ["7", 0],
-      "segs": ["69", 0],
+      "segs": ["75", 0],
       "guide_size": "__FACE_DETAILER_GUIDE_SIZE__",
       "guide_size_for": true,
       "max_size": 1024,
