@@ -54,7 +54,7 @@ camera angles for every combo, then stylizes each render into a
    body gets at its own denoise, producing a visibly smoother/more
    photoreal face than the stylized body. FaceID conditioning decouples the
    two, so the default `face_detailer.denoise` is now `0.35` (matching the
-   body pass) -- see the `faceid_weight` entry below for the resulting
+   body pass) -- see the "Known limitation" note below for the resulting
    trade-off.
 
    **Known limitation:** the FaceID embedding encodes facial features only,

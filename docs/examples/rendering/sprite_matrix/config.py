@@ -41,9 +41,9 @@ class ComfyUIStageConfig:
         default_factory=lambda: ControlNetPassConfig(weight=0.4)
     )
     # FaceDetailer second pass: detects the face in the stylized output,
-    # crops+upscales it, and re-runs KSampler on just that region at a lower
-    # denoise than the main pass -- keeps identity closer to the real
-    # Daz-rendered face. See workflow_builder.py.
+    # crops+upscales it, and re-runs KSampler on just that region -- keeps
+    # identity recognizable via IPAdapter FaceID conditioning rather than
+    # low denoise. See workflow_builder.py.
     face_detailer_enabled: bool = True
     # Live-tuned in Task 7 of docs/superpowers/plans/2026-08-05-faceid-conditioning.md
     # by comparing a denoise x faceid_weight grid against two characters

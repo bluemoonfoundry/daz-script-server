@@ -203,6 +203,16 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         wf = build_controlnet_workflow(**{**_DEFAULT_KWARGS, "face_detailer_faceid_weight": 0.75})
         self.assertAlmostEqual(wf["72"]["inputs"]["weight"], 0.75)
 
+    def test_faceid_fixed_literals_present(self):
+        # provider/preset/lora_strength are fixed (not config knobs) per the
+        # design spec -- only weight is tunable. Guards against the fixed
+        # values silently disappearing/changing during future edits.
+        wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
+        self.assertEqual(wf["70"]["inputs"]["provider"], "CPU")
+        self.assertEqual(wf["71"]["inputs"]["preset"], "FACEID PLUS V2")
+        self.assertEqual(wf["71"]["inputs"]["provider"], "CPU")
+        self.assertAlmostEqual(wf["71"]["inputs"]["lora_strength"], 0.6)
+
     def test_sam_refines_bbox_into_precise_silhouette(self):
         # UltralyticsDetectorProvider's face_yolov8m.pt is bbox-only, so
         # BboxDetectorSEGS's mask is a plain rectangle. A dilation generous
@@ -210,7 +220,7 @@ class TestBuildControlnetWorkflowFaceDetailer(unittest.TestCase):
         # which SEGSDetailer then visibly re-stylizes into a rectangular
         # "box" artifact against the clean background (confirmed live).
         # SAM refines that rectangular hint into an actual head/hair
-        # silhouette before the crop-source swap.
+        # silhouette before SEGSDetailer.
         wf = build_controlnet_workflow(**_DEFAULT_KWARGS)
         self.assertEqual(wf["67"]["inputs"]["model_name"], "sam_vit_b_01ec64.pth")
         self.assertEqual(wf["68"]["inputs"]["sam_model"], ["67", 0])

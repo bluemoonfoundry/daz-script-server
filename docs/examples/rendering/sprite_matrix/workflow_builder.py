@@ -36,7 +36,7 @@ def build_controlnet_workflow(
     controlnet_depth_weight: float,
     controlnet_lineart_weight: float,
     face_detailer_enabled: bool = True,
-    face_detailer_denoise: float = 0.15,
+    face_detailer_denoise: float = 0.35,
     face_detailer_guide_size: float = 512.0,
     face_detailer_bbox_dilation: int = 100,
     face_detailer_faceid_weight: float = 1.0,
