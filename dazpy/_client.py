@@ -99,10 +99,14 @@ class DazClient:
             ``None`` to auto-load from the default token file.
         timeout: Per-request HTTP timeout in seconds.
 
-    Example::
+    Requests are issued through a pooled ``requests.Session`` for connection
+    reuse. Call :meth:`close` when done, or use as a context manager::
 
         client = DazClient()                          # default 127.0.0.1:18811
         client = DazClient(token="my-secret-token")   # explicit token
+
+        with DazClient() as client:
+            result = client.execute("1 + 1;")
     """
 
     def __init__(
@@ -115,6 +119,17 @@ class DazClient:
         self._base = f"http://{host}:{port}"
         self._token = token if token is not None else _load_token()
         self._timeout = timeout
+        self._session = _requests.Session()
+
+    def __enter__(self) -> "DazClient":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the underlying ``requests.Session``'s pooled connections."""
+        self._session.close()
 
     @property
     def _headers(self) -> dict:
@@ -125,7 +140,7 @@ class DazClient:
 
     def _post(self, path: str, payload: dict) -> _requests.Response:
         try:
-            return _requests.post(
+            return self._session.post(
                 f"{self._base}{path}",
                 json=payload,
                 headers=self._headers,
@@ -138,7 +153,7 @@ class DazClient:
 
     def _get(self, path: str, params: dict | None = None) -> _requests.Response:
         try:
-            return _requests.get(
+            return self._session.get(
                 f"{self._base}{path}",
                 headers=self._headers,
                 params=params,
@@ -353,7 +368,7 @@ class DazClient:
             ``True`` if the server confirmed cancellation, ``False`` otherwise.
         """
         try:
-            resp = _requests.delete(
+            resp = self._session.delete(
                 f"{self._base}/requests/{request_id}",
                 headers=self._headers,
                 timeout=self._timeout,
@@ -560,7 +575,7 @@ class DazClient:
             (already finished, not found, or connection error).
         """
         try:
-            resp = _requests.post(
+            resp = self._session.post(
                 f"{self._base}/render/{request_id}/cancel",
                 headers=self._headers,
                 timeout=self._timeout,
@@ -576,7 +591,7 @@ class DazClient:
         if the endpoint is unavailable.  Callers must close the response when done.
         """
         try:
-            resp = _requests.get(
+            resp = self._session.get(
                 f"{self._base}/render/{request_id}/progress",
                 headers=self._headers,
                 stream=True,
@@ -609,7 +624,7 @@ class DazClient:
         """
         try:
             params = {"filter": ",".join(categories)} if categories else None
-            resp = _requests.get(
+            resp = self._session.get(
                 f"{self._base}/scene/events",
                 headers=self._headers,
                 params=params,

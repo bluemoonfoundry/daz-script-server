@@ -877,6 +877,15 @@ class TestInteractionAdapter(unittest.TestCase):
 
 
 class TestErrorMapping(unittest.TestCase):
+    def _client_with_mock_session(self, token: str = ""):
+        client = DazClient.__new__(DazClient)
+        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
+        object.__setattr__(client, "_token", token)
+        object.__setattr__(client, "_timeout", 30.0)
+        mock_session = MagicMock()
+        object.__setattr__(client, "_session", mock_session)
+        return client, mock_session
+
     def _client_from_response(self, response_data: dict, status: int = 200):
         import requests as req
         resp = MagicMock(spec=req.Response)
@@ -884,13 +893,9 @@ class TestErrorMapping(unittest.TestCase):
         resp.json.return_value = response_data
         resp.text = str(response_data)
 
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-
-        with patch("dazpy._client._requests.post", return_value=resp):
-            return client, resp
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = resp
+        return client, resp
 
     def test_auth_error_401(self):
         import requests as req
@@ -898,13 +903,10 @@ class TestErrorMapping(unittest.TestCase):
         resp.status_code = 401
         resp.json.return_value = {"error": "Unauthorized"}
         resp.text = "Unauthorized"
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "bad")
-        object.__setattr__(client, "_timeout", 30.0)
-        with patch("dazpy._client._requests.post", return_value=resp):
-            with self.assertRaises(exceptions.AuthenticationError):
-                client.execute("1;")
+        client, mock_session = self._client_with_mock_session(token="bad")
+        mock_session.post.return_value = resp
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.execute("1;")
 
     def test_script_runtime_error(self):
         import requests as req
@@ -912,14 +914,11 @@ class TestErrorMapping(unittest.TestCase):
         resp.status_code = 200
         resp.json.return_value = {"success": False, "error": "TypeError: undefined is not a function", "request_id": "abc"}
         resp.text = ""
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-        with patch("dazpy._client._requests.post", return_value=resp):
-            with self.assertRaises(exceptions.ScriptRuntimeError) as ctx:
-                client.execute("bad();")
-            self.assertEqual(ctx.exception.request_id, "abc")
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = resp
+        with self.assertRaises(exceptions.ScriptRuntimeError) as ctx:
+            client.execute("bad();")
+        self.assertEqual(ctx.exception.request_id, "abc")
 
     def test_script_syntax_error_line_number(self):
         import requests as req
@@ -927,13 +926,10 @@ class TestErrorMapping(unittest.TestCase):
         resp.status_code = 200
         resp.json.return_value = {"success": False, "error": "SyntaxError at Line 3: unexpected token", "request_id": "def"}
         resp.text = ""
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-        with patch("dazpy._client._requests.post", return_value=resp):
-            with self.assertRaises(exceptions.ScriptSyntaxError):
-                client.execute("{bad syntax")
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = resp
+        with self.assertRaises(exceptions.ScriptSyntaxError):
+            client.execute("{bad syntax")
 
     def test_studio_busy_error_503(self):
         import requests as req
@@ -947,16 +943,13 @@ class TestErrorMapping(unittest.TestCase):
         }
         resp.headers = {"Retry-After": "2"}
         resp.text = ""
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-        with patch("dazpy._client._requests.post", return_value=resp):
-            with self.assertRaises(exceptions.StudioBusyError) as ctx:
-                client.execute("1+1;")
-            self.assertIsInstance(ctx.exception, exceptions.DazBusyError)
-            self.assertEqual(ctx.exception.retry_after, 2.0)
-            self.assertIn("loading a scene", ctx.exception.reason)
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = resp
+        with self.assertRaises(exceptions.StudioBusyError) as ctx:
+            client.execute("1+1;")
+        self.assertIsInstance(ctx.exception, exceptions.DazBusyError)
+        self.assertEqual(ctx.exception.retry_after, 2.0)
+        self.assertIn("loading a scene", ctx.exception.reason)
 
     def test_concurrency_limit_error_429(self):
         import requests as req
@@ -969,16 +962,13 @@ class TestErrorMapping(unittest.TestCase):
         }
         resp.headers = {}
         resp.text = ""
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-        with patch("dazpy._client._requests.post", return_value=resp):
-            with self.assertRaises(exceptions.ConcurrencyLimitError) as ctx:
-                client.execute("1+1;")
-            self.assertIsInstance(ctx.exception, exceptions.DazBusyError)
-            self.assertNotIsInstance(ctx.exception, exceptions.ScriptRuntimeError)
-            self.assertEqual(ctx.exception.retry_after, 2.0)
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = resp
+        with self.assertRaises(exceptions.ConcurrencyLimitError) as ctx:
+            client.execute("1+1;")
+        self.assertIsInstance(ctx.exception, exceptions.DazBusyError)
+        self.assertNotIsInstance(ctx.exception, exceptions.ScriptRuntimeError)
+        self.assertEqual(ctx.exception.retry_after, 2.0)
 
     def _busy_resp(self):
         import requests as req
@@ -1003,50 +993,50 @@ class TestErrorMapping(unittest.TestCase):
         resp.text = ""
         return resp
 
-    def _busy_client(self):
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-        return client
-
     def test_execute_without_retry_on_busy_raises_immediately(self):
-        client = self._busy_client()
-        with patch("dazpy._client._requests.post", return_value=self._busy_resp()) as post:
-            with self.assertRaises(exceptions.StudioBusyError):
-                client.execute("1+1;")
-            self.assertEqual(post.call_count, 1)
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._busy_resp()
+        with self.assertRaises(exceptions.StudioBusyError):
+            client.execute("1+1;")
+        self.assertEqual(mock_session.post.call_count, 1)
 
     def test_execute_retry_on_busy_succeeds_after_retries(self):
-        client = self._busy_client()
-        responses = [self._busy_resp(), self._busy_resp(), self._success_resp()]
-        with patch("dazpy._client._requests.post", side_effect=responses) as post:
-            with patch("dazpy._client.time.sleep") as sleep:
-                result = client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = [self._busy_resp(), self._busy_resp(), self._success_resp()]
+        with patch("dazpy._client.time.sleep") as sleep:
+            result = client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
         self.assertEqual(result.value, 2)
-        self.assertEqual(post.call_count, 3)
+        self.assertEqual(mock_session.post.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
 
     def test_execute_retry_on_busy_gives_up_after_max_wait(self):
-        client = self._busy_client()
-        with patch("dazpy._client._requests.post", return_value=self._busy_resp()):
-            with patch("dazpy._client.time.sleep"):
-                with patch(
-                    "dazpy._client.time.monotonic",
-                    side_effect=[0.0, 0.0, 5.0, 11.0, 20.0, 20.0],
-                ):
-                    with self.assertRaises(exceptions.StudioBusyError):
-                        client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._busy_resp()
+        with patch("dazpy._client.time.sleep"):
+            with patch(
+                "dazpy._client.time.monotonic",
+                side_effect=[0.0, 0.0, 5.0, 11.0, 20.0, 20.0],
+            ):
+                with self.assertRaises(exceptions.StudioBusyError):
+                    client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
 
     def test_connection_error(self):
         import requests as req
-        client = DazClient.__new__(DazClient)
-        object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-        object.__setattr__(client, "_token", "")
-        object.__setattr__(client, "_timeout", 30.0)
-        with patch("dazpy._client._requests.post", side_effect=req.exceptions.ConnectionError("refused")):
-            with self.assertRaises(exceptions.ConnectionError):
-                client.execute("1;")
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = req.exceptions.ConnectionError("refused")
+        with self.assertRaises(exceptions.ConnectionError):
+            client.execute("1;")
+
+    def test_close_closes_session(self):
+        client, mock_session = self._client_with_mock_session()
+        client.close()
+        mock_session.close.assert_called_once()
+
+    def test_context_manager_closes_session(self):
+        client, mock_session = self._client_with_mock_session()
+        with client:
+            pass
+        mock_session.close.assert_called_once()
 
     def test_diagnostic_includes_script(self):
         err = exceptions.ScriptRuntimeError("failed", script="var x = bad();", request_id="r1")

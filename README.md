@@ -181,6 +181,13 @@ async def main():
 
 Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
 
+### `DazClient` connection pooling + `close()`
+
+`DazClient` now issues requests through a pooled `requests.Session` instead
+of a fresh connection per call, and supports `close()` / use as a context
+manager (`with DazClient() as client:`) for symmetry with the new async
+client's connection lifecycle.
+
 ---
 
 ## What's New in v2.8.1

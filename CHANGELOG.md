@@ -17,6 +17,13 @@ dazpy[aio]`). Removes the need for async callers (FastAPI, FastMCP,
 ComfyUI, Temporal) to wrap synchronous `DazClient` calls in
 `asyncio.to_thread()`.
 
+### `DazClient` connection pooling + `close()`
+
+`DazClient` now uses a pooled `requests.Session` for connection reuse
+instead of a fresh connection per call, and gained `close()` and context
+manager support (`with DazClient() as client:`), mirroring
+`AsyncDazClient`'s connection-lifecycle handling.
+
 ## [2.8.1] - 2026-07-24
 
 ### Truthful Iray/Viewport render-engine selector
