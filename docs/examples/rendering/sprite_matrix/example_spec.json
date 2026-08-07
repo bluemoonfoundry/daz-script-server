@@ -29,8 +29,8 @@
       "lineart": { "weight": 0.4 }
     },
     "lineart_composite_opacity": 1.0,
-    "canny_low_threshold": 120,
-    "canny_high_threshold": 240,
+    "canny_low_threshold": 150,
+    "canny_high_threshold": 300,
     "positive_prompt": "graphic novel illustration, bold ink linework, cel-shaded, dramatic hatching, naturalistic proportions",
     "negative_prompt": "photorealistic, 3d render, blurry, watermark, harsh facial crosshatching, heavy dark under-eye ink lines, dark eye bags, exaggerated brow line, pencil scribble on face, heavy facial ink shading, harsh nasolabial lines"
   },

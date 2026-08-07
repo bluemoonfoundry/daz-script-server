@@ -71,15 +71,20 @@ def convert_normal_exr_to_png(normal_path: str, png_path: str) -> str:
     return png_path
 
 
-def derive_lineart(beauty_png_path: str, lineart_png_path: str, *, low_threshold: int = 120, high_threshold: int = 240) -> str:
+def derive_lineart(beauty_png_path: str, lineart_png_path: str, *, low_threshold: int = 150, high_threshold: int = 300) -> str:
     """Derive a Canny edge/lineart pass from the beauty render.
 
     Defaults live-tuned against jason_a/abby_b (daz-script-server-r5br):
     80/160 picked up soft Iray shading/skin-crease edges on faces (brow
     ridge, under-nose, under-eye) that read as artifactual "pencil marks"
-    once composited back over the color pass at full opacity. 120/240
-    suppresses those soft edges while preserving structural lines (jaw,
-    hairline, clothing seams); 160/280 gave no further improvement.
+    once composited back over the color pass at full opacity -- the bulk of
+    that was actually the style LoRA's own behavior (see the negative_prompt
+    default in config.py) and cleared at 120/240, but a residual few
+    isolated stray marks (small high-contrast points -- specular highlights,
+    skin pores) survived even that threshold once the LoRA source was fixed.
+    150/300 clears those too, still without losing structural lines (jaw,
+    hairline, clothing seams); 200/400 and a bilateral-filter pre-smoothing
+    pass were tested and gave no further improvement over 150/300.
     """
     img = cv2.imread(beauty_png_path, cv2.IMREAD_COLOR)
     if img is None:

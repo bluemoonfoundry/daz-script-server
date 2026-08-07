@@ -136,8 +136,8 @@ def load_spec(path: str | Path) -> PipelineConfig:
 
     lineart_composite_opacity = comfy_raw.get("lineart_composite_opacity", 1.0)
     _require_unit_range(lineart_composite_opacity, "comfyui.lineart_composite_opacity", errors)
-    canny_low_threshold = comfy_raw.get("canny_low_threshold", 120)
-    canny_high_threshold = comfy_raw.get("canny_high_threshold", 240)
+    canny_low_threshold = comfy_raw.get("canny_low_threshold", 150)
+    canny_high_threshold = comfy_raw.get("canny_high_threshold", 300)
 
     comfy_cfg = ComfyUIStageConfig(
         checkpoint=comfy_raw.get("checkpoint", "graphicNovelStyleXL.safetensors"),

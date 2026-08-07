@@ -46,11 +46,11 @@ class ComfyUIStageConfig:
     lineart_composite_opacity: float = 1.0
     # Canny edge-detection thresholds for canvas_convert.derive_lineart().
     # See that function's docstring for the live-tuning rationale (daz-
-    # script-server-r5br/017n) -- 120/240 suppresses soft Iray shading
+    # script-server-r5br/017n) -- 150/300 suppresses soft Iray shading
     # edges on faces that read as artifactual "pencil marks" once
     # composited, without losing structural linework.
-    canny_low_threshold: int = 120
-    canny_high_threshold: int = 240
+    canny_low_threshold: int = 150
+    canny_high_threshold: int = 300
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"
