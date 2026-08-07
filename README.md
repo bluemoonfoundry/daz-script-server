@@ -156,6 +156,33 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
+## What's New in v2.9.0
+
+### ⚡ Async client — `dazpy.aio.AsyncDazClient`
+
+Async frameworks (FastAPI, FastMCP, ComfyUI custom nodes, asyncio/Temporal
+workflows) previously had to wrap every `DazClient` call in
+`asyncio.to_thread()` or hand-roll an `httpx.AsyncClient` wrapper.
+`dazpy.aio.AsyncDazClient` mirrors `DazClient`'s full method surface —
+`execute`, `execute_file`, async submit/status/result/list/cancel, render
+submit/batch/animation, USD export, and server-health endpoints — as
+native `async def` methods backed by `httpx.AsyncClient`, including the
+same `retry_on_busy`/`max_wait` backoff semantics (via `asyncio.sleep`
+instead of blocking `time.sleep`).
+
+```python
+from dazpy.aio import AsyncDazClient
+
+async def main():
+    async with AsyncDazClient() as client:
+        result = await client.execute("1 + 1;")
+        print(result.value)
+```
+
+Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
+
+---
+
 ## What's New in v2.8.1
 
 ### Truthful Iray/Viewport render-engine selector

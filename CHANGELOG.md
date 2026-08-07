@@ -2,6 +2,21 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.9.0] - 2026-08-06
+
+### Async client — `dazpy.aio.AsyncDazClient`
+
+New `dazpy.aio` module with `AsyncDazClient`, an `httpx.AsyncClient`-backed
+mirror of `DazClient`'s full method surface (`execute`, `execute_file`,
+async submit/status/result/list/cancel, render submit/batch/animation, USD
+export, server-health endpoints) as `async def` methods, including
+`asyncio`-native `retry_on_busy`/`max_wait` backoff and an async context
+manager (`async with AsyncDazClient() as client:`) for connection-pool
+lifecycle. Requires the optional `httpx` dependency (`pip install
+dazpy[aio]`). Removes the need for async callers (FastAPI, FastMCP,
+ComfyUI, Temporal) to wrap synchronous `DazClient` calls in
+`asyncio.to_thread()`.
+
 ## [2.8.1] - 2026-07-24
 
 ### Truthful Iray/Viewport render-engine selector
