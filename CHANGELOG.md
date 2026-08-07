@@ -24,6 +24,21 @@ instead of a fresh connection per call, and gained `close()` and context
 manager support (`with DazClient() as client:`), mirroring
 `AsyncDazClient`'s connection-lifecycle handling.
 
+### Fix: `/scene/save-copy`'s clean-scene fast path had no busy coverage
+
+Live testing plus code inspection (`daz-script-server-aaa`) found that
+`/scene/save-copy` completely bypassed `SceneSaving` busy tracking when the
+scene was already clean: that branch calls `QFile::copy()` directly and
+never touches `DzScene::saveScene()`, so the `sceneSaveStarting`/`sceneSaved`
+signals that drive busy detection never fired — any request landing during
+that copy got no `503 STUDIO_BUSY` fast-fail at all. (A live SSE capture
+confirmed the *dirty*-scene branch, which does call `saveScene()`, fires
+these signals reliably — the gap was specific to the clean-scene shortcut.)
+`SceneEventBroker::enterBusy()`/`exitBusy()` are now public, and
+`handleSaveCopy()` brackets its entire body (both branches) with an RAII
+`BusyScope` guard, giving explicit, signal-independent busy coverage for
+this handler.
+
 ## [2.8.1] - 2026-07-24
 
 ### Truthful Iray/Viewport render-engine selector

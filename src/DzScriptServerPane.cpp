@@ -826,6 +826,25 @@ private:
 	ActiveRequestSlot& operator=(const ActiveRequestSlot&);
 };
 
+// RAII guard for MainThreadBusy state, for handlers that perform a long
+// synchronous operation without going through the DzScene signal that would
+// normally bracket it (e.g. save-copy's QFile::copy fast path, which never
+// calls DzScene::saveScene() and so never fires sceneSaveStarting/sceneSaved).
+// enterBusy()/exitBusy() are depth-counted, so nesting with signal-driven
+// busy tracking (e.g. a saveScene() call also covered by this same guard) is safe.
+struct BusyScope {
+	SceneEventBroker* broker;
+
+	BusyScope(SceneEventBroker* b, MainThreadBusy::Reason reason) : broker(b) {
+		if (broker) broker->enterBusy(reason);
+	}
+	~BusyScope() { if (broker) broker->exitBusy(); }
+
+private:
+	BusyScope(const BusyScope&);
+	BusyScope& operator=(const BusyScope&);
+};
+
 static HttpContext toContext(const httplib::Request& req)
 {
 	HttpContext ctx;
@@ -2925,6 +2944,12 @@ HttpResult DzScriptServerPane::handleSaveCopy(const QByteArray& jsonBody)
 	// ── Snapshot current state ────────────────────────────────────────────────
 	QString origFilename = dzScene->getFilename();
 	bool    wasDirty     = dzScene->needsSave();
+
+	// Neither branch below is guaranteed to be bracketed by DzScene's own
+	// sceneSaveStarting/sceneSaved signals (Case 1's QFile::copy never calls
+	// DzScene::saveScene() at all), so track busy state explicitly here rather
+	// than relying solely on signal-driven detection. See daz-script-server-aaa.
+	BusyScope busyGuard(m_pEventBroker, MainThreadBusy::SceneSaving);
 
 	// ── Case 1: clean scene with a saved file — skip serialisation entirely ──
 	// QFile::copy does not touch DAZ Studio scene state at all.

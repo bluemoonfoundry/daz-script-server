@@ -118,6 +118,29 @@ public:
         return static_cast<MainThreadBusy::Reason>(m_busyReason.fetchAndAddOrdered(0));
     }
 
+    // Nested operations (e.g. a scene clear that runs inside a scene load)
+    // must not let the inner operation's finish prematurely mark the main
+    // thread idle. enterBusy()/exitBusy() track a depth counter alongside
+    // the reason of the outermost active operation: only a 0->1 transition
+    // records the reason, and only a 1->0 transition clears it, so nested
+    // Starting/Finished pairs are absorbed without affecting busy state.
+    //
+    // Public so main-thread HTTP handlers can bracket busy state explicitly
+    // for operations DzScene's own signals don't reliably cover (e.g. a
+    // QFile::copy-based save shortcut that never calls DzScene::saveScene()).
+    // Main thread only — matched enter/exit calls (ideally via an RAII guard)
+    // are required to keep the depth counter balanced.
+    void enterBusy(MainThreadBusy::Reason reason) {
+        if (m_busyDepth.fetchAndAddOrdered(1) == 0) {
+            m_busyReason.fetchAndStoreOrdered(static_cast<int>(reason));
+        }
+    }
+    void exitBusy() {
+        if (m_busyDepth.fetchAndAddOrdered(-1) == 1) {
+            m_busyReason.fetchAndStoreOrdered(static_cast<int>(MainThreadBusy::Idle));
+        }
+    }
+
 private slots:
     // Scene lifecycle
     void onSceneLoadStarting();
@@ -163,23 +186,6 @@ private:
     void    dispatch(int categoryBit, const QString& event);
     QString makeEvent(const QString& type, const QString& dataJson) const;
     QString nodeInfoJson(DzNode* node) const;
-
-    // Nested operations (e.g. a scene clear that runs inside a scene load)
-    // must not let the inner operation's finish prematurely mark the main
-    // thread idle. enterBusy()/exitBusy() track a depth counter alongside
-    // the reason of the outermost active operation: only a 0->1 transition
-    // records the reason, and only a 1->0 transition clears it, so nested
-    // Starting/Finished pairs are absorbed without affecting busy state.
-    void enterBusy(MainThreadBusy::Reason reason) {
-        if (m_busyDepth.fetchAndAddOrdered(1) == 0) {
-            m_busyReason.fetchAndStoreOrdered(static_cast<int>(reason));
-        }
-    }
-    void exitBusy() {
-        if (m_busyDepth.fetchAndAddOrdered(-1) == 1) {
-            m_busyReason.fetchAndStoreOrdered(static_cast<int>(MainThreadBusy::Idle));
-        }
-    }
 
     QList<SubscriberQueue*> m_subscribers;
     mutable QMutex          m_subscriberMutex;
