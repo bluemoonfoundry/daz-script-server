@@ -77,6 +77,12 @@ from ._pose import DazPose
 from ._scene_state import DazSceneState
 from ._animation import DazAnimation
 from .math3 import Vec3, Quat, BoundingBox
+from .lighting import (
+    LightSpec,
+    ThreePointLightSetup,
+    ThreePointLightRig,
+    apply_three_point_light_setup,
+)
 from ._result import ExecutionResult
 from ._polling import execute_long
 from ._render_api import (
@@ -158,6 +164,10 @@ __all__ = [
     "Vec3",
     "Quat",
     "BoundingBox",
+    "LightSpec",
+    "ThreePointLightSetup",
+    "ThreePointLightRig",
+    "apply_three_point_light_setup",
     "ExecutionResult",
     "execute_long",
     "FigureMorphs",

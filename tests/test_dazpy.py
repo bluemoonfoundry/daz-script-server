@@ -5428,5 +5428,18 @@ class TestThreePointLightSetup(unittest.TestCase):
         self.assertEqual(rig.key.position_calls[0], (1.0, 2.0, 3.0))
 
 
+class TestLightingExports(unittest.TestCase):
+    def test_lighting_symbols_importable_from_top_level_package(self):
+        import dazpy
+        self.assertTrue(hasattr(dazpy, "LightSpec"))
+        self.assertTrue(hasattr(dazpy, "ThreePointLightSetup"))
+        self.assertTrue(hasattr(dazpy, "ThreePointLightRig"))
+        self.assertTrue(hasattr(dazpy, "apply_three_point_light_setup"))
+        self.assertIn("LightSpec", dazpy.__all__)
+        self.assertIn("ThreePointLightSetup", dazpy.__all__)
+        self.assertIn("ThreePointLightRig", dazpy.__all__)
+        self.assertIn("apply_three_point_light_setup", dazpy.__all__)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
