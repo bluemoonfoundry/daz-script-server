@@ -47,3 +47,114 @@ def _look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]:
     else:
         yaw = math.degrees(math.atan2(direction.x, -direction.z))
     return (pitch, yaw, 0.0)
+
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._light import DazLight
+    from ._node import DazNode
+    from ._scene import DazScene
+
+
+@dataclass(frozen=True)
+class LightSpec:
+    """One light's placement and output within a rig.
+
+    Args:
+        role: Informational label, e.g. ``"key"``, ``"fill"``, ``"rim"``.
+        azimuth_deg: See :func:`_spherical_offset`. Ignored if *position* is set.
+        elevation_deg: See :func:`_spherical_offset`. Ignored if *position* is set.
+        distance: Distance from the target, in DAZ Studio units (cm).
+            Ignored if *position* is set.
+        intensity: Passed straight to :attr:`~dazpy.DazLight.intensity`.
+        color: ``(r, g, b)`` in the 0-255 range, passed to
+            :meth:`~dazpy.DazLight.set_color`.
+        position: Explicit world-space override. When set, *azimuth_deg*,
+            *elevation_deg*, and *distance* are ignored entirely.
+    """
+
+    role: str
+    azimuth_deg: float
+    elevation_deg: float
+    distance: float
+    intensity: float
+    color: tuple[int, int, int] = (255, 255, 255)
+    position: Vec3 | None = None
+
+
+_DEFAULT_KEY = LightSpec(role="key", azimuth_deg=45.0, elevation_deg=30.0, distance=150.0, intensity=100.0)
+_DEFAULT_FILL = LightSpec(role="fill", azimuth_deg=-45.0, elevation_deg=15.0, distance=150.0, intensity=50.0)
+_DEFAULT_RIM = LightSpec(role="rim", azimuth_deg=180.0, elevation_deg=45.0, distance=150.0, intensity=75.0)
+
+
+@dataclass(frozen=True)
+class ThreePointLightSetup:
+    """Input spec for a three-point light rig.
+
+    Args:
+        target: The point to light, as a :class:`~dazpy.math3.Vec3` world
+            position or a :class:`~dazpy.DazNode` (its
+            :attr:`~dazpy.DazNode.position` is used).
+        key: Key light placement/output. Defaults to a 45deg/30deg key light.
+        fill: Fill light placement/output. Defaults to a -45deg/15deg fill light.
+        rim: Rim light placement/output. Defaults to a 180deg/45deg rim light.
+        light_type: Forwarded to :meth:`~dazpy.DazScene.create_light` for all
+            three lights — one of ``"spot"``, ``"point"``, ``"distant"``.
+    """
+
+    target: "Vec3 | DazNode"
+    key: LightSpec = _DEFAULT_KEY
+    fill: LightSpec = _DEFAULT_FILL
+    rim: LightSpec = _DEFAULT_RIM
+    light_type: str = "spot"
+
+
+@dataclass(frozen=True)
+class ThreePointLightRig:
+    """Handles to the three lights created by :func:`apply_three_point_light_setup`."""
+
+    key: "DazLight"
+    fill: "DazLight"
+    rim: "DazLight"
+
+
+def _resolve_target(target: "Vec3 | DazNode") -> Vec3:
+    if isinstance(target, Vec3):
+        return target
+    return Vec3.from_dict(target.position)
+
+
+def _resolve_light_position(target: Vec3, spec: LightSpec) -> Vec3:
+    if spec.position is not None:
+        return spec.position
+    return _spherical_offset(target, spec.azimuth_deg, spec.elevation_deg, spec.distance)
+
+
+def _place_light(scene: "DazScene", target: Vec3, spec: LightSpec, light_type: str) -> "DazLight":
+    light = scene.create_light(light_type)
+    pos = _resolve_light_position(target, spec)
+    light.set_position(pos.x, pos.y, pos.z)
+    pitch, yaw, roll = _look_at_euler(pos, target)
+    light.set_rotation(pitch, yaw, roll)
+    light.intensity = spec.intensity
+    light.set_color(*spec.color)
+    return light
+
+
+def apply_three_point_light_setup(scene: "DazScene", setup: ThreePointLightSetup) -> ThreePointLightRig:
+    """Create and place a key/fill/rim light rig around *setup.target*.
+
+    Args:
+        scene: A :class:`~dazpy.DazScene`.
+        setup: The rig configuration.
+
+    Returns:
+        A :class:`ThreePointLightRig` with handles to the three created lights.
+    """
+    target = _resolve_target(setup.target)
+    key_light = _place_light(scene, target, setup.key, setup.light_type)
+    fill_light = _place_light(scene, target, setup.fill, setup.light_type)
+    rim_light = _place_light(scene, target, setup.rim, setup.light_type)
+    return ThreePointLightRig(key=key_light, fill=fill_light, rim=rim_light)
