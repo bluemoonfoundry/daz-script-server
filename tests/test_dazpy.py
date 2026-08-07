@@ -5305,7 +5305,7 @@ class TestLightingMath(unittest.TestCase):
         self.assertEqual(y, 0.0)
 
 
-class _FakeLight:
+class _FakeLightingLight:
     def __init__(self, light_type: str):
         self.light_type = light_type
         self.position_calls: list[tuple[float, float, float]] = []
@@ -5323,17 +5323,17 @@ class _FakeLight:
         self.color_calls.append((r, g, b))
 
 
-class _FakeScene:
+class _FakeLightingScene:
     def __init__(self):
-        self.created: list[_FakeLight] = []
+        self.created: list[_FakeLightingLight] = []
 
-    def create_light(self, light_type: str) -> _FakeLight:
-        light = _FakeLight(light_type)
+    def create_light(self, light_type: str) -> _FakeLightingLight:
+        light = _FakeLightingLight(light_type)
         self.created.append(light)
         return light
 
 
-class _FakeTargetNode:
+class _FakeLightingTargetNode:
     def __init__(self, x: float, y: float, z: float):
         self.position = {"x": x, "y": y, "z": z}
 
@@ -5364,7 +5364,7 @@ class TestThreePointLightSetup(unittest.TestCase):
     def test_apply_creates_three_lights_of_configured_type(self):
         from dazpy.lighting import ThreePointLightSetup, apply_three_point_light_setup
         from dazpy.math3 import Vec3
-        scene = _FakeScene()
+        scene = _FakeLightingScene()
         setup = ThreePointLightSetup(target=Vec3(0, 0, 0), light_type="distant")
         apply_three_point_light_setup(scene, setup)
         self.assertEqual(len(scene.created), 3)
@@ -5373,7 +5373,7 @@ class TestThreePointLightSetup(unittest.TestCase):
     def test_apply_returns_rig_in_key_fill_rim_order(self):
         from dazpy.lighting import ThreePointLightSetup, apply_three_point_light_setup
         from dazpy.math3 import Vec3
-        scene = _FakeScene()
+        scene = _FakeLightingScene()
         setup = ThreePointLightSetup(target=Vec3(0, 0, 0))
         rig = apply_three_point_light_setup(scene, setup)
         self.assertIs(rig.key, scene.created[0])
@@ -5383,7 +5383,7 @@ class TestThreePointLightSetup(unittest.TestCase):
     def test_apply_sets_position_rotation_intensity_color_from_spec(self):
         from dazpy.lighting import LightSpec, ThreePointLightSetup, apply_three_point_light_setup
         from dazpy.math3 import Vec3
-        scene = _FakeScene()
+        scene = _FakeLightingScene()
         key_spec = LightSpec(
             role="key", azimuth_deg=0.0, elevation_deg=0.0, distance=150.0,
             intensity=88.0, color=(200, 210, 220),
@@ -5404,8 +5404,8 @@ class TestThreePointLightSetup(unittest.TestCase):
     def test_apply_resolves_dazNode_target_via_position(self):
         from dazpy.lighting import ThreePointLightSetup, apply_three_point_light_setup, _spherical_offset
         from dazpy.math3 import Vec3
-        scene = _FakeScene()
-        node = _FakeTargetNode(10.0, 20.0, 30.0)
+        scene = _FakeLightingScene()
+        node = _FakeLightingTargetNode(10.0, 20.0, 30.0)
         setup = ThreePointLightSetup(target=node)
         rig = apply_three_point_light_setup(scene, setup)
         # key defaults to azimuth=45, elevation=30, distance=150 relative to (10, 20, 30)
@@ -5418,7 +5418,7 @@ class TestThreePointLightSetup(unittest.TestCase):
     def test_apply_honors_explicit_position_override(self):
         from dazpy.lighting import LightSpec, ThreePointLightSetup, apply_three_point_light_setup
         from dazpy.math3 import Vec3
-        scene = _FakeScene()
+        scene = _FakeLightingScene()
         override_spec = LightSpec(
             role="key", azimuth_deg=999.0, elevation_deg=999.0, distance=999.0,
             intensity=50.0, position=Vec3(1.0, 2.0, 3.0),
