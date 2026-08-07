@@ -136,6 +136,8 @@ def load_spec(path: str | Path) -> PipelineConfig:
 
     lineart_composite_opacity = comfy_raw.get("lineart_composite_opacity", 1.0)
     _require_unit_range(lineart_composite_opacity, "comfyui.lineart_composite_opacity", errors)
+    canny_low_threshold = comfy_raw.get("canny_low_threshold", 120)
+    canny_high_threshold = comfy_raw.get("canny_high_threshold", 240)
 
     comfy_cfg = ComfyUIStageConfig(
         checkpoint=comfy_raw.get("checkpoint", "graphicNovelStyleXL.safetensors"),
@@ -150,6 +152,8 @@ def load_spec(path: str | Path) -> PipelineConfig:
         controlnet_depth=_parse_controlnet_pass(controlnet_raw.get("depth", {}), "depth", errors),
         controlnet_lineart=_parse_controlnet_pass(controlnet_raw.get("lineart", {}), "lineart", errors),
         lineart_composite_opacity=float(lineart_composite_opacity),
+        canny_low_threshold=int(canny_low_threshold),
+        canny_high_threshold=int(canny_high_threshold),
         positive_prompt=comfy_raw.get("positive_prompt", ComfyUIStageConfig.positive_prompt),
         negative_prompt=comfy_raw.get("negative_prompt", ComfyUIStageConfig.negative_prompt),
     )

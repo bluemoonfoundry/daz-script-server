@@ -71,8 +71,16 @@ def convert_normal_exr_to_png(normal_path: str, png_path: str) -> str:
     return png_path
 
 
-def derive_lineart(beauty_png_path: str, lineart_png_path: str, *, low_threshold: int = 80, high_threshold: int = 160) -> str:
-    """Derive a Canny edge/lineart pass from the beauty render."""
+def derive_lineart(beauty_png_path: str, lineart_png_path: str, *, low_threshold: int = 120, high_threshold: int = 240) -> str:
+    """Derive a Canny edge/lineart pass from the beauty render.
+
+    Defaults live-tuned against jason_a/abby_b (daz-script-server-r5br):
+    80/160 picked up soft Iray shading/skin-crease edges on faces (brow
+    ridge, under-nose, under-eye) that read as artifactual "pencil marks"
+    once composited back over the color pass at full opacity. 120/240
+    suppresses those soft edges while preserving structural lines (jaw,
+    hairline, clothing seams); 160/280 gave no further improvement.
+    """
     img = cv2.imread(beauty_png_path, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Could not read beauty render: {beauty_png_path}")

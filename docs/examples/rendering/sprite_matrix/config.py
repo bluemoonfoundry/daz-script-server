@@ -44,11 +44,35 @@ class ComfyUIStageConfig:
     # pass back over the ComfyUI color output (0.0 = color output unchanged,
     # 1.0 = full multiply blend). See canvas_convert.py's multiply_blend().
     lineart_composite_opacity: float = 1.0
+    # Canny edge-detection thresholds for canvas_convert.derive_lineart().
+    # See that function's docstring for the live-tuning rationale (daz-
+    # script-server-r5br/017n) -- 120/240 suppresses soft Iray shading
+    # edges on faces that read as artifactual "pencil marks" once
+    # composited, without losing structural linework.
+    canny_low_threshold: int = 120
+    canny_high_threshold: int = 240
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"
     )
-    negative_prompt: str = "photorealistic, 3d render, blurry, watermark"
+    # Live-tuned against jason_a/abby_b (daz-script-server-r5br): the
+    # Graphic_Novel LoRA at full strength draws harsh ink lines along facial
+    # creases (brow ridge, under-eye, nasolabial fold) that read as
+    # artifactual "pencil marks" rather than stylistic linework -- confirmed
+    # via isolating lora_strength=0.0 (lines vanish) vs 0.8 (lines present)
+    # with every ControlNet/composite setting held constant. Explicitly
+    # suppressing that behavior in the negative prompt removes it cleanly on
+    # both test characters without affecting the LoRA's ink-hatching texture
+    # on clothing/body, and without any architecture change (no face-region
+    # pass needed -- see daz-script-server-fsq8, abandoned after making the
+    # face worse by reusing per-region ControlNet weights tuned for a
+    # different, now-removed identity-conditioning mechanism).
+    negative_prompt: str = (
+        "photorealistic, 3d render, blurry, watermark, "
+        "harsh facial crosshatching, heavy dark under-eye ink lines, "
+        "dark eye bags, exaggerated brow line, pencil scribble on face, "
+        "heavy facial ink shading, harsh nasolabial lines"
+    )
 
 
 @dataclass

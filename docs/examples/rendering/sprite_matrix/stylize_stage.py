@@ -85,7 +85,12 @@ def run_stylize_stage(
 
             normal_png = convert_normal_exr_to_png(normal_exr, paths.normal_png_path(cfg.output_dir, combo.id, camera))
             depth_png = convert_depth_exr_to_png(depth_exr, paths.depth_png_path(cfg.output_dir, combo.id, camera))
-            lineart_png = derive_lineart(beauty, paths.lineart_path(cfg.output_dir, combo.id, camera))
+            lineart_png = derive_lineart(
+                beauty,
+                paths.lineart_path(cfg.output_dir, combo.id, camera),
+                low_threshold=cfg.comfyui.canny_low_threshold,
+                high_threshold=cfg.comfyui.canny_high_threshold,
+            )
 
             beauty_ref = comfy.upload_image(beauty)
             normal_ref = comfy.upload_image(normal_png)

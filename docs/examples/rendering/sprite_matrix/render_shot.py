@@ -90,6 +90,8 @@ def _parse_args() -> argparse.Namespace:
         help="Opacity of the post-process multiply-blend of the Canny lineart pass back over the "
         "color-stylized output (0 = no compositing, 1 = fully multiplied)",
     )
+    p.add_argument("--canny-low-threshold", type=int, default=comfy_defaults.canny_low_threshold)
+    p.add_argument("--canny-high-threshold", type=int, default=comfy_defaults.canny_high_threshold)
 
     return p.parse_args()
 
@@ -175,7 +177,12 @@ def stylize_shot(args: argparse.Namespace) -> bool:
 
             normal_png = convert_normal_exr_to_png(normal_exr, paths.normal_png_path(args.output_dir, args.name, camera))
             depth_png = convert_depth_exr_to_png(depth_exr, paths.depth_png_path(args.output_dir, args.name, camera))
-            lineart_png = derive_lineart(beauty, paths.lineart_path(args.output_dir, args.name, camera))
+            lineart_png = derive_lineart(
+                beauty,
+                paths.lineart_path(args.output_dir, args.name, camera),
+                low_threshold=args.canny_low_threshold,
+                high_threshold=args.canny_high_threshold,
+            )
 
             beauty_ref = comfy.upload_image(beauty)
             normal_ref = comfy.upload_image(normal_png)
