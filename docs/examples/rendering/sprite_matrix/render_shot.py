@@ -83,53 +83,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--controlnet-normal-weight", type=float, default=comfy_defaults.controlnet_normal.weight)
     p.add_argument("--controlnet-depth-weight", type=float, default=comfy_defaults.controlnet_depth.weight)
     p.add_argument("--controlnet-lineart-weight", type=float, default=comfy_defaults.controlnet_lineart.weight)
-
     p.add_argument(
-        "--face-detailer",
-        dest="face_detailer_enabled",
-        action="store_true",
-        default=comfy_defaults.face_detailer_enabled,
-        help="Enable the FaceDetailer second pass (crop+refine the face at lower denoise for identity retention)",
-    )
-    p.add_argument(
-        "--no-face-detailer",
-        dest="face_detailer_enabled",
-        action="store_false",
-        help="Disable the FaceDetailer second pass",
-    )
-    p.add_argument("--face-detailer-denoise", type=float, default=comfy_defaults.face_detailer_denoise)
-    p.add_argument("--face-detailer-guide-size", type=float, default=comfy_defaults.face_detailer_guide_size)
-    p.add_argument(
-        "--face-detailer-bbox-dilation",
-        type=int,
-        default=comfy_defaults.face_detailer_bbox_dilation,
-        help="Pixels to dilate the detected face bbox before refining/pasting -- needs to be generous "
-        "since the face detector's bbox stops at the hairline, otherwise a color seam appears there",
-    )
-    p.add_argument(
-        "--face-detailer-faceid-weight",
+        "--lineart-composite-opacity",
         type=float,
-        default=comfy_defaults.face_detailer_faceid_weight,
-        help="IPAdapter FaceID conditioning strength for the face-identity pass "
-        "(0 = no identity conditioning, higher = stronger identity lock)",
-    )
-    p.add_argument(
-        "--face-detailer-controlnet-normal-weight",
-        type=float,
-        default=comfy_defaults.face_detailer_controlnet_normal_weight,
-        help="Per-region ControlNet strength (normal map) for the face-identity pass",
-    )
-    p.add_argument(
-        "--face-detailer-controlnet-depth-weight",
-        type=float,
-        default=comfy_defaults.face_detailer_controlnet_depth_weight,
-        help="Per-region ControlNet strength (depth map) for the face-identity pass",
-    )
-    p.add_argument(
-        "--face-detailer-controlnet-lineart-weight",
-        type=float,
-        default=comfy_defaults.face_detailer_controlnet_lineart_weight,
-        help="Per-region ControlNet strength (lineart map) for the face-identity pass",
+        default=comfy_defaults.lineart_composite_opacity,
+        help="Opacity of the post-process multiply-blend of the Canny lineart pass back over the "
+        "color-stylized output (0 = no compositing, 1 = fully multiplied)",
     )
 
     return p.parse_args()
@@ -192,8 +151,8 @@ def render_shot(args: argparse.Namespace, canvases: tuple[str, ...]) -> bool:
 
 
 def stylize_shot(args: argparse.Namespace) -> bool:
-    from canvas_convert import convert_depth_exr_to_png, convert_normal_exr_to_png, derive_lineart
-    from comfyui_client import ComfyUIClient, ComfyUIExecutionError
+    from canvas_convert import convert_depth_exr_to_png, convert_normal_exr_to_png, derive_lineart, multiply_blend
+    from comfyui_client import ComfyUIClient
     from workflow_builder import build_controlnet_workflow, stable_seed
 
     comfy = ComfyUIClient(base_url=args.comfyui_url)
@@ -223,58 +182,42 @@ def stylize_shot(args: argparse.Namespace) -> bool:
             depth_ref = comfy.upload_image(depth_png)
             lineart_ref = comfy.upload_image(lineart_png)
 
-            def _run(face_detailer_enabled: bool) -> None:
-                workflow = build_controlnet_workflow(
-                    beauty_image_ref=beauty_ref,
-                    normal_image_ref=normal_ref,
-                    depth_image_ref=depth_ref,
-                    lineart_image_ref=lineart_ref,
-                    checkpoint_name=args.checkpoint,
-                    lora_name=args.lora_name,
-                    lora_strength=args.lora_strength,
-                    denoise=args.denoise,
-                    steps=args.steps,
-                    cfg=args.cfg,
-                    seed=stable_seed(args.base_seed, args.name, camera),
-                    positive_prompt=args.positive_prompt,
-                    negative_prompt=args.negative_prompt,
-                    controlnet_model=args.controlnet_model,
-                    controlnet_normal_weight=args.controlnet_normal_weight,
-                    controlnet_depth_weight=args.controlnet_depth_weight,
-                    controlnet_lineart_weight=args.controlnet_lineart_weight,
-                    face_detailer_enabled=face_detailer_enabled,
-                    face_detailer_denoise=args.face_detailer_denoise,
-                    face_detailer_guide_size=args.face_detailer_guide_size,
-                    face_detailer_bbox_dilation=args.face_detailer_bbox_dilation,
-                    face_detailer_faceid_weight=args.face_detailer_faceid_weight,
-                    face_detailer_controlnet_normal_weight=args.face_detailer_controlnet_normal_weight,
-                    face_detailer_controlnet_depth_weight=args.face_detailer_controlnet_depth_weight,
-                    face_detailer_controlnet_lineart_weight=args.face_detailer_controlnet_lineart_weight,
-                )
-                prompt_id = comfy.queue_prompt(workflow)
-                # See stylize_stage.py's run_stylize_stage for why this is
-                # 600s, not 300s.
-                comfy.save_result(prompt_id, out_path, timeout=600.0)
-
-            note = ""
+            workflow = build_controlnet_workflow(
+                beauty_image_ref=beauty_ref,
+                normal_image_ref=normal_ref,
+                depth_image_ref=depth_ref,
+                lineart_image_ref=lineart_ref,
+                checkpoint_name=args.checkpoint,
+                lora_name=args.lora_name,
+                lora_strength=args.lora_strength,
+                denoise=args.denoise,
+                steps=args.steps,
+                cfg=args.cfg,
+                seed=stable_seed(args.base_seed, args.name, camera),
+                positive_prompt=args.positive_prompt,
+                negative_prompt=args.negative_prompt,
+                controlnet_model=args.controlnet_model,
+                controlnet_normal_weight=args.controlnet_normal_weight,
+                controlnet_depth_weight=args.controlnet_depth_weight,
+                controlnet_lineart_weight=args.controlnet_lineart_weight,
+            )
+            prompt_id = comfy.queue_prompt(workflow)
+            # See stylize_stage.py's run_stylize_stage for why this is
+            # 600s, not 300s.
+            color_path = out_path + ".raw.png"
+            comfy.save_result(prompt_id, color_path, timeout=600.0)
             try:
-                _run(args.face_detailer_enabled)
-            except ComfyUIExecutionError as exc:
-                if not args.face_detailer_enabled:
-                    raise
-                # See stylize_stage.py's run_stylize_stage for why this
-                # retry exists: IPAdapterFaceID needs InsightFace to find a
-                # face in the original beauty render, which isn't
-                # guaranteed (e.g. an over-the-shoulder/back camera shot).
-                _run(False)
-                note = f" (face-identity pass skipped: {exc})"
+                multiply_blend(color_path, lineart_png, args.lineart_composite_opacity, out_path)
+            finally:
+                if os.path.isfile(color_path):
+                    os.remove(color_path)
         except Exception as exc:  # noqa: BLE001 - continue-and-log per camera
             any_failed = True
             print(f"stylize {args.name} {camera} ... FAIL: {exc}", file=sys.stderr)
             continue
 
         duration_ms = (time.monotonic() - t0) * 1000
-        print(f"stylize {args.name} {camera} ... OK ({duration_ms:.0f}ms){note}")
+        print(f"stylize {args.name} {camera} ... OK ({duration_ms:.0f}ms)")
 
     return not any_failed
 

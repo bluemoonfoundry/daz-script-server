@@ -134,13 +134,8 @@ def load_spec(path: str | Path) -> PipelineConfig:
     if not controlnet_model:
         errors.append("comfyui.controlnet.model is required")
 
-    face_detailer_raw = comfy_raw.get("face_detailer", {})
-    face_detailer_denoise = face_detailer_raw.get("denoise", 0.35)
-    _require_unit_range(face_detailer_denoise, "comfyui.face_detailer.denoise", errors)
-    face_detailer_faceid_weight = face_detailer_raw.get("faceid_weight", 1.0)
-    face_detailer_controlnet_normal_weight = face_detailer_raw.get("controlnet_normal_weight", 1.4)
-    face_detailer_controlnet_depth_weight = face_detailer_raw.get("controlnet_depth_weight", 1.1)
-    face_detailer_controlnet_lineart_weight = face_detailer_raw.get("controlnet_lineart_weight", 0.9)
+    lineart_composite_opacity = comfy_raw.get("lineart_composite_opacity", 1.0)
+    _require_unit_range(lineart_composite_opacity, "comfyui.lineart_composite_opacity", errors)
 
     comfy_cfg = ComfyUIStageConfig(
         checkpoint=comfy_raw.get("checkpoint", "graphicNovelStyleXL.safetensors"),
@@ -154,14 +149,7 @@ def load_spec(path: str | Path) -> PipelineConfig:
         controlnet_normal=_parse_controlnet_pass(controlnet_raw.get("normal", {}), "normal", errors),
         controlnet_depth=_parse_controlnet_pass(controlnet_raw.get("depth", {}), "depth", errors),
         controlnet_lineart=_parse_controlnet_pass(controlnet_raw.get("lineart", {}), "lineart", errors),
-        face_detailer_enabled=bool(face_detailer_raw.get("enabled", True)),
-        face_detailer_denoise=float(face_detailer_denoise),
-        face_detailer_guide_size=float(face_detailer_raw.get("guide_size", 512.0)),
-        face_detailer_bbox_dilation=int(face_detailer_raw.get("bbox_dilation", 100)),
-        face_detailer_faceid_weight=float(face_detailer_faceid_weight),
-        face_detailer_controlnet_normal_weight=float(face_detailer_controlnet_normal_weight),
-        face_detailer_controlnet_depth_weight=float(face_detailer_controlnet_depth_weight),
-        face_detailer_controlnet_lineart_weight=float(face_detailer_controlnet_lineart_weight),
+        lineart_composite_opacity=float(lineart_composite_opacity),
         positive_prompt=comfy_raw.get("positive_prompt", ComfyUIStageConfig.positive_prompt),
         negative_prompt=comfy_raw.get("negative_prompt", ComfyUIStageConfig.negative_prompt),
     )

@@ -40,57 +40,10 @@ class ComfyUIStageConfig:
     controlnet_lineart: ControlNetPassConfig = field(
         default_factory=lambda: ControlNetPassConfig(weight=0.4)
     )
-    # FaceDetailer second pass: detects the face in the stylized output,
-    # crops+upscales it, and re-runs KSampler on just that region -- keeps
-    # identity recognizable via IPAdapter FaceID conditioning rather than
-    # low denoise. See workflow_builder.py.
-    face_detailer_enabled: bool = True
-    # Live-tuned in Task 7 of docs/superpowers/plans/2026-08-05-faceid-conditioning.md
-    # by comparing a denoise x faceid_weight grid against two characters
-    # (abby_b, jason_a) once FaceID conditioning decoupled identity from
-    # denoise. 0.35 -- matching the main body pass's own denoise -- produced
-    # ink-hatching texture on the face comparable to the body, closing the
-    # earlier photoreal-face-on-hatched-body mismatch, without visible loss
-    # of facial identity at any weight in the tested grid. Note: this pass's
-    # SAM-refined crop covers hair as well as face (see
-    # face_detailer_bbox_dilation below), and IPAdapter FaceID's embedding
-    # only encodes facial features, not hair color -- so hair color is *not*
-    # locked to the source and can drift under restyling (confirmed on
-    # jason_a's grey hair rendering brown/blonde across the whole tested
-    # denoise/weight grid, independent of both knobs). Accepted as a known
-    # limitation of this mechanism; see README.md.
-    face_detailer_denoise: float = 0.35
-    face_detailer_guide_size: float = 512.0
-    # Bbox dilation (pixels) around the detected face region before
-    # refining/pasting -- the face detector's bbox stops at the hairline, so
-    # a generous dilation is needed to push the refined region up through
-    # the whole head and avoid a visible hair-color seam at the boundary.
-    face_detailer_bbox_dilation: int = 100
-    # IPAdapter FaceID's own conditioning strength (0 = no identity
-    # conditioning, higher = stronger identity lock at the cost of the
-    # model's freedom to stylize). Live-tuned in Task 7 alongside
-    # face_detailer_denoise: weight 0.8/1.0/1.2 produced visually
-    # indistinguishable identity fidelity across the tested grid, so 1.0
-    # (the middle, safest value) was kept as the default.
-    face_detailer_faceid_weight: float = 1.0
-    # Per-region ControlNet conditioning strength for the face-identity
-    # pass's SEGSDetailer sampling (normal/depth/lineart, matched to the
-    # SAM-refined crop via Impact Pack's ImpactControlNetApplyAdvancedSEGS).
-    # Without this, the face pass has zero ControlNet guidance and renders
-    # visibly flatter/shinier skin than the ink-hatched body regardless of
-    # denoise/faceid_weight -- see
-    # docs/superpowers/plans/2026-08-05-face-detailer-controlnet.md. Live-
-    # tuned in Task 5 of that plan against two characters (abby_b, jason_a):
-    # a three-point grid (matching the main pass's own 0.6/0.5/0.4, a
-    # provisional 1.0/0.8/0.6, and 1.4/1.1/0.9) showed strength scaling
-    # directly with visible ink-hatching texture on both the face and the
-    # neck/collar transition, with 1.4/1.1/0.9 clearly the closest match to
-    # the body's own stylization on both characters and no visible identity
-    # loss or regression of prior fixes (hair-color seam, background box,
-    # blacker-than-black halo) at that strength.
-    face_detailer_controlnet_normal_weight: float = 1.4
-    face_detailer_controlnet_depth_weight: float = 1.1
-    face_detailer_controlnet_lineart_weight: float = 0.9
+    # Multiply-blend opacity for compositing the deterministic Canny lineart
+    # pass back over the ComfyUI color output (0.0 = color output unchanged,
+    # 1.0 = full multiply blend). See canvas_convert.py's multiply_blend().
+    lineart_composite_opacity: float = 1.0
     positive_prompt: str = (
         "graphic novel illustration, bold ink linework, cel-shaded, "
         "dramatic hatching, naturalistic proportions"

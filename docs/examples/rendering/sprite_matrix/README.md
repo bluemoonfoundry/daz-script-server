@@ -14,87 +14,34 @@ camera angles for every combo, then stylizes each render into a
    Normal and Depth Iray Canvas passes (AOVs) from both cameras.
 2. **Stylize stage** (`stylize_stage.py`): converts the Normal/Depth EXR
    canvases to PNG, derives a Canny/lineart pass from the beauty render, and
-   submits a ComfyUI img2img workflow conditioned on all three passes plus a
-   fixed checkpoint/LoRA, so pose/structure stays locked to the Daz render
-   while the graphic-novel look comes from Stable Diffusion. All three
-   passes are conditioned through a single SDXL **union** ControlNet model
-   (e.g. `controlnet-union-sdxl-1.0.safetensors`), loaded once and re-tagged
-   per pass via ComfyUI's `SetUnionControlNetType` node (`normal`, `depth`,
-   `canny/lineart/anime_lineart/mlsd`) -- not three separate per-type models.
-3. **Face identity pass** (enabled by default, `comfyui.face_detailer` in the
-   spec / `--face-detailer`/`--no-face-detailer` for `render_shot.py`): the
-   main pass has little resolution or conditioning signal to keep a small
-   face recognizable, so it detects the face in the stylized output and
-   re-runs the sampler on just that region. Because the face detector
-   (`UltralyticsDetectorProvider`/`bbox/face_yolov8m.pt`) only produces a
-   rectangular bounding box, that rectangle is refined into an actual
-   head/hair silhouette via SAM (`SAMLoader` + `SAMDetectorCombined` +
-   `MaskToSEGS`) before refining -- a plain rectangular mask either cuts off
-   the hair (leaving a hair-color seam at the boundary) or, if dilated
-   enough to cover it, pulls in surrounding background that gets subtly
-   re-stylized into a visible box artifact. Both were confirmed live before
-   adding the SAM step. Requires ComfyUI's Impact Pack with the
-   separately-installed
-   [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
-   (`UltralyticsDetectorProvider`), a `bbox/face_yolov8m.pt` model in
-   `models/ultralytics/bbox/`, and a SAM model (e.g.
-   `sam_vit_b_01ec64.pth`) in `models/sams/`.
+   submits a single ComfyUI img2img workflow conditioned on all three passes
+   plus a fixed checkpoint/LoRA, so pose/structure stays locked to the Daz
+   render while the graphic-novel look comes from Stable Diffusion. All
+   three passes are conditioned through a single SDXL **union** ControlNet
+   model (e.g. `controlnet-union-sdxl-1.0.safetensors`), loaded once and
+   re-tagged per pass via ComfyUI's `SetUnionControlNetType` node (`normal`,
+   `depth`, `canny/lineart/anime_lineart/mlsd`) -- not three separate
+   per-type models. This is now a single full-image KSampler pass; there is
+   no second pass over the image.
+3. **Lineart composite** (post-process, `canvas_convert.multiply_blend`,
+   tunable via `comfyui.lineart_composite_opacity` in the spec /
+   `--lineart-composite-opacity` for `render_shot.py`): after the ComfyUI
+   pass returns the color-stylized image, the same Canny lineart PNG already
+   derived for the ControlNet pass above is multiply-blended back over it at
+   a configurable opacity (`0` = no compositing, `1` = fully multiplied).
+   This punches the ink linework back up where the diffusion pass softened
+   it, without needing any extra model or a second sampling pass.
 
-   Identity is preserved via **IPAdapter FaceID** conditioning, not by
-   starting the crop from real source pixels. The refinement's sampling
-   model is patched with a face-recognition embedding (via `insightface`,
-   `IPAdapterInsightFaceLoader` -> `IPAdapterUnifiedLoaderFaceID` ->
-   `IPAdapterFaceID`) extracted from the original Daz beauty render, so the
-   face pass can run at a denoise that actually matches the body's own
-   stylization instead of needing to stay low to avoid drifting off the
-   real photo. An earlier version sourced the crop's pixels from the real
-   beauty render (`SetDefaultImageForSEGS`) and relied on low denoise
-   (`0.15`) alone for identity; a live comparison confirmed that had a hard
-   ceiling -- at low denoise there's no room for the ink cross-hatching the
-   body gets at its own denoise, producing a visibly smoother/more
-   photoreal face than the stylized body. FaceID conditioning decouples the
-   two, so the default `face_detailer.denoise` is now `0.35` (matching the
-   body pass) -- see the "Known limitation" note below for the resulting
-   trade-off.
-
-   Even with FaceID conditioning and matched denoise, the face pass
-   initially still rendered visibly flatter/shinier skin than the
-   ink-hatched body -- confirmed live via a real seam at the neck/collar
-   boundary. Root cause: `SEGSDetailer`'s `basic_pipe` carries the raw,
-   un-conditioned prompt straight into `ToBasicPipe`; the main pass's own
-   `ControlNetApply` chain (normal/depth/lineart) conditions the
-   whole-image sampler's positive conditioning object, which the
-   per-segment `SEGSDetailer` re-sampling never sees. Fixed by attaching
-   per-segment ControlNet conditioning directly onto the SEGS list via
-   Impact Pack's `ImpactControlNetApplyAdvancedSEGS`, inserted between
-   `MaskToSEGS` and `SEGSDetailer` -- it internally crops/resizes the same
-   normal/depth/lineart maps the main pass uses to match each segment's
-   crop region, solving the coordinate-space mismatch that made adding a
-   full `ControlNetApply` to this pass impractical in the first place. New
-   config knobs `face_detailer_controlnet_normal_weight`/`_depth_weight`/
-   `_lineart_weight` control this pass's ControlNet strength independently
-   of the main pass's own `controlnet.normal`/`depth`/`lineart` weights --
-   live tuning across two characters found the face crop's cropped/upscaled
-   scale wants noticeably stronger conditioning than the main pass's
-   full-body scale (`1.4`/`1.1`/`0.9` vs. the main pass's `0.6`/`0.5`/`0.4`).
-
-   **Known limitation:** the FaceID embedding encodes facial features only,
-   not hair color. Since the crop still covers hair (needed to avoid the
-   seam artifact above) but the pass no longer starts from real pixels,
-   hair color is unconstrained during refinement and can drift from the
-   source -- confirmed live on a grey-haired test character, whose hair
-   rendered brown/blonde across the entire tested denoise/`faceid_weight`
-   grid. This is a known, accepted trade-off of this mechanism, not a bug
-   to be tuned away with these knobs.
-
-   **Shots with no visible face** (e.g. an over-the-shoulder/back camera
-   angle) can't produce a FaceID embedding at all -- `InsightFace: No face
-   detected.` -- since there's nothing for it to extract from the beauty
-   render. `stylize_stage.py`/`render_shot.py` detect this specific ComfyUI
-   execution failure and automatically retry that shot with the whole face
-   identity pass disabled rather than failing the unit; the result still
-   lands at the normal output path, with a `(face-identity pass skipped:
-   ...)` note in the progress line.
+   This replaced an earlier two-pass mechanism (SEGSDetailer + IPAdapter
+   FaceID) that re-ran the sampler on just the detected face region to keep
+   small faces recognizable. That approach turned out to be the source of
+   its own visible artifacts -- pale/ghostlike skin and harsh eye-shadow on
+   the refined face -- confirmed via a live test with the face pass forced
+   off (a zero-baseline run) that reproduced a clean face without those
+   artifacts. Since the face-refinement mechanism was implicated rather than
+   any of the shared conditioning, it was removed outright rather than
+   further tuned, in favor of the simpler single-pass + deterministic
+   lineart composite described above.
 
 ### Single-shot variant (`render_shot.py`)
 
@@ -139,29 +86,10 @@ command is self-healing after a crash or partial failure.
   and an SDXL union ControlNet model (e.g. `controlnet-union-sdxl-1.0.safetensors`)
   installed -- one model conditions all three passes (normal, depth,
   lineart) via ComfyUI's `SetUnionControlNetType` node.
-- For the face identity pass (on by default): ComfyUI's Impact Pack plus the
-  separately-installed [Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack)
-  custom node (provides `UltralyticsDetectorProvider`), a
-  `bbox/face_yolov8m.pt` model in `models/ultralytics/bbox/`, and a SAM
-  model (e.g. `sam_vit_b_01ec64.pth`, loadable via Impact Pack's built-in
-  `SAMLoader`) in `models/sams/`. Disable via
-  `comfyui.face_detailer.enabled: false` in the spec, or
-  `--no-face-detailer` for `render_shot.py`, if these aren't installed.
-- Also for the face identity pass: [ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus)
-  with the `insightface` Python package installed into ComfyUI's own
-  Python environment (`pip install insightface`; the default provider is
-  `"CPU"` to avoid an additional CUDA-build `onnxruntime` dependency), plus
-  the FaceID SDXL model files from
-  [h94/IP-Adapter-FaceID](https://huggingface.co/h94/IP-Adapter-FaceID):
-  `ip-adapter-faceid-plusv2_sdxl.bin` in `models/ipadapter/` and
-  `ip-adapter-faceid-plusv2_sdxl_lora.safetensors` in `models/loras/`. Also
-  requires a ViT-H CLIP vision model in `models/clip_vision/` whose
-  filename IPAdapter_plus recognizes (matching `ViT-H-14`/`s32B-b79K`, or
-  `ipadapter`+`sd15` -- e.g. `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors`);
-  if you already have a same-content file under a different name, a
-  same-volume hardlink under the expected name works and needs no
-  ComfyUI restart.
-- `pip install -r requirements.txt` (plus `dazpy` itself).
+- `pip install -r requirements.txt` (plus `dazpy` itself). No ComfyUI custom
+  nodes beyond the standard ControlNet/SDXL nodes are required -- the
+  lineart composite step is a plain post-process done in Python, not a
+  ComfyUI graph node.
 
 ## Authoring pose and expression presets
 
@@ -194,36 +122,13 @@ See `example_spec.json` for a full example. Key fields:
   (AOVs) to render (`Normal`, `Depth`).
 - `comfyui` -- checkpoint, LoRA, denoise, base seed, steps, cfg, prompts,
   `controlnet` (a single union `model` shared by all three passes plus
-  per-pass `normal`/`depth`/`lineart` `weight`), and `face_detailer`
-  (`enabled`, `denoise`, `guide_size`, `bbox_dilation`, `faceid_weight`,
-  `controlnet_normal_weight`/`controlnet_depth_weight`/
-  `controlnet_lineart_weight` -- the identity-preservation pass; defaults
-  to on with `denoise: 0.35`, `bbox_dilation: 100`, `faceid_weight: 1.0`,
-  `controlnet_normal_weight: 1.4`, `controlnet_depth_weight: 1.1`,
-  `controlnet_lineart_weight: 0.9`). Identity comes from an IPAdapter
-  FaceID embedding (see "Face identity pass" above), which decouples it
-  from `denoise` -- so `denoise` can now match the body pass's own
-  stylization level instead of staying low. `0.35` was picked after a live
-  comparison grid (`denoise` in `0.25`/`0.35` x `faceid_weight` in
-  `0.8`/`1.0`/`1.2`) run against two different characters: it produced
-  ink-hatching texture on the face comparable to the body without visible
-  identity loss at any tested `faceid_weight`. `faceid_weight` controls
-  IPAdapter FaceID's own conditioning strength (0 = no identity
-  conditioning, higher = stronger identity lock); `1.0` was kept as the
-  default since `0.8`/`1.0`/`1.2` were visually indistinguishable in the
-  tested grid. The three `controlnet_*_weight` fields control the
-  per-region ControlNet conditioning described in "Face identity pass"
-  above (0 = no ControlNet guidance for this pass, higher = more strongly
-  forced to match the body's own ink-hatching); a live grid run against the
-  same two characters found `1.4`/`1.1`/`0.9` -- noticeably stronger than
-  the main pass's own `0.6`/`0.5`/`0.4` -- gave the closest match to the
-  body's stylization without identity loss or reintroducing any
-  previously-fixed artifact. `bbox_dilation` needs to be generous: the face
-  detector's bbox stops at the hairline, so a small value leaves a visible
-  color seam where the refined region ends and the un-refined main pass's
-  invented hair color begins -- note that a generous dilation also means
-  hair color is subject to the identity pass's own drift; see the known
-  limitation above.
+  per-pass `normal`/`depth`/`lineart` `weight`), and
+  `lineart_composite_opacity` -- the post-process multiply-blend strength
+  of the Canny lineart pass back over the color-stylized output (see
+  "Lineart composite" above; `0` = no compositing, `1` = fully multiplied;
+  default `1.0`). This replaced the old `face_detailer` block and its eight
+  identity-pass knobs, which no longer exist -- see "Lineart composite"
+  above for why that mechanism was removed rather than kept as an option.
 - `combos` -- an explicit list of `{pose, expression, overrides?, id?}`
   entries (not a pose x expression cross product). `pose` and `expression`
   must resolve to files in the preset libraries. `overrides` is an optional

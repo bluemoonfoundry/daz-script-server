@@ -84,3 +84,46 @@ def derive_lineart(beauty_png_path: str, lineart_png_path: str, *, low_threshold
     os.makedirs(os.path.dirname(lineart_png_path), exist_ok=True)
     cv2.imwrite(lineart_png_path, inverted)
     return lineart_png_path
+
+
+def multiply_blend(color_path: str, lineart_path: str, opacity: float, out_path: str) -> str:
+    """Composite the (inverted, dark-on-white) lineart pass over a color
+    render using a partial-opacity multiply blend.
+
+    For lineart pixel L (0 = black line, 255 = white/no-line background) and
+    color pixel C, a full multiply blend is ``C * L / 255``. `opacity`
+    linearly interpolates between the unblended color (opacity=0) and the
+    fully multiplied result (opacity=1):
+
+        result = C * (1 - opacity) + (C * L / 255) * opacity
+
+    lineart_path is expected to be the same dimensions as color_path (both
+    derived from the same render); if not, the lineart is resized to match
+    defensively. A single-channel (grayscale) lineart is broadcast to match
+    color's channel count.
+    """
+    color = cv2.imread(color_path, cv2.IMREAD_COLOR)
+    if color is None:
+        raise FileNotFoundError(f"Could not read color image: {color_path}")
+    lineart = cv2.imread(lineart_path, cv2.IMREAD_UNCHANGED)
+    if lineart is None:
+        raise FileNotFoundError(f"Could not read lineart image: {lineart_path}")
+
+    if lineart.shape[:2] != color.shape[:2]:
+        lineart = cv2.resize(lineart, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    if lineart.ndim == 2:
+        lineart = cv2.cvtColor(lineart, cv2.COLOR_GRAY2BGR)
+    elif lineart.shape[2] != color.shape[2]:
+        raise ValueError(f"Lineart channel count {lineart.shape[2]} incompatible with color channel count {color.shape[2]}")
+
+    color_f = color.astype(np.float32)
+    lineart_f = lineart.astype(np.float32)
+
+    multiplied = color_f * lineart_f / 255.0
+    blended = color_f * (1.0 - opacity) + multiplied * opacity
+    result = np.clip(blended, 0, 255).astype(np.uint8)
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    cv2.imwrite(out_path, result)
+    return out_path
