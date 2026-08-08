@@ -8,8 +8,15 @@ or explicit world-space positions.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .math3 import Vec3
+
+if TYPE_CHECKING:
+    from ._light import DazLight
+    from ._node import DazNode
+    from ._scene import DazScene
 
 
 def _spherical_offset(
@@ -38,6 +45,15 @@ def _look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]:
     rotation ``(0, 0, 0)`` — i.e. a light's unrotated rest pose is defined as
     facing ``-Z``. Roll (``z``) is always ``0.0``; lights have no meaningful
     "up" for aiming purposes.
+
+    Caveat: the yaw sign here has not been empirically verified against a live
+    DAZ Studio session. It is derived from :func:`dazpy.math3._euler_to_quat`'s
+    XYZ rotation convention (documented to match DAZ's bone-rotation channels),
+    but generic node rotation-control composition order has not been
+    independently confirmed for spot/distant/point lights. If lights aimed via
+    this rig appear mirrored (facing away from or past the target) for
+    off-axis placements, this is the first thing to check. See beads issue
+    daz-script-server-bu86 for the live-validation follow-up.
     """
     direction = (to_pos - from_pos).normalize()
     horizontal_dist = math.sqrt(direction.x * direction.x + direction.z * direction.z)
@@ -47,15 +63,6 @@ def _look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]:
     else:
         yaw = math.degrees(math.atan2(direction.x, -direction.z))
     return (pitch, yaw, 0.0)
-
-
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ._light import DazLight
-    from ._node import DazNode
-    from ._scene import DazScene
 
 
 @dataclass(frozen=True)
@@ -104,7 +111,7 @@ class ThreePointLightSetup:
             three lights — one of ``"spot"``, ``"point"``, ``"distant"``.
     """
 
-    target: "Vec3 | DazNode"
+    target: Vec3 | DazNode
     key: LightSpec = _DEFAULT_KEY
     fill: LightSpec = _DEFAULT_FILL
     rim: LightSpec = _DEFAULT_RIM
@@ -115,15 +122,18 @@ class ThreePointLightSetup:
 class ThreePointLightRig:
     """Handles to the three lights created by :func:`apply_three_point_light_setup`."""
 
-    key: "DazLight"
-    fill: "DazLight"
-    rim: "DazLight"
+    key: DazLight
+    fill: DazLight
+    rim: DazLight
 
 
-def _resolve_target(target: "Vec3 | DazNode") -> Vec3:
+def _resolve_target(target: Vec3 | DazNode) -> Vec3:
     if isinstance(target, Vec3):
         return target
-    return Vec3.from_dict(target.position)
+    position = target.position
+    if position is None:
+        raise ValueError("ThreePointLightSetup target node has no position (it may not exist in the scene)")
+    return Vec3.from_dict(position)
 
 
 def _resolve_light_position(target: Vec3, spec: LightSpec) -> Vec3:
@@ -132,8 +142,8 @@ def _resolve_light_position(target: Vec3, spec: LightSpec) -> Vec3:
     return _spherical_offset(target, spec.azimuth_deg, spec.elevation_deg, spec.distance)
 
 
-def _place_light(scene: "DazScene", target: Vec3, spec: LightSpec, light_type: str) -> "DazLight":
-    light = scene.create_light(light_type)
+def _place_light(scene: DazScene, target: Vec3, spec: LightSpec, light_type: str) -> DazLight:
+    light = scene.create_light(light_type, name=spec.role)
     pos = _resolve_light_position(target, spec)
     light.set_position(pos.x, pos.y, pos.z)
     pitch, yaw, roll = _look_at_euler(pos, target)
@@ -143,7 +153,7 @@ def _place_light(scene: "DazScene", target: Vec3, spec: LightSpec, light_type: s
     return light
 
 
-def apply_three_point_light_setup(scene: "DazScene", setup: ThreePointLightSetup) -> ThreePointLightRig:
+def apply_three_point_light_setup(scene: DazScene, setup: ThreePointLightSetup) -> ThreePointLightRig:
     """Create and place a key/fill/rim light rig around *setup.target*.
 
     Args:

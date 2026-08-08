@@ -5306,8 +5306,9 @@ class TestLightingMath(unittest.TestCase):
 
 
 class _FakeLightingLight:
-    def __init__(self, light_type: str):
+    def __init__(self, light_type: str, name: str | None = None):
         self.light_type = light_type
+        self.name = name
         self.position_calls: list[tuple[float, float, float]] = []
         self.rotation_calls: list[tuple[float, float, float]] = []
         self.color_calls: list[tuple[int, int, int]] = []
@@ -5327,8 +5328,8 @@ class _FakeLightingScene:
     def __init__(self):
         self.created: list[_FakeLightingLight] = []
 
-    def create_light(self, light_type: str) -> _FakeLightingLight:
-        light = _FakeLightingLight(light_type)
+    def create_light(self, light_type: str, name: str | None = None) -> _FakeLightingLight:
+        light = _FakeLightingLight(light_type, name)
         self.created.append(light)
         return light
 
@@ -5379,6 +5380,9 @@ class TestThreePointLightSetup(unittest.TestCase):
         self.assertIs(rig.key, scene.created[0])
         self.assertIs(rig.fill, scene.created[1])
         self.assertIs(rig.rim, scene.created[2])
+        self.assertEqual(rig.key.name, "key")
+        self.assertEqual(rig.fill.name, "fill")
+        self.assertEqual(rig.rim.name, "rim")
 
     def test_apply_sets_position_rotation_intensity_color_from_spec(self):
         from dazpy.lighting import LightSpec, ThreePointLightSetup, apply_three_point_light_setup
@@ -5426,6 +5430,17 @@ class TestThreePointLightSetup(unittest.TestCase):
         setup = ThreePointLightSetup(target=Vec3(0, 0, 0), key=override_spec)
         rig = apply_three_point_light_setup(scene, setup)
         self.assertEqual(rig.key.position_calls[0], (1.0, 2.0, 3.0))
+
+    def test_apply_raises_value_error_when_target_node_has_no_position(self):
+        from dazpy.lighting import ThreePointLightSetup, apply_three_point_light_setup
+
+        class _DeletedTargetNode:
+            position = None
+
+        scene = _FakeLightingScene()
+        setup = ThreePointLightSetup(target=_DeletedTargetNode())
+        with self.assertRaisesRegex(ValueError, "no position"):
+            apply_three_point_light_setup(scene, setup)
 
 
 class TestLightingExports(unittest.TestCase):
