@@ -1763,6 +1763,47 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertEqual(paths, {"Canvas1": "out_canvases/out-Canvas1-Depth.exr"})
 
 
+class TestDazRenderSettingsEnvironment(unittest.TestCase):
+    def setUp(self):
+        from dazpy._render import DazRenderSettings
+        self.DazRenderSettings = DazRenderSettings
+
+    def _make_render(self, return_value=None):
+        client = _make_client(return_value)
+        return self.DazRenderSettings(client), client
+
+    def test_environment_holder_uses_render_element_objects_index_3(self):
+        rs, client = self._make_render(1.0)
+        rs._get_environment_property("Environment Intensity")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRenderElementObjects()[3]", script)
+
+    def test_get_environment_property_reads_named_property(self):
+        rs, client = self._make_render(1.0)
+        val = rs._get_environment_property("Environment Intensity")
+        self.assertEqual(val, 1.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("findProperty", script)
+        self.assertIn("Environment Intensity", script)
+        self.assertIn("getValue", script)
+
+    def test_set_environment_property_writes_named_property(self):
+        rs, client = self._make_render(None)
+        rs._set_environment_property("Environment Intensity", 2.5)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Environment Intensity", script)
+        self.assertIn("setValue", script)
+        self.assertIn("2.5", script)
+
+    def test_set_environment_property_from_string_uses_setValueFromString(self):
+        rs, client = self._make_render(None)
+        rs._set_environment_property_from_string("Environment Mode", "Dome Only")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Environment Mode", script)
+        self.assertIn("setValueFromString", script)
+        self.assertIn("Dome Only", script)
+
+
 class TestDazSkeletonScriptGeneration(unittest.TestCase):
     def setUp(self):
         from dazpy._skeleton import DazSkeleton

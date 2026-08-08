@@ -216,6 +216,40 @@ class DazRenderSettings:
         """)
         self._client.execute(script)
 
+    def _environment_holder(self) -> str:
+        # Index 3 of the 4 fixed render element groups (General Render,
+        # Iray, Tonemapper, Environment) -- confirmed against a live
+        # instance alongside index 1 (see _iray_render_options_holder).
+        return f"{self._render_mgr()}.getRenderElementObjects()[3]"
+
+    def _get_environment_property(self, name: str):
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return null;
+            var p = holder.findProperty({json.dumps(name)});
+            return p ? p.getValue() : null;
+        """)
+        return self._client.execute(script).value
+
+    def _set_environment_property(self, name: str, value: object) -> None:
+        serialized = ScriptBuilder.serialize_arg(value)
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return;
+            var p = holder.findProperty({json.dumps(name)});
+            if (p) p.setValue({serialized});
+        """)
+        self._client.execute(script)
+
+    def _set_environment_property_from_string(self, name: str, value: str) -> None:
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return;
+            var p = holder.findProperty({json.dumps(name)});
+            if (p) p.setValueFromString({json.dumps(value)});
+        """)
+        self._client.execute(script)
+
     def _iray_render_options_holder(self) -> str:
         # Canvas definitions live on this holder, not on getActiveRenderer()
         # .getPropertyHolder() -- confirmed against a live instance; index 1
