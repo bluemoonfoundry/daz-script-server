@@ -1822,6 +1822,12 @@ class TestDazRenderSettingsEnvironment(unittest.TestCase):
             self.assertIn("setMap", script)
             self.assertIn(f.name.replace("\\", "\\\\"), script)
 
+    def test_set_environment_map_raises_when_path_relative(self):
+        rs, client = self._make_render(None)
+        with self.assertRaises(ValueError):
+            rs._set_environment_map("studio.hdr")
+        client.execute.assert_not_called()
+
 
 class TestDazSkeletonScriptGeneration(unittest.TestCase):
     def setUp(self):

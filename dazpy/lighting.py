@@ -2,7 +2,8 @@
 
 Provides :func:`apply_three_point_light_setup` for creating a conventional
 key/fill/rim light rig around a target, either via angle/distance placement
-or explicit world-space positions.
+or explicit world-space positions. Also provides :func:`apply_hdri_environment`
+for image-based (HDRI/dome) lighting via :class:`HDRIEnvironment`.
 """
 
 from __future__ import annotations

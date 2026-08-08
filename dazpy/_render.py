@@ -252,6 +252,19 @@ class DazRenderSettings:
         self._client.execute(script)
 
     def _set_environment_map(self, path: str) -> None:
+        """Validate *path* against the local filesystem before sending ``setMap()``.
+
+        Requires an absolute path: ``os.path.isfile()`` resolves relative
+        paths against the Python process's cwd, not DAZ Studio's, so a
+        relative path could pass this check yet still resolve to a
+        different (or unresolvable) file in DAZ Studio -- reproducing the
+        blocking file-not-found dialog this validation exists to prevent.
+        The existence check validates against the local/client-side
+        filesystem, which is correct when DAZ Studio and this client are
+        co-located but will misbehave against a remote DAZ Studio server.
+        """
+        if not os.path.isabs(path):
+            raise ValueError(f"HDRI/environment map path must be absolute: {path}")
         if not os.path.isfile(path):
             raise FileNotFoundError(f"HDRI/environment map not found: {path}")
         script = ScriptBuilder.iife(f"""
