@@ -5612,10 +5612,14 @@ class TestLightingExports(unittest.TestCase):
         self.assertTrue(hasattr(dazpy, "ThreePointLightSetup"))
         self.assertTrue(hasattr(dazpy, "ThreePointLightRig"))
         self.assertTrue(hasattr(dazpy, "apply_three_point_light_setup"))
+        self.assertTrue(hasattr(dazpy, "HDRIEnvironment"))
+        self.assertTrue(hasattr(dazpy, "apply_hdri_environment"))
         self.assertIn("LightSpec", dazpy.__all__)
         self.assertIn("ThreePointLightSetup", dazpy.__all__)
         self.assertIn("ThreePointLightRig", dazpy.__all__)
         self.assertIn("apply_three_point_light_setup", dazpy.__all__)
+        self.assertIn("HDRIEnvironment", dazpy.__all__)
+        self.assertIn("apply_hdri_environment", dazpy.__all__)
 
 
 if __name__ == "__main__":

@@ -82,6 +82,8 @@ from .lighting import (
     ThreePointLightSetup,
     ThreePointLightRig,
     apply_three_point_light_setup,
+    HDRIEnvironment,
+    apply_hdri_environment,
 )
 from ._result import ExecutionResult
 from ._polling import execute_long
@@ -168,6 +170,8 @@ __all__ = [
     "ThreePointLightSetup",
     "ThreePointLightRig",
     "apply_three_point_light_setup",
+    "HDRIEnvironment",
+    "apply_hdri_environment",
     "ExecutionResult",
     "execute_long",
     "FigureMorphs",
