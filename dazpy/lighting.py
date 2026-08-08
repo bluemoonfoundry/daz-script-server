@@ -8,6 +8,7 @@ or explicit world-space positions.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,7 @@ from .math3 import Vec3
 if TYPE_CHECKING:
     from ._light import DazLight
     from ._node import DazNode
+    from ._render import DazRenderSettings
     from ._scene import DazScene
 
 
@@ -164,3 +166,31 @@ def apply_three_point_light_setup(scene: DazScene, setup: ThreePointLightSetup) 
     fill_light = _place_light(scene, target, setup.fill, setup.light_type)
     rim_light = _place_light(scene, target, setup.rim, setup.light_type)
     return ThreePointLightRig(key=key_light, fill=fill_light, rim=rim_light)
+
+
+@dataclass(frozen=True)
+class HDRIEnvironment:
+    """Image-based (HDRI/dome) lighting configuration.
+
+    Args:
+        image_path: Absolute path to an HDRI/environment map on disk. Must
+            exist -- validated by :func:`apply_hdri_environment` before any
+            DazScript call is made.
+        intensity: Passed to the Iray "Environment Intensity" property.
+        rotation_deg: Passed to the Iray "Dome Rotation" property.
+        mode: One of ``"dome_only"``, ``"dome_and_scene"``, ``"scene_only"``.
+            Maps to the DazScript "Environment Mode" enum. Procedural
+            Sun-Sky mode is intentionally not exposed here.
+        draw_dome: Whether the dome image is visible as a backdrop in the
+            viewport/render (Iray "Draw Dome"), independent of whether it
+            lights the scene.
+        resolution: Iray "Environment Lighting Resolution" (IBL sampling
+            quality). ``None`` leaves DAZ Studio's current value untouched.
+    """
+
+    image_path: str
+    intensity: float = 1.0
+    rotation_deg: float = 0.0
+    mode: str = "dome_only"
+    draw_dome: bool = False
+    resolution: int | None = None

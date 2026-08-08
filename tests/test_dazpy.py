@@ -5503,6 +5503,24 @@ class TestThreePointLightSetup(unittest.TestCase):
             apply_three_point_light_setup(scene, setup)
 
 
+class TestHDRIEnvironment(unittest.TestCase):
+    def test_defaults(self):
+        from dazpy.lighting import HDRIEnvironment
+        env = HDRIEnvironment(image_path="/tmp/studio.hdr")
+        self.assertEqual(env.image_path, "/tmp/studio.hdr")
+        self.assertEqual(env.intensity, 1.0)
+        self.assertEqual(env.rotation_deg, 0.0)
+        self.assertEqual(env.mode, "dome_only")
+        self.assertFalse(env.draw_dome)
+        self.assertIsNone(env.resolution)
+
+    def test_is_frozen(self):
+        from dazpy.lighting import HDRIEnvironment
+        env = HDRIEnvironment(image_path="/tmp/studio.hdr")
+        with self.assertRaises(Exception):
+            env.intensity = 2.0
+
+
 class TestLightingExports(unittest.TestCase):
     def test_lighting_symbols_importable_from_top_level_package(self):
         import dazpy
