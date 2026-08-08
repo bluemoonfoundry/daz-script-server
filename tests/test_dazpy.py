@@ -1803,6 +1803,25 @@ class TestDazRenderSettingsEnvironment(unittest.TestCase):
         self.assertIn("setValueFromString", script)
         self.assertIn("Dome Only", script)
 
+    def test_set_environment_map_raises_when_file_missing(self):
+        import tempfile
+        rs, client = self._make_render(None)
+        missing_path = os.path.join(tempfile.gettempdir(), "definitely_not_a_real_hdri_file.hdr")
+        self.assertFalse(os.path.isfile(missing_path))
+        with self.assertRaises(FileNotFoundError):
+            rs._set_environment_map(missing_path)
+        client.execute.assert_not_called()
+
+    def test_set_environment_map_calls_setMap_when_file_exists(self):
+        import tempfile
+        rs, client = self._make_render(None)
+        with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+            rs._set_environment_map(f.name)
+            script = client.execute.call_args[0][0]
+            self.assertIn("Environment Map", script)
+            self.assertIn("setMap", script)
+            self.assertIn(f.name.replace("\\", "\\\\"), script)
+
 
 class TestDazSkeletonScriptGeneration(unittest.TestCase):
     def setUp(self):

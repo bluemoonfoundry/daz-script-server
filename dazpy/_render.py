@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 
 from ._client import DazClient
@@ -247,6 +248,17 @@ class DazRenderSettings:
             if (!holder) return;
             var p = holder.findProperty({json.dumps(name)});
             if (p) p.setValueFromString({json.dumps(value)});
+        """)
+        self._client.execute(script)
+
+    def _set_environment_map(self, path: str) -> None:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"HDRI/environment map not found: {path}")
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return;
+            var p = holder.findProperty({json.dumps("Environment Map")});
+            if (p) p.setMap({json.dumps(path)});
         """)
         self._client.execute(script)
 
