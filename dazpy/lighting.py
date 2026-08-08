@@ -194,3 +194,40 @@ class HDRIEnvironment:
     mode: str = "dome_only"
     draw_dome: bool = False
     resolution: int | None = None
+
+
+_HDRI_MODE_LABELS = {
+    "dome_only": "Dome Only",
+    "dome_and_scene": "Dome and Scene",
+    "scene_only": "Scene Only",
+}
+
+
+def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironment) -> None:
+    """Apply image-based (HDRI/dome) lighting via *render_settings*.
+
+    Args:
+        render_settings: A :class:`~dazpy.DazRenderSettings`.
+        env: The environment configuration.
+
+    Raises:
+        FileNotFoundError: If ``env.image_path`` does not exist on disk.
+            Checked before any DazScript call is made -- an invalid path
+            passed to the underlying ``setMap()`` call can hang or crash
+            DAZ Studio via a blocking file-not-found dialog.
+        ValueError: If ``env.mode`` is not one of ``"dome_only"``,
+            ``"dome_and_scene"``, ``"scene_only"``.
+    """
+    if not os.path.isfile(env.image_path):
+        raise FileNotFoundError(f"HDRI/environment map not found: {env.image_path}")
+    if env.mode not in _HDRI_MODE_LABELS:
+        raise ValueError(
+            f"Invalid HDRIEnvironment.mode {env.mode!r}; must be one of {sorted(_HDRI_MODE_LABELS)}"
+        )
+    render_settings._set_environment_map(env.image_path)
+    render_settings._set_environment_property("Environment Intensity", env.intensity)
+    render_settings._set_environment_property("Dome Rotation", env.rotation_deg)
+    render_settings._set_environment_property_from_string("Environment Mode", _HDRI_MODE_LABELS[env.mode])
+    render_settings._set_environment_property("Draw Dome", env.draw_dome)
+    if env.resolution is not None:
+        render_settings._set_environment_property("Environment Lighting Resolution", env.resolution)

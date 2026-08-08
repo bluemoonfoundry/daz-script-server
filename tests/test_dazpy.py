@@ -5520,6 +5520,90 @@ class TestHDRIEnvironment(unittest.TestCase):
         with self.assertRaises(Exception):
             env.intensity = 2.0
 
+    def test_apply_raises_file_not_found_before_any_client_call(self):
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        import tempfile
+        client = _make_client(None)
+        rs = DazRenderSettings(client)
+        missing_path = os.path.join(tempfile.gettempdir(), "definitely_not_a_real_hdri_file.hdr")
+        self.assertFalse(os.path.isfile(missing_path))
+        env = HDRIEnvironment(image_path=missing_path)
+        with self.assertRaises(FileNotFoundError):
+            apply_hdri_environment(rs, env)
+        client.execute.assert_not_called()
+
+    def test_apply_raises_value_error_on_invalid_mode_before_any_client_call(self):
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        import tempfile
+        client = _make_client(None)
+        rs = DazRenderSettings(client)
+        with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+            env = HDRIEnvironment(image_path=f.name, mode="sun_sky")
+            with self.assertRaises(ValueError):
+                apply_hdri_environment(rs, env)
+        client.execute.assert_not_called()
+
+    def test_apply_happy_path_sets_all_properties_in_order(self):
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        import tempfile
+        client = _make_client(None)
+        rs = DazRenderSettings(client)
+        with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+            env = HDRIEnvironment(
+                image_path=f.name, intensity=1.5, rotation_deg=90.0,
+                mode="dome_and_scene", draw_dome=True, resolution=1024,
+            )
+            apply_hdri_environment(rs, env)
+            scripts = [call.args[0] for call in client.execute.call_args_list]
+        self.assertEqual(len(scripts), 6)
+        self.assertIn("setMap", scripts[0])
+        self.assertIn("Environment Intensity", scripts[1])
+        self.assertIn("1.5", scripts[1])
+        self.assertIn("Dome Rotation", scripts[2])
+        self.assertIn("90.0", scripts[2])
+        self.assertIn("Environment Mode", scripts[3])
+        self.assertIn("Dome and Scene", scripts[3])
+        self.assertIn("Draw Dome", scripts[4])
+        self.assertIn("true", scripts[4])
+        self.assertIn("Environment Lighting Resolution", scripts[5])
+        self.assertIn("1024", scripts[5])
+
+    def test_apply_skips_resolution_property_when_none(self):
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        import tempfile
+        client = _make_client(None)
+        rs = DazRenderSettings(client)
+        with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+            env = HDRIEnvironment(image_path=f.name)
+            apply_hdri_environment(rs, env)
+            scripts = [call.args[0] for call in client.execute.call_args_list]
+        self.assertEqual(len(scripts), 5)
+        self.assertFalse(any("Environment Lighting Resolution" in s for s in scripts))
+
+    def test_apply_maps_each_mode_to_correct_dazscript_label(self):
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        import tempfile
+        expected = {
+            "dome_only": "Dome Only",
+            "dome_and_scene": "Dome and Scene",
+            "scene_only": "Scene Only",
+        }
+        for mode, label in expected.items():
+            with self.subTest(mode=mode):
+                client = _make_client(None)
+                rs = DazRenderSettings(client)
+                with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+                    env = HDRIEnvironment(image_path=f.name, mode=mode)
+                    apply_hdri_environment(rs, env)
+                    scripts = [call.args[0] for call in client.execute.call_args_list]
+                mode_script = next(s for s in scripts if "Environment Mode" in s)
+                self.assertIn(label, mode_script)
+
 
 class TestLightingExports(unittest.TestCase):
     def test_lighting_symbols_importable_from_top_level_package(self):
