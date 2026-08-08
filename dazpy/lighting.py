@@ -46,14 +46,10 @@ def _look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]:
     facing ``-Z``. Roll (``z``) is always ``0.0``; lights have no meaningful
     "up" for aiming purposes.
 
-    Caveat: the yaw sign here has not been empirically verified against a live
-    DAZ Studio session. It is derived from :func:`dazpy.math3._euler_to_quat`'s
-    XYZ rotation convention (documented to match DAZ's bone-rotation channels),
-    but generic node rotation-control composition order has not been
-    independently confirmed for spot/distant/point lights. If lights aimed via
-    this rig appear mirrored (facing away from or past the target) for
-    off-axis placements, this is the first thing to check. See beads issue
-    daz-script-server-bu86 for the live-validation follow-up.
+    The yaw sign was confirmed empirically against a live DAZ Studio session
+    (see beads issue daz-script-server-bu86): a distant light rotated to
+    ``y=+90`` reports :meth:`~dazpy.DazLight.direction` of ``(-1, 0, ~0)``,
+    matching this function's convention.
     """
     direction = (to_pos - from_pos).normalize()
     horizontal_dist = math.sqrt(direction.x * direction.x + direction.z * direction.z)
@@ -61,7 +57,7 @@ def _look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]:
     if horizontal_dist < 1e-9:
         yaw = 0.0
     else:
-        yaw = math.degrees(math.atan2(direction.x, -direction.z))
+        yaw = math.degrees(math.atan2(-direction.x, -direction.z))
     return (pitch, yaw, 0.0)
 
 

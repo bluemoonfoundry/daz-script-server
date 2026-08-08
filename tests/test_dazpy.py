@@ -5286,7 +5286,7 @@ class TestLightingMath(unittest.TestCase):
         from dazpy.math3 import Vec3
         x, y, z = _look_at_euler(Vec3(150, 0, 0), Vec3(0, 0, 0))
         self.assertAlmostEqual(x, 0.0, places=6)
-        self.assertAlmostEqual(y, -90.0, places=6)
+        self.assertAlmostEqual(y, 90.0, places=6)
         self.assertAlmostEqual(z, 0.0, places=6)
 
     def test_look_at_euler_pitches_up_when_light_is_above(self):
