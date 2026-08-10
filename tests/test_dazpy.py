@@ -73,6 +73,20 @@ def _make_client(return_value=None, output=None):
     return client
 
 
+def _hdri_client(intensity_readback):
+    """Client whose ``_get_environment_property`` readback (a ``getValue()``
+    script) returns *intensity_readback*; every write-side call returns
+    ``None`` (mirroring a real holder's no-return ``setValue`` scripts)."""
+    client = MagicMock(spec=DazClient)
+
+    def _execute(script, *args, **kwargs):
+        value = intensity_readback if "getValue" in script else None
+        return ExecutionResult(value=value, output=[], request_id="test1234")
+
+    client.execute.side_effect = _execute
+    return client
+
+
 class _FakeBone:
     def __init__(
         self,
@@ -5555,7 +5569,7 @@ class TestHDRIEnvironment(unittest.TestCase):
         from dazpy._render import DazRenderSettings
         from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
         import tempfile
-        client = _make_client(None)
+        client = _hdri_client(1.5)
         rs = DazRenderSettings(client)
         with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
             env = HDRIEnvironment(
@@ -5564,7 +5578,7 @@ class TestHDRIEnvironment(unittest.TestCase):
             )
             apply_hdri_environment(rs, env)
             scripts = [call.args[0] for call in client.execute.call_args_list]
-        self.assertEqual(len(scripts), 6)
+        self.assertEqual(len(scripts), 7)
         self.assertIn("setMap", scripts[0])
         self.assertIn("Environment Intensity", scripts[1])
         self.assertIn("1.5", scripts[1])
@@ -5576,18 +5590,20 @@ class TestHDRIEnvironment(unittest.TestCase):
         self.assertIn("true", scripts[4])
         self.assertIn("Environment Lighting Resolution", scripts[5])
         self.assertIn("1024", scripts[5])
+        self.assertIn("Environment Intensity", scripts[6])
+        self.assertIn("getValue", scripts[6])
 
     def test_apply_skips_resolution_property_when_none(self):
         from dazpy._render import DazRenderSettings
         from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
         import tempfile
-        client = _make_client(None)
+        client = _hdri_client(1.0)
         rs = DazRenderSettings(client)
         with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
             env = HDRIEnvironment(image_path=f.name)
             apply_hdri_environment(rs, env)
             scripts = [call.args[0] for call in client.execute.call_args_list]
-        self.assertEqual(len(scripts), 5)
+        self.assertEqual(len(scripts), 6)
         self.assertFalse(any("Environment Lighting Resolution" in s for s in scripts))
 
     def test_apply_maps_each_mode_to_correct_dazscript_label(self):
@@ -5601,7 +5617,7 @@ class TestHDRIEnvironment(unittest.TestCase):
         }
         for mode, label in expected.items():
             with self.subTest(mode=mode):
-                client = _make_client(None)
+                client = _hdri_client(1.0)
                 rs = DazRenderSettings(client)
                 with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
                     env = HDRIEnvironment(image_path=f.name, mode=mode)
@@ -5609,6 +5625,34 @@ class TestHDRIEnvironment(unittest.TestCase):
                     scripts = [call.args[0] for call in client.execute.call_args_list]
                 mode_script = next(s for s in scripts if "Environment Mode" in s)
                 self.assertIn(label, mode_script)
+
+    def test_apply_raises_render_error_when_environment_holder_unavailable(self):
+        """Simulates getRenderElementObjects()[3] being wrong on this DAZ Studio
+        version/build: every write silently no-ops and the readback returns None."""
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        from dazpy.exceptions import RenderError
+        import tempfile
+        client = _make_client(None)  # every execute() call returns value=None
+        rs = DazRenderSettings(client)
+        with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+            env = HDRIEnvironment(image_path=f.name, intensity=1.5)
+            with self.assertRaisesRegex(RenderError, "readback"):
+                apply_hdri_environment(rs, env)
+
+    def test_apply_raises_render_error_when_intensity_readback_mismatches(self):
+        """Holder resolves but the readback value doesn't match what was set --
+        should not be silently treated as success."""
+        from dazpy._render import DazRenderSettings
+        from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
+        from dazpy.exceptions import RenderError
+        import tempfile
+        client = _hdri_client(0.0)  # readback disagrees with requested 1.5
+        rs = DazRenderSettings(client)
+        with tempfile.NamedTemporaryFile(suffix=".hdr") as f:
+            env = HDRIEnvironment(image_path=f.name, intensity=1.5)
+            with self.assertRaisesRegex(RenderError, "readback"):
+                apply_hdri_environment(rs, env)
 
 
 class TestLightingExports(unittest.TestCase):

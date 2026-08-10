@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .exceptions import RenderError
 from .math3 import Vec3
 
 if TYPE_CHECKING:
@@ -218,6 +219,15 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
             DAZ Studio via a blocking file-not-found dialog.
         ValueError: If ``env.mode`` is not one of ``"dome_only"``,
             ``"dome_and_scene"``, ``"scene_only"``.
+        RenderError: If a post-apply readback of "Environment Intensity"
+            doesn't match *env.intensity*. All of this module's environment
+            writes go through ``DazRenderSettings._environment_holder()``,
+            which assumes ``getRenderElementObjects()[3]`` is always the
+            Environment property holder -- confirmed on one live DAZ Studio
+            4.x instance only. If that index is wrong on a different DAZ
+            Studio version, every write above silently no-ops (matching the
+            existing ``if (!holder) return;`` pattern) with no exception, so
+            this readback is what actually catches it.
     """
     if not os.path.isfile(env.image_path):
         raise FileNotFoundError(f"HDRI/environment map not found: {env.image_path}")
@@ -232,3 +242,14 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
     render_settings._set_environment_property("Draw Dome", env.draw_dome)
     if env.resolution is not None:
         render_settings._set_environment_property("Environment Lighting Resolution", env.resolution)
+
+    readback = render_settings._get_environment_property("Environment Intensity")
+    if readback is None or not math.isclose(float(readback), env.intensity, rel_tol=1e-6, abs_tol=1e-6):
+        raise RenderError(
+            "HDRI environment apply failed verification: 'Environment Intensity' "
+            f"readback ({readback!r}) does not match the requested value "
+            f"({env.intensity!r}). The environment property holder "
+            "(getRenderElementObjects()[3]) may be unavailable or at a "
+            "different index on this DAZ Studio version/build -- the HDRI "
+            "was likely never applied."
+        )
