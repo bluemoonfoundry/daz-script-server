@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from dazpy.math3 import AxisRemap, Vec3
+from dazpy.math3 import AxisRemap, Quat, Vec3
 
 
 class TestAxisRemapConstruction(unittest.TestCase):
@@ -58,6 +58,37 @@ class TestAxisRemapApplyVec3(unittest.TestCase):
         # but apply_vec3 must still work.
         remap = AxisRemap(x="y", y="x", z="z")
         self.assertEqual(remap.apply_vec3(Vec3(1, 2, 3)), Vec3(2, 1, 3))
+
+
+class TestAxisRemapApplyQuat(unittest.TestCase):
+    def test_identity_remap_leaves_quat_unchanged(self):
+        remap = AxisRemap(x="x", y="y", z="z")
+        q = Quat.from_axis_angle(Vec3(0, 1, 0), 90)
+        result = remap.apply_quat(q)
+        self.assertAlmostEqual(result.x, q.x, places=9)
+        self.assertAlmostEqual(result.y, q.y, places=9)
+        self.assertAlmostEqual(result.z, q.z, places=9)
+        self.assertAlmostEqual(result.w, q.w, places=9)
+
+    def test_y_up_to_z_up_rotates_rotation_axis_consistently(self):
+        # A rotation about the Y-up "up" axis should become a rotation about
+        # the Z-up "up" axis, applied to the correspondingly-remapped vector.
+        remap = AxisRemap(x="x", y="-z", z="y")
+        q = Quat.from_axis_angle(Vec3(0, 1, 0), 90)  # rotate 90 deg around Y-up
+        v = Vec3(1, 0, 0)
+
+        rotated_then_remapped = remap.apply_vec3(q.rotate(v))
+        remapped_then_rotated = remap.apply_quat(q).rotate(remap.apply_vec3(v))
+
+        self.assertAlmostEqual(rotated_then_remapped.x, remapped_then_rotated.x, places=9)
+        self.assertAlmostEqual(rotated_then_remapped.y, remapped_then_rotated.y, places=9)
+        self.assertAlmostEqual(rotated_then_remapped.z, remapped_then_rotated.z, places=9)
+
+    def test_reflection_remap_rejects_apply_quat(self):
+        remap = AxisRemap(x="y", y="x", z="z")  # det == -1
+        q = Quat.identity()
+        with self.assertRaises(ValueError):
+            remap.apply_quat(q)
 
 
 if __name__ == "__main__":

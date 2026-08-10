@@ -639,6 +639,36 @@ def _mat3_det(m: list) -> float:
     )
 
 
+def _mat3_to_quat(m: list) -> "Quat":
+    """Convert a 3x3 rotation matrix (``m[row][col]``, det == +1) to a unit quaternion."""
+    trace = m[0][0] + m[1][1] + m[2][2]
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * s
+        x = (m[2][1] - m[1][2]) / s
+        y = (m[0][2] - m[2][0]) / s
+        z = (m[1][0] - m[0][1]) / s
+    elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        s = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2.0
+        w = (m[2][1] - m[1][2]) / s
+        x = 0.25 * s
+        y = (m[0][1] + m[1][0]) / s
+        z = (m[0][2] + m[2][0]) / s
+    elif m[1][1] > m[2][2]:
+        s = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2.0
+        w = (m[0][2] - m[2][0]) / s
+        x = (m[0][1] + m[1][0]) / s
+        y = 0.25 * s
+        z = (m[1][2] + m[2][1]) / s
+    else:
+        s = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2.0
+        w = (m[1][0] - m[0][1]) / s
+        x = (m[0][2] + m[2][0]) / s
+        y = (m[1][2] + m[2][1]) / s
+        z = 0.25 * s
+    return Quat(x, y, z, w)
+
+
 class AxisRemap:
     """Converts :class:`Vec3`, :class:`Quat`, and :class:`BoundingBox` values
     between axis conventions (e.g. Y-up to Z-up).
@@ -678,8 +708,11 @@ class AxisRemap:
             matrix[row][idx] = sign
         object.__setattr__(self, "_specs", specs)
         object.__setattr__(self, "_matrix", matrix)
-        object.__setattr__(self, "_det", _mat3_det(matrix))
-        object.__setattr__(self, "_rotation_quat", None)
+        det = _mat3_det(matrix)
+        object.__setattr__(self, "_det", det)
+        object.__setattr__(
+            self, "_rotation_quat", _mat3_to_quat(matrix) if det > 0 else None
+        )
 
     def __setattr__(self, name, value):
         raise AttributeError("AxisRemap is immutable")
@@ -698,3 +731,19 @@ class AxisRemap:
         comps = (v.x, v.y, v.z)
         out = [comps[idx] * sign for idx, sign in self._specs]
         return Vec3(out[0], out[1], out[2])
+
+    def apply_quat(self, q: "Quat") -> "Quat":
+        """Remap a rotation.
+
+        Raises:
+            ValueError: If this remap is a reflection (determinant ``-1``).
+                Reflections cannot be represented by a quaternion; use
+                :meth:`apply_vec3` for vectors/points instead.
+        """
+        if self._rotation_quat is None:
+            raise ValueError(
+                "AxisRemap represents a reflection (determinant -1); cannot "
+                "remap a Quat. Use apply_vec3 for vectors/points instead."
+            )
+        r = self._rotation_quat
+        return r.multiply(q).multiply(r.conjugate())
