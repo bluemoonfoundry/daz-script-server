@@ -76,7 +76,7 @@ from ._undo import UndoGroup
 from ._pose import DazPose
 from ._scene_state import DazSceneState
 from ._animation import DazAnimation
-from .math3 import Vec3, Quat, BoundingBox
+from .math3 import Vec3, Quat, BoundingBox, AxisRemap, Y_UP_TO_Z_UP
 from .lighting import (
     LightSpec,
     ThreePointLightSetup,
@@ -166,6 +166,8 @@ __all__ = [
     "Vec3",
     "Quat",
     "BoundingBox",
+    "AxisRemap",
+    "Y_UP_TO_Z_UP",
     "LightSpec",
     "ThreePointLightSetup",
     "ThreePointLightRig",

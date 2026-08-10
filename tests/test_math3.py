@@ -109,5 +109,17 @@ class TestAxisRemapApplyBbox(unittest.TestCase):
         self.assertEqual(result.max, Vec3(1, 0, 2))
 
 
+class TestYUpToZUpPreset(unittest.TestCase):
+    def test_preset_matches_manual_equivalent(self):
+        manual = AxisRemap(x="x", y="-z", z="y")
+        from dazpy.math3 import Y_UP_TO_Z_UP
+        self.assertEqual(Y_UP_TO_Z_UP.apply_vec3(Vec3(1, 2, 3)), manual.apply_vec3(Vec3(1, 2, 3)))
+
+    def test_preset_importable_from_dazpy_package(self):
+        from dazpy import AxisRemap as PkgAxisRemap
+        from dazpy import Y_UP_TO_Z_UP as PkgPreset
+        self.assertIsInstance(PkgPreset, PkgAxisRemap)
+
+
 if __name__ == "__main__":
     unittest.main()

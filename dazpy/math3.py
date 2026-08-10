@@ -21,6 +21,10 @@ Typical usage::
     mid = a.slerp(b, 0.5)
     x, y, z = mid.to_euler(order="XYZ")
     bone_a.set_local_rotation(x, y, z)
+
+    # Convert a DAZ Studio (Y-up) position to a Z-up convention
+    from dazpy.math3 import Y_UP_TO_Z_UP
+    zup_pos = Y_UP_TO_Z_UP.apply_vec3(pos)
 """
 
 from __future__ import annotations
@@ -760,3 +764,9 @@ class AxisRemap:
         lo = Vec3(min(p1.x, p2.x), min(p1.y, p2.y), min(p1.z, p2.z))
         hi = Vec3(max(p1.x, p2.x), max(p1.y, p2.y), max(p1.z, p2.z))
         return BoundingBox(lo, hi)
+
+
+#: Converts DAZ Studio's Y-up convention to a Z-up convention (e.g. Blender,
+#: glTF-consuming tools that were themselves converted to Z-up). Up (+Y)
+#: becomes +Z; DAZ's forward (+Z) becomes -Y.
+Y_UP_TO_Z_UP = AxisRemap(x="x", y="-z", z="y")
