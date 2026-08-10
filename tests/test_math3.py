@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from dazpy.math3 import AxisRemap, Quat, Vec3
+from dazpy.math3 import AxisRemap, BoundingBox, Quat, Vec3
 
 
 class TestAxisRemapConstruction(unittest.TestCase):
@@ -89,6 +89,24 @@ class TestAxisRemapApplyQuat(unittest.TestCase):
         q = Quat.identity()
         with self.assertRaises(ValueError):
             remap.apply_quat(q)
+
+
+class TestAxisRemapApplyBbox(unittest.TestCase):
+    def test_identity_remap_leaves_bbox_unchanged(self):
+        remap = AxisRemap(x="x", y="y", z="z")
+        box = BoundingBox(Vec3(-1, -2, -3), Vec3(1, 2, 3))
+        result = remap.apply_bbox(box)
+        self.assertEqual(result.min, box.min)
+        self.assertEqual(result.max, box.max)
+
+    def test_sign_flip_keeps_min_max_correctly_ordered(self):
+        # y='-z' -> negating z means the box's old z-max becomes the new
+        # y-min, so apply_bbox must re-sort per axis, not just remap corners.
+        remap = AxisRemap(x="x", y="-z", z="y")
+        box = BoundingBox(Vec3(0, 0, 0), Vec3(1, 2, 3))
+        result = remap.apply_bbox(box)
+        self.assertEqual(result.min, Vec3(0, -3, 0))
+        self.assertEqual(result.max, Vec3(1, 0, 2))
 
 
 if __name__ == "__main__":

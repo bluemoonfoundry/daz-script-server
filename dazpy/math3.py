@@ -747,3 +747,16 @@ class AxisRemap:
             )
         r = self._rotation_quat
         return r.multiply(q).multiply(r.conjugate())
+
+    def apply_bbox(self, b: "BoundingBox") -> "BoundingBox":
+        """Remap a bounding box.
+
+        Both corners are remapped and the result is re-sorted per axis,
+        since a sign-flipping remap can swap which corner is the minimum
+        on a given axis.
+        """
+        p1 = self.apply_vec3(b.min)
+        p2 = self.apply_vec3(b.max)
+        lo = Vec3(min(p1.x, p2.x), min(p1.y, p2.y), min(p1.z, p2.z))
+        hi = Vec3(max(p1.x, p2.x), max(p1.y, p2.y), max(p1.z, p2.z))
+        return BoundingBox(lo, hi)
