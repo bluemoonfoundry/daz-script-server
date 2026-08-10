@@ -609,3 +609,92 @@ class BoundingBox:
 
     def __repr__(self) -> str:
         return f"BoundingBox(min={self.min}, max={self.max})"
+
+
+# ── AxisRemap ─────────────────────────────────────────────────────────────────
+
+_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+
+
+def _parse_axis_spec(spec: str) -> tuple[int, float]:
+    """Parse an axis spec like ``"x"``, ``"-y"``, ``"+z"`` into ``(index, sign)``."""
+    if not isinstance(spec, str) or not spec:
+        raise ValueError(f"Invalid axis spec {spec!r}; expected one of x, y, z, -x, -y, -z")
+    sign = 1.0
+    name = spec
+    if name[0] in "+-":
+        sign = -1.0 if name[0] == "-" else 1.0
+        name = name[1:]
+    if name not in _AXIS_INDEX:
+        raise ValueError(f"Invalid axis spec {spec!r}; expected one of x, y, z, -x, -y, -z")
+    return _AXIS_INDEX[name], sign
+
+
+def _mat3_det(m: list) -> float:
+    """Determinant of a 3x3 matrix given as ``m[row][col]``."""
+    return (
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    )
+
+
+class AxisRemap:
+    """Converts :class:`Vec3`, :class:`Quat`, and :class:`BoundingBox` values
+    between axis conventions (e.g. Y-up to Z-up).
+
+    A generic signed-axis-permutation remap — no application-specific
+    knowledge (Blender/Unreal naming, camera or figure orientation fixups)
+    is baked in beyond the :data:`Y_UP_TO_Z_UP` preset.
+
+    Each of *x*, *y*, *z* names which source axis (optionally signed) the
+    corresponding output axis is derived from. All three of the source
+    axes ``x``, ``y``, ``z`` must be referenced exactly once (signs aside).
+
+    Example::
+
+        # DAZ Studio (Y-up) -> Blender-style Z-up
+        remap = AxisRemap(x="x", y="-z", z="y")
+        blender_pos = remap.apply_vec3(daz_pos)
+
+    Args:
+        x: Source axis for the output X component, e.g. ``"x"`` or ``"-z"``.
+        y: Source axis for the output Y component.
+        z: Source axis for the output Z component.
+    """
+
+    __slots__ = ("_specs", "_matrix", "_det", "_rotation_quat")
+
+    def __init__(self, x: str, y: str, z: str) -> None:
+        specs = (_parse_axis_spec(x), _parse_axis_spec(y), _parse_axis_spec(z))
+        used = sorted(idx for idx, _ in specs)
+        if used != [0, 1, 2]:
+            raise ValueError(
+                "AxisRemap must reference each of x, y, z exactly once "
+                f"(got x={x!r}, y={y!r}, z={z!r})"
+            )
+        matrix = [[0.0, 0.0, 0.0] for _ in range(3)]
+        for row, (idx, sign) in enumerate(specs):
+            matrix[row][idx] = sign
+        object.__setattr__(self, "_specs", specs)
+        object.__setattr__(self, "_matrix", matrix)
+        object.__setattr__(self, "_det", _mat3_det(matrix))
+        object.__setattr__(self, "_rotation_quat", None)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("AxisRemap is immutable")
+
+    def __repr__(self) -> str:
+        axes = "xyz"
+        parts = []
+        for idx, sign in self._specs:
+            parts.append(("-" if sign < 0 else "") + axes[idx])
+        return f"AxisRemap(x={parts[0]!r}, y={parts[1]!r}, z={parts[2]!r})"
+
+    # ── application ───────────────────────────────────────────────────────────
+
+    def apply_vec3(self, v: "Vec3") -> "Vec3":
+        """Remap a vector or point. Works for any remap, proper or reflective."""
+        comps = (v.x, v.y, v.z)
+        out = [comps[idx] * sign for idx, sign in self._specs]
+        return Vec3(out[0], out[1], out[2])
