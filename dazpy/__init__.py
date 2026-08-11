@@ -86,6 +86,14 @@ from .lighting import (
     apply_hdri_environment,
 )
 from .poses import apply_pose, reset_transforms, zero_figure
+from .cinematics import (
+    CinematicStaticShot,
+    OrbitCamera,
+    FrameSubject,
+    apply_static_shot,
+    apply_orbit_camera,
+    apply_frame_subject,
+)
 from ._result import ExecutionResult
 from ._polling import execute_long
 from ._render_api import (
@@ -178,6 +186,12 @@ __all__ = [
     "apply_pose",
     "reset_transforms",
     "zero_figure",
+    "CinematicStaticShot",
+    "OrbitCamera",
+    "FrameSubject",
+    "apply_static_shot",
+    "apply_orbit_camera",
+    "apply_frame_subject",
     "ExecutionResult",
     "execute_long",
     "FigureMorphs",
