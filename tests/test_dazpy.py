@@ -5910,11 +5910,15 @@ class _FakeCinematicsCamera:
 class _FakeCinematicsScene:
     def __init__(self):
         self.created: list[_FakeCinematicsCamera] = []
+        self.anim_range_calls: list[tuple[int, int]] = []
 
     def create_camera(self, name: str | None = None) -> _FakeCinematicsCamera:
         cam = _FakeCinematicsCamera(name)
         self.created.append(cam)
         return cam
+
+    def set_anim_range(self, start: int, end: int) -> None:
+        self.anim_range_calls.append((start, end))
 
 
 class TestCinematicStaticShot(unittest.TestCase):
@@ -6156,6 +6160,27 @@ class TestOrbitCamera(unittest.TestCase):
         self.assertAlmostEqual(x, expected.x, places=6)
         self.assertAlmostEqual(z, expected.z, places=6)
 
+    def test_apply_extends_scene_anim_range_before_per_frame_writes(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=0, frame_end=90)
+        apply_orbit_camera(scene, orbit, camera=cam)
+        self.assertEqual(scene.anim_range_calls, [(0, 90)])
+        # Anim range must be set before any per-frame position write, or a
+        # fresh scene's default 0-30 range clamps early frames.
+        self.assertEqual(len(cam.position_calls), 91)
+
+    def test_apply_raises_value_error_when_frame_end_before_frame_start(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=10, frame_end=5)
+        with self.assertRaises(ValueError):
+            apply_orbit_camera(scene, orbit)
+        self.assertEqual(scene.created, [])
+
 
 class TestFrameSubject(unittest.TestCase):
     def test_defaults(self):
@@ -6229,6 +6254,7 @@ class TestFrameSubject(unittest.TestCase):
         frame = FrameSubject(subject=Vec3(0, 0, 0), shot_type="extreme_wide")
         with self.assertRaises(ValueError):
             apply_frame_subject(scene, frame)
+        self.assertEqual(scene.created, [])
 
     def test_apply_sets_focal_length(self):
         from dazpy.cinematics import FrameSubject, apply_frame_subject

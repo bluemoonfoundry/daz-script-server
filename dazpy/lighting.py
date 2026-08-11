@@ -17,6 +17,7 @@ from .exceptions import RenderError
 from .math3 import Vec3
 from ._shot_geometry import spherical_offset as _spherical_offset
 from ._shot_geometry import look_at_euler as _look_at_euler
+from ._shot_geometry import resolve_target as _resolve_target
 
 if TYPE_CHECKING:
     from ._light import DazLight
@@ -85,15 +86,6 @@ class ThreePointLightRig:
     key: DazLight
     fill: DazLight
     rim: DazLight
-
-
-def _resolve_target(target: Vec3 | DazNode) -> Vec3:
-    if isinstance(target, Vec3):
-        return target
-    position = target.position
-    if position is None:
-        raise ValueError("ThreePointLightSetup target node has no position (it may not exist in the scene)")
-    return Vec3.from_dict(position)
 
 
 def _resolve_light_position(target: Vec3, spec: LightSpec) -> Vec3:

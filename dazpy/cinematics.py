@@ -142,9 +142,15 @@ class OrbitCamera:
             :func:`~dazpy._shot_geometry.spherical_offset`.
         start_azimuth_deg: Azimuth at *frame_start*.
         end_azimuth_deg: Azimuth at *frame_end*. Azimuth is linearly
-            interpolated between the two across the frame range.
+            interpolated between the two across the frame range. Note the
+            class defaults sweep a full 0-360 degrees, which gives
+            *frame_start* and *frame_end* the same azimuth (a duplicate
+            endpoint) -- callers wanting a seamless loop should use e.g.
+            ``end_azimuth_deg=356.0`` or ``frame_end=frame_start+89``
+            instead of a full 360.
         frame_start: First timeline frame (inclusive).
-        frame_end: Last timeline frame (inclusive).
+        frame_end: Last timeline frame (inclusive). Must be ``>=``
+            *frame_start*.
         focal_length: Passed to :attr:`~dazpy.DazCamera.focal_length` once,
             before the per-frame sweep.
         target_offset_cm: Vertical offset (cm) applied when resolving
@@ -174,9 +180,19 @@ def apply_orbit_camera(
 ) -> "DazCamera":
     """Sweep a camera around *orbit.target* across its frame range.
 
+    Side effects: this widens/sets the scene's animation range to
+    ``[orbit.frame_start, orbit.frame_end]`` via
+    :meth:`~dazpy.DazScene.set_anim_range` -- without this, DAZ Studio's
+    ``Scene.setFrame()`` clamps to the scene's existing animation range
+    (typically 0-30 on a fresh scene), silently overwriting later frames
+    onto the clamped one. The scene's timeline frame is also left parked at
+    *orbit.frame_end* when this function returns -- it is not restored to
+    whatever frame was current beforehand.
+
     Args:
-        scene: A :class:`~dazpy.DazScene`. Only used to create a new camera
-            when *camera* is ``None``.
+        scene: A :class:`~dazpy.DazScene`. Used to create a new camera when
+            *camera* is ``None``, and to widen the animation range to cover
+            the orbit's frame range.
         orbit: The orbit configuration.
         camera: An existing :class:`~dazpy.DazCamera` to reuse/mutate.
             When ``None`` (the default), a new camera is created via
@@ -186,8 +202,16 @@ def apply_orbit_camera(
 
     Returns:
         The configured :class:`~dazpy.DazCamera`.
+
+    Raises:
+        ValueError: If ``orbit.frame_end`` is less than ``orbit.frame_start``.
     """
+    if orbit.frame_end < orbit.frame_start:
+        raise ValueError(
+            f"OrbitCamera.frame_end ({orbit.frame_end}) must be >= frame_start ({orbit.frame_start})"
+        )
     cam = _resolve_camera(scene, camera, name)
+    scene.set_anim_range(orbit.frame_start, orbit.frame_end)
     target = resolve_target(orbit.target, vertical_offset_cm=orbit.target_offset_cm)
     cam.focal_length = orbit.focal_length
     timeline = DazTimeline(cam._client)
