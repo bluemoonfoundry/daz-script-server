@@ -2637,6 +2637,18 @@ class TestDazNodeRotationAndSelection(unittest.TestCase):
         self.assertIn("15.0", script)
         self.assertIn("25.0", script)
 
+    def test_set_scale_uses_axis_controls(self):
+        node, client = self._node(None)
+        node.set_scale(1.5, 2.0, 0.5)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getXScaleControl", script)
+        self.assertIn("getYScaleControl", script)
+        self.assertIn("getZScaleControl", script)
+        self.assertIn("setValue", script)
+        self.assertIn("1.5", script)
+        self.assertIn("2.0", script)
+        self.assertIn("0.5", script)
+
     def test_is_selected_calls_isSelected(self):
         node, client = self._node(True)
         result = node.is_selected()

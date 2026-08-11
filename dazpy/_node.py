@@ -124,6 +124,23 @@ class DazNode(DazElement):
         )
         return self._client.execute(script).value
 
+    def set_scale(self, x: float, y: float, z: float) -> None:
+        """Set per-axis local scale.
+
+        Does not affect the general/uniform scale dial (:attr:`general_scale`)
+        — DAZ Studio tracks per-axis and uniform scale as separate controls.
+
+        Args:
+            x: X-axis scale factor (1.0 = unscaled).
+            y: Y-axis scale factor.
+            z: Z-axis scale factor.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"_node.getXScaleControl().setValue({x}); _node.getYScaleControl().setValue({y}); _node.getZScaleControl().setValue({z});"
+        )
+        self._client.execute(script)
+
     @property
     def visible(self) -> bool | None:
         """General visibility flag (read/write).
