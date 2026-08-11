@@ -5045,6 +5045,17 @@ class TestZeroFigure(unittest.TestCase):
         skeleton._client.execute.assert_not_called()
 
 
+class TestPosesExports(unittest.TestCase):
+    def test_poses_symbols_importable_from_top_level_package(self):
+        import dazpy
+        self.assertTrue(hasattr(dazpy, "apply_pose"))
+        self.assertTrue(hasattr(dazpy, "reset_transforms"))
+        self.assertTrue(hasattr(dazpy, "zero_figure"))
+        self.assertIn("apply_pose", dazpy.__all__)
+        self.assertIn("reset_transforms", dazpy.__all__)
+        self.assertIn("zero_figure", dazpy.__all__)
+
+
 class TestBatchPoseEvaluation(unittest.TestCase):
     """Tests for DazSkeleton.evaluate_pose() and evaluate_pose_jacobian()."""
 

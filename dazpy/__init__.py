@@ -85,6 +85,7 @@ from .lighting import (
     HDRIEnvironment,
     apply_hdri_environment,
 )
+from .poses import apply_pose, reset_transforms, zero_figure
 from ._result import ExecutionResult
 from ._polling import execute_long
 from ._render_api import (
@@ -174,6 +175,9 @@ __all__ = [
     "apply_three_point_light_setup",
     "HDRIEnvironment",
     "apply_hdri_environment",
+    "apply_pose",
+    "reset_transforms",
+    "zero_figure",
     "ExecutionResult",
     "execute_long",
     "FigureMorphs",
