@@ -4996,6 +4996,55 @@ class TestResetTransforms(unittest.TestCase):
         self.assertTrue(any("getXScaleControl" in s for s in scripts))
 
 
+class TestZeroFigure(unittest.TestCase):
+    def _make_skeleton(self, capture_result=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(capture_result)
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    def test_default_zeroes_bones_morphs_and_props_via_apply_full(self):
+        from dazpy.poses import zero_figure
+        skel, client = self._make_skeleton(True)
+        zero_figure(skel)
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        # apply_full()'s signature zeroing behavior — see DazPose.apply_full tests.
+        self.assertIn("_bones[b.getName()] || [0, 0, 0]", script)
+        self.assertIn("var _v = (v !== undefined) ? v : 0;", script)
+
+    def test_default_does_not_touch_root_transform(self):
+        from dazpy.poses import zero_figure
+        skel, client = self._make_skeleton(True)
+        zero_figure(skel)
+        script = client.execute.call_args[0][0]
+        self.assertNotIn("setLocalPos", script)
+        self.assertNotIn("setWSPos", script)
+
+    def test_include_props_false_zeroes_only_bones_and_morphs(self):
+        from dazpy.poses import zero_figure
+        skeleton = MagicMock()
+        skeleton.bone_rotations.return_value = {"hip": (1.0, 2.0, 3.0), "chest": (0.0, 5.0, 0.0)}
+        skeleton.morph_values.return_value = {"PHMSmile": 0.8}
+
+        zero_figure(skeleton, include_props=False)
+
+        skeleton.set_bone_rotations.assert_called_once_with(
+            {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
+        )
+        skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
+
+    def test_include_props_false_does_not_use_dazpose(self):
+        from dazpy.poses import zero_figure
+        skeleton = MagicMock()
+        skeleton.bone_rotations.return_value = {}
+        skeleton.morph_values.return_value = {}
+
+        zero_figure(skeleton, include_props=False)
+
+        skeleton._client.execute.assert_not_called()
+
+
 class TestBatchPoseEvaluation(unittest.TestCase):
     """Tests for DazSkeleton.evaluate_pose() and evaluate_pose_jacobian()."""
 

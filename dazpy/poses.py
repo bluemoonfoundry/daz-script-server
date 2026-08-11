@@ -42,3 +42,27 @@ def reset_transforms(node: "DazNode") -> None:
     node.set_local_position(0.0, 0.0, 0.0)
     node.set_local_rotation(0.0, 0.0, 0.0)
     node.set_scale(1.0, 1.0, 1.0)
+
+
+def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = True) -> None:
+    """Drive every bone rotation and morph on *skeleton* to zero.
+
+    Does not touch the figure's root position/rotation/scale — use
+    :func:`reset_transforms` for that.
+
+    Args:
+        skeleton: The figure to zero.
+        include_props: When ``True`` (default), node-level numeric properties
+            are also zeroed, via :meth:`~dazpy.DazPose.apply_full`. When
+            ``False``, only bone rotations and morphs are zeroed, leaving
+            node properties untouched.
+    """
+    if include_props:
+        pose = DazPose(figure=skeleton._identifier.value, bones={}, morphs={}, props={})
+        pose.apply_full(skeleton)
+        return
+
+    zero_bones = {name: (0.0, 0.0, 0.0) for name in skeleton.bone_rotations()}
+    zero_morphs = {name: 0.0 for name in skeleton.morph_values()}
+    skeleton.set_bone_rotations(zero_bones)
+    skeleton.set_morph_values(zero_morphs)
