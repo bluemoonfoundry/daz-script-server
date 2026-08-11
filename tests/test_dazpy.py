@@ -5003,23 +5003,39 @@ class TestZeroFigure(unittest.TestCase):
         skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
         return skel, client
 
-    def test_default_zeroes_bones_morphs_and_props_via_apply_full(self):
+    def test_include_props_true_zeroes_bones_morphs_and_props_via_apply_full(self):
         from dazpy.poses import zero_figure
         skel, client = self._make_skeleton(True)
-        zero_figure(skel)
+        zero_figure(skel, include_props=True)
         self.assertEqual(client.execute.call_count, 1)
         script = client.execute.call_args[0][0]
         # apply_full()'s signature zeroing behavior — see DazPose.apply_full tests.
         self.assertIn("_bones[b.getName()] || [0, 0, 0]", script)
         self.assertIn("var _v = (v !== undefined) ? v : 0;", script)
 
-    def test_default_does_not_touch_root_transform(self):
+    def test_include_props_true_does_not_touch_root_transform(self):
         from dazpy.poses import zero_figure
         skel, client = self._make_skeleton(True)
-        zero_figure(skel)
+        zero_figure(skel, include_props=True)
         script = client.execute.call_args[0][0]
         self.assertNotIn("setLocalPos", script)
         self.assertNotIn("setWSPos", script)
+
+    def test_default_zeroes_only_bones_and_morphs(self):
+        """The new default (include_props omitted) must take the bones/morphs-only path,
+        never the apply_full path — that's what guarantees root transform is untouched."""
+        from dazpy.poses import zero_figure
+        skeleton = MagicMock()
+        skeleton.bone_rotations.return_value = {"hip": (1.0, 2.0, 3.0), "chest": (0.0, 5.0, 0.0)}
+        skeleton.morph_values.return_value = {"PHMSmile": 0.8}
+
+        zero_figure(skeleton)
+
+        skeleton.set_bone_rotations.assert_called_once_with(
+            {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
+        )
+        skeleton.morph_values.assert_called_once_with(nonzero_only=True)
+        skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
 
     def test_include_props_false_zeroes_only_bones_and_morphs(self):
         from dazpy.poses import zero_figure
@@ -5032,6 +5048,7 @@ class TestZeroFigure(unittest.TestCase):
         skeleton.set_bone_rotations.assert_called_once_with(
             {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
         )
+        skeleton.morph_values.assert_called_once_with(nonzero_only=True)
         skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
 
     def test_include_props_false_does_not_use_dazpose(self):

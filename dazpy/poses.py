@@ -44,18 +44,38 @@ def reset_transforms(node: "DazNode") -> None:
     node.set_scale(1.0, 1.0, 1.0)
 
 
-def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = True) -> None:
+def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = False) -> None:
     """Drive every bone rotation and morph on *skeleton* to zero.
 
-    Does not touch the figure's root position/rotation/scale — use
-    :func:`reset_transforms` for that.
+    The default (``include_props=False``) is what guarantees this function
+    never touches the figure's root position/rotation/scale — use
+    :func:`reset_transforms` for that instead.
 
     Args:
         skeleton: The figure to zero.
-        include_props: When ``True`` (default), node-level numeric properties
-            are also zeroed, via :meth:`~dazpy.DazPose.apply_full`. When
-            ``False``, only bone rotations and morphs are zeroed, leaving
-            node properties untouched.
+        include_props: When ``True``, node-level numeric properties are also
+            zeroed, via :meth:`~dazpy.DazPose.apply_full`. This is **opt-in**,
+            not the default: ``apply_full`` writes 0 for every property
+            returned by the figure's node-property enumeration that is
+            *absent* from the pose it's given, and every other caller passes
+            a captured pose whose ``props`` dict already contains those
+            values. ``zero_figure`` instead passes an empty ``props={}``, so
+            with ``include_props=True`` that "absent → 0" fallback can drive
+            built-in transform-adjacent dials — e.g. the figure's general
+            Scale property (see the DzERCLink comment in ``dazpy/_pose.py``
+            around line 117-125) — to 0, contradicting the "does not touch
+            root transform" guarantee. Only pass ``True`` if you know your
+            rig doesn't route transforms through its node-property list.
+
+            The two modes also differ in how they write ERC-driven channels:
+            the ``True`` path goes through :meth:`~dazpy.DazPose.apply_full`,
+            which prefers ``setRawValue()`` writes to avoid double-applying
+            :class:`DzERCLink` controller contributions (see the comment in
+            ``dazpy/_pose.py`` around line 117-125). The ``False`` path uses
+            :meth:`~dazpy.DazSkeleton.set_bone_rotations` /
+            :meth:`~dazpy.DazSkeleton.set_morph_values`, which use plain
+            ``setValue()`` writes. On ERC-driven channels the two modes can
+            therefore leave the figure in different end states.
     """
     if include_props:
         pose = DazPose(figure=skeleton._identifier.value, bones={}, morphs={}, props={})
@@ -63,6 +83,6 @@ def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = True) -> None:
         return
 
     zero_bones = {name: (0.0, 0.0, 0.0) for name in skeleton.bone_rotations()}
-    zero_morphs = {name: 0.0 for name in skeleton.morph_values()}
+    zero_morphs = {name: 0.0 for name in skeleton.morph_values(nonzero_only=True)}
     skeleton.set_bone_rotations(zero_bones)
     skeleton.set_morph_values(zero_morphs)

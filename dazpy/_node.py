@@ -117,7 +117,10 @@ class DazNode(DazElement):
 
     @property
     def scale(self) -> dict | None:
-        """Per-axis and uniform scale as ``{"x", "y", "z", "general"}`` (read-only)."""
+        """Per-axis and uniform scale as ``{"x", "y", "z", "general"}`` (read-only).
+
+        Use :meth:`set_scale` to change the per-axis values.
+        """
         script = ScriptBuilder.node_body(
             self._identifier,
             "return {x: _node.getXScaleControl().getValue(), y: _node.getYScaleControl().getValue(), z: _node.getZScaleControl().getValue(), general: _node.getScaleControl().getValue()};"
