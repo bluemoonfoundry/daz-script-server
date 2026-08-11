@@ -5882,5 +5882,168 @@ class TestLightingExports(unittest.TestCase):
         self.assertIn("apply_hdri_environment", dazpy.__all__)
 
 
+class _FakeCinematicsCamera:
+    def __init__(self, name: str | None = None):
+        self.name = name
+        self.position_calls: list[tuple[float, float, float]] = []
+        self.rotation_calls: list[tuple[float, float, float]] = []
+        self.aim_at_calls: list[tuple[float, float, float]] = []
+        self.focal_length: float | None = None
+        self.depth_of_field: bool | None = None
+        self.focal_distance: float | None = None
+        self.aspect_width: float | None = None
+        self.aspect_height: float | None = None
+        self.pixels_width: int | None = None
+        self.pixels_height: int | None = None
+        self._client = MagicMock()
+
+    def set_position(self, x, y, z):
+        self.position_calls.append((x, y, z))
+
+    def set_rotation(self, x, y, z):
+        self.rotation_calls.append((x, y, z))
+
+    def aim_at(self, x, y, z):
+        self.aim_at_calls.append((x, y, z))
+
+
+class _FakeCinematicsScene:
+    def __init__(self):
+        self.created: list[_FakeCinematicsCamera] = []
+
+    def create_camera(self, name: str | None = None) -> _FakeCinematicsCamera:
+        cam = _FakeCinematicsCamera(name)
+        self.created.append(cam)
+        return cam
+
+
+class TestCinematicStaticShot(unittest.TestCase):
+    def test_defaults(self):
+        from dazpy.cinematics import CinematicStaticShot
+        from dazpy.math3 import Vec3
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150))
+        self.assertIsNone(shot.look_at)
+        self.assertEqual(shot.look_at_offset_cm, 0.0)
+        self.assertIsNone(shot.rotation)
+        self.assertEqual(shot.focal_length, 50.0)
+        self.assertFalse(shot.depth_of_field)
+        self.assertIsNone(shot.focal_distance)
+        self.assertIsNone(shot.aspect_width)
+        self.assertIsNone(shot.aspect_height)
+        self.assertIsNone(shot.pixels_width)
+        self.assertIsNone(shot.pixels_height)
+
+    def test_is_frozen(self):
+        from dazpy.cinematics import CinematicStaticShot
+        from dazpy.math3 import Vec3
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150))
+        with self.assertRaises(Exception):
+            shot.focal_length = 85.0
+
+    def test_apply_creates_new_camera_when_none_given(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150))
+        cam = apply_static_shot(scene, shot, name="Shot 1")
+        self.assertEqual(len(scene.created), 1)
+        self.assertIs(cam, scene.created[0])
+        self.assertEqual(cam.name, "Shot 1")
+
+    def test_apply_reuses_given_camera(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        existing = _FakeCinematicsCamera("MyCam")
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150))
+        cam = apply_static_shot(scene, shot, camera=existing)
+        self.assertIs(cam, existing)
+        self.assertEqual(len(scene.created), 0)
+
+    def test_apply_sets_position(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(1.0, 2.0, 3.0))
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.position_calls, [(1.0, 2.0, 3.0)])
+
+    def test_apply_calls_aim_at_when_look_at_vec3_given(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150), look_at=Vec3(0, 0, 0))
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.aim_at_calls, [(0.0, 0.0, 0.0)])
+        self.assertEqual(cam.rotation_calls, [])
+
+    def test_apply_applies_look_at_offset_to_daznode_target(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+
+        class _Node:
+            position = {"x": 0.0, "y": 100.0, "z": 0.0}
+
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150), look_at=_Node(), look_at_offset_cm=20.0)
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.aim_at_calls, [(0.0, 120.0, 0.0)])
+
+    def test_apply_calls_set_rotation_when_only_rotation_given(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150), rotation=(10.0, 20.0, 30.0))
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.rotation_calls, [(10.0, 20.0, 30.0)])
+        self.assertEqual(cam.aim_at_calls, [])
+
+    def test_apply_touches_neither_orientation_when_both_none(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150))
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.aim_at_calls, [])
+        self.assertEqual(cam.rotation_calls, [])
+
+    def test_apply_always_writes_focal_length_and_depth_of_field(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150), focal_length=85.0, depth_of_field=True)
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.focal_length, 85.0)
+        self.assertTrue(cam.depth_of_field)
+
+    def test_apply_writes_optional_fields_only_when_not_none(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(position=Vec3(0, 0, 150))
+        cam = apply_static_shot(scene, shot)
+        self.assertIsNone(cam.focal_distance)
+        self.assertIsNone(cam.aspect_width)
+        self.assertIsNone(cam.aspect_height)
+        self.assertIsNone(cam.pixels_width)
+        self.assertIsNone(cam.pixels_height)
+
+    def test_apply_writes_all_optional_fields_when_given(self):
+        from dazpy.cinematics import CinematicStaticShot, apply_static_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicStaticShot(
+            position=Vec3(0, 0, 150), focal_distance=175.0,
+            aspect_width=16.0, aspect_height=9.0,
+            pixels_width=1920, pixels_height=1080,
+        )
+        cam = apply_static_shot(scene, shot)
+        self.assertEqual(cam.focal_distance, 175.0)
+        self.assertEqual(cam.aspect_width, 16.0)
+        self.assertEqual(cam.aspect_height, 9.0)
+        self.assertEqual(cam.pixels_width, 1920)
+        self.assertEqual(cam.pixels_height, 1080)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
