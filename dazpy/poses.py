@@ -29,3 +29,16 @@ def apply_pose(skeleton: "DazSkeleton", pose: "DazPose | str | Path") -> None:
     if isinstance(pose, (str, Path)):
         pose = DazPose.load(pose)
     pose.apply(skeleton)
+
+
+def reset_transforms(node: "DazNode") -> None:
+    """Reset *node*'s local position and rotation to zero, and scale to 1.0.
+
+    Works on any :class:`~dazpy.DazNode` — camera, prop, or figure root.
+
+    Args:
+        node: The node to reset.
+    """
+    node.set_local_position(0.0, 0.0, 0.0)
+    node.set_local_rotation(0.0, 0.0, 0.0)
+    node.set_scale(1.0, 1.0, 1.0)

@@ -4973,6 +4973,29 @@ class TestApplyPose(unittest.TestCase):
             os.unlink(path)
 
 
+class TestResetTransforms(unittest.TestCase):
+    def test_reset_transforms_calls_position_rotation_scale_setters(self):
+        from dazpy.poses import reset_transforms
+        node = MagicMock()
+        reset_transforms(node)
+        node.set_local_position.assert_called_once_with(0.0, 0.0, 0.0)
+        node.set_local_rotation.assert_called_once_with(0.0, 0.0, 0.0)
+        node.set_scale.assert_called_once_with(1.0, 1.0, 1.0)
+
+    def test_reset_transforms_works_on_real_node(self):
+        from dazpy._node import DazNode
+        from dazpy.poses import reset_transforms
+
+        client = _make_client(None)
+        node = DazNode(client, NodeIdentifier("SomeCamera"))
+        reset_transforms(node)
+        self.assertEqual(client.execute.call_count, 3)
+        scripts = [call.args[0] for call in client.execute.call_args_list]
+        self.assertTrue(any("setLocalPos" in s for s in scripts))
+        self.assertTrue(any("getXRotControl" in s for s in scripts))
+        self.assertTrue(any("getXScaleControl" in s for s in scripts))
+
+
 class TestBatchPoseEvaluation(unittest.TestCase):
     """Tests for DazSkeleton.evaluate_pose() and evaluate_pose_jacobian()."""
 
