@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from .math3 import Vec3
 from ._shot_geometry import resolve_target, spherical_offset
+from ._timeline import DazTimeline
 
 if TYPE_CHECKING:
     from ._camera import DazCamera
@@ -114,4 +115,88 @@ def apply_static_shot(
         cam.pixels_width = shot.pixels_width
     if shot.pixels_height is not None:
         cam.pixels_height = shot.pixels_height
+    return cam
+
+
+def _lerp(start: float, end: float, t: float) -> float:
+    return start + (end - start) * t
+
+
+@dataclass(frozen=True)
+class OrbitCamera:
+    """A camera sweeping around a target across a frame range.
+
+    Writes a static per-frame placement at each timeline frame — this is
+    **not** a real interpolated keyframe animation (see the module
+    docstring). Whether the sweep persists as visible motion when scrubbing
+    the timeline afterward depends on DAZ Studio's key/animation mode at
+    call time; that's the caller's responsibility.
+
+    Args:
+        target: The point to orbit around, as a
+            :class:`~dazpy.math3.Vec3` world position or a
+            :class:`~dazpy.DazNode` (its :attr:`~dazpy.DazNode.position`,
+            raised by *target_offset_cm*, is used).
+        radius: Orbit radius from the target, in DAZ Studio units (cm).
+        elevation_deg: Constant elevation angle throughout the orbit — see
+            :func:`~dazpy._shot_geometry.spherical_offset`.
+        start_azimuth_deg: Azimuth at *frame_start*.
+        end_azimuth_deg: Azimuth at *frame_end*. Azimuth is linearly
+            interpolated between the two across the frame range.
+        frame_start: First timeline frame (inclusive).
+        frame_end: Last timeline frame (inclusive).
+        focal_length: Passed to :attr:`~dazpy.DazCamera.focal_length` once,
+            before the per-frame sweep.
+        target_offset_cm: Vertical offset (cm) applied when resolving
+            *target* — see :func:`~dazpy._shot_geometry.resolve_target`.
+            Defaults to ``25.0`` (chest height) since a figure's resolved
+            position is generally its root/hip joint and a close orbit
+            radius aimed straight at it risks clipping the head.
+    """
+
+    target: "Vec3 | DazNode"
+    radius: float
+    elevation_deg: float = 15.0
+    start_azimuth_deg: float = 0.0
+    end_azimuth_deg: float = 360.0
+    frame_start: int = 0
+    frame_end: int = 90
+    focal_length: float = 50.0
+    target_offset_cm: float = 25.0
+
+
+def apply_orbit_camera(
+    scene: "DazScene",
+    orbit: OrbitCamera,
+    *,
+    camera: "DazCamera | None" = None,
+    name: str | None = None,
+) -> "DazCamera":
+    """Sweep a camera around *orbit.target* across its frame range.
+
+    Args:
+        scene: A :class:`~dazpy.DazScene`. Only used to create a new camera
+            when *camera* is ``None``.
+        orbit: The orbit configuration.
+        camera: An existing :class:`~dazpy.DazCamera` to reuse/mutate.
+            When ``None`` (the default), a new camera is created via
+            ``scene.create_camera(name)``.
+        name: Optional name for a newly created camera. Ignored when
+            *camera* is given.
+
+    Returns:
+        The configured :class:`~dazpy.DazCamera`.
+    """
+    cam = _resolve_camera(scene, camera, name)
+    target = resolve_target(orbit.target, vertical_offset_cm=orbit.target_offset_cm)
+    cam.focal_length = orbit.focal_length
+    timeline = DazTimeline(cam._client)
+    frame_count = orbit.frame_end - orbit.frame_start
+    for frame in range(orbit.frame_start, orbit.frame_end + 1):
+        t = (frame - orbit.frame_start) / frame_count if frame_count > 0 else 0.0
+        azimuth = _lerp(orbit.start_azimuth_deg, orbit.end_azimuth_deg, t)
+        pos = spherical_offset(target, azimuth, orbit.elevation_deg, orbit.radius)
+        timeline.frame = frame
+        cam.set_position(pos.x, pos.y, pos.z)
+        cam.aim_at(target.x, target.y, target.z)
     return cam

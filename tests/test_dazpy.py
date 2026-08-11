@@ -6045,5 +6045,117 @@ class TestCinematicStaticShot(unittest.TestCase):
         self.assertEqual(cam.pixels_height, 1080)
 
 
+class TestOrbitCamera(unittest.TestCase):
+    def test_defaults(self):
+        from dazpy.cinematics import OrbitCamera
+        from dazpy.math3 import Vec3
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0)
+        self.assertEqual(orbit.elevation_deg, 15.0)
+        self.assertEqual(orbit.start_azimuth_deg, 0.0)
+        self.assertEqual(orbit.end_azimuth_deg, 360.0)
+        self.assertEqual(orbit.frame_start, 0)
+        self.assertEqual(orbit.frame_end, 90)
+        self.assertEqual(orbit.focal_length, 50.0)
+        self.assertEqual(orbit.target_offset_cm, 25.0)
+
+    def test_apply_creates_new_camera_when_none_given(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=0, frame_end=2)
+        cam = apply_orbit_camera(scene, orbit, name="Orbit Cam")
+        self.assertEqual(len(scene.created), 1)
+        self.assertIs(cam, scene.created[0])
+
+    def test_apply_reuses_given_camera(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        existing = _FakeCinematicsCamera("MyCam")
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=0, frame_end=2)
+        cam = apply_orbit_camera(scene, orbit, camera=existing)
+        self.assertIs(cam, existing)
+        self.assertEqual(len(scene.created), 0)
+
+    def test_apply_sets_focal_length_once(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=0, frame_end=2, focal_length=35.0)
+        apply_orbit_camera(scene, orbit, camera=cam)
+        self.assertEqual(cam.focal_length, 35.0)
+
+    def test_apply_steps_timeline_frame_for_every_frame_inclusive(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=5, frame_end=8)
+        apply_orbit_camera(scene, orbit, camera=cam)
+        scripts = [call.args[0] for call in cam._client.execute.call_args_list]
+        self.assertEqual(len(scripts), 4)
+        for frame, script in zip(range(5, 9), scripts):
+            self.assertIn(f"Scene.setFrame({frame})", script)
+
+    def test_apply_writes_one_position_and_aim_at_per_frame(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=Vec3(0, 0, 0), radius=200.0, frame_start=0, frame_end=3)
+        apply_orbit_camera(scene, orbit, camera=cam)
+        self.assertEqual(len(cam.position_calls), 4)
+        self.assertEqual(len(cam.aim_at_calls), 4)
+
+    def test_apply_interpolates_azimuth_linearly_across_frames(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy._shot_geometry import spherical_offset
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(
+            target=Vec3(0, 0, 0), radius=200.0, elevation_deg=0.0,
+            start_azimuth_deg=0.0, end_azimuth_deg=90.0,
+            frame_start=0, frame_end=2, target_offset_cm=0.0,
+        )
+        apply_orbit_camera(scene, orbit, camera=cam)
+        expected_mid = spherical_offset(Vec3(0, 0, 0), 45.0, 0.0, 200.0)
+        x, y, z = cam.position_calls[1]
+        self.assertAlmostEqual(x, expected_mid.x, places=6)
+        self.assertAlmostEqual(y, expected_mid.y, places=6)
+        self.assertAlmostEqual(z, expected_mid.z, places=6)
+
+    def test_apply_resolves_daznode_target_with_offset(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy.math3 import Vec3
+
+        class _Node:
+            position = {"x": 0.0, "y": 0.0, "z": 0.0}
+
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(target=_Node(), radius=200.0, frame_start=0, frame_end=0, target_offset_cm=30.0)
+        apply_orbit_camera(scene, orbit, camera=cam)
+        self.assertEqual(cam.aim_at_calls, [(0.0, 30.0, 0.0)])
+
+    def test_apply_single_frame_range_uses_start_azimuth(self):
+        from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+        from dazpy._shot_geometry import spherical_offset
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        orbit = OrbitCamera(
+            target=Vec3(0, 0, 0), radius=200.0, elevation_deg=0.0,
+            start_azimuth_deg=10.0, end_azimuth_deg=350.0,
+            frame_start=7, frame_end=7, target_offset_cm=0.0,
+        )
+        apply_orbit_camera(scene, orbit, camera=cam)
+        expected = spherical_offset(Vec3(0, 0, 0), 10.0, 0.0, 200.0)
+        x, y, z = cam.position_calls[0]
+        self.assertAlmostEqual(x, expected.x, places=6)
+        self.assertAlmostEqual(z, expected.z, places=6)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
