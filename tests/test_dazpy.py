@@ -6157,5 +6157,88 @@ class TestOrbitCamera(unittest.TestCase):
         self.assertAlmostEqual(z, expected.z, places=6)
 
 
+class TestFrameSubject(unittest.TestCase):
+    def test_defaults(self):
+        from dazpy.cinematics import FrameSubject
+        from dazpy.math3 import Vec3
+        frame = FrameSubject(subject=Vec3(0, 0, 0))
+        self.assertEqual(frame.shot_type, "medium")
+        self.assertEqual(frame.azimuth_deg, 0.0)
+        self.assertEqual(frame.elevation_deg, 10.0)
+        self.assertEqual(frame.focal_length, 50.0)
+        self.assertIsNone(frame.target_offset_cm)
+
+    def test_apply_creates_new_camera_when_none_given(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        frame = FrameSubject(subject=Vec3(0, 0, 0))
+        cam = apply_frame_subject(scene, frame, name="Close Up")
+        self.assertEqual(len(scene.created), 1)
+        self.assertIs(cam, scene.created[0])
+
+    def test_apply_reuses_given_camera(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        existing = _FakeCinematicsCamera("MyCam")
+        frame = FrameSubject(subject=Vec3(0, 0, 0))
+        cam = apply_frame_subject(scene, frame, camera=existing)
+        self.assertIs(cam, existing)
+        self.assertEqual(len(scene.created), 0)
+
+    def test_apply_resolves_each_shot_type_to_documented_distance(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject, _SHOT_DISTANCES
+        from dazpy._shot_geometry import spherical_offset
+        from dazpy.math3 import Vec3
+        for shot_type, distance in _SHOT_DISTANCES.items():
+            with self.subTest(shot_type=shot_type):
+                cam = _FakeCinematicsCamera()
+                scene = _FakeCinematicsScene()
+                frame = FrameSubject(subject=Vec3(0, 0, 0), shot_type=shot_type, elevation_deg=0.0, target_offset_cm=0.0)
+                apply_frame_subject(scene, frame, camera=cam)
+                expected = spherical_offset(Vec3(0, 0, 0), 0.0, 0.0, distance)
+                x, y, z = cam.position_calls[0]
+                self.assertAlmostEqual(x, expected.x, places=6)
+                self.assertAlmostEqual(z, expected.z, places=6)
+
+    def test_apply_uses_shot_type_default_offset_when_none(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject, _SHOT_TARGET_OFFSETS_CM
+        from dazpy.math3 import Vec3
+        for shot_type, offset in _SHOT_TARGET_OFFSETS_CM.items():
+            with self.subTest(shot_type=shot_type):
+                cam = _FakeCinematicsCamera()
+                scene = _FakeCinematicsScene()
+                frame = FrameSubject(subject=Vec3(0, 0, 0), shot_type=shot_type, azimuth_deg=0.0, elevation_deg=0.0)
+                apply_frame_subject(scene, frame, camera=cam)
+                self.assertAlmostEqual(cam.aim_at_calls[0][1], offset, places=6)
+
+    def test_apply_honors_explicit_target_offset_override(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        frame = FrameSubject(subject=Vec3(0, 0, 0), shot_type="close_up", target_offset_cm=5.0)
+        apply_frame_subject(scene, frame, camera=cam)
+        self.assertAlmostEqual(cam.aim_at_calls[0][1], 5.0, places=6)
+
+    def test_apply_raises_value_error_on_unknown_shot_type(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        frame = FrameSubject(subject=Vec3(0, 0, 0), shot_type="extreme_wide")
+        with self.assertRaises(ValueError):
+            apply_frame_subject(scene, frame)
+
+    def test_apply_sets_focal_length(self):
+        from dazpy.cinematics import FrameSubject, apply_frame_subject
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        frame = FrameSubject(subject=Vec3(0, 0, 0), focal_length=135.0)
+        apply_frame_subject(scene, frame, camera=cam)
+        self.assertEqual(cam.focal_length, 135.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

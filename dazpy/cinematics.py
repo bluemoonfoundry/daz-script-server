@@ -200,3 +200,78 @@ def apply_orbit_camera(
         cam.set_position(pos.x, pos.y, pos.z)
         cam.aim_at(target.x, target.y, target.z)
     return cam
+
+
+_SHOT_DISTANCES = {"close_up": 60.0, "medium": 150.0, "full_body": 300.0}
+_SHOT_TARGET_OFFSETS_CM = {"close_up": 45.0, "medium": 25.0, "full_body": 0.0}
+
+
+@dataclass(frozen=True)
+class FrameSubject:
+    """A camera framing a subject at a named shot distance.
+
+    Args:
+        subject: The point to frame, as a :class:`~dazpy.math3.Vec3` world
+            position or a :class:`~dazpy.DazNode` (its
+            :attr:`~dazpy.DazNode.position`, raised by *target_offset_cm*,
+            is used).
+        shot_type: One of ``"close_up"``, ``"medium"``, ``"full_body"`` —
+            maps to a preset distance via a module-level table.
+        azimuth_deg: Camera azimuth around the subject — see
+            :func:`~dazpy._shot_geometry.spherical_offset`.
+        elevation_deg: Camera elevation around the subject.
+        focal_length: Passed to :attr:`~dazpy.DazCamera.focal_length`.
+        target_offset_cm: Vertical offset (cm) applied when resolving
+            *subject* — see :func:`~dazpy._shot_geometry.resolve_target`.
+            ``None`` (the default) uses the *shot_type*'s entry in
+            ``_SHOT_TARGET_OFFSETS_CM`` (tighter shots aim higher, to
+            compensate for a figure's resolved position being its
+            root/hip joint rather than chest/head height).
+    """
+
+    subject: "Vec3 | DazNode"
+    shot_type: str = "medium"
+    azimuth_deg: float = 0.0
+    elevation_deg: float = 10.0
+    focal_length: float = 50.0
+    target_offset_cm: float | None = None
+
+
+def apply_frame_subject(
+    scene: "DazScene",
+    frame: FrameSubject,
+    *,
+    camera: "DazCamera | None" = None,
+    name: str | None = None,
+) -> "DazCamera":
+    """Place and aim a camera to frame *frame.subject* at its shot distance.
+
+    Args:
+        scene: A :class:`~dazpy.DazScene`. Only used to create a new camera
+            when *camera* is ``None``.
+        frame: The framing configuration.
+        camera: An existing :class:`~dazpy.DazCamera` to reuse/mutate.
+            When ``None`` (the default), a new camera is created via
+            ``scene.create_camera(name)``.
+        name: Optional name for a newly created camera. Ignored when
+            *camera* is given.
+
+    Returns:
+        The configured :class:`~dazpy.DazCamera`.
+
+    Raises:
+        ValueError: If ``frame.shot_type`` is not one of ``"close_up"``,
+            ``"medium"``, ``"full_body"``.
+    """
+    if frame.shot_type not in _SHOT_DISTANCES:
+        raise ValueError(
+            f"Invalid FrameSubject.shot_type {frame.shot_type!r}; must be one of {sorted(_SHOT_DISTANCES)}"
+        )
+    cam = _resolve_camera(scene, camera, name)
+    offset = frame.target_offset_cm if frame.target_offset_cm is not None else _SHOT_TARGET_OFFSETS_CM[frame.shot_type]
+    target = resolve_target(frame.subject, vertical_offset_cm=offset)
+    pos = spherical_offset(target, frame.azimuth_deg, frame.elevation_deg, _SHOT_DISTANCES[frame.shot_type])
+    cam.set_position(pos.x, pos.y, pos.z)
+    cam.aim_at(target.x, target.y, target.z)
+    cam.focal_length = frame.focal_length
+    return cam
