@@ -38,6 +38,13 @@ convention.
   `_look_at_euler`, target resolution) that `dazpy.lighting` already has, by
   extracting it into a shared private module rather than copy-pasting it
   into `cinematics.py`.
+- Avoid head/foot clipping on tight framing by default. A figure's
+  `DazNode.position` is its root joint — for `DazSkeleton` figures that's
+  conventionally the hip, not the center of mass or the head. Aiming and
+  placing the camera straight at that point with a close-up distance can
+  put the head (and sometimes the feet) outside the frame. Target
+  resolution needs a vertical-offset knob so framing defaults aim higher
+  than the raw root position, with the caller able to override it.
 
 ## Non-goals
 
@@ -45,7 +52,9 @@ convention.
   pending DazScript keyframe API research).
 - Bounding-box-aware framing — `FrameSubject` uses fixed distance presets
   per shot type, not a computed bounding box (`DazNode` has no bounding-box
-  query today).
+  query today). The vertical-offset heuristic (see Goals) is likewise a
+  fixed-cm approximation tuned for an average adult figure, not a computed
+  measurement — it does not know a specific figure's actual height.
 - Multi-camera sequencing / shot lists / cuts. Each `apply_*` call
   configures one camera at a time; composing a sequence is left to the
   caller.
@@ -63,14 +72,22 @@ them, they move to a new private module:
 # dazpy/_shot_geometry.py
 def spherical_offset(target: Vec3, azimuth_deg: float, elevation_deg: float, distance: float) -> Vec3: ...
 def look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]: ...
-def resolve_target(target: Vec3 | DazNode) -> Vec3: ...
+def resolve_target(target: Vec3 | DazNode, vertical_offset_cm: float = 0.0) -> Vec3: ...
 ```
 
 (Names lose their leading underscore since they're now the public surface
 of an internal module, imported by both `lighting.py` and `cinematics.py`.)
 `lighting.py` is refactored to import these instead of defining its own
 copies — no behavior change, existing lighting tests must continue to pass
-unmodified.
+unmodified. `lighting.py`'s call sites keep passing `vertical_offset_cm=0.0`
+(the default) — light rigs don't need this adjustment, only camera framing
+does.
+
+`resolve_target` adds `vertical_offset_cm` to the resolved position's Y
+component (DAZ Studio's up axis) *after* resolving a `DazNode` to its
+`.position`, or directly to an explicit `Vec3`'s Y — so an explicit `Vec3`
+target can also be nudged if the caller wants, though the offset exists
+primarily to compensate for a figure's root-joint position.
 
 ### New file: `dazpy/cinematics.py`
 
@@ -80,6 +97,7 @@ class CinematicStaticShot:
     """A single camera placement and optics configuration."""
     position: Vec3
     look_at: Vec3 | DazNode | None = None    # aim_at() target; None = use `rotation` instead
+    look_at_offset_cm: float = 0.0           # vertical offset applied to look_at when it's a DazNode; see resolve_target
     rotation: tuple[float, float, float] | None = None  # explicit (x,y,z) deg; ignored if look_at is set
     focal_length: float = 50.0
     depth_of_field: bool = False
@@ -101,9 +119,11 @@ class OrbitCamera:
     frame_start: int = 0
     frame_end: int = 90
     focal_length: float = 50.0
+    target_offset_cm: float = 25.0  # vertical offset above target's root position, assuming chest-height framing
 
 
 _SHOT_DISTANCES = {"close_up": 60.0, "medium": 150.0, "full_body": 300.0}
+_SHOT_TARGET_OFFSETS_CM = {"close_up": 45.0, "medium": 25.0, "full_body": 0.0}
 
 @dataclass(frozen=True)
 class FrameSubject:
@@ -113,10 +133,26 @@ class FrameSubject:
     azimuth_deg: float = 0.0
     elevation_deg: float = 10.0
     focal_length: float = 50.0
+    target_offset_cm: float | None = None  # None = use _SHOT_TARGET_OFFSETS_CM[shot_type]
 ```
 
 `position`, `radius`, `elevation_deg` etc. use the same DAZ Studio unit
 convention (cm) as `dazpy.lighting`'s `LightSpec.distance`.
+
+`target_offset_cm` / `_SHOT_TARGET_OFFSETS_CM` are the fix for the
+hip-joint clipping problem described in Goals: a figure's resolved
+`.position` is generally its root/hip, so `resolve_target` (see above)
+raises the actual look-at/orbit-center point by this many cm before any
+spherical placement math runs. `_SHOT_TARGET_OFFSETS_CM` biases tighter
+shots higher (close-up aims near chest/head height) and leaves full-body
+shots at the root (a wide-enough shot to include the whole figure doesn't
+need the correction). `OrbitCamera.target_offset_cm` defaults to a fixed
+`25.0` (chest height) rather than a shot-type table, since orbit shots
+don't carry a `shot_type` concept — callers doing a tight orbit should
+raise it explicitly. `CinematicStaticShot.look_at_offset_cm` defaults to
+`0.0` since that API already takes an explicit `position`/`look_at` the
+caller fully controls; the knob exists for consistency, not because a
+default correction is needed there.
 
 ## Behavior
 
@@ -139,10 +175,10 @@ def apply_static_shot(
 
 1. `cam = _resolve_camera(scene, camera, name)`.
 2. `cam.set_position(shot.position.x, shot.position.y, shot.position.z)`.
-3. Orientation: if `shot.look_at` is set, resolve it via `resolve_target`
-   (if it's a `DazNode`) and call `cam.aim_at(x, y, z)`. Else if
-   `shot.rotation` is set, call `cam.set_rotation(*shot.rotation)`. Else
-   leave orientation untouched.
+3. Orientation: if `shot.look_at` is set, resolve it via
+   `resolve_target(shot.look_at, vertical_offset_cm=shot.look_at_offset_cm)`
+   and call `cam.aim_at(x, y, z)`. Else if `shot.rotation` is set, call
+   `cam.set_rotation(*shot.rotation)`. Else leave orientation untouched.
 4. `cam.focal_length = shot.focal_length`.
 5. `cam.depth_of_field = shot.depth_of_field`.
 6. If `shot.focal_distance is not None`: `cam.focal_distance = shot.focal_distance`.
@@ -160,7 +196,7 @@ def apply_orbit_camera(
 ```
 
 1. `cam = _resolve_camera(scene, camera, name)`.
-2. `target = resolve_target(orbit.target)`.
+2. `target = resolve_target(orbit.target, vertical_offset_cm=orbit.target_offset_cm)`.
 3. `cam.focal_length = orbit.focal_length`.
 4. `timeline = DazTimeline(cam._client)`.
 5. For each `frame` in `range(orbit.frame_start, orbit.frame_end + 1)`:
@@ -192,12 +228,13 @@ def apply_frame_subject(
 
 1. Validate `frame.shot_type in _SHOT_DISTANCES`, else `ValueError`.
 2. `cam = _resolve_camera(scene, camera, name)`.
-3. `target = resolve_target(frame.subject)`.
-4. `pos = spherical_offset(target, frame.azimuth_deg, frame.elevation_deg, _SHOT_DISTANCES[frame.shot_type])`.
-5. `cam.set_position(pos.x, pos.y, pos.z)`.
-6. `cam.aim_at(target.x, target.y, target.z)`.
-7. `cam.focal_length = frame.focal_length`.
-8. Return `cam`.
+3. `offset = frame.target_offset_cm if frame.target_offset_cm is not None else _SHOT_TARGET_OFFSETS_CM[frame.shot_type]`.
+4. `target = resolve_target(frame.subject, vertical_offset_cm=offset)`.
+5. `pos = spherical_offset(target, frame.azimuth_deg, frame.elevation_deg, _SHOT_DISTANCES[frame.shot_type])`.
+6. `cam.set_position(pos.x, pos.y, pos.z)`.
+7. `cam.aim_at(target.x, target.y, target.z)`.
+8. `cam.focal_length = frame.focal_length`.
+9. Return `cam`.
 
 ## API surface / exports
 
@@ -223,7 +260,8 @@ test conventions):
 
 - Pure-Python tests for `dazpy/_shot_geometry.py`'s `spherical_offset` and
   `look_at_euler` (moved from the existing lighting tests, updated to the
-  new import location) plus `resolve_target`.
+  new import location) plus `resolve_target`, including its
+  `vertical_offset_cm` behavior for both a `Vec3` and a `DazNode` target.
 - Existing `dazpy.lighting` tests continue to pass unmodified after the
   refactor (same public behavior, internal helper relocation only).
 - Mock-client tests for `apply_static_shot`:
@@ -239,9 +277,14 @@ test conventions):
     before each position/aim_at write.
   - Interpolates azimuth linearly between `start_azimuth_deg` and
     `end_azimuth_deg`.
-  - Resolves a `DazNode` target via `resolve_target`.
+  - Resolves a `DazNode` target via `resolve_target`, applying
+    `target_offset_cm` (default `25.0`).
 - Mock-client tests for `apply_frame_subject`:
   - Resolves each `shot_type` to its documented distance.
+  - Resolves each `shot_type` to its documented default target offset
+    (`_SHOT_TARGET_OFFSETS_CM`) when `target_offset_cm` is `None`.
+  - Honors an explicit `target_offset_cm` override, bypassing the
+    shot-type default.
   - Raises `ValueError` on an unknown `shot_type`.
   - Sets focal_length, position, and aim_at correctly.
 
