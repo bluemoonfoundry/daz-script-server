@@ -4911,6 +4911,68 @@ class TestSceneSnapshot(unittest.TestCase):
         self.assertIsNone(d["world_position"])
 
 
+class TestApplyPose(unittest.TestCase):
+    def _make_skeleton(self, capture_result=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(capture_result)
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
+        return skel, client
+
+    def test_apply_pose_with_dazpose_instance_delegates_to_apply(self):
+        from dazpy.poses import apply_pose
+        skeleton = MagicMock()
+        pose = MagicMock()
+        apply_pose(skeleton, pose)
+        pose.apply.assert_called_once_with(skeleton)
+
+    def test_apply_pose_with_dazpose_instance_does_not_call_load(self):
+        from dazpy.poses import apply_pose
+        from dazpy._pose import DazPose
+        skeleton = MagicMock()
+        pose = MagicMock()
+        with patch.object(DazPose, "load") as mock_load:
+            apply_pose(skeleton, pose)
+        mock_load.assert_not_called()
+
+    def test_apply_pose_with_path_loads_then_applies(self):
+        import json
+        import os
+        import tempfile
+        from dazpy.poses import apply_pose
+
+        data = {"figure": "Genesis 9", "bones": {"hip": [0.0, 5.0, 0.0]}, "morphs": {}, "props": {}}
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            json.dump(data, f)
+            path = f.name
+        try:
+            skel, client = self._make_skeleton(True)
+            apply_pose(skel, path)
+            self.assertEqual(client.execute.call_count, 1)
+            script = client.execute.call_args[0][0]
+            self.assertIn("hip", script)
+        finally:
+            os.unlink(path)
+
+    def test_apply_pose_with_path_accepts_pathlib_path(self):
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from dazpy.poses import apply_pose
+
+        data = {"figure": "Genesis 9", "bones": {}, "morphs": {"PHMSmile": 0.5}, "props": {}}
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            json.dump(data, f)
+            path = f.name
+        try:
+            skel, client = self._make_skeleton(True)
+            apply_pose(skel, Path(path))
+            script = client.execute.call_args[0][0]
+            self.assertIn("PHMSmile", script)
+        finally:
+            os.unlink(path)
+
+
 class TestBatchPoseEvaluation(unittest.TestCase):
     """Tests for DazSkeleton.evaluate_pose() and evaluate_pose_jacobian()."""
 
