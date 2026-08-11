@@ -606,11 +606,14 @@ print(anim.frame_range())          # (start, end)
 anim.bake_pose_to_keyframes(start=0, end=60)
 ```
 
-### 📐 math3 — Vec3, Quat, BoundingBox
+### 📐 math3 — Vec3, Quat, BoundingBox, AxisRemap
 
 New module **`dazpy.math3`** provides lightweight value types returned throughout
 the SDK: `Vec3` (positions, translations), `Quat` (rotations), and `BoundingBox`
 (geometry bounds).  All support arithmetic operators and round-trip through JSON.
+`AxisRemap` converts `Vec3`/`Quat`/`BoundingBox` values between axis conventions
+via signed-axis permutations (e.g. the built-in `Y_UP_TO_Z_UP` preset for
+converting DAZ Studio's Y-up scene data to Z-up tools like Blender).
 
 ### 🌐 Posed Vertex Export & USD Scene Export
 
@@ -656,7 +659,7 @@ Studio instance) now ship in the repo root.
 
 ### 📖 Docs & Ergonomics
 
-- API reference pages for `DazPose`, `DazAnimation`, `Vec3`, `Quat`, and `BoundingBox`
+- API reference pages for `DazPose`, `DazAnimation`, `Vec3`, `Quat`, `BoundingBox`, and `AxisRemap`
 - Every script in `docs/examples/` has an `if __name__ == "__main__":` guard and
   argparse `--help`, making all examples safe to import and self-documenting
 

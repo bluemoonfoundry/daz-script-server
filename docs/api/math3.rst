@@ -24,3 +24,13 @@ BoundingBox
    :members:
    :undoc-members:
    :show-inheritance:
+
+AxisRemap
+---------
+
+.. autoclass:: dazpy.AxisRemap
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autodata:: dazpy.Y_UP_TO_Z_UP

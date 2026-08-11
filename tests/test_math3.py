@@ -7,6 +7,7 @@ Run standalone:  python tests/test_math3.py
 Via runner:      python tests.py unit
 """
 
+import itertools
 import os
 import sys
 import unittest
@@ -107,6 +108,63 @@ class TestAxisRemapApplyBbox(unittest.TestCase):
         result = remap.apply_bbox(box)
         self.assertEqual(result.min, Vec3(0, -3, 0))
         self.assertEqual(result.max, Vec3(1, 0, 2))
+
+
+class TestAxisRemapEquality(unittest.TestCase):
+    def test_equal_specs_are_equal_and_hash_equal(self):
+        a = AxisRemap(x="x", y="-z", z="y")
+        b = AxisRemap(x="x", y="-z", z="y")
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+
+    def test_different_specs_are_unequal(self):
+        a = AxisRemap(x="x", y="y", z="z")
+        b = AxisRemap(x="x", y="-z", z="y")
+        self.assertNotEqual(a, b)
+
+    def test_eq_against_other_type_is_not_implemented(self):
+        remap = AxisRemap(x="x", y="y", z="z")
+        self.assertNotEqual(remap, "not a remap")
+
+
+class TestMat3ToQuatBranchCoverage(unittest.TestCase):
+    """Sweeps all 24 proper (det == +1) signed axis permutations so every
+    branch of dazpy.math3._mat3_to_quat (trace>0 and the three
+    diagonal-dominant cases) gets exercised, not just trace>0.
+    """
+
+    AXES = ("x", "y", "z")
+    _PROBE_VECTORS = (Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1), Vec3(1, 2, 3))
+
+    @classmethod
+    def _proper_remaps(cls):
+        remaps = []
+        for perm in itertools.permutations(cls.AXES):
+            for signs in itertools.product((1, -1), repeat=3):
+                specs = [("-" if s < 0 else "") + axis for axis, s in zip(perm, signs)]
+                remap = AxisRemap(x=specs[0], y=specs[1], z=specs[2])
+                if remap._rotation_quat is not None:
+                    remaps.append(remap)
+        return remaps
+
+    def test_exactly_24_proper_permutations_exist(self):
+        # 3! axis orderings * 2^3 sign choices = 48 total; exactly half
+        # (24) have determinant +1 (proper rotations).
+        self.assertEqual(len(self._proper_remaps()), 24)
+
+    def test_rotation_quat_matches_matrix_for_all_proper_permutations(self):
+        for remap in self._proper_remaps():
+            q = remap._rotation_quat
+            for v in self._PROBE_VECTORS:
+                expected = remap.apply_vec3(v)
+                actual = q.rotate(v)
+                self.assertAlmostEqual(actual.x, expected.x, places=9, msg=repr(remap))
+                self.assertAlmostEqual(actual.y, expected.y, places=9, msg=repr(remap))
+                self.assertAlmostEqual(actual.z, expected.z, places=9, msg=repr(remap))
+
+    def test_rotation_quat_is_unit_length_for_all_proper_permutations(self):
+        for remap in self._proper_remaps():
+            self.assertAlmostEqual(remap._rotation_quat.length(), 1.0, places=9, msg=repr(remap))
 
 
 class TestYUpToZUpPreset(unittest.TestCase):

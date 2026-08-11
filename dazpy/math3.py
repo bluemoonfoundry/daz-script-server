@@ -697,7 +697,7 @@ class AxisRemap:
         z: Source axis for the output Z component.
     """
 
-    __slots__ = ("_specs", "_matrix", "_det", "_rotation_quat")
+    __slots__ = ("_specs", "_rotation_quat")
 
     def __init__(self, x: str, y: str, z: str) -> None:
         specs = (_parse_axis_spec(x), _parse_axis_spec(y), _parse_axis_spec(z))
@@ -710,10 +710,8 @@ class AxisRemap:
         matrix = [[0.0, 0.0, 0.0] for _ in range(3)]
         for row, (idx, sign) in enumerate(specs):
             matrix[row][idx] = sign
-        object.__setattr__(self, "_specs", specs)
-        object.__setattr__(self, "_matrix", matrix)
         det = _mat3_det(matrix)
-        object.__setattr__(self, "_det", det)
+        object.__setattr__(self, "_specs", specs)
         object.__setattr__(
             self, "_rotation_quat", _mat3_to_quat(matrix) if det > 0 else None
         )
@@ -727,6 +725,14 @@ class AxisRemap:
         for idx, sign in self._specs:
             parts.append(("-" if sign < 0 else "") + axes[idx])
         return f"AxisRemap(x={parts[0]!r}, y={parts[1]!r}, z={parts[2]!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AxisRemap):
+            return NotImplemented
+        return self._specs == other._specs
+
+    def __hash__(self) -> int:
+        return hash(self._specs)
 
     # ── application ───────────────────────────────────────────────────────────
 
