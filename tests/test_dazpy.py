@@ -5494,69 +5494,105 @@ class TestSceneEvents(unittest.TestCase):
             wait_for_scene_event(client, "node.added", timeout=1.0)
 
 
-class TestLightingMath(unittest.TestCase):
+class TestShotGeometryMath(unittest.TestCase):
     def test_spherical_offset_at_zero_azimuth_elevation(self):
-        from dazpy.lighting import _spherical_offset
+        from dazpy._shot_geometry import spherical_offset
         from dazpy.math3 import Vec3
-        result = _spherical_offset(Vec3(0, 0, 0), azimuth_deg=0.0, elevation_deg=0.0, distance=150.0)
+        result = spherical_offset(Vec3(0, 0, 0), azimuth_deg=0.0, elevation_deg=0.0, distance=150.0)
         self.assertAlmostEqual(result.x, 0.0, places=6)
         self.assertAlmostEqual(result.y, 0.0, places=6)
         self.assertAlmostEqual(result.z, 150.0, places=6)
 
     def test_spherical_offset_at_90_azimuth(self):
-        from dazpy.lighting import _spherical_offset
+        from dazpy._shot_geometry import spherical_offset
         from dazpy.math3 import Vec3
-        result = _spherical_offset(Vec3(0, 0, 0), azimuth_deg=90.0, elevation_deg=0.0, distance=150.0)
+        result = spherical_offset(Vec3(0, 0, 0), azimuth_deg=90.0, elevation_deg=0.0, distance=150.0)
         self.assertAlmostEqual(result.x, 150.0, places=6)
         self.assertAlmostEqual(result.y, 0.0, places=6)
         self.assertAlmostEqual(result.z, 0.0, places=6)
 
     def test_spherical_offset_at_90_elevation_ignores_azimuth(self):
-        from dazpy.lighting import _spherical_offset
+        from dazpy._shot_geometry import spherical_offset
         from dazpy.math3 import Vec3
-        result = _spherical_offset(Vec3(0, 0, 0), azimuth_deg=45.0, elevation_deg=90.0, distance=150.0)
+        result = spherical_offset(Vec3(0, 0, 0), azimuth_deg=45.0, elevation_deg=90.0, distance=150.0)
         self.assertAlmostEqual(result.x, 0.0, places=6)
         self.assertAlmostEqual(result.y, 150.0, places=6)
         self.assertAlmostEqual(result.z, 0.0, places=6)
 
     def test_spherical_offset_is_relative_to_target(self):
-        from dazpy.lighting import _spherical_offset
+        from dazpy._shot_geometry import spherical_offset
         from dazpy.math3 import Vec3
-        result = _spherical_offset(Vec3(10, 20, 30), azimuth_deg=0.0, elevation_deg=0.0, distance=150.0)
+        result = spherical_offset(Vec3(10, 20, 30), azimuth_deg=0.0, elevation_deg=0.0, distance=150.0)
         self.assertAlmostEqual(result.x, 10.0, places=6)
         self.assertAlmostEqual(result.y, 20.0, places=6)
         self.assertAlmostEqual(result.z, 180.0, places=6)
 
     def test_look_at_euler_default_offset_is_zero_rotation(self):
-        from dazpy.lighting import _look_at_euler
+        from dazpy._shot_geometry import look_at_euler
         from dazpy.math3 import Vec3
-        x, y, z = _look_at_euler(Vec3(0, 0, 150), Vec3(0, 0, 0))
+        x, y, z = look_at_euler(Vec3(0, 0, 150), Vec3(0, 0, 0))
         self.assertAlmostEqual(x, 0.0, places=6)
         self.assertAlmostEqual(y, 0.0, places=6)
         self.assertAlmostEqual(z, 0.0, places=6)
 
     def test_look_at_euler_yaws_toward_90_azimuth_offset(self):
-        from dazpy.lighting import _look_at_euler
+        from dazpy._shot_geometry import look_at_euler
         from dazpy.math3 import Vec3
-        x, y, z = _look_at_euler(Vec3(150, 0, 0), Vec3(0, 0, 0))
+        x, y, z = look_at_euler(Vec3(150, 0, 0), Vec3(0, 0, 0))
         self.assertAlmostEqual(x, 0.0, places=6)
         self.assertAlmostEqual(y, 90.0, places=6)
         self.assertAlmostEqual(z, 0.0, places=6)
 
     def test_look_at_euler_pitches_up_when_light_is_above(self):
-        from dazpy.lighting import _look_at_euler
+        from dazpy._shot_geometry import look_at_euler
         from dazpy.math3 import Vec3
-        x, y, z = _look_at_euler(Vec3(0, 150, 0), Vec3(0, 0, 0))
+        x, y, z = look_at_euler(Vec3(0, 150, 0), Vec3(0, 0, 0))
         self.assertAlmostEqual(x, -90.0, places=6)
         self.assertAlmostEqual(z, 0.0, places=6)
 
     def test_look_at_euler_handles_directly_above_without_error(self):
         # Degenerate case: horizontal component is exactly zero, yaw must
         # default to 0.0 rather than raising or returning NaN.
-        from dazpy.lighting import _look_at_euler
+        from dazpy._shot_geometry import look_at_euler
         from dazpy.math3 import Vec3
-        x, y, z = _look_at_euler(Vec3(0, 150, 0), Vec3(0, 0, 0))
+        x, y, z = look_at_euler(Vec3(0, 150, 0), Vec3(0, 0, 0))
         self.assertEqual(y, 0.0)
+
+    def test_resolve_target_returns_vec3_unchanged_with_zero_offset(self):
+        from dazpy._shot_geometry import resolve_target
+        from dazpy.math3 import Vec3
+        result = resolve_target(Vec3(10, 20, 30))
+        self.assertAlmostEqual(result.x, 10.0, places=6)
+        self.assertAlmostEqual(result.y, 20.0, places=6)
+        self.assertAlmostEqual(result.z, 30.0, places=6)
+
+    def test_resolve_target_applies_vertical_offset_to_vec3(self):
+        from dazpy._shot_geometry import resolve_target
+        from dazpy.math3 import Vec3
+        result = resolve_target(Vec3(10, 20, 30), vertical_offset_cm=25.0)
+        self.assertAlmostEqual(result.x, 10.0, places=6)
+        self.assertAlmostEqual(result.y, 45.0, places=6)
+        self.assertAlmostEqual(result.z, 30.0, places=6)
+
+    def test_resolve_target_applies_vertical_offset_to_daznode_position(self):
+        from dazpy._shot_geometry import resolve_target
+
+        class _Node:
+            position = {"x": 1.0, "y": 2.0, "z": 3.0}
+
+        result = resolve_target(_Node(), vertical_offset_cm=10.0)
+        self.assertAlmostEqual(result.x, 1.0, places=6)
+        self.assertAlmostEqual(result.y, 12.0, places=6)
+        self.assertAlmostEqual(result.z, 3.0, places=6)
+
+    def test_resolve_target_raises_value_error_when_node_has_no_position(self):
+        from dazpy._shot_geometry import resolve_target
+
+        class _DeletedNode:
+            position = None
+
+        with self.assertRaisesRegex(ValueError, "no position"):
+            resolve_target(_DeletedNode())
 
 
 class _FakeLightingLight:
