@@ -63,6 +63,20 @@ print(response.json())
 
 ---
 
+## Examples
+
+**Complete example collection:** [daz-script-server-examples repository](https://github.com/bluemoonfoundry/daz-script-server-examples)
+
+Production-ready examples ranging from beginner tutorials to advanced pipeline implementations:
+- **48 examples** across 9 categories
+- Individual READMEs with skill level classification
+- Requirements.txt per example
+- Comprehensive searchable table
+
+Categories: fundamentals, character, animation, rendering, geometry, export, ml_data, ai_vision, bvh
+
+---
+
 ## 📋 Table of Contents
 
 ### Getting Started
