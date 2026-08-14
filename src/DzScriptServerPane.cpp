@@ -219,6 +219,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pEventBroker(nullptr)
 	, m_pRenderProgress(nullptr)
 	, m_pEventClientsLabel(nullptr)
+	, m_pLogView(nullptr)
 	, m_pPersistentScript(nullptr)
 {
 	// Register return type for BlockingQueuedConnection on execute/register handlers.
