@@ -6316,5 +6316,203 @@ class TestCinematicsExports(unittest.TestCase):
         self.assertIn("apply_frame_subject", dazpy.__all__)
 
 
+class TestIrayMaterial(unittest.TestCase):
+    def test_is_frozen(self):
+        from dazpy.materials import IrayMaterial
+        spec = IrayMaterial(base_color=(255, 0, 0))
+        with self.assertRaises(Exception):
+            spec.base_color = (0, 255, 0)
+
+    def test_texture_map_is_frozen(self):
+        from dazpy.materials import TextureMap
+        tex = TextureMap(channel="base_color", file_path="/tmp/x.png")
+        with self.assertRaises(Exception):
+            tex.file_path = "/tmp/y.png"
+
+    def test_surface_property_is_frozen(self):
+        from dazpy.materials import SurfaceProperty
+        prop = SurfaceProperty(label="Base Color", value=1.0)
+        with self.assertRaises(Exception):
+            prop.value = 2.0
+
+
+class TestApplyTextureMap(unittest.TestCase):
+    def test_raises_file_not_found_before_any_client_call(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import TextureMap, apply_texture_map
+        import tempfile
+        client = _make_client(None)
+        material = DazMaterial(client, "_mat")
+        missing_path = os.path.join(tempfile.gettempdir(), "definitely_not_a_real_texture.png")
+        self.assertFalse(os.path.isfile(missing_path))
+        texture = TextureMap(channel="base_color", file_path=missing_path)
+        with self.assertRaises(FileNotFoundError):
+            apply_texture_map(material, texture)
+        client.execute.assert_not_called()
+
+    def test_raises_value_error_on_relative_path_before_any_client_call(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import TextureMap, apply_texture_map
+        client = _make_client(None)
+        material = DazMaterial(client, "_mat")
+        texture = TextureMap(channel="base_color", file_path="relative/texture.png")
+        with self.assertRaises(ValueError):
+            apply_texture_map(material, texture)
+        client.execute.assert_not_called()
+
+    def test_happy_path_calls_set_map_on_resolved_channel_label(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import TextureMap, apply_texture_map
+        import tempfile
+        client = _make_client({"success": True})
+        material = DazMaterial(client, "_mat")
+        with tempfile.NamedTemporaryFile(suffix=".png") as f:
+            texture = TextureMap(channel="normal", file_path=f.name)
+            apply_texture_map(material, texture)
+        script = client.execute.call_args.args[0]
+        self.assertIn("Normal Map", script)
+        self.assertIn("setMap", script)
+
+    def test_raises_material_error_when_property_not_found(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import TextureMap, apply_texture_map
+        from dazpy.exceptions import MaterialError
+        import tempfile
+        client = _make_client({"error": "property_not_found"})
+        material = DazMaterial(client, "_mat")
+        with tempfile.NamedTemporaryFile(suffix=".png") as f:
+            texture = TextureMap(channel="base_color", file_path=f.name)
+            with self.assertRaises(MaterialError):
+                apply_texture_map(material, texture)
+
+
+class TestSurfaceProperty(unittest.TestCase):
+    def test_get_surface_property_returns_value(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import get_surface_property
+        client = _make_client({"success": True, "value": 0.5})
+        material = DazMaterial(client, "_mat")
+        result = get_surface_property(material, "Glossy Anisotropy")
+        self.assertEqual(result, 0.5)
+        script = client.execute.call_args.args[0]
+        self.assertIn("Glossy Anisotropy", script)
+        self.assertIn("getValue", script)
+
+    def test_get_surface_property_raises_material_error_when_not_found(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import get_surface_property
+        from dazpy.exceptions import MaterialError
+        client = _make_client({"error": "property_not_found"})
+        material = DazMaterial(client, "_mat")
+        with self.assertRaises(MaterialError):
+            get_surface_property(material, "Nonexistent Channel")
+
+    def test_set_surface_property_calls_set_value(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import SurfaceProperty, set_surface_property
+        client = _make_client({"success": True})
+        material = DazMaterial(client, "_mat")
+        set_surface_property(material, SurfaceProperty(label="Top Coat Weight", value=0.25))
+        script = client.execute.call_args.args[0]
+        self.assertIn("Top Coat Weight", script)
+        self.assertIn("setValue", script)
+        self.assertIn("0.25", script)
+
+    def test_set_surface_property_raises_material_error_on_failure(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import SurfaceProperty, set_surface_property
+        from dazpy.exceptions import MaterialError
+        client = _make_client({"error": "material_not_found"})
+        material = DazMaterial(client, "_mat")
+        with self.assertRaises(MaterialError):
+            set_surface_property(material, SurfaceProperty(label="Base Color", value=(255, 0, 0)))
+
+
+class TestApplyIrayMaterial(unittest.TestCase):
+    def test_raises_file_not_found_before_any_client_call(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import IrayMaterial, TextureMap, apply_iray_material
+        import tempfile
+        client = _make_client({"success": True})
+        material = DazMaterial(client, "_mat")
+        missing_path = os.path.join(tempfile.gettempdir(), "definitely_not_a_real_texture2.png")
+        self.assertFalse(os.path.isfile(missing_path))
+        spec = IrayMaterial(
+            base_color=(255, 0, 0),
+            textures=(TextureMap(channel="base_color", file_path=missing_path),),
+        )
+        with self.assertRaises(FileNotFoundError):
+            apply_iray_material(material, spec)
+        client.execute.assert_not_called()
+
+    def test_skips_none_typed_fields(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import IrayMaterial, apply_iray_material
+        client = _make_client({"success": True})
+        material = DazMaterial(client, "_mat")
+        spec = IrayMaterial(roughness=0.5)
+        apply_iray_material(material, spec)
+        scripts = [call.args[0] for call in client.execute.call_args_list]
+        self.assertEqual(len(scripts), 1)
+        self.assertIn("Glossy Roughness", scripts[0])
+        self.assertIn("0.5", scripts[0])
+
+    def test_applies_typed_fields_then_textures_then_properties_in_order(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import (
+            IrayMaterial, TextureMap, SurfaceProperty, apply_iray_material,
+        )
+        import tempfile
+        client = _make_client({"success": True})
+        material = DazMaterial(client, "_mat")
+        with tempfile.NamedTemporaryFile(suffix=".png") as f:
+            spec = IrayMaterial(
+                base_color=(200, 200, 200),
+                roughness=0.4,
+                textures=(TextureMap(channel="normal", file_path=f.name),),
+                properties=(SurfaceProperty(label="Base Color", value=(10, 10, 10)),),
+            )
+            apply_iray_material(material, spec)
+            scripts = [call.args[0] for call in client.execute.call_args_list]
+        self.assertEqual(len(scripts), 4)
+        self.assertIn("Base Color", scripts[0])
+        self.assertIn("Glossy Roughness", scripts[1])
+        self.assertIn("Normal Map", scripts[2])
+        self.assertIn("setMap", scripts[2])
+        self.assertIn("Base Color", scripts[3])
+        self.assertIn("10", scripts[3])
+
+    def test_raises_material_error_when_channel_property_not_found(self):
+        from dazpy._material import DazMaterial
+        from dazpy.materials import IrayMaterial, apply_iray_material
+        from dazpy.exceptions import MaterialError
+        client = _make_client({"error": "property_not_found"})
+        material = DazMaterial(client, "_mat")
+        spec = IrayMaterial(metallic_weight=0.8)
+        with self.assertRaises(MaterialError):
+            apply_iray_material(material, spec)
+
+
+class TestMaterialsExports(unittest.TestCase):
+    def test_materials_symbols_importable_from_top_level_package(self):
+        import dazpy
+        self.assertTrue(hasattr(dazpy, "IrayMaterial"))
+        self.assertTrue(hasattr(dazpy, "TextureMap"))
+        self.assertTrue(hasattr(dazpy, "SurfaceProperty"))
+        self.assertTrue(hasattr(dazpy, "apply_iray_material"))
+        self.assertTrue(hasattr(dazpy, "apply_texture_map"))
+        self.assertTrue(hasattr(dazpy, "get_surface_property"))
+        self.assertTrue(hasattr(dazpy, "set_surface_property"))
+        self.assertTrue(hasattr(dazpy, "MaterialError"))
+        self.assertIn("IrayMaterial", dazpy.__all__)
+        self.assertIn("TextureMap", dazpy.__all__)
+        self.assertIn("SurfaceProperty", dazpy.__all__)
+        self.assertIn("apply_iray_material", dazpy.__all__)
+        self.assertIn("apply_texture_map", dazpy.__all__)
+        self.assertIn("get_surface_property", dazpy.__all__)
+        self.assertIn("set_surface_property", dazpy.__all__)
+        self.assertIn("MaterialError", dazpy.__all__)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

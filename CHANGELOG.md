@@ -4,6 +4,17 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **dazpy.materials — IrayMaterial, TextureMap, SurfaceProperty** —
+  declarative Iray Uber Base material setup built on `DazMaterial`:
+  `apply_iray_material()` sets base color, metallic, roughness, glossy
+  reflectivity, cutout opacity, bump, and top coat weight, plus texture-slot
+  assignment (`apply_texture_map()`, with file-existence validation before
+  any DazScript call) and generic named-channel get/set
+  (`get_surface_property()`/`set_surface_property()`) for channels not
+  covered by the typed fields. (GH #31)
+
 ### Fix: render success reporting trusted `doRender()`'s undocumented return value
 
 `doRender()`'s C++ signature is `bool doRender(...)`, but the DAZ SDK's own

@@ -86,6 +86,15 @@ from .lighting import (
     apply_hdri_environment,
 )
 from .poses import apply_pose, reset_transforms, zero_figure
+from .materials import (
+    IrayMaterial,
+    TextureMap,
+    SurfaceProperty,
+    apply_iray_material,
+    apply_texture_map,
+    get_surface_property,
+    set_surface_property,
+)
 from .cinematics import (
     CinematicStaticShot,
     OrbitCamera,
@@ -104,7 +113,7 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import RenderError
+from .exceptions import RenderError, MaterialError
 from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
@@ -186,6 +195,13 @@ __all__ = [
     "apply_pose",
     "reset_transforms",
     "zero_figure",
+    "IrayMaterial",
+    "TextureMap",
+    "SurfaceProperty",
+    "apply_iray_material",
+    "apply_texture_map",
+    "get_surface_property",
+    "set_surface_property",
     "CinematicStaticShot",
     "OrbitCamera",
     "FrameSubject",
@@ -199,6 +215,7 @@ __all__ = [
     "RenderBase",
     "RenderResult",
     "RenderError",
+    "MaterialError",
     "render",
     "render_variants",
     "SceneEvent",

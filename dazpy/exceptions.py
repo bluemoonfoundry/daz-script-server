@@ -110,3 +110,18 @@ class RenderError(DazError):
     def __init__(self, message: str, request_id: str = ""):
         super().__init__(message)
         self.request_id = request_id
+
+
+class MaterialError(DazError):
+    """Raised when an Iray material/surface-property operation fails.
+
+    Covers a missing material, a channel label that doesn't resolve to a
+    property on the live material, or a failed ``setValue()``/``setMap()``.
+
+    Attributes:
+        request_id: The server-assigned render request ID.
+    """
+
+    def __init__(self, message: str, request_id: str = ""):
+        super().__init__(message)
+        self.request_id = request_id
