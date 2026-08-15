@@ -6,6 +6,12 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **dazpy.DazCamera — aperture / bokeh controls** — `f_stop` (DOF blur
+  intensity, backed by the "F/Stop" property), `aperture_blades` (bokeh
+  blade count; `0` = circular, 3+ = polygonal), and
+  `aperture_blade_rotation` (polygon rotation angle), completing the last
+  item split off from #20. Property labels confirmed against a live DAZ
+  Studio instance. (GH #25)
 - **dazpy.materials — IrayMaterial, TextureMap, SurfaceProperty** —
   declarative Iray Uber Base material setup built on `DazMaterial`:
   `apply_iray_material()` sets base color, metallic, roughness, glossy

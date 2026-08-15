@@ -1221,6 +1221,55 @@ class TestDazCameraScriptGeneration(unittest.TestCase):
         self.assertIn("Lens Shift Y (mm)", script)
         self.assertIn("3.0", script)
 
+    def test_f_stop_getter_uses_property_label(self):
+        client = _make_client(2.8)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.f_stop
+        self.assertEqual(val, 2.8)
+        script = client.execute.call_args[0][0]
+        self.assertIn("F/Stop", script)
+        self.assertIn("findPropertyByLabel", script)
+
+    def test_f_stop_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.f_stop = 5.6
+        script = client.execute.call_args[0][0]
+        self.assertIn("F/Stop", script)
+        self.assertIn("5.6", script)
+
+    def test_aperture_blades_getter_uses_property_label(self):
+        client = _make_client(6)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.aperture_blades
+        self.assertEqual(val, 6)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Aperture Blades", script)
+
+    def test_aperture_blades_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.aperture_blades = 6
+        script = client.execute.call_args[0][0]
+        self.assertIn("Aperture Blades", script)
+        self.assertIn("6", script)
+
+    def test_aperture_blade_rotation_getter_uses_property_label(self):
+        client = _make_client(15.0)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        val = cam.aperture_blade_rotation
+        self.assertEqual(val, 15.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Aperture Blade Rotation", script)
+
+    def test_aperture_blade_rotation_setter_uses_property_label(self):
+        client = _make_client(None)
+        cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.aperture_blade_rotation = 15.0
+        script = client.execute.call_args[0][0]
+        self.assertIn("Aperture Blade Rotation", script)
+        self.assertIn("15.0", script)
+
     def test_aim_at_generates_DzVec3(self):
         client = _make_client(None)
         cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
