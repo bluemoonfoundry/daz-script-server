@@ -16,6 +16,7 @@ class DzSkeleton;
 class DzLight;
 class DzCamera;
 class DzRenderer;
+class DzRenderMgr;
 
 // ─── Event filter categories ──────────────────────────────────────────────────
 // Bitmask values passed to SubscriberQueue to control which event categories
@@ -181,6 +182,13 @@ private slots:
     // Render
     void onAboutToRender(DzRenderer* r);
     void onRenderFinished(DzRenderer* r);
+    // DzRenderMgr's renderFinished(bool) is the authoritative render-lifecycle
+    // signal: unlike DzScene::renderFinished(DzRenderer*), it fires even when
+    // the render errors out (DAZ Studio pops a blocking modal dialog in that
+    // case, which can prevent DzScene::renderFinished from ever being emitted).
+    // Whichever "finished" signal arrives first clears the render busy state;
+    // see m_renderBusy.
+    void onRenderMgrFinished(bool succeeded);
 
 private:
     void    dispatch(int categoryBit, const QString& event);
@@ -194,6 +202,7 @@ private:
     QTimer*  m_pSelectionDebounce;  // 50 ms single-shot, debounces selection bursts
     DzTime   m_pendingTime;
     bool     m_started;
+    bool     m_renderBusy;            // guards against double enterBusy()/exitBusy() from the two render-finished signals
     mutable QAtomicInt m_busyDepth;   // count of active nested busy operations; written on main thread only
     mutable QAtomicInt m_busyReason;  // MainThreadBusy::Reason of the outermost active operation
 };
