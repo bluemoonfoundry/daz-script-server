@@ -408,6 +408,13 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
     if (!m_requests.contains(id)) return;
 
     AsyncRequest& req  = m_requests[id];
+
+    // If failStaleRunning() already timed this request out (RUNNING -> FAILED)
+    // while the underlying DazScript call was blocked, that terminal state
+    // sticks -- a late, real completion must not flip it back to
+    // COMPLETED/CANCELLED after a client may have already acted on "failed".
+    if (req.status != REQUEST_RUNNING) return;
+
     req.completedAt    = QDateTime::currentMSecsSinceEpoch();
     req.progress       = 1.0;
     req.outputLines    = output;
@@ -469,6 +476,30 @@ int AsyncRequestManager::cleanupExpired(qint64 ttlMs)
             m_requests.remove(expired);
     }
     return toRemove.size();
+}
+
+int AsyncRequestManager::failStaleRunning(qint64 staleMs)
+{
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    int failedCount = 0;
+
+    QMutexLocker locker(&m_mutex);
+    for (QMap<QString, AsyncRequest>::iterator it = m_requests.begin();
+         it != m_requests.end(); ++it) {
+        AsyncRequest& req = it.value();
+        if (req.status == REQUEST_RUNNING && req.startedAt > 0 &&
+            (now - req.startedAt) > staleMs) {
+            req.status      = REQUEST_FAILED;
+            req.error       = "Request timed out after running for longer than expected; "
+                               "DAZ Studio's main thread may be blocked behind a dialog "
+                               "(e.g. a failed render's error prompt). This request's script "
+                               "may still complete in the background, but its result will no "
+                               "longer be tracked -- check DAZ Studio directly.";
+            req.completedAt = now;
+            ++failedCount;
+        }
+    }
+    return failedCount;
 }
 
 void AsyncRequestManager::cancelAllPending(const QString& reason)

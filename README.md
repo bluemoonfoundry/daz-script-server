@@ -724,6 +724,8 @@ Long-running operations (renders, exports, batch jobs) no longer need to block t
 
 **TTL:** Completed, failed, and cancelled requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
 
+**Stale running requests:** If a request has been `running` for more than 30 minutes without completing — e.g. a render blocked behind a DAZ Studio modal dialog — it's automatically marked `failed` so polling clients aren't left waiting forever. The underlying DAZ Studio operation may still be stuck; check the DAZ Studio window directly if this happens.
+
 ---
 
 ## What's New in v1.2.0

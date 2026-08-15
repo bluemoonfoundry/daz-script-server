@@ -2897,13 +2897,22 @@ void DzScriptServerPane::processNextAsyncRequest()
 	QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
 }
 
-// Removes completed/failed/cancelled requests older than 1 hour.
+// Removes completed/failed/cancelled requests older than 1 hour, and fails
+// out any request that has been RUNNING for longer than
+// ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN (see failStaleRunning()).
 // Fired by m_pCleanupTimer every 5 minutes on the main thread.
 void DzScriptServerPane::cleanupExpiredRequests()
 {
 	int removed = m_pAsyncMgr->cleanupExpired();
 	if (removed > 0) {
 		appendLog(QString("[INFO] Async cleanup: removed %1 expired request(s)").arg(removed));
+	}
+
+	int failed = m_pAsyncMgr->failStaleRunning(
+		(qint64)ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN * 60 * 1000);
+	if (failed > 0) {
+		appendLog(QString("[WARN] Async cleanup: %1 request(s) stuck running past %2 min, marked failed")
+			.arg(failed).arg(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN));
 	}
 }
 
