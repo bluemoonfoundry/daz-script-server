@@ -693,6 +693,22 @@ class DazRenderSettings:
             var opts = mgr.getRenderOptions();
             opts.camera = cam;
             opts.renderImgToId = DzRenderOptions.DirectToFile;
+            // findCanvasDefinition(name, true) implicitly reassigns the
+            // "Active Canvas" property to whatever canvas was most recently
+            // created/looked-up (confirmed against a live instance). Once
+            // any non-Beauty canvas exists (Depth, MaterialID, ...), doRender()
+            // saves *that* canvas's pass to the primary output file instead
+            // of the true beauty image -- the "clown render" bug (GH #32).
+            // Force it back to Beauty right before rendering so the primary
+            // output always matches this method's documented contract,
+            // regardless of what canvases were added or last touched.
+            var canvasHolder = {self._iray_render_options_holder()};
+            if (canvasHolder && canvasHolder.renderToCanvases) {{
+                var beautyCanvas = canvasHolder.findCanvasDefinition("Beauty", true);
+                beautyCanvas.canvasType = beautyCanvas.canvasTypeFromString("Beauty");
+                var activeCanvasProp = canvasHolder.findProperty("Active Canvas");
+                if (activeCanvasProp) activeCanvasProp.setValueFromString("Beauty");
+            }}
             var vp = MainWindow.getViewportMgr().getActiveViewport().get3DViewport();
             var prevCam = vp ? vp.getCamera() : null;
             if (vp) vp.setCamera(cam);

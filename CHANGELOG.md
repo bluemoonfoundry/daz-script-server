@@ -2,6 +2,26 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [Unreleased]
+
+### Fix: `render()` "clown render" when Iray Canvases are enabled (GH #32)
+
+`DzIrayPropertyHolder.findCanvasDefinition(name, true)` implicitly
+reassigns the `Active Canvas` enum property to whichever canvas was most
+recently created/looked-up (confirmed against a live instance). Once any
+non-Beauty canvas (Depth, MaterialID, ...) existed, `doRender()` would save
+that canvas's pass as the primary output file instead of the true beauty
+image -- producing a flat, per-material-region "clown render" in place of
+the expected beauty render. Manual use via the Render Settings UI didn't
+hit this because the UI's canvas list keeps `Active Canvas` on Beauty
+unless a user deliberately changes it.
+
+`DazRenderSettings.render()` now forces `Active Canvas` back to `Beauty`
+(creating it if missing) immediately before `doRender()` whenever
+`renderToCanvases` is on, guaranteeing the primary saved output always
+matches the method's documented "render the scene" contract regardless of
+what canvases were added or last touched.
+
 ## [2.9.0] - 2026-08-06
 
 ### Async client — `dazpy.aio.AsyncDazClient`

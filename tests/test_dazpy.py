@@ -1306,6 +1306,22 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertIn("doRender", script)
         self.assertNotIn("mgr.render()", script)
 
+    def test_render_forces_active_canvas_back_to_beauty(self):
+        # Regression (GH #32): findCanvasDefinition(name, true) implicitly
+        # reassigns "Active Canvas" as a side effect, so once any non-Beauty
+        # canvas (Depth, MaterialID, ...) has been added, doRender() saves
+        # that canvas's pass as the primary output instead of the true
+        # beauty image -- the "clown render" bug. render() must always pin
+        # Active Canvas back to Beauty before rendering.
+        rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
+        rs.render()
+        script = client.execute.call_args[0][0]
+        self.assertIn("renderToCanvases", script)
+        self.assertIn('findCanvasDefinition("Beauty", true)', script)
+        self.assertIn('canvasTypeFromString("Beauty")', script)
+        self.assertIn('findProperty("Active Canvas")', script)
+        self.assertIn('setValueFromString("Beauty")', script)
+
     def test_render_camera_name_uses_findCamera(self):
         rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
         rs.render(camera_name="Camera")
