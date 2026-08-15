@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.8.1** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.9.0** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -68,7 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.8.1](#whats-new-in-v281) (Nightly Build)
+- [What's New in v2.9.0](#whats-new-in-v290) (Nightly Build)
 - [What's New in v2.8.0](#whats-new-in-v280)
 - [What's New in v2.7.2](#whats-new-in-v272)
 - [What's New in v2.7.1](#whats-new-in-v271)
@@ -187,10 +187,6 @@ Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
 of a fresh connection per call, and supports `close()` / use as a context
 manager (`with DazClient() as client:`) for symmetry with the new async
 client's connection lifecycle.
-
----
-
-## What's New in v2.8.1
 
 ### Truthful Iray/Viewport render-engine selector
 
@@ -773,7 +769,7 @@ automation code without authoring DazScript by hand.
 Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
 
 ```bash
-pip install dazpy-2.8.1-py3-none-any.whl
+pip install dazpy-2.9.0-py3-none-any.whl
 ```
 
 Or install directly from the repo for development:
