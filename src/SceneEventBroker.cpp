@@ -7,6 +7,8 @@
 #include <dzlight.h>
 #include <dzcamera.h>
 #include <dzrenderer.h>
+#include <dzrendermgr.h>
+#include <dzapp.h>
 
 #include <QtCore/qdatetime.h>
 
@@ -55,6 +57,7 @@ SceneEventBroker::SceneEventBroker(QObject* parent)
     , m_pSelectionDebounce(nullptr)
     , m_pendingTime(0)
     , m_started(false)
+    , m_renderBusy(false)
     , m_busyDepth(0)
     , m_busyReason(MainThreadBusy::Idle)
 {
@@ -115,6 +118,16 @@ void SceneEventBroker::start() {
     connect(scene, SIGNAL(aboutToRender(DzRenderer*)),        this, SLOT(onAboutToRender(DzRenderer*)));
     connect(scene, SIGNAL(renderFinished(DzRenderer*)),       this, SLOT(onRenderFinished(DzRenderer*)));
 
+    // DzRenderMgr::renderFinished(bool) is connected as a second, guaranteed
+    // exit path: DzScene::renderFinished(DzRenderer*) is not emitted when a
+    // render errors out and DAZ Studio blocks the main thread behind its
+    // modal "Error during rendering!" dialog, which otherwise leaves the
+    // plugin's busy state (and therefore /execute) stuck forever.
+    DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
+    if (renderMgr) {
+        connect(renderMgr, SIGNAL(renderFinished(bool)), this, SLOT(onRenderMgrFinished(bool)));
+    }
+
     m_started = true;
 }
 
@@ -123,6 +136,11 @@ void SceneEventBroker::stop() {
 
     if (dzScene) {
         disconnect(dzScene, nullptr, this, nullptr);
+    }
+
+    DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
+    if (renderMgr) {
+        disconnect(renderMgr, nullptr, this, nullptr);
     }
 
     m_pTimeDebounce->stop();
@@ -310,13 +328,32 @@ void SceneEventBroker::onPlaybackFinished() {
 // ─── Render ───────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onAboutToRender(DzRenderer* /*r*/) {
-    enterBusy(MainThreadBusy::Rendering);
+    if (!m_renderBusy) {
+        enterBusy(MainThreadBusy::Rendering);
+        m_renderBusy = true;
+    }
     dispatch(SceneEventFilter::Render, makeEvent("render.started", "{}"));
 }
 
 void SceneEventBroker::onRenderFinished(DzRenderer* /*r*/) {
-    exitBusy();
+    if (m_renderBusy) {
+        exitBusy();
+        m_renderBusy = false;
+    }
     dispatch(SceneEventFilter::Render, makeEvent("render.finished", "{}"));
+}
+
+// Guaranteed exit path — see the comment in start() where this is connected.
+void SceneEventBroker::onRenderMgrFinished(bool succeeded) {
+    if (m_renderBusy) {
+        exitBusy();
+        m_renderBusy = false;
+    }
+    JsonBuilder j;
+    j.startObject();
+    j.addMember("succeeded", succeeded);
+    j.finishObject();
+    dispatch(SceneEventFilter::Render, makeEvent("render.finished", j.toString()));
 }
 
 #include "moc_SceneEventBroker.cpp"

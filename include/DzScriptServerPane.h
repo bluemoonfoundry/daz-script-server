@@ -74,6 +74,10 @@ namespace ServerConfig {
 
     // Async request management
     const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;  // A RUNNING request older than this is presumed
+                                                      // blocked (e.g. behind a DAZ Studio modal) and
+                                                      // reported as FAILED so it doesn't poll as
+                                                      // "running" forever. See failStaleRunning().
 }
 
 class DzScript;

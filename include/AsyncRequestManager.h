@@ -106,6 +106,16 @@ public:
     // Called from cleanup timer on the main thread. Returns count removed.
     int cleanupExpired(qint64 ttlMs = 60LL * 60LL * 1000LL);
 
+    // Mark any request stuck in RUNNING for longer than staleMs as FAILED.
+    // Covers the case where the underlying DazScript call (e.g. a render
+    // that ends up blocked behind a DAZ Studio modal dialog) never returns:
+    // without this, GET /requests/:id would report "running" forever. This
+    // only updates the client-visible status -- it cannot un-block the main
+    // thread, so if the blocked call eventually does return, markCompleted()
+    // is a no-op for a request already in this terminal state (see markCompleted).
+    // Called from cleanup timer on the main thread. Returns count marked failed.
+    int failStaleRunning(qint64 staleMs);
+
     // Mark all QUEUED and RUNNING requests as CANCELLED. Call on server stop
     // so that poll results after restart show the correct terminal state.
     void cancelAllPending(const QString& reason = "Server stopped");
