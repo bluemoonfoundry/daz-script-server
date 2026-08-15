@@ -86,6 +86,10 @@ public:
     // Mark the running request as RUNNING (sets startedAt).
     void markRunning(const QString& id);
 
+    // Update progress (0.0-1.0) for the running request. No-op if the
+    // request isn't currently RUNNING (e.g. late call after cancel/timeout).
+    void updateProgress(const QString& id, double progress);
+
     // Mark the running request terminal after script execution.
     // outWasCancelled is true if cancelRequested was set mid-run.
     void markCompleted(const QString& id, bool executed, const QVariant& result,

@@ -32,6 +32,7 @@
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
+#include <QtCore/qregexp.h>
 #include <QtCore/qscopedpointer.h>
 #if DAZ_SDK_MAJOR_VERSION >= 6
 // QClipboard stays in QtGui; the rest moved to QtWidgets in Qt5/6.
@@ -2127,6 +2128,7 @@ static QString buildAnimationRenderScript(
         "      var framePath = outputPattern.replace('{frame}', padFrame(f, framePadding));\n"
         "      opts.renderImgFilename = framePath;\n"
         "      frameSucceeded = null;\n"
+        "      print(\"[DAZPY_FRAME] \" + (f - startFrame + 1) + \"/\" + (endFrame - startFrame + 1));\n"
         "      renderMgr.doRender(opts);\n"
         "      if (frameSucceeded !== true) allSucceeded = false;\n"
         "      outputPaths.push(framePath);\n"
@@ -2592,6 +2594,26 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 				.arg(ServerConfig::MAX_CAPTURED_LINES));
 	}
 	// Silently discard additional lines beyond limit
+
+	// Frame-boundary progress for animation renders: buildAnimationRenderScript()
+	// prints "[DAZPY_FRAME] n/total" right before each frame's doRender() call.
+	// Iray itself exposes no per-percent progress signal (see
+	// RenderProgressBroker.h), so this print-marker is the only real progress
+	// source available; only intercept it while a render is actually running.
+	if (!m_sCurrentRenderId.isEmpty()) {
+		static QRegExp frameRx("^\\[DAZPY_FRAME\\] (\\d+)/(\\d+)$");
+		if (frameRx.indexIn(msg) == 0) {
+			int frame = frameRx.cap(1).toInt();
+			int total = frameRx.cap(2).toInt();
+			if (total > 0) {
+				if (m_pRenderProgress)
+					m_pRenderProgress->notifyProgress(m_sCurrentRenderId, frame, total);
+				if (m_pAsyncMgr)
+					m_pAsyncMgr->updateProgress(m_sCurrentRenderId,
+						double(frame - 1) / double(total));
+			}
+		}
+	}
 }
 
 // ─── JSON helpers (main thread only) ─────────────────────────────────────────
@@ -2877,6 +2899,7 @@ void DzScriptServerPane::processNextAsyncRequest()
 	// Execute the script on the main thread (same path as sync handler)
 	m_aCapturedLogLines.clear();
 	m_bCapturingLog = true;
+	m_sCurrentRenderId = isRender ? id : QString();
 	connect(dzApp, DSS_DEBUG_SIGNAL,
 	        this,  SLOT(onMessagePosted(const QString&)),
 	        Qt::DirectConnection);
@@ -2902,6 +2925,7 @@ void DzScriptServerPane::processNextAsyncRequest()
 	disconnect(dzApp, DSS_DEBUG_SIGNAL,
 	           this,  SLOT(onMessagePosted(const QString&)));
 	m_bCapturingLog = false;
+	m_sCurrentRenderId.clear();
 
 	int durationMs = wallClock.msecsTo(QTime::currentTime());
 

@@ -15,5 +15,6 @@ Example::
 """
 
 from ._client_aio import AsyncDazClient
+from ._render_api_aio import render, render_variants
 
-__all__ = ["AsyncDazClient"]
+__all__ = ["AsyncDazClient", "render", "render_variants"]

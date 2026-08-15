@@ -119,11 +119,21 @@ def _parse_sse_events(response: object):
             data_lines.append(line[5:].strip())
 
 
-def _wait_render_sse(client: DazClient, request_id: str, timeout: float) -> RenderResult:
+def _wait_render_sse(
+    client: DazClient,
+    request_id: str,
+    timeout: float,
+    on_progress: Callable[[dict], None] | None = None,
+) -> RenderResult:
     """Wait for a render to complete using the SSE progress stream.
 
     Falls back to request-result polling if the SSE stream cannot be established
     or if the server returns a non-200 status.
+
+    *on_progress*, if given, is called with the raw ``"progress"`` event payload
+    (e.g. ``{"request_id":..., "percent": 25.0, "frame": 2, "total_frames": 8}``
+    for animation renders; single-shot renders only get one such event at 0%
+    when the render starts — the DAZ SDK exposes no intra-frame percent signal).
     """
     deadline = time.monotonic() + timeout
 
@@ -143,7 +153,8 @@ def _wait_render_sse(client: DazClient, request_id: str, timeout: float) -> Rend
                     )
                 if event_type == "error":
                     raise RenderError(data.get("error", "Render failed"), request_id=request_id)
-                # "progress" → render is running, keep reading
+                if event_type == "progress" and on_progress is not None:
+                    on_progress(data)
     except (RenderError, TimeoutError):
         raise
     except Exception:
@@ -191,6 +202,7 @@ def render(
     reset_morphs: bool = False,
     wait: bool = True,
     timeout: float = 300.0,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> RenderResult:
     """Render the DAZ Studio scene to *output_path*.
 
@@ -217,6 +229,13 @@ def render(
             immediately after the job is accepted; the result will have
             ``file_size_bytes=-1`` and ``duration_ms=0``.
         timeout: Maximum seconds to wait when *wait* is ``True``.
+        on_progress: Optional callback invoked with each ``"progress"`` SSE
+            event's raw payload dict while waiting. For animation renders
+            (``output_path`` containing ``{frame}``, see
+            :func:`dazpy.render_animation_submit`) this includes real
+            ``percent``/``frame``/``total_frames`` fields updated once per
+            frame; for single-frame renders it only fires once at 0% since
+            the DAZ SDK exposes no intra-frame progress signal.
 
     Returns:
         A :class:`RenderResult`.
@@ -257,7 +276,7 @@ def render(
     if not wait:
         return RenderResult(success=True, output_path=output_path, request_id=request_id)
 
-    return _wait_render_sse(client, request_id, timeout)
+    return _wait_render_sse(client, request_id, timeout, on_progress=on_progress)
 
 
 def render_variants(

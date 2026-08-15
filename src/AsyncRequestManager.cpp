@@ -411,6 +411,15 @@ void AsyncRequestManager::markRunning(const QString& id)
     req.progress  = 0.0;
 }
 
+void AsyncRequestManager::updateProgress(const QString& id, double progress)
+{
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(id)) return;
+    AsyncRequest& req = m_requests[id];
+    if (req.status != REQUEST_RUNNING) return;
+    req.progress = progress;
+}
+
 void AsyncRequestManager::markCompleted(const QString& id, bool executed,
                                         const QVariant& result,
                                         const QStringList& output,

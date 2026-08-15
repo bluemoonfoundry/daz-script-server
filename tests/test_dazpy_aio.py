@@ -275,3 +275,64 @@ class TestAsyncDazClientRealHttpxWiring:
             ("progress", {"pct": 50}),
             ("complete", {"output_path": "C:/out.png"}),
         ]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_render_forwards_animation_frame_progress(self):
+        from dazpy.aio import render
+
+        respx.post("http://127.0.0.1:18811/render").mock(
+            return_value=httpx.Response(200, json={"request_id": "rnd-1", "status": "queued"})
+        )
+        sse_body = (
+            b'event: progress\ndata: {"request_id": "rnd-1", "percent": 0.0, "frame": 1, "total_frames": 2}\n\n'
+            b'event: progress\ndata: {"request_id": "rnd-1", "percent": 50.0, "frame": 2, "total_frames": 2}\n\n'
+            b'event: complete\ndata: {"output_path": "C:/out_0001.png", "duration_ms": 10}\n\n'
+        )
+        respx.get("http://127.0.0.1:18811/render/rnd-1/progress").mock(
+            return_value=httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+        )
+
+        seen = []
+        async with AsyncDazClient() as client:
+            result = await render(client, "C:/out_{frame}.png", on_progress=seen.append)
+
+        assert result.success
+        assert result.output_path == "C:/out_0001.png"
+        assert [e["frame"] for e in seen] == [1, 2]
+        assert seen[1]["percent"] == 50.0
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_render_variants_reports_batch_progress(self):
+        from dazpy._render_api import RenderVariant
+        from dazpy.aio import render_variants
+
+        respx.post("http://127.0.0.1:18811/render/batch").mock(
+            return_value=httpx.Response(200, json={"request_ids": ["r1", "r2"], "total": 2})
+        )
+        respx.get("http://127.0.0.1:18811/render/r1/progress").mock(
+            return_value=httpx.Response(
+                200,
+                content=b'event: complete\ndata: {"output_path": "C:/a.png"}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        respx.get("http://127.0.0.1:18811/render/r2/progress").mock(
+            return_value=httpx.Response(
+                200,
+                content=b'event: complete\ndata: {"output_path": "C:/b.png"}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        seen = []
+        async with AsyncDazClient() as client:
+            results = await render_variants(
+                client,
+                [RenderVariant("C:/a.png"), RenderVariant("C:/b.png")],
+                on_progress=lambda done, total: seen.append((done, total)),
+            )
+
+        assert [r.output_path for r in results] == ["C:/a.png", "C:/b.png"]
+        assert seen == [(1, 2), (2, 2)]

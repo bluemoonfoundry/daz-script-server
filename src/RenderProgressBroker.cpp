@@ -39,6 +39,16 @@ void RenderProgressBroker::notifyStarted(const QString& requestId)
     pushEvent(requestId, makeEvent("progress", data));
 }
 
+void RenderProgressBroker::notifyProgress(const QString& requestId, int frame, int totalFrames)
+{
+    double percent = totalFrames > 0 ? (100.0 * (frame - 1) / totalFrames) : 0.0;
+    QString data = "{\"request_id\":\"" + requestId
+        + "\",\"percent\":" + QString::number(percent, 'f', 2)
+        + ",\"frame\":" + QString::number(frame)
+        + ",\"total_frames\":" + QString::number(totalFrames) + "}";
+    pushEvent(requestId, makeEvent("progress", data));
+}
+
 void RenderProgressBroker::notifyCompleted(const QString& requestId, int durationMs)
 {
     QString outputPath;

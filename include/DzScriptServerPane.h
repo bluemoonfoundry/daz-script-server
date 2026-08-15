@@ -213,6 +213,13 @@ private:
 	QStringList m_aCapturedLogLines;
 	bool        m_bCapturingLog;
 
+	// Non-empty only while processNextAsyncRequest() is running a render
+	// request (id starting "rnd-"). onMessagePosted() checks this to scan
+	// captured lines for [DAZPY_FRAME] n/total markers (emitted by
+	// buildAnimationRenderScript's per-frame loop) and forward them to
+	// m_pRenderProgress/m_pAsyncMgr as progress updates.
+	QString     m_sCurrentRenderId;
+
 	// Persistent DzScript instance, reused (via clear()) across every script
 	// execution instead of constructing/destroying one per request. All
 	// execution is already serialized onto this (the main) thread via
