@@ -3303,11 +3303,11 @@ class TestDazLightScriptGeneration(unittest.TestCase):
         light.set_color(255, 128, 0)
         script = client.execute.call_args[0][0]
         self.assertIn("findPropertyByLabel", script)
-        self.assertIn("Diffuse Color", script)
+        self.assertIn("'Color'", script)
+        self.assertIn("setColorValue", script)
         self.assertIn("255", script)
         self.assertIn("128", script)
         self.assertIn("0", script)
-        self.assertIn("Color", script)
 
 
 class TestDazGeometryScriptGeneration(unittest.TestCase):
@@ -5942,6 +5942,20 @@ class TestHDRIEnvironment(unittest.TestCase):
                 apply_hdri_environment(rs, env)
 
 
+class TestSetLightColor(unittest.TestCase):
+    def test_calls_light_set_color_with_same_args(self):
+        from dazpy.lighting import set_light_color
+        light = _FakeLightingLight("spot", "Key")
+        set_light_color(light, 255, 128, 0)
+        self.assertEqual(light.color_calls, [(255, 128, 0)])
+
+    def test_returns_none(self):
+        from dazpy.lighting import set_light_color
+        light = _FakeLightingLight("spot", "Key")
+        result = set_light_color(light, 255, 255, 255)
+        self.assertIsNone(result)
+
+
 class TestLightingExports(unittest.TestCase):
     def test_lighting_symbols_importable_from_top_level_package(self):
         import dazpy
@@ -5951,12 +5965,14 @@ class TestLightingExports(unittest.TestCase):
         self.assertTrue(hasattr(dazpy, "apply_three_point_light_setup"))
         self.assertTrue(hasattr(dazpy, "HDRIEnvironment"))
         self.assertTrue(hasattr(dazpy, "apply_hdri_environment"))
+        self.assertTrue(hasattr(dazpy, "set_light_color"))
         self.assertIn("LightSpec", dazpy.__all__)
         self.assertIn("ThreePointLightSetup", dazpy.__all__)
         self.assertIn("ThreePointLightRig", dazpy.__all__)
         self.assertIn("apply_three_point_light_setup", dazpy.__all__)
         self.assertIn("HDRIEnvironment", dazpy.__all__)
         self.assertIn("apply_hdri_environment", dazpy.__all__)
+        self.assertIn("set_light_color", dazpy.__all__)
 
 
 class _FakeCinematicsCamera:

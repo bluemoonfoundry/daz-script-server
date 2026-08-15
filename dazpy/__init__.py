@@ -84,6 +84,7 @@ from .lighting import (
     apply_three_point_light_setup,
     HDRIEnvironment,
     apply_hdri_environment,
+    set_light_color,
 )
 from .poses import apply_pose, reset_transforms, zero_figure
 from .materials import (
@@ -195,6 +196,7 @@ __all__ = [
     "apply_three_point_light_setup",
     "HDRIEnvironment",
     "apply_hdri_environment",
+    "set_light_color",
     "apply_pose",
     "reset_transforms",
     "zero_figure",

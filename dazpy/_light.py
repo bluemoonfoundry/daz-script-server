@@ -44,8 +44,8 @@ class DazLight(DazNode):
         """
         script = ScriptBuilder.node_body(
             self._identifier,
-            f"var p = _node.findPropertyByLabel('Diffuse Color');"
-            f"if (p) p.setValue(new Color({int(r)}, {int(g)}, {int(b)}));"
+            f"var p = _node.findPropertyByLabel('Color');"
+            f"if (p) p.setColorValue(new Color({int(r)}, {int(g)}, {int(b)}));"
         )
         self._client.execute(script)
 

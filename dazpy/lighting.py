@@ -3,7 +3,9 @@
 Provides :func:`apply_three_point_light_setup` for creating a conventional
 key/fill/rim light rig around a target, either via angle/distance placement
 or explicit world-space positions. Also provides :func:`apply_hdri_environment`
-for image-based (HDRI/dome) lighting via :class:`HDRIEnvironment`.
+for image-based (HDRI/dome) lighting via :class:`HDRIEnvironment`, and
+:func:`set_light_color` as a submodule-level entry point for the color-setting
+already available via :meth:`~dazpy.DazLight.set_color`.
 """
 
 from __future__ import annotations
@@ -205,3 +207,21 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
             "different index on this DAZ Studio version/build -- the HDRI "
             "was likely never applied."
         )
+
+
+def set_light_color(light: DazLight, r: float, g: float, b: float) -> None:
+    """Set *light*'s diffuse color.
+
+    A thin :mod:`dazpy.lighting`-level entry point for
+    :meth:`~dazpy.DazLight.set_color`, so color-setting is discoverable
+    alongside :func:`apply_three_point_light_setup` and
+    :func:`apply_hdri_environment` without needing to know the lower-level
+    :class:`~dazpy.DazLight` primitive lives in a different module.
+
+    Args:
+        light: The :class:`~dazpy.DazLight` to recolor.
+        r: Red component (0-255).
+        g: Green component (0-255).
+        b: Blue component (0-255).
+    """
+    light.set_color(r, g, b)
