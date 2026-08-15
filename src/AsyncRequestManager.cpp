@@ -233,12 +233,20 @@ std::pair<int, std::string> AsyncRequestManager::cancelJson(
                 if (id != qid) newQueue.enqueue(id);
             }
             m_queue = newQueue;
-            req.status      = REQUEST_CANCELLED;
-            req.error       = "Cancelled by client";
-            req.completedAt = QDateTime::currentMSecsSinceEpoch();
         } else {
             needKillRender = (req.requestType == REQUEST_TYPE_RENDER);
         }
+
+        // Mark cancelled immediately regardless of whether we can actually
+        // interrupt a RUNNING request's underlying operation (killRender()
+        // may find nothing to kill, e.g. a renderer already wedged behind a
+        // modal). The tracker's status must match the "cancelled" response
+        // we're about to return, not silently stay "running" forever. If the
+        // underlying call does complete later, markCompleted() no-ops for a
+        // request already in a terminal state (see markCompleted).
+        req.status      = REQUEST_CANCELLED;
+        req.error       = "Cancelled by client";
+        req.completedAt = QDateTime::currentMSecsSinceEpoch();
     }
 
     if (needKillRender) {
@@ -290,12 +298,18 @@ std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
                 if (id != qid) newQueue.enqueue(id);
             }
             m_queue = newQueue;
-            req.status      = REQUEST_CANCELLED;
-            req.error       = "Cancelled by client";
-            req.completedAt = QDateTime::currentMSecsSinceEpoch();
         } else {
             needKillRender = true;
         }
+
+        // See the matching comment in cancelJson(): mark cancelled
+        // immediately even though killRender() is best-effort and may find
+        // nothing to kill (renderer already wedged behind a modal), so the
+        // tracker's status can't be left stuck at "running" forever while
+        // the HTTP response already claims "cancelled".
+        req.status      = REQUEST_CANCELLED;
+        req.error       = "Cancelled by client";
+        req.completedAt = QDateTime::currentMSecsSinceEpoch();
     }
 
     if (needKillRender) {

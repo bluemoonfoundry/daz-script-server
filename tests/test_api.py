@@ -395,6 +395,40 @@ class TestAsyncExecution(unittest.TestCase):
         if cancel_r.status_code == 200:
             self.assertEqual(cancel_r.json().get("status"), "cancelled")
 
+    def test_async_cancel_running_request_reaches_terminal_status(self):
+        # A busy-loop script long enough to still be RUNNING when we cancel it.
+        # killRender()/killRenderOnMainThread() has nothing to kill for a plain
+        # script (not a render), so this exercises the case where the cancel
+        # response says "cancelled" but the underlying call can't actually be
+        # interrupted -- the tracker must still report a terminal status
+        # instead of leaving GET /requests/:id stuck at "running" (GH #34).
+        script = iife("var x = 0; for (var i = 0; i < 2000000000; i++) { x += i; } return x;")
+        r = async_execute(script=script)
+        request_id = r.json()["request_id"]
+
+        # Wait for it to actually start running before cancelling.
+        deadline = time.time() + 5
+        status = None
+        while time.time() < deadline:
+            status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                                    headers=auth_headers(), timeout=5)
+            status = status_r.json().get("status")
+            if status == "running":
+                break
+            time.sleep(0.05)
+        self.assertEqual(status, "running", "request never reached running state")
+
+        cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
+                                   headers=auth_headers(), timeout=5)
+        self.assertEqual(cancel_r.status_code, 200)
+        self.assertEqual(cancel_r.json().get("status"), "cancelled")
+
+        # GET status must not stay "running" forever -- it should already
+        # reflect the terminal status the cancel response promised.
+        status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                                headers=auth_headers(), timeout=5)
+        self.assertEqual(status_r.json().get("status"), "cancelled")
+
     def test_async_cancel_already_finished_returns_400(self):
         r = async_execute(script=iife("return 1;"))
         request_id = r.json()["request_id"]
