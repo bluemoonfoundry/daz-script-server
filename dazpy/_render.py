@@ -712,10 +712,25 @@ class DazRenderSettings:
             var vp = MainWindow.getViewportMgr().getActiveViewport().get3DViewport();
             var prevCam = vp ? vp.getCamera() : null;
             if (vp) vp.setCamera(cam);
-            var err = mgr.doRender(opts);
+            // doRender()'s own return value is undocumented in the SDK (no
+            // "Returns:" section at all) and was found to report success even
+            // for a render the user cancelled mid-progress via the DAZ Studio
+            // UI. DzRenderMgr.renderFinished(bool succeeded) is the SDK's
+            // explicit, named completion signal -- SceneEventBroker.cpp
+            // already relies on it as the "guaranteed exit path" that fires
+            // correctly across error/cancel cases -- so capture it directly
+            // instead of guessing at doRender()'s return code.
+            var renderSucceeded = null;
+            function _onRenderFinished(succeeded) {{ renderSucceeded = succeeded; }}
+            mgr["renderFinished(bool)"].connect(_onRenderFinished);
+            try {{
+                mgr.doRender(opts);
+            }} finally {{
+                mgr["renderFinished(bool)"].disconnect(_onRenderFinished);
+            }}
             if (vp && prevCam) vp.setCamera(prevCam);
             return {{
-                success: (err === 0 || err === true),
+                success: renderSucceeded === true,
                 output_path: mgr.getRenderOptions().renderImgFilename
             }};
         """)

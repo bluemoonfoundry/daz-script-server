@@ -1306,6 +1306,23 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertIn("doRender", script)
         self.assertNotIn("mgr.render()", script)
 
+    def test_render_uses_renderFinished_signal_not_doRender_return_value(self):
+        # Regression: doRender()'s own return value is undocumented in the
+        # DAZ SDK (no "Returns:" section) and was observed live to report
+        # success even for a render the user cancelled mid-progress via the
+        # DAZ Studio UI. renderFinished(bool succeeded) is the SDK's named,
+        # documented completion signal -- SceneEventBroker.cpp already
+        # trusts it as the "guaranteed exit path" -- so render() must derive
+        # success from that signal, not from doRender()'s return code.
+        rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
+        rs.render()
+        script = client.execute.call_args[0][0]
+        self.assertIn('mgr["renderFinished(bool)"].connect(', script)
+        self.assertIn('mgr["renderFinished(bool)"].disconnect(', script)
+        self.assertIn("renderSucceeded === true", script)
+        self.assertNotIn("err === 0", script)
+        self.assertNotIn("err === true", script)
+
     def test_render_forces_active_canvas_back_to_beauty(self):
         # Regression (GH #32): findCanvasDefinition(name, true) implicitly
         # reassigns "Active Canvas" as a side effect, so once any non-Beauty

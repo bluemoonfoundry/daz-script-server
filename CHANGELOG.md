@@ -4,6 +4,25 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Fix: render success reporting trusted `doRender()`'s undocumented return value
+
+`doRender()`'s C++ signature is `bool doRender(...)`, but the DAZ SDK's own
+docs have no "Returns:" section for it at all -- its return value is
+unspecified. `dazpy.DazRenderSettings.render()` guessed at its meaning
+(`err === 0 || err === true`) and was found, live, to report `success: true`
+for a render the user cancelled mid-progress from the DAZ Studio UI. The
+async render endpoints (`/render/submit`, `/render/animation`, backing
+`DazClient.render_submit()`/`render_animation_submit()`) were worse --
+`buildRenderScript()`/`buildAnimationRenderScript()` in
+`src/DzScriptServerPane.cpp` didn't check the return value at all and
+hardcoded `success: true` unconditionally.
+
+Both now derive success from `DzRenderMgr.renderFinished(bool succeeded)`,
+the SDK's explicit, named completion signal -- already trusted elsewhere in
+this codebase (`SceneEventBroker.cpp`) as the "guaranteed exit path" that
+fires correctly across error/cancel cases. The animation loop tracks
+per-frame success and reports the AND of all frames.
+
 ### Fix: `render()` "clown render" when Iray Canvases are enabled (GH #32)
 
 `DzIrayPropertyHolder.findCanvasDefinition(name, true)` implicitly

@@ -1991,9 +1991,23 @@ static QString buildRenderScript(
     script += "\n";
 
     // ── Render ────────────────────────────────────────────────────────────
+    // doRender()'s own return value is undocumented in the SDK (no
+    // "Returns:" section at all) and was observed live to report success
+    // even for a render the user cancelled mid-progress via the DAZ Studio
+    // UI. renderFinished(bool succeeded) is the SDK's explicit, named
+    // completion signal -- SceneEventBroker.cpp already relies on it as the
+    // "guaranteed exit path" that fires correctly across error/cancel cases
+    // -- so capture it directly instead of hardcoding success.
     script +=
-        "  renderMgr.doRender(opts);\n"
-        "  return {success: true, output_path: outputPath, engine: engineReadback};\n"
+        "  var renderSucceeded = null;\n"
+        "  function _onRenderFinished(succeeded) { renderSucceeded = succeeded; }\n"
+        "  renderMgr[\"renderFinished(bool)\"].connect(_onRenderFinished);\n"
+        "  try {\n"
+        "    renderMgr.doRender(opts);\n"
+        "  } finally {\n"
+        "    renderMgr[\"renderFinished(bool)\"].disconnect(_onRenderFinished);\n"
+        "  }\n"
+        "  return {success: renderSucceeded === true, output_path: outputPath, engine: engineReadback};\n"
         "})();\n";
 
     return script;
@@ -2093,20 +2107,37 @@ static QString buildAnimationRenderScript(
         "  }\n\n";
 
     // ── Render each frame ───────────────────────────────────────────────────
+    // doRender()'s own return value is undocumented in the SDK (no
+    // "Returns:" section at all) and was observed live to report success
+    // even for a render the user cancelled mid-progress via the DAZ Studio
+    // UI. renderFinished(bool succeeded) is the SDK's explicit, named
+    // completion signal -- SceneEventBroker.cpp already relies on it as the
+    // "guaranteed exit path" that fires correctly across error/cancel cases
+    // -- so capture it per frame instead of hardcoding success.
     script +=
         "  var originalFrame = Scene.getFrame();\n"
         "  var outputPaths = [];\n"
-        "  for (var f = startFrame; f <= endFrame; f++) {\n"
-        "    Scene.setFrame(f);\n"
-        "    var framePath = outputPattern.replace('{frame}', padFrame(f, framePadding));\n"
-        "    opts.renderImgFilename = framePath;\n"
-        "    renderMgr.doRender(opts);\n"
-        "    outputPaths.push(framePath);\n"
+        "  var allSucceeded = true;\n"
+        "  var frameSucceeded = null;\n"
+        "  function _onRenderFinished(succeeded) { frameSucceeded = succeeded; }\n"
+        "  renderMgr[\"renderFinished(bool)\"].connect(_onRenderFinished);\n"
+        "  try {\n"
+        "    for (var f = startFrame; f <= endFrame; f++) {\n"
+        "      Scene.setFrame(f);\n"
+        "      var framePath = outputPattern.replace('{frame}', padFrame(f, framePadding));\n"
+        "      opts.renderImgFilename = framePath;\n"
+        "      frameSucceeded = null;\n"
+        "      renderMgr.doRender(opts);\n"
+        "      if (frameSucceeded !== true) allSucceeded = false;\n"
+        "      outputPaths.push(framePath);\n"
+        "    }\n"
+        "  } finally {\n"
+        "    renderMgr[\"renderFinished(bool)\"].disconnect(_onRenderFinished);\n"
         "  }\n"
         "  Scene.setFrame(originalFrame);\n\n";
 
     script +=
-        "  return {success: true, frame_count: outputPaths.length, output_paths: outputPaths, engine: engineReadback};\n"
+        "  return {success: allSucceeded, frame_count: outputPaths.length, output_paths: outputPaths, engine: engineReadback};\n"
         "})();\n";
 
     return script;
