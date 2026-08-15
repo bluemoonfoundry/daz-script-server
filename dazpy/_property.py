@@ -117,26 +117,41 @@ class DazProperty(DazElement):
         )
         return self._client.execute(script).value
 
-    def set_key(self, time: float, value: object) -> None:
-        """Set a keyframe for this property.
+    def set_key(self, time: float, value: float) -> None:
+        """Set a keyframe for this (numeric) property.
+
+        Writes via ``DzNumericProperty.setDoubleValue(tm, val)`` — the
+        DazScript keyframe surface confirmed live against a running DAZ
+        Studio instance (see ``dazpy.cinematics.apply_animated_shot``,
+        which uses the same call). ``DzProperty.setKey()``/``addKey()``,
+        which earlier versions of this method called, do not exist on a
+        live property and silently wrote nothing.
 
         Args:
             time: The keyframe time in DAZ ticks.
-            value: The property value at that keyframe.
+            value: The numeric property value at that keyframe. Non-numeric
+                properties (color, string, enum, ...) are not supported —
+                this is a no-op for a property without ``setDoubleValue``.
         """
-        serialized = ScriptBuilder.serialize_arg(value)
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.setKey) p.setKey({time}, {serialized});
+            if (p && p.setDoubleValue) p.setDoubleValue({time}, {float(value)});
         """)
         self._client.execute(script)
 
     @property
     def is_animated(self) -> bool | None:
-        """``True`` if this property has keyframe animation data (read-only)."""
-        script = ScriptBuilder.iife(
-            f"var p = {self._locator}; return p ? p.isAnimated() : null;"
-        )
+        """``True`` if this property has keyframe animation data (read-only).
+
+        Implemented as ``getNumKeys() > 0`` — ``DzProperty.isAnimated()``,
+        which this property called previously, does not exist on a live
+        property and raised a ``ScriptRuntimeError`` on every access.
+        """
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p || !p.getNumKeys) return null;
+            return p.getNumKeys() > 0;
+        """)
         return self._client.execute(script).value
 
     def get_keys(self) -> list[dict]:
@@ -154,7 +169,7 @@ class DazProperty(DazElement):
             var keys = [];
             for (var i = 0; i < n; i++) {{
                 var t = p.getKeyTime(i);
-                keys.push({{ time: t, value: p.getDoubleValue(t) }});
+                keys.push({{ time: t.valueOf(), value: p.getDoubleValue(t) }});
             }}
             return keys;
         """)
@@ -169,7 +184,7 @@ class DazProperty(DazElement):
         """
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.deleteKeys) p.deleteKeys({time}, {time});
+            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange({time}, {time}));
         """)
         self._client.execute(script)
 

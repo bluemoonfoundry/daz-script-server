@@ -2956,16 +2956,38 @@ class TestDazPropertyKeyframes(unittest.TestCase):
         self.assertIn("getNumKeys", script)
         self.assertIn("getKeyTime", script)
         self.assertIn("getDoubleValue", script)
+        self.assertIn("t.valueOf()", script)
 
     def test_get_keys_empty_when_no_keys(self):
         prop, client = self._prop([])
         self.assertEqual(prop.get_keys(), [])
 
-    def test_remove_key_calls_delete_keys_with_same_time_twice(self):
+    def test_set_key_calls_setDoubleValue(self):
+        prop, client = self._prop(None)
+        prop.set_key(30, 45.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setDoubleValue", script)
+        self.assertIn("30", script)
+        self.assertIn("45.0", script)
+        self.assertNotIn("setKey(", script)
+
+    def test_is_animated_true_when_keys_present(self):
+        prop, client = self._prop(True)
+        self.assertTrue(prop.is_animated)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumKeys", script)
+        self.assertIn("> 0", script)
+        self.assertNotIn("isAnimated", script)
+
+    def test_is_animated_false_when_no_keys(self):
+        prop, client = self._prop(False)
+        self.assertFalse(prop.is_animated)
+
+    def test_remove_key_calls_delete_keys_with_zero_width_time_range(self):
         prop, client = self._prop(None)
         prop.remove_key(30)
         script = client.execute.call_args[0][0]
-        self.assertIn("deleteKeys(30, 30)", script)
+        self.assertIn("deleteKeys(new DzTimeRange(30, 30))", script)
 
     def test_clear_keys_calls_delete_all_keys(self):
         prop, client = self._prop(None)
