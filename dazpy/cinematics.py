@@ -1,11 +1,12 @@
 """Domain-level camera shot builders built on the DazCamera/DazScene primitives.
 
 Provides :func:`apply_static_shot` for a single camera placement/framing,
-:func:`apply_orbit_camera` for a per-frame orbit sweep around a target, and
-:func:`apply_frame_subject` for distance-preset framing of a subject. All
-three write static per-frame placements, not real interpolated keyframes —
-see the module's design spec for why (``CinematicAnimatedShot`` is a
-separate, deferred follow-up).
+:func:`apply_orbit_camera` for a per-frame orbit sweep around a target,
+:func:`apply_frame_subject` for distance-preset framing of a subject, and
+:func:`apply_animated_shot` for a camera move driven by real DAZ Studio
+keyframes (:meth:`~dazpy.DazNode.set_position_at_frame` /
+:meth:`~dazpy.DazNode.set_rotation_at_frame`) rather than a per-frame
+setValue bake — DAZ Studio interpolates between the given waypoints itself.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .math3 import Vec3
-from ._shot_geometry import resolve_target, spherical_offset
+from ._shot_geometry import look_at_euler, resolve_target, spherical_offset
 from ._timeline import DazTimeline
 
 if TYPE_CHECKING:
@@ -298,4 +299,125 @@ def apply_frame_subject(
     cam.set_position(pos.x, pos.y, pos.z)
     cam.aim_at(target.x, target.y, target.z)
     cam.focal_length = frame.focal_length
+    return cam
+
+
+@dataclass(frozen=True)
+class CameraKeyframe:
+    """A single waypoint in an animated camera move (see :class:`CinematicAnimatedShot`).
+
+    Args:
+        frame: Timeline frame number for this waypoint.
+        position: World-space camera position at *frame*.
+        look_at: Aim target at *frame*, resolved the same way as
+            :attr:`CinematicStaticShot.look_at`. Ignored if ``None``; in
+            that case *rotation* (if set) is used instead.
+        look_at_offset_cm: Vertical offset (cm) applied when resolving
+            *look_at* — see :func:`~dazpy._shot_geometry.resolve_target`.
+        rotation: Explicit ``(x, y, z)`` degrees for this waypoint. Ignored
+            if *look_at* is set.
+    """
+
+    frame: int
+    position: Vec3
+    look_at: "Vec3 | DazNode | None" = None
+    look_at_offset_cm: float = 0.0
+    rotation: tuple[float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class CinematicAnimatedShot:
+    """A camera move driven by real DAZ Studio keyframes.
+
+    Unlike :class:`OrbitCamera` (which bakes a value on every timeline
+    frame), this writes one keyframe per :class:`CameraKeyframe` waypoint
+    and lets DAZ Studio interpolate the frames in between via its own
+    animation curves.
+
+    Args:
+        keyframes: The waypoints, in ascending, unique *frame* order (at
+            least two). Either every waypoint must specify an orientation
+            (*look_at* or *rotation*) or none must — a partial mix would
+            leave the rotation curve keyed at only some waypoints, holding
+            a stale orientation between them.
+        focal_length: Passed to :attr:`~dazpy.DazCamera.focal_length` once,
+            before the keyframes are written.
+        depth_of_field: Passed to :attr:`~dazpy.DazCamera.depth_of_field`
+            once.
+        focal_distance: Passed to :attr:`~dazpy.DazCamera.focal_distance`
+            once, when not ``None``; otherwise DAZ's current value is
+            untouched.
+    """
+
+    keyframes: tuple[CameraKeyframe, ...]
+    focal_length: float = 50.0
+    depth_of_field: bool = False
+    focal_distance: float | None = None
+
+
+def apply_animated_shot(
+    scene: "DazScene",
+    shot: CinematicAnimatedShot,
+    *,
+    camera: "DazCamera | None" = None,
+    name: str | None = None,
+) -> "DazCamera":
+    """Write *shot.keyframes* as real DAZ Studio keyframes on a camera.
+
+    Side effects: clears any existing keys on the camera's position
+    controls (via :meth:`~dazpy.DazNode.clear_position_keys`) before
+    writing the new curve — a freshly created camera can already carry a
+    default key from creation time, which would otherwise distort
+    interpolation/extrapolation around the new keyframes. Rotation
+    controls are cleared the same way, but only if at least one keyframe
+    specifies an orientation.
+
+    Args:
+        scene: A :class:`~dazpy.DazScene`. Only used to create a new camera
+            when *camera* is ``None``.
+        shot: The keyframe sequence and optics configuration.
+        camera: An existing :class:`~dazpy.DazCamera` to reuse/mutate.
+            When ``None`` (the default), a new camera is created via
+            ``scene.create_camera(name)``.
+        name: Optional name for a newly created camera. Ignored when
+            *camera* is given.
+
+    Returns:
+        The configured :class:`~dazpy.DazCamera`.
+
+    Raises:
+        ValueError: If fewer than two keyframes are given, if their
+            *frame* values are not strictly ascending, or if only some
+            keyframes specify an orientation (*look_at*/*rotation*).
+    """
+    if len(shot.keyframes) < 2:
+        raise ValueError("CinematicAnimatedShot.keyframes needs at least two waypoints")
+    frames = [kf.frame for kf in shot.keyframes]
+    if frames != sorted(frames) or len(set(frames)) != len(frames):
+        raise ValueError("CinematicAnimatedShot.keyframes must have strictly ascending, unique frame numbers")
+    has_orientation = [kf.look_at is not None or kf.rotation is not None for kf in shot.keyframes]
+    if any(has_orientation) and not all(has_orientation):
+        raise ValueError(
+            "CinematicAnimatedShot.keyframes must either all specify an orientation "
+            "(look_at/rotation) or none of them should"
+        )
+
+    cam = _resolve_camera(scene, camera, name)
+    cam.focal_length = shot.focal_length
+    cam.depth_of_field = shot.depth_of_field
+    if shot.focal_distance is not None:
+        cam.focal_distance = shot.focal_distance
+
+    cam.clear_position_keys()
+    if any(has_orientation):
+        cam.clear_rotation_keys()
+
+    for kf in shot.keyframes:
+        cam.set_position_at_frame(kf.frame, kf.position.x, kf.position.y, kf.position.z)
+        if kf.look_at is not None:
+            target = resolve_target(kf.look_at, vertical_offset_cm=kf.look_at_offset_cm)
+            x, y, z = look_at_euler(kf.position, target)
+            cam.set_rotation_at_frame(kf.frame, x, y, z)
+        elif kf.rotation is not None:
+            cam.set_rotation_at_frame(kf.frame, *kf.rotation)
     return cam

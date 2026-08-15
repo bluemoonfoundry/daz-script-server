@@ -476,6 +476,84 @@ class DazNode(DazElement):
         )
         self._client.execute(script)
 
+    def set_position_at_frame(self, frame: int, x: float, y: float, z: float) -> None:
+        """Write a real keyframe for world-space position at timeline *frame*.
+
+        Unlike :meth:`set_position`, this writes an actual animation curve
+        key (via ``DzNode.setWSPos(tm, pos)``) rather than the "current"
+        value — the position at frames between keys is DAZ Studio's own
+        interpolation, not something the caller has to bake per-frame.
+
+        *frame* is converted to DAZ Studio time ticks via the scene's
+        current ``Scene.getTimeStep()`` (ticks per frame), not a hardcoded
+        constant — that value depends on the scene's frame rate.
+
+        Args:
+            frame: Timeline frame number for this keyframe.
+            x: X coordinate in DAZ Studio units (centimetres by default).
+            y: Y coordinate.
+            z: Z coordinate.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"var _tm = {int(frame)} * Scene.getTimeStep(); "
+            f"_node.setWSPos(_tm, new DzVec3({x}, {y}, {z}));"
+        )
+        self._client.execute(script)
+
+    def set_rotation_at_frame(self, frame: int, x: float, y: float, z: float) -> None:
+        """Write a real keyframe for world-space Euler rotation at timeline *frame*.
+
+        Companion to :meth:`set_position_at_frame` — see its docstring for
+        the tick-conversion note. Writes to the same per-axis rotation
+        controls as :meth:`set_rotation`, but as a keyed value at *frame*
+        rather than the "current" value.
+
+        Args:
+            frame: Timeline frame number for this keyframe.
+            x: Rotation around the X axis in degrees.
+            y: Rotation around the Y axis in degrees.
+            z: Rotation around the Z axis in degrees.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"var _tm = {int(frame)} * Scene.getTimeStep(); "
+            f"_node.getXRotControl().setDoubleValue(_tm, {x}); "
+            f"_node.getYRotControl().setDoubleValue(_tm, {y}); "
+            f"_node.getZRotControl().setDoubleValue(_tm, {z});"
+        )
+        self._client.execute(script)
+
+    def clear_position_keys(self) -> None:
+        """Remove all keyframes from this node's X/Y/Z position controls.
+
+        Newly-created nodes can already carry a default key (e.g. a preset
+        camera position at its creation time); call this before writing a
+        fresh animated curve with :meth:`set_position_at_frame`, otherwise
+        the leftover default key distorts interpolation/extrapolation
+        around the new keys.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            "_node.getXPosControl().deleteAllKeys(); "
+            "_node.getYPosControl().deleteAllKeys(); "
+            "_node.getZPosControl().deleteAllKeys();"
+        )
+        self._client.execute(script)
+
+    def clear_rotation_keys(self) -> None:
+        """Remove all keyframes from this node's X/Y/Z rotation controls.
+
+        See :meth:`clear_position_keys` — same rationale, for orientation.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            "_node.getXRotControl().deleteAllKeys(); "
+            "_node.getYRotControl().deleteAllKeys(); "
+            "_node.getZRotControl().deleteAllKeys();"
+        )
+        self._client.execute(script)
+
     @property
     def local_position(self) -> dict | None:
         """Local-space position as ``{"x", "y", "z"}`` (read-only)."""

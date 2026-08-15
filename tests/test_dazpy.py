@@ -2630,6 +2630,50 @@ class TestDazNodeRotationAndSelection(unittest.TestCase):
         self.assertIn("20.0", script)
         self.assertIn("30.0", script)
 
+    def test_set_position_at_frame_converts_frame_to_ticks_and_calls_setWSPos(self):
+        node, client = self._node(None)
+        node.set_position_at_frame(5, 1.0, 2.0, 3.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getTimeStep()", script)
+        self.assertIn("5 *", script)
+        self.assertIn("setWSPos", script)
+        self.assertIn("DzVec3", script)
+        self.assertIn("1.0", script)
+        self.assertIn("2.0", script)
+        self.assertIn("3.0", script)
+
+    def test_set_rotation_at_frame_converts_frame_to_ticks_and_uses_axis_controls(self):
+        node, client = self._node(None)
+        node.set_rotation_at_frame(7, 10.0, 20.0, 30.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getTimeStep()", script)
+        self.assertIn("7 *", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getYRotControl", script)
+        self.assertIn("getZRotControl", script)
+        self.assertIn("setDoubleValue", script)
+        self.assertIn("10.0", script)
+        self.assertIn("20.0", script)
+        self.assertIn("30.0", script)
+
+    def test_clear_position_keys_calls_deleteAllKeys_on_all_axes(self):
+        node, client = self._node(None)
+        node.clear_position_keys()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getXPosControl", script)
+        self.assertIn("getYPosControl", script)
+        self.assertIn("getZPosControl", script)
+        self.assertEqual(script.count("deleteAllKeys"), 3)
+
+    def test_clear_rotation_keys_calls_deleteAllKeys_on_all_axes(self):
+        node, client = self._node(None)
+        node.clear_rotation_keys()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getYRotControl", script)
+        self.assertIn("getZRotControl", script)
+        self.assertEqual(script.count("deleteAllKeys"), 3)
+
     def test_local_position_calls_getLocalPos(self):
         node, client = self._node({"x": 1.0, "y": 2.0, "z": 3.0})
         pos = node.local_position
@@ -5928,6 +5972,10 @@ class _FakeCinematicsCamera:
         self.aspect_height: float | None = None
         self.pixels_width: int | None = None
         self.pixels_height: int | None = None
+        self.position_at_frame_calls: list[tuple[int, float, float, float]] = []
+        self.rotation_at_frame_calls: list[tuple[int, float, float, float]] = []
+        self.clear_position_keys_calls: int = 0
+        self.clear_rotation_keys_calls: int = 0
         self._client = MagicMock()
 
     def set_position(self, x, y, z):
@@ -5938,6 +5986,18 @@ class _FakeCinematicsCamera:
 
     def aim_at(self, x, y, z):
         self.aim_at_calls.append((x, y, z))
+
+    def set_position_at_frame(self, frame, x, y, z):
+        self.position_at_frame_calls.append((frame, x, y, z))
+
+    def set_rotation_at_frame(self, frame, x, y, z):
+        self.rotation_at_frame_calls.append((frame, x, y, z))
+
+    def clear_position_keys(self):
+        self.clear_position_keys_calls += 1
+
+    def clear_rotation_keys(self):
+        self.clear_rotation_keys_calls += 1
 
 
 class _FakeCinematicsScene:
@@ -6299,6 +6359,204 @@ class TestFrameSubject(unittest.TestCase):
         self.assertEqual(cam.focal_length, 135.0)
 
 
+class TestCinematicAnimatedShot(unittest.TestCase):
+    def test_keyframe_defaults(self):
+        from dazpy.cinematics import CameraKeyframe
+        from dazpy.math3 import Vec3
+        kf = CameraKeyframe(frame=0, position=Vec3(0, 0, 150))
+        self.assertIsNone(kf.look_at)
+        self.assertEqual(kf.look_at_offset_cm, 0.0)
+        self.assertIsNone(kf.rotation)
+
+    def test_shot_defaults(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot
+        from dazpy.math3 import Vec3
+        shot = CinematicAnimatedShot(keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),
+                                                  CameraKeyframe(frame=10, position=Vec3(0, 0, 100))))
+        self.assertEqual(shot.focal_length, 50.0)
+        self.assertFalse(shot.depth_of_field)
+        self.assertIsNone(shot.focal_distance)
+
+    def test_is_frozen(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot
+        from dazpy.math3 import Vec3
+        shot = CinematicAnimatedShot(keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),
+                                                  CameraKeyframe(frame=10, position=Vec3(0, 0, 100))))
+        with self.assertRaises(Exception):
+            shot.focal_length = 85.0
+
+    def test_apply_raises_value_error_with_fewer_than_two_keyframes(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),))
+        with self.assertRaises(ValueError):
+            apply_animated_shot(scene, shot)
+        self.assertEqual(scene.created, [])
+
+    def test_apply_raises_value_error_on_non_ascending_frames(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=10, position=Vec3(0, 0, 0)),
+            CameraKeyframe(frame=5, position=Vec3(0, 0, 100)),
+        ))
+        with self.assertRaises(ValueError):
+            apply_animated_shot(scene, shot)
+
+    def test_apply_raises_value_error_on_duplicate_frames(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=5, position=Vec3(0, 0, 0)),
+            CameraKeyframe(frame=5, position=Vec3(0, 0, 100)),
+        ))
+        with self.assertRaises(ValueError):
+            apply_animated_shot(scene, shot)
+
+    def test_apply_raises_value_error_on_partial_orientation(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=0, position=Vec3(0, 0, 0), look_at=Vec3(0, 0, 0)),
+            CameraKeyframe(frame=10, position=Vec3(0, 0, 100)),
+        ))
+        with self.assertRaises(ValueError):
+            apply_animated_shot(scene, shot)
+
+    def test_apply_creates_new_camera_when_none_given(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),
+                                                  CameraKeyframe(frame=10, position=Vec3(0, 0, 100))))
+        cam = apply_animated_shot(scene, shot, name="Move 1")
+        self.assertEqual(len(scene.created), 1)
+        self.assertIs(cam, scene.created[0])
+        self.assertEqual(cam.name, "Move 1")
+
+    def test_apply_reuses_given_camera(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        scene = _FakeCinematicsScene()
+        existing = _FakeCinematicsCamera("MyCam")
+        shot = CinematicAnimatedShot(keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),
+                                                  CameraKeyframe(frame=10, position=Vec3(0, 0, 100))))
+        cam = apply_animated_shot(scene, shot, camera=existing)
+        self.assertIs(cam, existing)
+        self.assertEqual(len(scene.created), 0)
+
+    def test_apply_sets_optics_once(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(
+            keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),
+                       CameraKeyframe(frame=10, position=Vec3(0, 0, 100))),
+            focal_length=85.0, depth_of_field=True, focal_distance=175.0,
+        )
+        apply_animated_shot(scene, shot, camera=cam)
+        self.assertEqual(cam.focal_length, 85.0)
+        self.assertTrue(cam.depth_of_field)
+        self.assertEqual(cam.focal_distance, 175.0)
+
+    def test_apply_clears_position_keys_always(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(CameraKeyframe(frame=0, position=Vec3(0, 0, 0)),
+                                                  CameraKeyframe(frame=10, position=Vec3(0, 0, 100))))
+        apply_animated_shot(scene, shot, camera=cam)
+        self.assertEqual(cam.clear_position_keys_calls, 1)
+        self.assertEqual(cam.clear_rotation_keys_calls, 0)
+
+    def test_apply_clears_rotation_keys_when_orientation_given(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=0, position=Vec3(0, 0, 150), look_at=Vec3(0, 0, 0)),
+            CameraKeyframe(frame=10, position=Vec3(0, 0, 100), look_at=Vec3(0, 0, 0)),
+        ))
+        apply_animated_shot(scene, shot, camera=cam)
+        self.assertEqual(cam.clear_rotation_keys_calls, 1)
+
+    def test_apply_writes_one_position_key_per_waypoint(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=0, position=Vec3(1, 2, 3)),
+            CameraKeyframe(frame=10, position=Vec3(4, 5, 6)),
+            CameraKeyframe(frame=20, position=Vec3(7, 8, 9)),
+        ))
+        apply_animated_shot(scene, shot, camera=cam)
+        self.assertEqual(cam.position_at_frame_calls, [
+            (0, 1.0, 2.0, 3.0), (10, 4.0, 5.0, 6.0), (20, 7.0, 8.0, 9.0),
+        ])
+        self.assertEqual(cam.rotation_at_frame_calls, [])
+
+    def test_apply_writes_rotation_key_from_look_at(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy._shot_geometry import look_at_euler
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        pos0 = Vec3(0, 0, 150)
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=0, position=pos0, look_at=Vec3(0, 0, 0)),
+            CameraKeyframe(frame=10, position=Vec3(150, 0, 0), look_at=Vec3(0, 0, 0)),
+        ))
+        apply_animated_shot(scene, shot, camera=cam)
+        expected = look_at_euler(pos0, Vec3(0, 0, 0))
+        frame, x, y, z = cam.rotation_at_frame_calls[0]
+        self.assertEqual(frame, 0)
+        self.assertAlmostEqual(x, expected[0], places=6)
+        self.assertAlmostEqual(y, expected[1], places=6)
+        self.assertAlmostEqual(z, expected[2], places=6)
+
+    def test_apply_applies_look_at_offset_to_daznode_target(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy._shot_geometry import look_at_euler
+        from dazpy.math3 import Vec3
+
+        class _Node:
+            position = {"x": 0.0, "y": 100.0, "z": 0.0}
+
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        pos0 = Vec3(0, 0, 150)
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=0, position=pos0, look_at=_Node(), look_at_offset_cm=20.0),
+            CameraKeyframe(frame=10, position=Vec3(0, 0, 100), look_at=_Node(), look_at_offset_cm=20.0),
+        ))
+        apply_animated_shot(scene, shot, camera=cam)
+        expected = look_at_euler(pos0, Vec3(0.0, 120.0, 0.0))
+        frame, x, y, z = cam.rotation_at_frame_calls[0]
+        self.assertAlmostEqual(x, expected[0], places=6)
+        self.assertAlmostEqual(y, expected[1], places=6)
+        self.assertAlmostEqual(z, expected[2], places=6)
+
+    def test_apply_writes_rotation_key_from_explicit_rotation(self):
+        from dazpy.cinematics import CameraKeyframe, CinematicAnimatedShot, apply_animated_shot
+        from dazpy.math3 import Vec3
+        cam = _FakeCinematicsCamera()
+        scene = _FakeCinematicsScene()
+        shot = CinematicAnimatedShot(keyframes=(
+            CameraKeyframe(frame=0, position=Vec3(0, 0, 150), rotation=(1.0, 2.0, 3.0)),
+            CameraKeyframe(frame=10, position=Vec3(0, 0, 100), rotation=(4.0, 5.0, 6.0)),
+        ))
+        apply_animated_shot(scene, shot, camera=cam)
+        self.assertEqual(cam.rotation_at_frame_calls, [(0, 1.0, 2.0, 3.0), (10, 4.0, 5.0, 6.0)])
+
+
 class TestCinematicsExports(unittest.TestCase):
     def test_cinematics_symbols_importable_from_top_level_package(self):
         import dazpy
@@ -6308,12 +6566,18 @@ class TestCinematicsExports(unittest.TestCase):
         self.assertTrue(hasattr(dazpy, "apply_static_shot"))
         self.assertTrue(hasattr(dazpy, "apply_orbit_camera"))
         self.assertTrue(hasattr(dazpy, "apply_frame_subject"))
+        self.assertTrue(hasattr(dazpy, "CameraKeyframe"))
+        self.assertTrue(hasattr(dazpy, "CinematicAnimatedShot"))
+        self.assertTrue(hasattr(dazpy, "apply_animated_shot"))
         self.assertIn("CinematicStaticShot", dazpy.__all__)
         self.assertIn("OrbitCamera", dazpy.__all__)
         self.assertIn("FrameSubject", dazpy.__all__)
         self.assertIn("apply_static_shot", dazpy.__all__)
         self.assertIn("apply_orbit_camera", dazpy.__all__)
         self.assertIn("apply_frame_subject", dazpy.__all__)
+        self.assertIn("CameraKeyframe", dazpy.__all__)
+        self.assertIn("CinematicAnimatedShot", dazpy.__all__)
+        self.assertIn("apply_animated_shot", dazpy.__all__)
 
 
 class TestIrayMaterial(unittest.TestCase):

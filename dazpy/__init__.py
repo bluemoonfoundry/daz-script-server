@@ -99,9 +99,12 @@ from .cinematics import (
     CinematicStaticShot,
     OrbitCamera,
     FrameSubject,
+    CameraKeyframe,
+    CinematicAnimatedShot,
     apply_static_shot,
     apply_orbit_camera,
     apply_frame_subject,
+    apply_animated_shot,
 )
 from ._result import ExecutionResult
 from ._polling import execute_long
@@ -205,9 +208,12 @@ __all__ = [
     "CinematicStaticShot",
     "OrbitCamera",
     "FrameSubject",
+    "CameraKeyframe",
+    "CinematicAnimatedShot",
     "apply_static_shot",
     "apply_orbit_camera",
     "apply_frame_subject",
+    "apply_animated_shot",
     "ExecutionResult",
     "execute_long",
     "FigureMorphs",

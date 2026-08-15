@@ -292,4 +292,89 @@ test conventions):
 
 - `CinematicAnimatedShot` — separate issue, pending confirmation of what
   DazScript actually exposes for keyframe/`addKey` writes at specific
-  frames/times.
+  frames/times. **Resolved 2026-08-15, see addendum below.**
+
+## Addendum (2026-08-15): `CinematicAnimatedShot` (real keyframes)
+
+Live-verified against a running DAZ Studio 4.x instance (see
+`daz-script-server-v6sk`). Findings:
+
+- `DzProperty.setKey()` / `.addKey()` / `.isAnimated()` — **do not exist**
+  on a live `DzFloatProperty` (position/rotation axis controls). The
+  existing `dazpy/_property.py` `DazProperty.set_key()`/`is_animated`
+  methods call these and are broken; tracked separately as
+  `daz-script-server-5lpx`.
+- `DzNumericProperty.setDoubleValue(tm, val)` **does** create a real
+  keyframe at DAZ time `tm` and DAZ Studio interpolates between existing
+  keys correctly (confirmed: two keys at ticks 0/320 with values 0/100
+  read back as 50 at the halfway tick). `canAnimate()` is `true` by
+  default on camera position/rotation controls — no `setCanAnimate(true)`
+  call is needed first.
+- `DzNode.setWSPos(tm, DzVec3)` (documented, two-arg overload) also
+  creates a real world-space-position keyframe and interpolates
+  correctly — used instead of manually keying the X/Y/Z position controls,
+  since it matches `apply_static_shot`'s existing `set_position` (which
+  uses `setWSPos`) and handles any parent-transform math DAZ Studio itself
+  applies.
+- **Ticks-per-frame is not a fixed constant** — `Scene.getTimeStep()`
+  returned `160` in the live test scene (30fps), not the commonly-assumed
+  `4800`. Frame→tick conversion must call `Scene.getTimeStep()` at
+  keyframe-write time, not hardcode a constant.
+- **Newly created nodes can already carry a default key** (e.g. a preset
+  camera spawn position) on their position/rotation controls. Writing new
+  keyframes without first calling `deleteAllKeys()` on each axis control
+  leaves the old default key in the curve, which distorts interpolation
+  and produces wild extrapolation beyond the new keys (observed: a
+  y/z drift to `190`/`370` on an axis that was never touched). New
+  primitives clear existing keys before writing.
+- No live-confirmed global constant names for `InterpolationType` enum
+  values (`ELinear`, `ETCB`, etc. all resolved `undefined`); the default
+  key interpolation type (numeric value `2`, presumably TCB/spline) is
+  left untouched — out of scope for this slice, same as `CinematicStaticShot`
+  not exposing interpolation control.
+
+### New primitives (`dazpy/_node.py`)
+
+- `DazNode.set_position_at_frame(frame, x, y, z)` — `_node.setWSPos(frame * Scene.getTimeStep(), new DzVec3(x,y,z))`.
+- `DazNode.set_rotation_at_frame(frame, x, y, z)` — `setDoubleValue(frame * Scene.getTimeStep(), ...)` on each of `getXRotControl()`/`getYRotControl()`/`getZRotControl()`.
+- `DazNode.clear_position_keys()` / `clear_rotation_keys()` — `deleteAllKeys()` on the three axis controls; called once per `apply_animated_shot` call before writing the new curve.
+
+### New data model / behavior (`dazpy/cinematics.py`)
+
+```python
+@dataclass(frozen=True)
+class CameraKeyframe:
+    frame: int
+    position: Vec3
+    look_at: Vec3 | DazNode | None = None
+    look_at_offset_cm: float = 0.0
+    rotation: tuple[float, float, float] | None = None
+
+@dataclass(frozen=True)
+class CinematicAnimatedShot:
+    keyframes: tuple[CameraKeyframe, ...]
+    focal_length: float = 50.0
+    depth_of_field: bool = False
+    focal_distance: float | None = None
+```
+
+`apply_animated_shot(scene, shot, *, camera=None, name=None) -> DazCamera`:
+
+1. Validate at least two keyframes; frames strictly ascending and unique;
+   orientation (`look_at`/`rotation`) either given on every keyframe or
+   none — a partial mix would leave the rotation curve keyed at only some
+   waypoints, holding a stale value in between.
+2. Resolve/create the camera; write `focal_length`/`depth_of_field`/
+   `focal_distance` once (same as `apply_static_shot`).
+3. `cam.clear_position_keys()` always; `cam.clear_rotation_keys()` only if
+   any keyframe specifies an orientation.
+4. For each keyframe: `cam.set_position_at_frame(frame, x, y, z)`; if
+   `look_at` is set, resolve it via `resolve_target` and compute the
+   rotation with the existing `look_at_euler`, then
+   `cam.set_rotation_at_frame(frame, x, y, z)`; elif `rotation` is set,
+   write it directly.
+
+End-to-end smoke-tested against a live DAZ Studio instance: a 3-waypoint
+move (frames 0/15/30) produced 3 real keys on the X position control at
+ticks 0/2400/4800 (160 ticks/frame), with the mid-move frame (7) reading
+back a correctly interpolated position and orientation.
