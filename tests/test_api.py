@@ -402,7 +402,11 @@ class TestAsyncExecution(unittest.TestCase):
         # response says "cancelled" but the underlying call can't actually be
         # interrupted -- the tracker must still report a terminal status
         # instead of leaving GET /requests/:id stuck at "running" (GH #34).
-        script = iife("var x = 0; for (var i = 0; i < 2000000000; i++) { x += i; } return x;")
+        # ~8s on a live DAZ Studio 4 instance -- long enough to reliably catch
+        # "running" below, short enough not to starve the main thread for
+        # other tests once cancelled (the loop itself can't be interrupted,
+        # only the tracker's reported status can).
+        script = iife("var x = 0; for (var i = 0; i < 500000000; i++) { x += i; } return x;")
         r = async_execute(script=script)
         request_id = r.json()["request_id"]
 
