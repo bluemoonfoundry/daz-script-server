@@ -2039,6 +2039,34 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
         result = skel.bone_rotations()
         self.assertEqual(result, {})
 
+    def test_bone_rotations_quat_single_call(self):
+        payload = {
+            "hip": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            "rForeArm": {"x": 0.1, "y": 0.2, "z": 0.3, "w": 0.9},
+        }
+        skel, client = self._make_skeleton(payload)
+        result = skel.bone_rotations_quat()
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result["hip"], {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})
+        self.assertEqual(result["rForeArm"], {"x": 0.1, "y": 0.2, "z": 0.3, "w": 0.9})
+
+    def test_bone_rotations_quat_script_uses_getLocalRot(self):
+        skel, client = self._make_skeleton({"hip": {"x": 0, "y": 0, "z": 0, "w": 1}})
+        skel.bone_rotations_quat()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertIn("getLocalRot", script)
+
+    def test_bone_rotations_quat_empty_skeleton(self):
+        skel, client = self._make_skeleton({})
+        result = skel.bone_rotations_quat()
+        self.assertEqual(result, {})
+
+    def test_bone_rotations_quat_null_returns_empty(self):
+        skel, client = self._make_skeleton(None)
+        result = skel.bone_rotations_quat()
+        self.assertEqual(result, {})
+
     def test_set_bone_rotations_single_call(self):
         skel, client = self._make_skeleton(None)
         skel.set_bone_rotations({"hip": (10, 20, 30), "rForeArm": (0, 45, 0)})

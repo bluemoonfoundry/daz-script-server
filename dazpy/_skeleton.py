@@ -194,6 +194,33 @@ class DazSkeleton(DazNode):
         raw = self._client.execute(script).value or {}
         return {name: (v[0], v[1], v[2]) for name, v in raw.items()}
 
+    def bone_rotations_quat(self) -> dict[str, dict[str, float]]:
+        """Return local-space quaternion rotations for every bone in one HTTP call.
+
+        Equivalent to calling :attr:`~dazpy.DazBone.local_rotation` on every
+        bone returned by :meth:`bones`, but rounds-trips only once. Prefer
+        this over :meth:`bone_rotations` when the result will be composed
+        with other rotations (e.g. an axis remap via
+        :class:`~dazpy.math3.AxisRemap`) — quaternions avoid the per-bone
+        Euler rotation-order ambiguity that :attr:`~dazpy.DazBone.rotation_order`
+        otherwise requires tracking.
+
+        Returns:
+            ``{bone_name: {"x": float, "y": float, "z": float, "w": float}}``
+            for every bone.
+        """
+        script = self._skeleton_body("""
+            var _bones = _node.getAllBones();
+            var _result = {};
+            for (var i = 0; i < _bones.length; i++) {
+                var _b = _bones[i];
+                var _r = _b.getLocalRot();
+                _result[_b.getName()] = {x: _r.x, y: _r.y, z: _r.z, w: _r.w};
+            }
+            return _result;
+        """)
+        return self._client.execute(script).value or {}
+
     def set_bone_rotations(self, data: dict[str, tuple | list]) -> None:
         """Set Euler rotations for any subset of bones in one HTTP call.
 
