@@ -32,7 +32,14 @@
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
+#if DAZ_SDK_MAJOR_VERSION >= 6
+// QRegExp was removed from Qt6 Core (Qt5Compat provides it under a
+// different include path); QRegularExpression is available unchanged
+// since Qt 5.0, so use it instead of pulling in the compat module.
+#include <QtCore/qregularexpression.h>
+#else
 #include <QtCore/qregexp.h>
+#endif
 #include <QtCore/qscopedpointer.h>
 #if DAZ_SDK_MAJOR_VERSION >= 6
 // QClipboard stays in QtGui; the rest moved to QtWidgets in Qt5/6.
@@ -2601,10 +2608,21 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 	// RenderProgressBroker.h), so this print-marker is the only real progress
 	// source available; only intercept it while a render is actually running.
 	if (!m_sCurrentRenderId.isEmpty()) {
+#if DAZ_SDK_MAJOR_VERSION >= 6
+		static const QRegularExpression frameRx("^\\[DAZPY_FRAME\\] (\\d+)/(\\d+)$");
+		QRegularExpressionMatch frameMatch = frameRx.match(msg);
+		bool frameMatched = frameMatch.hasMatch();
+		QString frameCap1 = frameMatch.captured(1);
+		QString frameCap2 = frameMatch.captured(2);
+#else
 		static QRegExp frameRx("^\\[DAZPY_FRAME\\] (\\d+)/(\\d+)$");
-		if (frameRx.indexIn(msg) == 0) {
-			int frame = frameRx.cap(1).toInt();
-			int total = frameRx.cap(2).toInt();
+		bool frameMatched = frameRx.indexIn(msg) == 0;
+		QString frameCap1 = frameRx.cap(1);
+		QString frameCap2 = frameRx.cap(2);
+#endif
+		if (frameMatched) {
+			int frame = frameCap1.toInt();
+			int total = frameCap2.toInt();
 			if (total > 0) {
 				if (m_pRenderProgress)
 					m_pRenderProgress->notifyProgress(m_sCurrentRenderId, frame, total);
