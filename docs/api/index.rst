@@ -5,6 +5,7 @@ API Reference
    :maxdepth: 1
 
    client
+   aio
    result
    scene
    scene_state
@@ -15,6 +16,7 @@ API Reference
    dforce
    animation
    camera
+   cinematics
    light
    materials
    geometry
