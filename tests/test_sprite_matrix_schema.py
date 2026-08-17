@@ -1,4 +1,4 @@
-"""Unit tests for docs/examples/rendering/sprite_matrix/schema.py.
+"""Unit tests for tests/fixtures/rendering/sprite_matrix/schema.py.
 
 No live servers required.
 """
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 _SPRITE_MATRIX_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "sprite_matrix"
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "sprite_matrix"
 )
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, _SPRITE_MATRIX_DIR)

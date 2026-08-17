@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "comfyui_enhance"
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "comfyui_enhance"
 ))
 
 from comfyui_client import ComfyUIClient, ComfyUIError, ComfyUIExecutionError

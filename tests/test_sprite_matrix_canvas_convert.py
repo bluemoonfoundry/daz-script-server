@@ -1,4 +1,4 @@
-"""Unit tests for docs/examples/rendering/sprite_matrix/canvas_convert.py's
+"""Unit tests for tests/fixtures/rendering/sprite_matrix/canvas_convert.py's
 multiply_blend() lineart composite helper.
 
 No live Daz Studio or ComfyUI required -- exercises the pure OpenCV/numpy
@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 _SPRITE_MATRIX_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "sprite_matrix"
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "sprite_matrix"
 )
 sys.path.insert(0, _SPRITE_MATRIX_DIR)
 

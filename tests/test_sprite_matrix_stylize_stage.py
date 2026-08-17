@@ -1,4 +1,4 @@
-"""Unit tests for docs/examples/rendering/sprite_matrix/stylize_stage.py's
+"""Unit tests for tests/fixtures/rendering/sprite_matrix/stylize_stage.py's
 FaceID-execution-error fallback. No live servers required -- ComfyUIClient
 and the EXR conversion functions are mocked.
 """
@@ -11,10 +11,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "comfyui_enhance"
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "comfyui_enhance"
 ))
 _SPRITE_MATRIX_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "examples", "rendering", "sprite_matrix"
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "sprite_matrix"
 )
 sys.path.insert(0, _SPRITE_MATRIX_DIR)
 

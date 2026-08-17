@@ -18,8 +18,8 @@ import tempfile
 import unittest
 
 _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-_SPRITE_MATRIX_DIR = os.path.join(_REPO_ROOT, "docs", "examples", "rendering", "sprite_matrix")
-_COMFYUI_ENHANCE_DIR = os.path.join(_REPO_ROOT, "docs", "examples", "rendering", "comfyui_enhance")
+_SPRITE_MATRIX_DIR = os.path.join(_REPO_ROOT, "tests", "fixtures", "rendering", "sprite_matrix")
+_COMFYUI_ENHANCE_DIR = os.path.join(_REPO_ROOT, "tests", "fixtures", "rendering", "comfyui_enhance")
 sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, _COMFYUI_ENHANCE_DIR)
 sys.path.insert(0, _SPRITE_MATRIX_DIR)

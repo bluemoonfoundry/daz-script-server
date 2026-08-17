@@ -11,7 +11,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples", "comfyui_enhance"))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "comfyui_enhance"))
 
 from file_watcher import FileWatcher, _wait_for_stable
 

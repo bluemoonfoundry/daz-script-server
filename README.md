@@ -370,7 +370,7 @@ change.  For dirty scenes it serialises via `Scene.saveScene()` and restores
 the original filename immediately.  The `method` field in the response tells
 you which strategy was used.
 
-See `docs/examples/fundamentals/scene_save_copy.py` for a complete example
+See [`fundamentals/scene_save_copy`](https://github.com/bluemoonfoundry/daz-script-server-examples/tree/main/fundamentals/scene_save_copy) in the examples repo for a complete example
 with `--compare` and `--dry-run` options.
 
 ---
@@ -422,7 +422,7 @@ snapshot  = scene.scene_snapshot()
 profiles  = build_rig_profiles_from_snapshot(snapshot)
 ```
 
-**Body measurement accuracy improvements** in `docs/examples/body_measurements.py`:
+**Body measurement accuracy improvements** in [`geometry/body_measurements`](https://github.com/bluemoonfoundry/daz-script-server-examples/tree/main/geometry/body_measurements):
 
 - Slices now use centroid-weighted torso loop selection to filter arm cross-sections, correcting a ~70 cm overestimate on A-pose figures.
 - The heuristic fallback for unlabelled figures (e.g. a character named
@@ -617,7 +617,7 @@ converting DAZ Studio's Y-up scene data to Z-up tools like Blender).
 positions with skinning and morphs already applied — enabling downstream export
 pipelines to read the final mesh without re-solving the rig.
 
-New example **`docs/examples/scene_to_usd.py`** uses this to export a full live
+New example **[`export/scene_to_usd`](https://github.com/bluemoonfoundry/daz-script-server-examples/tree/main/export/scene_to_usd)** uses this to export a full live
 DAZ Studio scene to Pixar USD: posed meshes, cameras, lights, PBR materials, and
 strand-based hair as `UsdGeom.BasisCurves`.  Pass `--morphs` to write blend
 shapes as `UsdSkel` targets.
@@ -656,7 +656,7 @@ Studio instance) now ship in the repo root.
 ### 📖 Docs & Ergonomics
 
 - API reference pages for `DazPose`, `DazAnimation`, `Vec3`, `Quat`, `BoundingBox`, and `AxisRemap`
-- Every script in `docs/examples/` has an `if __name__ == "__main__":` guard and
+- Every script in [daz-script-server-examples](https://github.com/bluemoonfoundry/daz-script-server-examples) has an `if __name__ == "__main__":` guard and
   argparse `--help`, making all examples safe to import and self-documenting
 
 ---
