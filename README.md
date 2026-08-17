@@ -68,7 +68,7 @@ print(response.json())
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.9.0](#whats-new-in-v290) (Nightly Build)
+- [What's New in v2.9.0](#whats-new-in-v290)
 - [What's New in v2.8.0](#whats-new-in-v280)
 - [What's New in v2.7.2](#whats-new-in-v272)
 - [What's New in v2.7.1](#whats-new-in-v271)
@@ -157,6 +157,67 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 ---
 
 ## What's New in v2.9.0
+
+### 🎬 dazpy.cinematics — camera shot builders
+
+`dazpy.cinematics` packages common camera choreography on top of
+`DazCamera`/`DazScene`: `apply_static_shot()` places/aims/configures a
+camera in one call; `apply_orbit_camera()` sweeps a camera around a target
+across a frame range; `apply_frame_subject()` frames a subject at a named
+shot distance (`close_up` / `medium` / `full_body`); and
+`apply_animated_shot()` writes real, interpolated DAZ Studio keyframes at a
+sequence of waypoints instead of baking a value on every frame.
+
+```python
+from dazpy.cinematics import OrbitCamera, apply_orbit_camera
+
+apply_orbit_camera(scene, OrbitCamera(target=figure, radius=250, frame_start=0, frame_end=90))
+```
+
+### 💡 dazpy.lighting — three-point rigs and HDRI environments
+
+`apply_three_point_light_setup()` creates and places a key/fill/rim light
+rig around a target in one call, via angle/distance placement or explicit
+world-space positions per light. `apply_hdri_environment()` applies
+image-based dome lighting — map, intensity, rotation, dome/scene mode,
+visibility, and IBL resolution — validating the image path up front and
+verifying a post-apply readback so a silent failure never passes as success.
+
+### 🧍 dazpy.poses — apply_pose, reset_transforms, zero_figure
+
+Common pose operations without hand-assembling a `DazPose`:
+`apply_pose()` applies a pose object or a JSON file path directly to a
+skeleton; `reset_transforms()` zeroes a node's local position/rotation and
+resets scale to 1.0; `zero_figure()` drives every bone rotation and morph
+to zero while leaving the figure's root transform untouched by default.
+
+### 📐 dazpy.math3.AxisRemap — coordinate-space conversion
+
+A generic signed-axis-permutation converter for `Vec3`/`Quat`/
+`BoundingBox` between coordinate conventions, with a ready-made
+`Y_UP_TO_Z_UP` preset for moving data from DAZ Studio (Y-up) into
+Blender/glTF-style Z-up pipelines.
+
+```python
+from dazpy.math3 import Y_UP_TO_Z_UP
+
+blender_pos = Y_UP_TO_Z_UP.apply_vec3(daz_pos)
+```
+
+### 🦴 DazSkeleton.bone_rotations_quat()
+
+Returns local-space quaternion rotations for every bone in one HTTP
+round-trip — the composable counterpart to `bone_rotations()` for callers
+feeding the result into another rotation (e.g. `AxisRemap.apply_quat()`),
+sidestepping the per-bone Euler rotation-order tracking that would
+otherwise be required.
+
+### 🎞️ Frame-level progress streaming for animation renders
+
+The `GET /render/:id/progress` SSE stream now emits a progress event at
+each frame boundary during an animation render, instead of only start/
+terminal events — the DAZ SDK exposes no per-percent render progress
+signal, so this frame-level marker is the most granular progress available.
 
 ### ⚡ Async client — `dazpy.aio.AsyncDazClient`
 

@@ -4,8 +4,58 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-08-16
+
 ### Added
 
+- **dazpy.cinematics — CinematicStaticShot, OrbitCamera, FrameSubject,
+  CinematicAnimatedShot** — domain-level camera-shot builders on top of
+  `DazCamera`/`DazScene`. `apply_static_shot()` places/aims/configures a
+  camera in one call (position, `look_at` target or explicit rotation,
+  focal length, depth of field, aspect/pixel dimensions).
+  `apply_orbit_camera()` sweeps a camera around a target across a frame
+  range by baking a per-frame position/aim on every timeline frame
+  (widening the scene's animation range as needed so `Scene.setFrame()`
+  doesn't clamp past frame 30 on a fresh scene). `apply_frame_subject()`
+  frames a subject at a named shot distance (`close_up` / `medium` /
+  `full_body`). `apply_animated_shot()` (`CinematicAnimatedShot`) is the
+  interpolated-keyframe counterpart to `OrbitCamera` — it writes real DAZ
+  Studio keyframes at each `CameraKeyframe` waypoint
+  (`set_position_at_frame()`/`set_rotation_at_frame()`) and lets DAZ Studio
+  interpolate between them via its own animation curves, instead of a
+  per-frame bake.
+- **dazpy.lighting — ThreePointLightSetup, HDRIEnvironment** —
+  `apply_three_point_light_setup()` creates and places a conventional
+  key/fill/rim light rig around a target (`Vec3` or `DazNode`), via
+  angle/distance spherical placement or explicit world-space positions per
+  light. `apply_hdri_environment()` (`HDRIEnvironment`) applies image-based
+  dome lighting — environment map, intensity, dome rotation,
+  dome/scene/both mode, dome visibility, and IBL sampling resolution —
+  validating the image path exists before any DazScript call (an invalid
+  path passed to the underlying `setMap()` can hang or crash DAZ Studio via
+  a blocking file-not-found dialog) and verifying a post-apply
+  "Environment Intensity" readback so a silent no-op on an unexpected DAZ
+  Studio build surfaces as a `RenderError` instead of failing invisibly.
+- **dazpy.poses — apply_pose, reset_transforms, zero_figure** — `apply_pose()`
+  applies a `DazPose` (or loads one from a JSON path first) to a skeleton in
+  one call. `reset_transforms()` zeroes a node's local position/rotation and
+  resets scale to 1.0. `zero_figure()` drives every bone rotation and morph
+  on a skeleton to zero without touching the figure's root transform by
+  default; an opt-in `include_props=True` also zeroes node-level numeric
+  properties via `DazPose.apply_full()` for rigs that route transforms
+  through built-in dials, at the cost of that root-transform guarantee.
+- **dazpy.math3.AxisRemap** — a generic signed-axis-permutation converter
+  for `Vec3`/`Quat`/`BoundingBox` between coordinate conventions (e.g. DAZ
+  Studio's Y-up to Blender/glTF-style Z-up), with a ready-made
+  `Y_UP_TO_Z_UP` preset. Reflective remaps (determinant `-1`) are supported
+  for vectors/bounding boxes but correctly rejected for `apply_quat()`,
+  since a reflection has no quaternion representation.
+- **DazSkeleton.bone_rotations_quat()** — returns local-space quaternion
+  rotations for every bone in one HTTP round-trip (`{bone: {x, y, z, w}}`),
+  as an alternative to `bone_rotations()` for callers who will compose the
+  result with another rotation (e.g. via `AxisRemap.apply_quat()`) — this
+  avoids the per-bone Euler rotation-order ambiguity that
+  `DazBone.rotation_order` would otherwise require tracking.
 - **dazpy.DazCamera — aperture / bokeh controls** — `f_stop` (DOF blur
   intensity, backed by the "F/Stop" property), `aperture_blades` (bokeh
   blade count; `0` = circular, 3+ = polygonal), and
@@ -20,6 +70,53 @@ All notable changes to DazScript Server are documented here.
   any DazScript call) and generic named-channel get/set
   (`get_surface_property()`/`set_surface_property()`) for channels not
   covered by the typed fields. (GH #31)
+- **Frame-level progress streaming for animation renders** — the
+  `GET /render/:id/progress` SSE stream now emits a progress event at each
+  frame boundary during an animation render, instead of only start/terminal
+  events. `buildAnimationRenderScript()` prints a `[DAZPY_FRAME] n/total`
+  marker right before each frame's `doRender()` call;
+  `DzScriptServerPane::onMessagePosted()` intercepts it (only while a render
+  is actually running) and reports it via `RenderProgressBroker::
+  notifyProgress()` as `percent = 100 * (frame-1) / total`. The DAZ SDK
+  exposes no `renderProgress(int)` signal and Iray posts no parseable
+  intra-frame progress text through the debug-message channel, so this
+  print-marker is the only real progress source available — single-frame
+  renders still only get the 0% start / terminal finish events. (GH #31)
+
+### Async client — `dazpy.aio.AsyncDazClient`
+
+New `dazpy.aio` module with `AsyncDazClient`, an `httpx.AsyncClient`-backed
+mirror of `DazClient`'s full method surface (`execute`, `execute_file`,
+async submit/status/result/list/cancel, render submit/batch/animation, USD
+export, server-health endpoints) as `async def` methods, including
+`asyncio`-native `retry_on_busy`/`max_wait` backoff and an async context
+manager (`async with AsyncDazClient() as client:`) for connection-pool
+lifecycle. Requires the optional `httpx` dependency (`pip install
+dazpy[aio]`). Removes the need for async callers (FastAPI, FastMCP,
+ComfyUI, Temporal) to wrap synchronous `DazClient` calls in
+`asyncio.to_thread()`.
+
+### `DazClient` connection pooling + `close()`
+
+`DazClient` now uses a pooled `requests.Session` for connection reuse
+instead of a fresh connection per call, and gained `close()` and context
+manager support (`with DazClient() as client:`), mirroring
+`AsyncDazClient`'s connection-lifecycle handling.
+
+### Fix: `/scene/save-copy`'s clean-scene fast path had no busy coverage
+
+Live testing plus code inspection (`daz-script-server-aaa`) found that
+`/scene/save-copy` completely bypassed `SceneSaving` busy tracking when the
+scene was already clean: that branch calls `QFile::copy()` directly and
+never touches `DzScene::saveScene()`, so the `sceneSaveStarting`/`sceneSaved`
+signals that drive busy detection never fired — any request landing during
+that copy got no `503 STUDIO_BUSY` fast-fail at all. (A live SSE capture
+confirmed the *dirty*-scene branch, which does call `saveScene()`, fires
+these signals reliably — the gap was specific to the clean-scene shortcut.)
+`SceneEventBroker::enterBusy()`/`exitBusy()` are now public, and
+`handleSaveCopy()` brackets its entire body (both branches) with an RAII
+`BusyScope` guard, giving explicit, signal-independent busy coverage for
+this handler.
 
 ### Fix: render success reporting trusted `doRender()`'s undocumented return value
 
@@ -58,42 +155,29 @@ unless a user deliberately changes it.
 matches the method's documented "render the scene" contract regardless of
 what canvases were added or last touched.
 
-## [2.9.0] - 2026-08-06
+### Fix: SDK6 (Qt6) nightly build failed on `QtCore/qregexp.h`
 
-### Async client — `dazpy.aio.AsyncDazClient`
+`QRegExp` was removed from Qt6 Core in favor of the separate `Qt5Compat`
+module, which lives under a different include path
+(`QtCore5Compat/qregexp.h`, not `QtCore/qregexp.h`) — breaking the nightly
+SDK6 build with a missing-header error on all three Qt6 platforms (Windows,
+macOS Intel, macOS Apple Silicon). The one `QRegExp` use (parsing
+`[DAZPY_FRAME] n/total` progress markers) now uses `QRegularExpression`
+when building against SDK6, guarded by the existing `DAZ_SDK_MAJOR_VERSION`
+pattern; SDK4 keeps `QRegExp`, since it targets Qt 4.8, which predates
+`QRegularExpression` entirely.
 
-New `dazpy.aio` module with `AsyncDazClient`, an `httpx.AsyncClient`-backed
-mirror of `DazClient`'s full method surface (`execute`, `execute_file`,
-async submit/status/result/list/cancel, render submit/batch/animation, USD
-export, server-health endpoints) as `async def` methods, including
-`asyncio`-native `retry_on_busy`/`max_wait` backoff and an async context
-manager (`async with AsyncDazClient() as client:`) for connection-pool
-lifecycle. Requires the optional `httpx` dependency (`pip install
-dazpy[aio]`). Removes the need for async callers (FastAPI, FastMCP,
-ComfyUI, Temporal) to wrap synchronous `DazClient` calls in
-`asyncio.to_thread()`.
+### Changed: example scripts moved to `daz-script-server-examples`
 
-### `DazClient` connection pooling + `close()`
-
-`DazClient` now uses a pooled `requests.Session` for connection reuse
-instead of a fresh connection per call, and gained `close()` and context
-manager support (`with DazClient() as client:`), mirroring
-`AsyncDazClient`'s connection-lifecycle handling.
-
-### Fix: `/scene/save-copy`'s clean-scene fast path had no busy coverage
-
-Live testing plus code inspection (`daz-script-server-aaa`) found that
-`/scene/save-copy` completely bypassed `SceneSaving` busy tracking when the
-scene was already clean: that branch calls `QFile::copy()` directly and
-never touches `DzScene::saveScene()`, so the `sceneSaveStarting`/`sceneSaved`
-signals that drive busy detection never fired — any request landing during
-that copy got no `503 STUDIO_BUSY` fast-fail at all. (A live SSE capture
-confirmed the *dirty*-scene branch, which does call `saveScene()`, fires
-these signals reliably — the gap was specific to the clean-scene shortcut.)
-`SceneEventBroker::enterBusy()`/`exitBusy()` are now public, and
-`handleSaveCopy()` brackets its entire body (both branches) with an RAII
-`BusyScope` guard, giving explicit, signal-independent busy coverage for
-this handler.
+The example scripts formerly under this repo's `docs/examples/` now live in
+their own repo,
+[daz-script-server-examples](https://github.com/bluemoonfoundry/daz-script-server-examples),
+kept up to date with the current `dazpy` API and organized by category with
+per-example READMEs. `docs/examples/` now just points there.
+`sprite_matrix` and `comfyui_enhance` are the exception — this repo's own
+test suite imports them directly as unit-test fixtures, so they moved to
+`tests/fixtures/rendering/` instead; the examples repo carries its own
+documented, standalone copies of both for general use.
 
 ## [2.8.1] - 2026-07-24
 
