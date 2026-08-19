@@ -76,7 +76,9 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
 
         try:
             request_id = client.execute_file_async_submit(
-                "C:/scripts/pose-probe.dsa", args={"mode": "probe"}
+                "C:/scripts/pose-probe.dsa",
+                args={"mode": "probe"},
+                report_file="C:/runs/probe/job.jsonl",
             )
         finally:
             original_session.close()
@@ -87,6 +89,7 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
             json={
                 "scriptFile": "C:/scripts/pose-probe.dsa",
                 "args": {"mode": "probe"},
+                "reportFile": "C:/runs/probe/job.jsonl",
             },
             headers={},
             timeout=30.0,
@@ -7496,10 +7499,14 @@ class TestExecuteBatchAsync(unittest.TestCase):
         client.execute_batch_async(
             [{"body_lines": [], "result_expression": "1"}],
             args={"mode": "probe"},
+            report_file="C:/runs/probe/batch.jsonl",
         )
 
         submitted_payload = client._session.post.call_args[1]["json"]
         self.assertEqual(submitted_payload["args"], {"mode": "probe"})
+        self.assertEqual(
+            submitted_payload["reportFile"], "C:/runs/probe/batch.jsonl"
+        )
 
 
 class TestCallCountBaseline(unittest.TestCase):

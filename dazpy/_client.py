@@ -262,13 +262,16 @@ class DazClient:
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def execute_async_submit(
-        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, script: str, args: object = None, *, report_file: str | None = None,
+        retry_on_busy: bool = False, max_wait: float = 30.0
     ) -> str:
         """Submit a script for asynchronous execution and return immediately.
 
         Args:
             script: DazScript source code.
             args: Optional argument for the script.
+            report_file: Optional host-side JSONL file used by the script to
+                report structured progress, logs, and output artefacts.
             retry_on_busy: If ``True``, transparently retry with backoff when
                 the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
                 instead of raising immediately.
@@ -292,6 +295,8 @@ class DazClient:
         payload: dict = {"script": script}
         if args is not None:
             payload["args"] = args
+        if report_file is not None:
+            payload["reportFile"] = report_file
 
         def _do():
             resp = self._post("/execute/async", payload)
@@ -301,7 +306,8 @@ class DazClient:
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def execute_file_async_submit(
-        self, script_file: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, script_file: str, args: object = None, *, report_file: str | None = None,
+        retry_on_busy: bool = False, max_wait: float = 30.0
     ) -> str:
         """Submit a host-side ``.dsa`` file for asynchronous execution.
 
@@ -313,6 +319,8 @@ class DazClient:
         payload: dict = {"scriptFile": script_file}
         if args is not None:
             payload["args"] = args
+        if report_file is not None:
+            payload["reportFile"] = report_file
 
         def _do():
             resp = self._post("/execute/async", payload)
@@ -321,13 +329,17 @@ class DazClient:
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
-    def execute_batch_async(self, operations: list[dict], args: object = None) -> str:
+    def execute_batch_async(
+        self, operations: list[dict], args: object = None, *, report_file: str | None = None
+    ) -> str:
         """Submit multiple operations as one async request (one queue slot, one script).
 
         Args:
             operations: List of ``{"body_lines": [...], "result_expression": "..."}``
                 dicts — same shape as :meth:`~dazpy.Batch.add_operation`'s arguments.
             args: Optional argument passed to the combined script.
+            report_file: Optional host-side JSONL file used for structured job
+                observation, as in :meth:`execute_async_submit`.
 
         Returns:
             The server-assigned ``request_id``. Poll it like any other async
@@ -338,7 +350,7 @@ class DazClient:
 
         pairs = [(op["body_lines"], op["result_expression"]) for op in operations]
         script = build_operations_script(pairs)
-        return self.execute_async_submit(script, args=args)
+        return self.execute_async_submit(script, args=args, report_file=report_file)
 
     def get_request_status(self, request_id: str) -> dict:
         """Return the current status of an async request.
@@ -347,7 +359,9 @@ class DazClient:
             request_id: The ID returned by :meth:`execute_async_submit`.
 
         Returns:
-            A dict with at least a ``"status"`` key.  Possible values:
+            A dict with at least ``"status"`` and ``"observation"`` keys.
+            Observation contains structured progress, the bounded log tail,
+            and the output manifest. Possible status values:
             ``"queued"``, ``"running"``, ``"completed"``, ``"failed"``,
             ``"cancelled"``, or ``"not_found"``.
         """
@@ -368,7 +382,7 @@ class DazClient:
 
         Returns:
             A dict containing ``success``, ``result``, ``output``, ``error``,
-            ``duration_ms``, and ``status`` keys.
+            ``duration_ms``, ``status``, and ``observation`` keys.
         """
         params = {}
         if wait:

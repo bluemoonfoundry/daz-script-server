@@ -279,7 +279,7 @@ class TestInputValidation(unittest.TestCase):
 
 # ─── Async execution ─────────────────────────────────────────────────────────
 
-def async_execute(script=None, script_file=None, args=None, headers=None):
+def async_execute(script=None, script_file=None, args=None, report_file=None, headers=None):
     """POST /execute/async and return the raw response."""
     payload = {}
     if script is not None:
@@ -288,6 +288,8 @@ def async_execute(script=None, script_file=None, args=None, headers=None):
         payload["scriptFile"] = script_file
     if args is not None:
         payload["args"] = args
+    if report_file is not None:
+        payload["reportFile"] = report_file
     h = auth_headers() if headers is None else headers
     return requests.post(f"{BASE_URL}/execute/async", headers=h, json=payload, timeout=10)
 
@@ -451,6 +453,44 @@ class TestAsyncExecution(unittest.TestCase):
             if script_path and os.path.exists(script_path):
                 os.unlink(script_path)
 
+    def test_async_report_file_cannot_overwrite_script_file(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return 1;"))
+                script_path = os.path.abspath(script_file.name)
+
+            r = async_execute(script_file=script_path, report_file=script_path)
+            self.assertEqual(r.status_code, 503)
+            with open(script_path, encoding="utf-8") as script_file:
+                self.assertIn("return 1", script_file.read())
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
+
+    def test_async_report_file_alias_cannot_overwrite_script_file(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return 1;"))
+                script_path = os.path.abspath(script_file.name)
+
+            alias_path = os.path.join(
+                os.path.dirname(script_path), ".", os.path.basename(script_path)
+            )
+            self.assertNotEqual(alias_path, script_path)
+            r = async_execute(script_file=script_path, report_file=alias_path)
+            self.assertEqual(r.status_code, 503)
+            with open(script_path, encoding="utf-8") as script_file:
+                self.assertIn("return 1", script_file.read())
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
+
     def test_sync_scriptfile_preserves_file_identity(self):
         script_path = ""
         try:
@@ -597,6 +637,86 @@ class TestAsyncExecution(unittest.TestCase):
         result_r = get_result(request_id)
         body = result_r.json()
         self.assertIsInstance(body.get("output"), list)
+
+    def test_async_job_report_tracks_live_progress_logs_and_outputs(self):
+        report_path = ""
+        output_path = os.path.join(tempfile.gettempdir(), "dss-observed-output.png")
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
+            ) as report:
+                # Submission owns/truncates this file; this stale event must
+                # never leak into the new job record.
+                report.write('{"type":"output","path":"stale.png"}\n')
+                report_path = os.path.abspath(report.name)
+
+            script = iife(
+                "var cfg = getArguments()[0]; "
+                "var events = ''; "
+                "function emit(e) { "
+                "  events += JSON.stringify(e) + '\\n'; "
+                "  var f = new DzFile(cfg.__dssReportFile); "
+                "  if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+                "  f.write(events); f.close(); "
+                "} "
+                "emit({type:'progress', value:0.25, current:1, total:4, "
+                "      phase:'setup', message:'Scene ready'}); "
+                "emit({type:'log', level:'info', message:'started'}); "
+                "var start = Date.now(); while (Date.now() - start < 2500) {} "
+                "for (var i = 0; i < 105; i++) "
+                "  emit({type:'log', level:'debug', message:'line-' + i}); "
+                "emit({type:'output', path:cfg.outputPath, kind:'image', label:'plate'}); "
+                "emit({type:'progress', value:1, current:4, total:4, "
+                "      phase:'done', message:'Complete'}); "
+                "return 'reported';"
+            )
+            r = async_execute(
+                script=script,
+                args={"outputPath": output_path},
+                report_file=report_path,
+            )
+            self.assertEqual(r.status_code, 200)
+            request_id = r.json()["request_id"]
+
+            saw_live_progress = False
+            # A prior cancellation test deliberately leaves a non-render
+            # script finishing on Daz's main thread after its tracker is
+            # already terminal, so this job may remain queued for ~8 seconds.
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                status = requests.get(
+                    f"{BASE_URL}/requests/{request_id}/status",
+                    headers=auth_headers(), timeout=5,
+                ).json()
+                detail = status.get("observation", {}).get("progress") or {}
+                if status.get("status") == "running" and detail.get("value") == 0.25:
+                    saw_live_progress = True
+                    break
+                time.sleep(0.05)
+            self.assertTrue(saw_live_progress, "structured progress was not visible while running")
+
+            body = get_result(request_id, wait=True, timeout=20).json()
+            self.assertEqual(body.get("status"), "completed")
+            observation = body["observation"]
+            self.assertEqual(observation["progress"]["value"], 1)
+            self.assertEqual(observation["progress"]["phase"], "done")
+            self.assertEqual(observation["log_total"], 106)
+            self.assertEqual(len(observation["log_tail"]), 100)
+            self.assertTrue(observation["log_truncated"])
+            manifest = observation["output_manifest"]
+            self.assertEqual(manifest["count"], 1)
+            self.assertEqual(manifest["outputs"][0]["path"], output_path)
+            self.assertNotIn("stale.png", str(manifest))
+
+            listed = requests.get(
+                f"{BASE_URL}/requests", headers=auth_headers(), timeout=5
+            ).json()["requests"]
+            summary = next(x for x in listed if x["request_id"] == request_id)
+            self.assertEqual(summary["observation_summary"]["output_count"], 1)
+            self.assertEqual(summary["observation_summary"]["log_total"], 106)
+        finally:
+            if report_path and os.path.exists(report_path):
+                os.unlink(report_path)
 
 
 # ─── Response shape ───────────────────────────────────────────────────────────

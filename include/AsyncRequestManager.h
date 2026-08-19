@@ -7,6 +7,7 @@
 #include <QtCore/qpair.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qstringlist.h>
+#include <QtCore/qbytearray.h>
 #include <string>
 #include <utility>
 
@@ -34,6 +35,7 @@ class AsyncRequestManager {
 public:
     static const int DEFAULT_MAX_QUEUE_DEPTH      = 100;
     static const int DEFAULT_MAX_TRACKED_REQUESTS = 1000;
+    static const int DEFAULT_LOG_TAIL_LINES       = 100;
     static const int RESULT_POLL_INTERVAL_MS      = 500; // Long-poll sleep interval in getResultJson()
 
     // notifyTarget must be a DzScriptServerPane* (QObject subclass).
@@ -60,18 +62,20 @@ public:
     // Enqueue a new async request. Returns SubmitResult::accepted=false when
     // the queue is at capacity or too many requests are tracked.
     SubmitResult        submit(const QString& scriptText, const QString& scriptFile,
-                               const QVariantMap& args, const QString& idPrefix);
+                               const QString& reportFile, const QVariantMap& args,
+                               const QString& idPrefix);
 
     // Enqueue a render job. Same as submit() but tags the request as
     // REQUEST_TYPE_RENDER so cancel dispatch calls killRender() correctly.
     SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix);
 
-    // All four methods below are safe to call from HTTP threads (no Qt string ops).
-    std::pair<int, std::string> getStatusJson(const std::string& requestId) const;
+    // All five methods below are safe to call from HTTP threads. QtCore values
+    // and report files are local to the calling thread; shared state is locked.
+    std::pair<int, std::string> getStatusJson(const std::string& requestId);
     std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec);
     std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP);
     std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP);
-    std::string                 listJson(const std::string& statusFilter) const;
+    std::string                 listJson(const std::string& statusFilter);
 
     // Live counters — acquire mutex.
     int getQueueDepth()   const;
@@ -138,7 +142,8 @@ private:
         AsyncRequest()
             : status(REQUEST_QUEUED), requestType(REQUEST_TYPE_SCRIPT)
             , scriptExecuted(false), progress(0.0)
-            , submittedAt(0), startedAt(0), completedAt(0), cancelRequested(0)
+            , submittedAt(0), startedAt(0), completedAt(0), reportOffset(0)
+            , logTotal(0), cancelRequested(0)
         {}
 
         QString       id;
@@ -146,6 +151,7 @@ private:
         RequestType   requestType;
         QString       scriptText;
         QString       scriptFile;
+        QString       reportFile;
         QVariantMap   args;
         QVariant      scriptResult;
         QStringList   outputLines;
@@ -155,11 +161,21 @@ private:
         qint64        submittedAt;
         qint64        startedAt;
         qint64        completedAt;
+        qint64        reportOffset;
+        QByteArray    reportRemainder;
+        QVariantMap   progressDetail;
+        QVariantList  logTail;
+        QVariantList  outputManifest;
+        int           logTotal;
         // Always read/written while holding m_mutex.
         int           cancelRequested;
     };
 
     std::string statusToString(RequestStatus s) const;
+    void ingestReportLocked(AsyncRequest& req, bool final = false);
+    void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);
+    void appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry);
+    std::string observationJson(const AsyncRequest& req) const;
 
     QObject* m_notifyTarget; // DzScriptServerPane*
 
