@@ -257,6 +257,13 @@ async def main():
 
 Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
 
+Both clients also own the complete automation protocol used by integrations:
+registered-script registration/execution, request status/result/list/cancel,
+render cancellation, health checks, exports, and SSE event streams. Non-2xx
+server responses surface as typed `dazpy.exceptions` errors (including
+`ServerResponseError` for ordinary protocol rejections), so callers do not
+need to construct endpoint URLs or inspect raw HTTP responses.
+
 ### `DazClient` connection pooling + `close()`
 
 `DazClient` now issues requests through a pooled `requests.Session` instead

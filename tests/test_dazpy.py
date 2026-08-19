@@ -97,6 +97,42 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
         )
 
 
+class TestDazClientRegisteredScripts(unittest.TestCase):
+    def _client(self, response_json):
+        client = DazClient(token="")
+        client._session = MagicMock()
+        response = MagicMock(status_code=200, headers={})
+        response.json.return_value = response_json
+        client._session.post.return_value = response
+        return client
+
+    def test_register_script_owns_registry_payload(self):
+        client = self._client({"success": True, "id": "scene-info"})
+        result = client.register_script("scene-info", "1;", "Scene info")
+        self.assertEqual(result["id"], "scene-info")
+        client._session.post.assert_called_once_with(
+            "http://127.0.0.1:18811/scripts/register",
+            json={"name": "scene-info", "description": "Scene info", "script": "1;"},
+            headers={}, timeout=30.0,
+        )
+
+    def test_execute_registered_maps_execution_result(self):
+        client = self._client({"success": True, "result": 42, "output": [], "request_id": "r1"})
+        result = client.execute_registered("scene-info", {"detail": True})
+        self.assertEqual(result.value, 42)
+
+    def test_submit_registered_async_owns_report_payload(self):
+        client = self._client({"request_id": "script-1", "status": "queued"})
+        request_id = client.execute_registered_async_submit(
+            "scene-info", {"detail": True}, report_file="C:/run/job.jsonl"
+        )
+        self.assertEqual(request_id, "script-1")
+        self.assertEqual(
+            client._session.post.call_args.kwargs["json"],
+            {"args": {"detail": True}, "reportFile": "C:/run/job.jsonl"},
+        )
+
+
 def _make_client(return_value=None, output=None):
     client = MagicMock(spec=DazClient)
     client.execute.return_value = ExecutionResult(

@@ -12,6 +12,17 @@ All notable changes to DazScript Server are documented here.
   dazpy). Best-effort and non-blocking; opt out with `check_version=False`.
   New `DazClient.server_version` / `AsyncDazClient.get_server_version()`.
 
+- dazpy: `DazClient` and `AsyncDazClient` now own registered-script
+  registration and execution (`register_script`, `execute_registered`,
+  `execute_registered_async_submit`), detailed script/render cancellation
+  (`cancel_request_detail`), long-poll timeout policy, and generic server-error
+  mapping through the new `ServerResponseError`. Status, health, metrics,
+  request management, exports, and async SSE streams all use the same typed
+  authentication, connection, timeout, busy, and server-response errors, so
+  integrations can depend on dazpy instead of duplicating endpoint URLs, wire
+  payloads, and error handling. Contributed by @abrady
+  ([#38](https://github.com/bluemoonfoundry/daz-script-server/pull/38)).
+
 ## [2.10.0] - 2026-11-12
 
 **Daz Studio 6 builds now require Studio 6.26.** Studio 6.25 users: stay on
