@@ -93,6 +93,26 @@ class TestAsyncDazClientExecute:
         }
 
     @pytest.mark.asyncio
+    async def test_registered_script_protocol(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.side_effect = [
+            _mock_resp(json_data={"success": True, "id": "scene-info"}),
+            _mock_resp(json_data={"success": True, "result": 42, "output": []}),
+            _mock_resp(json_data={"request_id": "script-1", "status": "queued"}),
+        ]
+        registered = await client.register_script("scene-info", "1;", "Scene info")
+        executed = await client.execute_registered("scene-info", {"detail": True})
+        request_id = await client.execute_registered_async_submit(
+            "scene-info", {"detail": True}, report_file="C:/run/job.jsonl"
+        )
+        assert registered["id"] == "scene-info"
+        assert executed.value == 42
+        assert request_id == "script-1"
+        assert mock_http.post.call_args.kwargs["json"] == {
+            "args": {"detail": True}, "reportFile": "C:/run/job.jsonl"
+        }
+
+    @pytest.mark.asyncio
     async def test_auth_error_401(self):
         client, mock_http = _client_with_mock_http(token="bad")
         mock_http.post.return_value = _mock_resp(status_code=401, json_data={"error": "Unauthorized"})
@@ -319,6 +339,28 @@ class TestAsyncDazClientRealHttpxWiring:
         async with AsyncDazClient() as client:
             result = await client.execute("1 + 2;")
         assert result.value == 3
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_generic_server_rejection_is_typed(self):
+        respx.get("http://127.0.0.1:18811/status").mock(
+            return_value=httpx.Response(409, json={"error": "request conflict"})
+        )
+        async with AsyncDazClient() as client:
+            with pytest.raises(exceptions.ServerResponseError) as raised:
+                await client.status()
+        assert raised.value.status_code == 409
+        assert str(raised.value) == "request conflict"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_scene_event_connection_failure_is_typed(self):
+        respx.get("http://127.0.0.1:18811/scene/events").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        async with AsyncDazClient() as client:
+            with pytest.raises(exceptions.ConnectionError):
+                _ = [event async for event in client.stream_scene_events(["scene"])]
 
     @pytest.mark.asyncio
     @respx.mock

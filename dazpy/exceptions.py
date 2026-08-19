@@ -10,6 +10,22 @@ class AuthenticationError(DazError):
     """Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked)."""
 
 
+class ServerResponseError(DazError):
+    """Raised when the Script Server rejects a protocol request.
+
+    Attributes:
+        status_code: HTTP response status.
+        error_code: Stable server error code when supplied.
+        detail: Optional structured detail from the server response.
+    """
+
+    def __init__(self, message: str, status_code: int, error_code: str = "", detail: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.detail = detail
+
+
 class DazBusyError(DazError):
     """Base class for transient "DAZ Studio is busy, please retry" conditions.
 
