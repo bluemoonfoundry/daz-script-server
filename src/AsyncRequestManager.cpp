@@ -20,7 +20,8 @@ AsyncRequestManager::AsyncRequestManager(QObject* notifyTarget)
 // ─── HTTP-thread API ──────────────────────────────────────────────────────────
 
 AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
-    const QString& scriptText, const QVariantMap& args, const QString& idPrefix)
+    const QString& scriptText, const QString& scriptFile,
+    const QVariantMap& args, const QString& idPrefix)
 {
     SubmitResult r;
     r.accepted    = false;
@@ -44,6 +45,7 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
         AsyncRequest req;
         req.id          = MetricsCollector::generateAsyncId(idPrefix);
         req.scriptText  = scriptText;
+        req.scriptFile  = scriptFile;
         req.args        = args;
         req.submittedAt = QDateTime::currentMSecsSinceEpoch();
 
@@ -385,7 +387,8 @@ int AsyncRequestManager::getTotalTracked() const
 
 // ─── Main-thread API ──────────────────────────────────────────────────────────
 
-bool AsyncRequestManager::dequeueNext(QString& outId, QString& outScript, QVariantMap& outArgs)
+bool AsyncRequestManager::dequeueNext(QString& outId, QString& outScript,
+                                      QString& outScriptFile, QVariantMap& outArgs)
 {
     QMutexLocker locker(&m_mutex);
     if (!m_currentId.isEmpty()) return false;
@@ -397,6 +400,7 @@ bool AsyncRequestManager::dequeueNext(QString& outId, QString& outScript, QVaria
     const AsyncRequest& req = m_requests.value(id);
     outId     = id;
     outScript = req.scriptText;
+    outScriptFile = req.scriptFile;
     outArgs   = req.args;
     return true;
 }

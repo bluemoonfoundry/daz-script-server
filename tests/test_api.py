@@ -16,6 +16,7 @@ Notes:
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -278,11 +279,13 @@ class TestInputValidation(unittest.TestCase):
 
 # ─── Async execution ─────────────────────────────────────────────────────────
 
-def async_execute(script=None, args=None, headers=None):
+def async_execute(script=None, script_file=None, args=None, headers=None):
     """POST /execute/async and return the raw response."""
     payload = {}
     if script is not None:
         payload["script"] = script
+    if script_file is not None:
+        payload["scriptFile"] = script_file
     if args is not None:
         payload["args"] = args
     h = auth_headers() if headers is None else headers
@@ -354,6 +357,31 @@ class TestAsyncExecution(unittest.TestCase):
         result_r = get_result(request_id)
         body = result_r.json()
         self.assertEqual(body.get("result"), 99)
+
+    def test_async_scriptfile_preserves_file_identity(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return getScriptFileName();"))
+                script_path = os.path.abspath(script_file.name)
+
+            r = async_execute(script_file=script_path)
+            self.assertEqual(r.status_code, 200)
+            request_id = r.json()["request_id"]
+            final = poll_status(request_id, timeout=20)
+            self.assertEqual(final["status"], "completed")
+
+            body = get_result(request_id).json()
+            self.assertTrue(body.get("success"))
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(body.get("result"))),
+                os.path.normcase(os.path.normpath(script_path)),
+            )
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
 
     def test_async_script_error_gives_failed_status(self):
         r = async_execute(script="this is not valid dazscript !!!")

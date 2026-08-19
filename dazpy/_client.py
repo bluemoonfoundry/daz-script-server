@@ -300,6 +300,27 @@ class DazClient:
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
+    def execute_file_async_submit(
+        self, script_file: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+    ) -> str:
+        """Submit a host-side ``.dsa`` file for asynchronous execution.
+
+        The file is loaded by DAZ Studio when the queued job starts, preserving
+        its filename for ``getScriptFileName()`` and relative ``include()``
+        calls. Returns the server-assigned request id immediately; use the
+        request status/result/cancel methods to manage its lifecycle.
+        """
+        payload: dict = {"scriptFile": script_file}
+        if args is not None:
+            payload["args"] = args
+
+        def _do():
+            resp = self._post("/execute/async", payload)
+            _raise_for_error(resp)
+            return resp.json().get("request_id", "")
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+
     def get_request_status(self, request_id: str) -> dict:
         """Return the current status of an async request.
 

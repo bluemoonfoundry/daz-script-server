@@ -239,7 +239,7 @@ Async frameworks (FastAPI, FastMCP, ComfyUI custom nodes, asyncio/Temporal
 workflows) previously had to wrap every `DazClient` call in
 `asyncio.to_thread()` or hand-roll an `httpx.AsyncClient` wrapper.
 `dazpy.aio.AsyncDazClient` mirrors `DazClient`'s full method surface —
-`execute`, `execute_file`, async submit/status/result/list/cancel, render
+`execute`, `execute_file`, inline/file async submit/status/result/list/cancel, render
 submit/batch/animation, USD export, and server-health endpoints — as
 native `async def` methods backed by `httpx.AsyncClient`, including the
 same `retry_on_busy`/`max_wait` backoff semantics (via `asyncio.sleep`
@@ -250,8 +250,9 @@ from dazpy.aio import AsyncDazClient
 
 async def main():
     async with AsyncDazClient() as client:
-        result = await client.execute("1 + 1;")
-        print(result.value)
+        request_id = await client.execute_file_async_submit("C:/jobs/pose-probe.dsa")
+        result = await client.get_request_result(request_id, wait=True)
+        print(result)
 ```
 
 Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
@@ -784,7 +785,7 @@ See the [full migration guide](MIGRATION.md) for upgrade steps and rollback inst
 
 Long-running operations (renders, exports, batch jobs) no longer need to block the HTTP connection:
 
-- **`POST /execute/async`** — Submit any inline script asynchronously; returns a `request_id` immediately
+- **`POST /execute/async`** — Submit inline `script` or host-side `scriptFile` work asynchronously; returns a `request_id` immediately
 - **`POST /scripts/:id/async`** — Submit a registered script asynchronously
 - **`GET /requests/:id/status`** — Poll for progress (`queued`, `running`, `completed`, `failed`, `cancelled`)
 - **`GET /requests/:id/result`** — Fetch the final result; supports `?wait=true` to long-poll until complete
@@ -1768,7 +1769,7 @@ result = requests.get(f"{BASE}/requests/{req_id}/result?wait=true&timeout=300",
 
 ### `POST /execute/async`
 
-**Purpose:** Submit an inline script for asynchronous execution
+**Purpose:** Submit an inline script or host-side script file for asynchronous execution
 **Authentication:** Required (if enabled)
 
 **Request Body:** Same as `POST /execute`

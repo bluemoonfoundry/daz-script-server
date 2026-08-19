@@ -153,7 +153,8 @@ public:
 
 	// Async request management — called from HTTP threads (delegated to AsyncRequestManager)
 	// enqueueAsyncRequest still takes Qt types (used by Tier-1 async handlers — fix pending)
-	QString              enqueueAsyncRequest(const QString& scriptText, const QVariantMap& args,
+	QString              enqueueAsyncRequest(const QString& scriptText, const QString& scriptFile,
+	                                         const QVariantMap& args,
 	                                         const QString& idPrefix, qint64& outSubmittedAt,
 	                                         QString& outError);
 	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId) const;

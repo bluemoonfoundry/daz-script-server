@@ -73,6 +73,23 @@ class TestAsyncDazClientExecute:
         assert kwargs["json"] == {"scriptFile": "C:/scripts/foo.dsa"}
 
     @pytest.mark.asyncio
+    async def test_execute_file_async_submit(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.return_value = _mock_resp(
+            json_data={"request_id": "execute-file-123", "status": "queued"}
+        )
+        request_id = await client.execute_file_async_submit(
+            "C:/scripts/foo.dsa", args={"mode": "probe"}
+        )
+        assert request_id == "execute-file-123"
+        args, kwargs = mock_http.post.call_args
+        assert args[0] == "http://127.0.0.1:18811/execute/async"
+        assert kwargs["json"] == {
+            "scriptFile": "C:/scripts/foo.dsa",
+            "args": {"mode": "probe"},
+        }
+
+    @pytest.mark.asyncio
     async def test_auth_error_401(self):
         client, mock_http = _client_with_mock_http(token="bad")
         mock_http.post.return_value = _mock_resp(status_code=401, json_data={"error": "Unauthorized"})

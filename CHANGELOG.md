@@ -4,6 +4,16 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Async script-file jobs
+
+`POST /execute/async` now implements the `scriptFile` form already described
+by the API schema. File-backed requests keep the path in the queue and call
+`DzScript::loadFromFile()` when execution starts, preserving
+`getScriptFileName()` and relative `include()` behavior instead of flattening
+the file to inline source. `DazClient` and `AsyncDazClient` expose this as
+`execute_file_async_submit()`; the existing status/result/list/cancel methods
+manage the returned request id.
+
 ## [2.9.0] - 2026-08-16
 
 ### Added

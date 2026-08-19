@@ -1442,12 +1442,14 @@ bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string
 // ─── Async Request public API (called from HTTP threads) ──────────────────────
 
 QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
+                                                const QString& scriptFile,
                                                 const QVariantMap& args,
                                                 const QString& idPrefix,
                                                 qint64& outSubmittedAt,
                                                 QString& outError)
 {
-	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(scriptText, args, idPrefix);
+	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(
+		scriptText, scriptFile, args, idPrefix);
 	outSubmittedAt = r.submittedAt;
 	outError       = r.error;
 	if (!r.accepted) {
@@ -1760,16 +1762,19 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonB
 		return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
 	}
 
-	QString     scriptText = body.value("script").toString();
+	QString scriptFile = body.value("scriptFile").toString();
+	QString scriptText = body.value("script").toString();
 
-	ValidationResult vr = RequestValidator::validateRequiredField(scriptText, "script");
+	ValidationResult vr = RequestValidator::validateExecuteFields(
+		scriptFile, scriptText, m_nMaxScriptLengthKB);
 	if (!vr.valid)
 		return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
 
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, body.value("args").toMap(), "execute", submittedAt, enqueueError);
+		scriptText, scriptFile, body.value("args").toMap(), "execute",
+		submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
@@ -1797,7 +1802,7 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, argsMap, "script", submittedAt, enqueueError);
+		scriptText, QString(), argsMap, "script", submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
@@ -2895,9 +2900,9 @@ std::string DzScriptServerPane::mainThreadBusyMessage() const
 // mutex-protected map and are unaffected.
 void DzScriptServerPane::processNextAsyncRequest()
 {
-	QString id, scriptText;
+	QString id, scriptText, scriptFile;
 	QVariantMap args;
-	if (!m_pAsyncMgr->dequeueNext(id, scriptText, args)) return;
+	if (!m_pAsyncMgr->dequeueNext(id, scriptText, scriptFile, args)) return;
 
 	// Request may have been cancelled while queued
 	if (m_pAsyncMgr->isCancelRequested(id)) {
@@ -2923,9 +2928,14 @@ void DzScriptServerPane::processNextAsyncRequest()
 	        Qt::DirectConnection);
 
 	ensurePersistentScript()->clear();
-	m_pPersistentScript->setCode(scriptText);
-
-	ScriptRunResult runResult = runDazScript(m_pPersistentScript, args);
+	ScriptRunResult runResult;
+	if (!scriptFile.isEmpty() && !m_pPersistentScript->loadFromFile(scriptFile)) {
+		runResult.errorMessage = QString("Failed to load script file: %1").arg(scriptFile);
+	} else {
+		if (scriptFile.isEmpty())
+			m_pPersistentScript->setCode(scriptText);
+		runResult = runDazScript(m_pPersistentScript, args);
+	}
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
 #endif

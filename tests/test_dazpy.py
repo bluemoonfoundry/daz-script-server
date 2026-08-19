@@ -63,6 +63,36 @@ from dazpy._client import DazClient
 from dazpy import exceptions
 
 
+class TestDazClientAsyncFileSubmit(unittest.TestCase):
+    def test_posts_script_file_to_async_endpoint_and_returns_request_id(self):
+        client = DazClient(token="")
+        original_session = client._session
+        client._session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"request_id": "execute-file-123", "status": "queued"}
+        response.headers = {}
+        client._session.post.return_value = response
+
+        try:
+            request_id = client.execute_file_async_submit(
+                "C:/scripts/pose-probe.dsa", args={"mode": "probe"}
+            )
+        finally:
+            original_session.close()
+
+        self.assertEqual(request_id, "execute-file-123")
+        client._session.post.assert_called_once_with(
+            "http://127.0.0.1:18811/execute/async",
+            json={
+                "scriptFile": "C:/scripts/pose-probe.dsa",
+                "args": {"mode": "probe"},
+            },
+            headers={},
+            timeout=30.0,
+        )
+
+
 def _make_client(return_value=None, output=None):
     client = MagicMock(spec=DazClient)
     client.execute.return_value = ExecutionResult(
