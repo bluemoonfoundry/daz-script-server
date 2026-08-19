@@ -233,13 +233,12 @@ AsyncExecuteHandler::AsyncExecuteHandler(DzScriptServerPane* pane) : m_pPane(pan
 
 void AsyncExecuteHandler::handle(HttpContext& ctx)
 {
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncExecuteEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes));
+    // Enqueue is deliberately worker-thread-safe. Sending this through a
+    // BlockingQueuedConnection makes an "async" submit wait behind the very
+    // main-thread job it is meant to queue after, which also makes queued
+    // cancellation impossible while Daz is busy.
+    HttpResult result = m_pPane->handleAsyncExecuteEnqueue(bodyBytes);
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
@@ -249,7 +248,6 @@ AsyncScriptHandler::AsyncScriptHandler(DzScriptServerPane* pane) : m_pPane(pane)
 
 void AsyncScriptHandler::handle(HttpContext& ctx)
 {
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     std::string scriptText;
     if (!m_pPane->lookupRegistryScript(ctx.urlMatch, scriptText)) {
         ctx.respond(404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, ctx.urlMatch));
@@ -259,13 +257,8 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
     QByteArray scriptBytes(scriptText.c_str(), (int)scriptText.size());
     QByteArray scriptIdBytes(ctx.urlMatch.c_str(), (int)ctx.urlMatch.size());
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncScriptEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, scriptBytes),
-        Q_ARG(QByteArray, scriptIdBytes),
-        Q_ARG(QByteArray, bodyBytes));
+    HttpResult result = m_pPane->handleAsyncScriptEnqueue(
+        scriptBytes, scriptIdBytes, bodyBytes);
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 

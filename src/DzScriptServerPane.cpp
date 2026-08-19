@@ -123,22 +123,29 @@ static ScriptRunResult runDazScript(DzScript* script, const QVariantMap& argsMap
 	QVariantList argsList;
 	argsList << QVariant(argsMap);
 	QString argsJson = QString::fromStdString(JsonStd::variantToJson(QVariant(argsList)));
+	// evaluate() runs the wrapper as anonymous source on SDK6, so the engine's
+	// built-in getScriptFileName() sees no filename even after loadFromFile().
+	// Carry DzScript's retained filename into the evaluated program explicitly.
+	// This also keeps file-backed scripts' relative-loader helpers working.
+	QString filenameJson = QString::fromStdString(
+		JsonStd::variantToJson(QVariant(script->getFilename())));
 	QString codeLiteral = QString::fromStdString(
 		"\"" + JsonStd::escape(JsonStd::qstrToStd(script->getCode())) + "\"");
 	QString shimmed = QString(
 		"var __dss_output = [];\n"
 		"function print(msg) { __dss_output.push(String(msg)); }\n"
 		"function getArguments(){ return %1; }\n"
+		"function getScriptFileName(){ return %2; }\n"
 		"var __dss_result = null, __dss_error = null, __dss_errorLine = 0;\n"
 		"try {\n"
-		"  __dss_result = eval(%2);\n"
+		"  __dss_result = eval(%3);\n"
 		"} catch (e) {\n"
 		"  __dss_error = (e && e.message !== undefined) ? String(e.message) : String(e);\n"
 		"  __dss_errorLine = (e && e.lineNumber) ? e.lineNumber : 0;\n"
 		"}\n"
 		"JSON.stringify({ result: __dss_result, output: __dss_output, "
 		"error: __dss_error, errorLine: __dss_errorLine });"
-	).arg(argsJson, codeLiteral);
+	).arg(argsJson, filenameJson, codeLiteral);
 
 	QJSValue evalResult = script->evaluate(shimmed);
 	if (evalResult.isError()) {
@@ -1808,9 +1815,11 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
 			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
 
-	appendLog(QString("[%1] [ASYNC QUEUED] script:%2 -> %3")
-		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-		.arg(scriptId).arg(requestId));
+	std::string logLine = "[" + JsonStd::currentTime() +
+		"] [ASYNC QUEUED] script:" + JsonStd::qstrToStd(scriptId) +
+		" -> " + JsonStd::qstrToStd(requestId);
+	QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
+		Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
 
 	return buildQueuedResponse(requestId, submittedAt);
 }

@@ -116,13 +116,15 @@ public slots:
 	Q_INVOKABLE HttpResult handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
 	Q_INVOKABLE HttpResult handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
-	// Async enqueue helpers — called on main thread via BlockingQueuedConnection from
-	// AsyncExecuteHandler / AsyncScriptHandler so that all DzScript/Qt work
-	// stays on the Qt main thread.
+	// Async script enqueue helpers — called directly from httplib worker threads.
+	// They only parse/validate value data and submit to the mutex-protected queue;
+	// actual DzScript execution stays on the Qt main thread.
 	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
 	                                                const QByteArray& scriptIdBytes,
 	                                                const QByteArray& bodyBytes);
+
+	// Render enqueue still builds Daz/Qt render work on the main thread.
 	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody);
