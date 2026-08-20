@@ -141,6 +141,24 @@ class AsyncDazClient:
 
         return await self._with_busy_retry(_do, retry_on_busy, max_wait)
 
+    async def execute_file_async_submit(
+        self, script_file: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+    ) -> str:
+        """Submit a host-side ``.dsa`` file asynchronously.
+
+        See :meth:`dazpy.DazClient.execute_file_async_submit`.
+        """
+        payload: dict = {"scriptFile": script_file}
+        if args is not None:
+            payload["args"] = args
+
+        async def _do():
+            resp = await self._post("/execute/async", payload)
+            _raise_for_error(resp)
+            return resp.json().get("request_id", "")
+
+        return await self._with_busy_retry(_do, retry_on_busy, max_wait)
+
     async def get_request_status(self, request_id: str) -> dict:
         """See :meth:`dazpy.DazClient.get_request_status`."""
         resp = await self._get(f"/requests/{request_id}/status")

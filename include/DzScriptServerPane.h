@@ -116,13 +116,19 @@ public slots:
 	Q_INVOKABLE HttpResult handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
 	Q_INVOKABLE HttpResult handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 
-	// Async enqueue helpers — called on main thread via BlockingQueuedConnection from
-	// AsyncExecuteHandler / AsyncScriptHandler so that all DzScript/Qt work
-	// stays on the Qt main thread.
-	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody);
+	// On Studio 6 these are called directly from HTTP workers and use only local,
+	// reentrant Qt Core values plus mutex-protected services. Studio 4 routes them
+	// through BlockingQueuedConnection because its JSON parser uses QScriptEngine.
+	// Neither path touches GUI, DzScript, or DAZ SDK state off the main thread.
+	// The script limit is an immutable snapshot captured before server start.
+	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody,
+	                                                const QByteArray& clientIP,
+	                                                int maxScriptLengthKB);
 	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
 	                                                const QByteArray& scriptIdBytes,
 	                                                const QByteArray& bodyBytes);
+
+	// Render enqueue still builds Daz/Qt render work on the main thread.
 	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
 	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody);
@@ -152,8 +158,10 @@ public:
 	bool                        lookupRegistryScript(const std::string& id, std::string& outScript) const;
 
 	// Async request management — called from HTTP threads (delegated to AsyncRequestManager)
-	// enqueueAsyncRequest still takes Qt types (used by Tier-1 async handlers — fix pending)
-	QString              enqueueAsyncRequest(const QString& scriptText, const QVariantMap& args,
+	// Qt value types here are protected by AsyncRequestManager's mutex and are
+	// only called directly from documented reentrant Studio 6 worker paths.
+	QString              enqueueAsyncRequest(const QString& scriptText, const QString& scriptFile,
+	                                         const QVariantMap& args,
 	                                         const QString& idPrefix, qint64& outSubmittedAt,
 	                                         QString& outError);
 	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId) const;
@@ -222,9 +230,9 @@ private:
 
 	// Persistent DzScript instance, reused (via clear()) across every script
 	// execution instead of constructing/destroying one per request. All
-	// execution is already serialized onto this (the main) thread via
-	// Qt::BlockingQueuedConnection — DazScript isn't thread-safe — so reuse
-	// here is sequential, not concurrent. See runDazScript() in the .cpp.
+	// execution is serialized onto this (the main) thread — synchronously for
+	// sync requests and by a queued wake-up for async requests — so reuse is
+	// sequential, not concurrent. See runDazScript() in the .cpp.
 	DzScript* m_pPersistentScript;
 
 	// ── Settings service ─────────────────────────────────────────────────────

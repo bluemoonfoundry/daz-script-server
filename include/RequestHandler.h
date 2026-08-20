@@ -180,10 +180,11 @@ private:
 
 class AsyncExecuteHandler : public IRequestHandler {
 public:
-    explicit AsyncExecuteHandler(DzScriptServerPane* pane);
+    AsyncExecuteHandler(DzScriptServerPane* pane, int maxScriptLengthKB);
     void handle(HttpContext& ctx) override;
 private:
     DzScriptServerPane* m_pPane;
+    const int           m_maxScriptLengthKB;
 };
 
 class AsyncScriptHandler : public IRequestHandler {

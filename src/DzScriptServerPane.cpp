@@ -107,7 +107,10 @@ struct ScriptRunResult {
 	QStringList output;   // SDK6 only — see below; SDK4 still uses the debugMsg signal capture
 };
 
-static ScriptRunResult runDazScript(DzScript* script, const QVariantMap& argsMap)
+static ScriptRunResult runDazScript(
+	DzScript* script,
+	const QVariantMap& argsMap,
+	const QString& scriptFilename)
 {
 	ScriptRunResult r;
 #if DAZ_SDK_MAJOR_VERSION >= 6
@@ -123,22 +126,32 @@ static ScriptRunResult runDazScript(DzScript* script, const QVariantMap& argsMap
 	QVariantList argsList;
 	argsList << QVariant(argsMap);
 	QString argsJson = QString::fromStdString(JsonStd::variantToJson(QVariant(argsList)));
+	// evaluate() runs the wrapper as anonymous source on SDK6, so the engine's
+	// built-in getScriptFileName() sees no filename even after loadFromFile().
+	// Carry the request's explicit filename into the evaluated program. Do not
+	// read it back from the reused DzScript instance: the SDK does not document
+	// whether clear() resets a filename retained by a preceding file-backed job.
+	// This also keeps file-backed scripts' relative-loader helpers working while
+	// guaranteeing that an inline job reports an empty filename.
+	QString filenameJson = QString::fromStdString(
+		JsonStd::variantToJson(QVariant(scriptFilename)));
 	QString codeLiteral = QString::fromStdString(
 		"\"" + JsonStd::escape(JsonStd::qstrToStd(script->getCode())) + "\"");
 	QString shimmed = QString(
 		"var __dss_output = [];\n"
 		"function print(msg) { __dss_output.push(String(msg)); }\n"
 		"function getArguments(){ return %1; }\n"
+		"function getScriptFileName(){ return %2; }\n"
 		"var __dss_result = null, __dss_error = null, __dss_errorLine = 0;\n"
 		"try {\n"
-		"  __dss_result = eval(%2);\n"
+		"  __dss_result = eval(%3);\n"
 		"} catch (e) {\n"
 		"  __dss_error = (e && e.message !== undefined) ? String(e.message) : String(e);\n"
 		"  __dss_errorLine = (e && e.lineNumber) ? e.lineNumber : 0;\n"
 		"}\n"
 		"JSON.stringify({ result: __dss_result, output: __dss_output, "
 		"error: __dss_error, errorLine: __dss_errorLine });"
-	).arg(argsJson, codeLiteral);
+	).arg(argsJson, filenameJson, codeLiteral);
 
 	QJSValue evalResult = script->evaluate(shimmed);
 	if (evalResult.isError()) {
@@ -173,8 +186,12 @@ static ScriptRunResult runDazScript(DzScript* script, const QVariantMap& argsMap
 	QVariantList argsList;
 	argsList << QVariant(argsMap);
 	QString argsJson = QString::fromStdString(JsonStd::variantToJson(QVariant(argsList)));
-	QString shimmed = QString("function getArguments(){ return %1; }\n%2")
-		.arg(argsJson, script->getCode());
+	QString filenameJson = QString::fromStdString(
+		JsonStd::variantToJson(QVariant(scriptFilename)));
+	QString shimmed = QString(
+		"function getArguments(){ return %1; }\n"
+		"function getScriptFileName(){ return %2; }\n%3")
+		.arg(argsJson, filenameJson, script->getCode());
 	script->setCode(shimmed);
 	if (script->execute()) {
 		r.success = true;
@@ -882,9 +899,12 @@ static void applyContext(const HttpContext& ctx, httplib::Response& res)
 // ─── Route setup ──────────────────────────────────────────────────────────────
 //
 // THREADING RULE: httplib invokes these handlers on raw std::threads (not QThreads).
-// Handlers must do NO Qt work beyond calling handler/middleware methods that are
-// themselves designed for HTTP-thread use (mutex-protected data, QueuedConnection logs).
-// All DzScript execution happens on the main thread via Qt::BlockingQueuedConnection.
+// Sync handlers cross to the main thread with BlockingQueuedConnection. On
+// Studio 6, async script enqueue handlers may build local reentrant Qt Core
+// values and call mutex-protected services; Studio 4 crosses to the main thread
+// because its JSON parser uses QScriptEngine. Execution later reaches the main
+// thread through a queued wake-up. No worker may touch GUI, DzScript, DAZ SDK,
+// or shared mutable pane state.
 
 void DzScriptServerPane::setupRoutes()
 {
@@ -912,7 +932,9 @@ void DzScriptServerPane::setupRoutes()
 	m_pScriptListHandler.reset(new ScriptListHandler(this));
 	m_pScriptDeleteHandler.reset(new ScriptDeleteHandler(this));
 	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this));
-	m_pAsyncExecHandler.reset(new AsyncExecuteHandler(this));
+	// Snapshot the GUI-owned limit before httplib starts its worker threads.
+	// The corresponding control is disabled while the server is running.
+	m_pAsyncExecHandler.reset(new AsyncExecuteHandler(this, m_nMaxScriptLengthKB));
 	m_pAsyncScriptHandler.reset(new AsyncScriptHandler(this));
 	m_pAsyncStatusHandler.reset(new AsyncStatusHandler(this));
 	m_pAsyncResultHandler.reset(new AsyncResultHandler(this));
@@ -1442,12 +1464,14 @@ bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string
 // ─── Async Request public API (called from HTTP threads) ──────────────────────
 
 QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
+                                                const QString& scriptFile,
                                                 const QVariantMap& args,
                                                 const QString& idPrefix,
                                                 qint64& outSubmittedAt,
                                                 QString& outError)
 {
-	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(scriptText, args, idPrefix);
+	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(
+		scriptText, scriptFile, args, idPrefix);
 	outSubmittedAt = r.submittedAt;
 	outError       = r.error;
 	if (!r.accepted) {
@@ -1570,7 +1594,7 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 
 	// Args are accessible in scripts via getArguments()[0], since
 	// DzScriptContext methods are available as globals in every DzScript.
-	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap);
+	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap, scriptFile);
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
 #endif
@@ -1703,7 +1727,7 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 	ensurePersistentScript()->clear();
 	m_pPersistentScript->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
 
-	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap);
+	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap, QString());
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
 #endif
@@ -1752,7 +1776,10 @@ static HttpResult buildQueuedResponse(const QString& requestId, qint64 submitted
 	return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
 }
 
-HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonBody)
+HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
+	const QByteArray& jsonBody,
+	const QByteArray& clientIP,
+	int maxScriptLengthKB)
 {
 	QVariantMap body;
 	std::string parseErrDetail;
@@ -1760,20 +1787,33 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(const QByteArray& jsonB
 		return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_JSON)));
 	}
 
-	QString     scriptText = body.value("script").toString();
+	QString scriptFile = body.value("scriptFile").toString();
+	QString scriptText = body.value("script").toString();
+	const bool bothProvided = !scriptFile.isEmpty() && !scriptText.isEmpty();
 
-	ValidationResult vr = RequestValidator::validateRequiredField(scriptText, "script");
+	ValidationResult vr = RequestValidator::validateExecuteFields(
+		scriptFile, scriptText, maxScriptLengthKB);
 	if (!vr.valid)
 		return HttpResult(vr.httpStatus(), stdToQBA(vr.toErrorJson()));
 
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, body.value("args").toMap(), "execute", submittedAt, enqueueError);
+		scriptText, scriptFile, body.value("args").toMap(), "execute",
+		submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
 			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
+
+	if (bothProvided) {
+		std::string logLine = "[" + JsonStd::currentTime() + "] [" +
+			std::string(clientIP.constData(), clientIP.size()) + "] [WARN] [" +
+			JsonStd::qstrToStd(requestId) +
+			"] Both scriptFile and script provided; using scriptFile";
+		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
+			Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+	}
 
 	return buildQueuedResponse(requestId, submittedAt);
 }
@@ -1797,15 +1837,17 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, argsMap, "script", submittedAt, enqueueError);
+		scriptText, QString(), argsMap, "script", submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
 			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
 
-	appendLog(QString("[%1] [ASYNC QUEUED] script:%2 -> %3")
-		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-		.arg(scriptId).arg(requestId));
+	std::string logLine = "[" + JsonStd::currentTime() +
+		"] [ASYNC QUEUED] script:" + JsonStd::qstrToStd(scriptId) +
+		" -> " + JsonStd::qstrToStd(requestId);
+	QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
+		Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
 
 	return buildQueuedResponse(requestId, submittedAt);
 }
@@ -2242,7 +2284,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
 
         ensurePersistentScript()->clear();
         m_pPersistentScript->setCode(validateScript);
-        ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap());
+        ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap(), QString());
         if (valRunResult.success) {
             QString valResult = valRunResult.result.toString();
             if (valResult.startsWith("NOT_FOUND:")) {
@@ -2429,7 +2471,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
                 "})()";
             ensurePersistentScript()->clear();
             m_pPersistentScript->setCode(validateScript);
-            ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap());
+            ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap(), QString());
             if (valRunResult.success) {
                 QString valResult = valRunResult.result.toString();
                 if (valResult.startsWith("NOT_FOUND:")) {
@@ -2559,7 +2601,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
             "})()";
         ensurePersistentScript()->clear();
         m_pPersistentScript->setCode(validateScript);
-        ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap());
+        ScriptRunResult valRunResult = runDazScript(m_pPersistentScript, QVariantMap(), QString());
         if (valRunResult.success && valRunResult.result.toString() == "NOT_FOUND")
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
                 "Camera not found in scene: " + JsonStd::qstrToStd(camera))));
@@ -2885,9 +2927,8 @@ std::string DzScriptServerPane::mainThreadBusyMessage() const
 
 // ─── Async Execution (main thread) ───────────────────────────────────────────
 
-// Called on the main thread via Qt::QueuedConnection (connected to
-// AsyncRequestManager::requestEnqueued signal) and self-reposted after each
-// execution completes to drain the queue.
+// Called on the main thread by AsyncRequestManager's queued wake-up and
+// self-reposted after each execution completes to drain the queue.
 //
 // Blocks the main thread (Qt event loop) for the full duration of each script.
 // That is intentional — DAZ Studio's DzScript API is not thread-safe.  HTTP
@@ -2895,9 +2936,9 @@ std::string DzScriptServerPane::mainThreadBusyMessage() const
 // mutex-protected map and are unaffected.
 void DzScriptServerPane::processNextAsyncRequest()
 {
-	QString id, scriptText;
+	QString id, scriptText, scriptFile;
 	QVariantMap args;
-	if (!m_pAsyncMgr->dequeueNext(id, scriptText, args)) return;
+	if (!m_pAsyncMgr->dequeueNext(id, scriptText, scriptFile, args)) return;
 
 	// Request may have been cancelled while queued
 	if (m_pAsyncMgr->isCancelRequested(id)) {
@@ -2923,9 +2964,14 @@ void DzScriptServerPane::processNextAsyncRequest()
 	        Qt::DirectConnection);
 
 	ensurePersistentScript()->clear();
-	m_pPersistentScript->setCode(scriptText);
-
-	ScriptRunResult runResult = runDazScript(m_pPersistentScript, args);
+	ScriptRunResult runResult;
+	if (!scriptFile.isEmpty() && !m_pPersistentScript->loadFromFile(scriptFile)) {
+		runResult.errorMessage = QString("Failed to load script file: %1").arg(scriptFile);
+	} else {
+		if (scriptFile.isEmpty())
+			m_pPersistentScript->setCode(scriptText);
+		runResult = runDazScript(m_pPersistentScript, args, scriptFile);
+	}
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
 #endif

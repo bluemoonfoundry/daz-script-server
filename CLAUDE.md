@@ -53,10 +53,21 @@ reuses a stale CMake cache from the other SDK.
 
 ### Threading Model (CRITICAL)
 
-- **Main Qt thread**: GUI, script execution via `DzScript`, all Qt/DAZ API calls
-- **HTTP thread**: `ServerListenThread` blocks on `httplib::Server::listen()`
+- **Main Qt thread**: GUI, script execution via `DzScript`, DAZ API calls, and
+  access to thread-affine `QObject` instances
+- **HTTP workers**: middleware plus synchronous parsing/validation; Studio 6
+  async queue submission may use local instances of documented reentrant Qt
+  Core value classes
 
-**IMPORTANT:** HTTP handlers run on raw `std::thread`s (not Qt threads). Handlers must do minimal work (parse body), then invoke `handleExecuteRequest()` on main thread via `Qt::BlockingQueuedConnection`. All `QScriptEngine`, `DzScript`, and Qt operations MUST happen on the main thread.
+**IMPORTANT:** HTTP handlers run on raw `std::thread`s (not Qt threads).
+Synchronous execution crosses to `handleExecuteRequest()` via
+`Qt::BlockingQueuedConnection`. On Studio 6, async script submission may parse
+and validate with local reentrant Qt Core values, then submit to mutex-protected
+services without blocking on the main thread. Studio 4 must keep submission on
+the main thread because `JsonStd::parseObject()` uses `QScriptEngine` there.
+Neither path may touch GUI objects, `DzScript`, the DAZ API, or shared mutable
+state from a worker. Settings used by an async handler are snapshotted before
+the server starts.
 
 ### Request Flow (POST /execute)
 

@@ -59,8 +59,8 @@ public:
 
     // Enqueue a new async request. Returns SubmitResult::accepted=false when
     // the queue is at capacity or too many requests are tracked.
-    SubmitResult        submit(const QString& scriptText, const QVariantMap& args,
-                               const QString& idPrefix);
+    SubmitResult        submit(const QString& scriptText, const QString& scriptFile,
+                               const QVariantMap& args, const QString& idPrefix);
 
     // Enqueue a render job. Same as submit() but tags the request as
     // REQUEST_TYPE_RENDER so cancel dispatch calls killRender() correctly.
@@ -79,9 +79,10 @@ public:
 
     // ── Main-thread API ────────────────────────────────────────────────────
 
-    // Dequeue next QUEUED request into outId/outScript/outArgs.
+    // Dequeue next QUEUED request into outId/outScript/outScriptFile/outArgs.
     // Sets m_currentId and returns true if work was found; false otherwise.
-    bool dequeueNext(QString& outId, QString& outScript, QVariantMap& outArgs);
+    bool dequeueNext(QString& outId, QString& outScript, QString& outScriptFile,
+                     QVariantMap& outArgs);
 
     // Mark the running request as RUNNING (sets startedAt).
     void markRunning(const QString& id);
@@ -144,6 +145,7 @@ private:
         RequestStatus status;
         RequestType   requestType;
         QString       scriptText;
+        QString       scriptFile;
         QVariantMap   args;
         QVariant      scriptResult;
         QStringList   outputLines;

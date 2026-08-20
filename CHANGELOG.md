@@ -4,6 +4,25 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Async script-file jobs
+
+`POST /execute/async` now implements the `scriptFile` form already described
+by the API schema. File-backed requests keep the path in the queue and call
+`DzScript::loadFromFile()` when execution starts, preserving
+`getScriptFileName()` and relative `include()` behavior instead of flattening
+the file to inline source. `DazClient` and `AsyncDazClient` expose this as
+`execute_file_async_submit()`; the existing status/result/list/cancel methods
+manage the returned request id.
+
+On Studio 6, the result-capturing `evaluate()` wrapper now forwards the
+request's explicit filename; Studio otherwise treats the wrapper as anonymous
+source and returns an empty `getScriptFileName()`. Script enqueue
+handlers also submit directly from the HTTP worker into the mutex-protected
+queue on Studio 6, so a new async request returns while Daz's main thread is
+occupied and can be cancelled before it starts. Studio 4 retains main-thread
+submission because its JSON fallback uses `QScriptEngine`. UI logging remains
+queued to the main thread.
+
 ## [2.9.0] - 2026-08-16
 
 ### Added

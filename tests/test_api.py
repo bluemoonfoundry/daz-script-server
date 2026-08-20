@@ -16,6 +16,7 @@ Notes:
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -278,11 +279,13 @@ class TestInputValidation(unittest.TestCase):
 
 # ─── Async execution ─────────────────────────────────────────────────────────
 
-def async_execute(script=None, args=None, headers=None):
+def async_execute(script=None, script_file=None, args=None, headers=None):
     """POST /execute/async and return the raw response."""
     payload = {}
     if script is not None:
         payload["script"] = script
+    if script_file is not None:
+        payload["scriptFile"] = script_file
     if args is not None:
         payload["args"] = args
     h = auth_headers() if headers is None else headers
@@ -354,6 +357,118 @@ class TestAsyncExecution(unittest.TestCase):
         result_r = get_result(request_id)
         body = result_r.json()
         self.assertEqual(body.get("result"), 99)
+
+    def test_queued_request_can_be_cancelled_while_main_thread_runs(self):
+        blocker = async_execute(script=iife(
+            "var start = Date.now(); "
+            "while (Date.now() - start < 4000) {} "
+            "return 'blocker-complete';"
+        ))
+        self.assertEqual(blocker.status_code, 200, blocker.text)
+        blocker_id = blocker.json()["request_id"]
+
+        submit_started = time.monotonic()
+        queued = async_execute(script=iife("return 'must-not-run';"))
+        submit_seconds = time.monotonic() - submit_started
+        self.assertEqual(queued.status_code, 200, queued.text)
+        queued_id = queued.json()["request_id"]
+
+        status = requests.get(
+            f"{BASE_URL}/requests/{queued_id}/status",
+            headers=auth_headers(), timeout=5,
+        ).json()
+        cancelled = requests.delete(
+            f"{BASE_URL}/requests/{queued_id}",
+            headers=auth_headers(), timeout=5,
+        )
+        final = poll_status(queued_id, timeout=10)
+        blocker_result = get_result(blocker_id, wait=True, timeout=10).json()
+
+        self.assertLess(submit_seconds, 2.0)
+        self.assertEqual(status.get("status"), "queued")
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(final.get("status"), "cancelled")
+        self.assertEqual(blocker_result.get("status"), "completed")
+
+    def test_async_scriptfile_preserves_file_identity(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return getScriptFileName();"))
+                script_path = os.path.abspath(script_file.name)
+
+            r = async_execute(script_file=script_path)
+            self.assertEqual(r.status_code, 200)
+            request_id = r.json()["request_id"]
+            final = poll_status(request_id, timeout=20)
+            self.assertEqual(final["status"], "completed")
+
+            body = get_result(request_id).json()
+            self.assertTrue(body.get("success"))
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(body.get("result"))),
+                os.path.normcase(os.path.normpath(script_path)),
+            )
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
+
+    def test_async_inline_after_scriptfile_has_empty_file_identity(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return getScriptFileName();"))
+                script_path = os.path.abspath(script_file.name)
+
+            file_request = async_execute(
+                script=iife("return 'inline-should-not-run';"),
+                script_file=script_path,
+            )
+            self.assertEqual(file_request.status_code, 200, file_request.text)
+            file_result = get_result(
+                file_request.json()["request_id"], wait=True, timeout=20
+            ).json()
+            self.assertTrue(file_result.get("success"), file_result.get("error"))
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(file_result.get("result"))),
+                os.path.normcase(os.path.normpath(script_path)),
+            )
+
+            inline_request = async_execute(
+                script=iife("return getScriptFileName();")
+            )
+            self.assertEqual(inline_request.status_code, 200, inline_request.text)
+            inline_result = get_result(
+                inline_request.json()["request_id"], wait=True, timeout=20
+            ).json()
+            self.assertTrue(inline_result.get("success"), inline_result.get("error"))
+            self.assertEqual(inline_result.get("result"), "")
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
+
+    def test_sync_scriptfile_preserves_file_identity(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return getScriptFileName();"))
+                script_path = os.path.abspath(script_file.name)
+
+            body = execute(script_file=script_path).json()
+            self.assertTrue(body.get("success"))
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(body.get("result"))),
+                os.path.normcase(os.path.normpath(script_path)),
+            )
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
 
     def test_async_script_error_gives_failed_status(self):
         r = async_execute(script="this is not valid dazscript !!!")

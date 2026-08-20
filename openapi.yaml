@@ -271,7 +271,7 @@ paths:
   /execute/async:
     post:
       tags: [Async]
-      summary: Submit an inline script for asynchronous execution
+      summary: Submit an inline script or host-side script file for asynchronous execution
       operationId: executeAsync
       security:
         - apiToken: []
