@@ -42,7 +42,8 @@ graph TD
     DAZ["DAZ Studio<br/>(DzScript engine, scene graph)"]
 
     Client -->|HTTP POST /execute| SLT
-    SLT -->|BlockingQueuedConnection| Pane
+    SLT -->|sync + DS4 async submit:<br/>BlockingQueuedConnection| Pane
+    SLT -->|DS6 async: validate + enqueue| ARM
     Pane --> Auth
     Pane --> Rate
     Pane --> WL
@@ -51,7 +52,7 @@ graph TD
     RV --> RP
     RP -->|Main thread| DAZ
     RP --> ARM
-    ARM -->|BlockingQueuedConnection| Pane
+    ARM -->|QueuedConnection| Pane
     Auth --> SR
     JB -.-> Pane
     SS -.-> Services
@@ -86,11 +87,16 @@ sequenceDiagram
 **Rules that must never be broken:**
 
 1. `DzScript`, `QScriptEngine`, and all DAZ API calls on the **main thread only**.
-2. HTTP handlers (running on `std::thread`s) must emit signals with
-   `Qt::BlockingQueuedConnection` to cross into the main thread.
+2. Synchronous execution crosses from HTTP workers with
+   `Qt::BlockingQueuedConnection`. On Studio 6, async script submission uses
+   only local, reentrant Qt Core values and mutex-protected services so it can
+   enqueue while the main thread is busy. Studio 4 retains the blocking crossing
+   for submission because its JSON parser uses `QScriptEngine`.
 3. `DzScript` objects must be created **and** destroyed on the main thread.
 4. `killRender()` must be invoked via a signal on the main thread, not from
    the HTTP thread.
+5. HTTP workers must not read GUI-owned mutable settings; async handlers receive
+   immutable snapshots captured before the server starts.
 
 ---
 
@@ -236,13 +242,17 @@ Qt 4.8 (the SDK's Qt) has `QHttp` but it is deprecated and removed in later
 Qt versions. `cpp-httplib` is header-only, zero-dependency, and well-maintained.
 It runs on a dedicated thread managed by `ServerListenThread`.
 
-### Why BlockingQueuedConnection for every request?
+### Why different crossings for synchronous and asynchronous execution?
 
 The DAZ Studio SDK explicitly requires all scene-graph and script-engine
-operations on the main thread. `BlockingQueuedConnection` gives us the main-
-thread guarantee while letting the HTTP thread block until the result is ready
-(for synchronous `/execute`) or until the request is accepted into the queue
-(for async endpoints).
+operations on the main thread. Synchronous `/execute` therefore uses
+`BlockingQueuedConnection` and waits for the result. On Studio 6, async script
+endpoints validate request value data on the HTTP worker and submit directly to
+the mutex-protected `AsyncRequestManager`; blocking on the main thread here
+would prevent submission and queued cancellation while a prior script is
+running. Studio 4 keeps submission on the main thread because its JSON fallback
+uses `QScriptEngine`. In both builds the manager posts execution to the main
+thread, where `DzScript` is loaded and run.
 
 ### Why session-only script registry?
 

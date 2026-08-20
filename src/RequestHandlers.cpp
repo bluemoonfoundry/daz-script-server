@@ -229,16 +229,32 @@ void ScriptExecuteHandler::handle(HttpContext& ctx)
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-AsyncExecuteHandler::AsyncExecuteHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
+AsyncExecuteHandler::AsyncExecuteHandler(DzScriptServerPane* pane, int maxScriptLengthKB)
+    : m_pPane(pane), m_maxScriptLengthKB(maxScriptLengthKB) {}
 
 void AsyncExecuteHandler::handle(HttpContext& ctx)
 {
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+#if DAZ_SDK_MAJOR_VERSION >= 6
     // Enqueue is deliberately worker-thread-safe. Sending this through a
     // BlockingQueuedConnection makes an "async" submit wait behind the very
     // main-thread job it is meant to queue after, which also makes queued
     // cancellation impossible while Daz is busy.
-    HttpResult result = m_pPane->handleAsyncExecuteEnqueue(bodyBytes);
+    QByteArray clientIPBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
+    HttpResult result = m_pPane->handleAsyncExecuteEnqueue(
+        bodyBytes, clientIPBytes, m_maxScriptLengthKB);
+#else
+    // Qt 4's JsonStd parser uses QScriptEngine, so Studio 4 must retain the
+    // main-thread crossing even though Studio 6 can enqueue directly.
+    QByteArray clientIPBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleAsyncExecuteEnqueue",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result),
+        Q_ARG(QByteArray, bodyBytes),
+        Q_ARG(QByteArray, clientIPBytes),
+        Q_ARG(int, m_maxScriptLengthKB));
+#endif
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
@@ -257,8 +273,18 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
     QByteArray scriptBytes(scriptText.c_str(), (int)scriptText.size());
     QByteArray scriptIdBytes(ctx.urlMatch.c_str(), (int)ctx.urlMatch.size());
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+#if DAZ_SDK_MAJOR_VERSION >= 6
     HttpResult result = m_pPane->handleAsyncScriptEnqueue(
         scriptBytes, scriptIdBytes, bodyBytes);
+#else
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleAsyncScriptEnqueue",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result),
+        Q_ARG(QByteArray, scriptBytes),
+        Q_ARG(QByteArray, scriptIdBytes),
+        Q_ARG(QByteArray, bodyBytes));
+#endif
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 

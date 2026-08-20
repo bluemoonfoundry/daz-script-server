@@ -15,12 +15,13 @@ the file to inline source. `DazClient` and `AsyncDazClient` expose this as
 manage the returned request id.
 
 On Studio 6, the result-capturing `evaluate()` wrapper now forwards the
-filename retained by `DzScript`; Studio otherwise treats the wrapper as
-anonymous source and returns an empty `getScriptFileName()`. Script enqueue
+request's explicit filename; Studio otherwise treats the wrapper as anonymous
+source and returns an empty `getScriptFileName()`. Script enqueue
 handlers also submit directly from the HTTP worker into the mutex-protected
-queue, so a new async request returns while Daz's main thread is occupied and
-can be cancelled before it starts. UI logging remains queued to the main
-thread.
+queue on Studio 6, so a new async request returns while Daz's main thread is
+occupied and can be cancelled before it starts. Studio 4 retains main-thread
+submission because its JSON fallback uses `QScriptEngine`. UI logging remains
+queued to the main thread.
 
 ## [2.9.0] - 2026-08-16
 

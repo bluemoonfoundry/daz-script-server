@@ -364,11 +364,13 @@ class TestAsyncExecution(unittest.TestCase):
             "while (Date.now() - start < 4000) {} "
             "return 'blocker-complete';"
         ))
+        self.assertEqual(blocker.status_code, 200, blocker.text)
         blocker_id = blocker.json()["request_id"]
 
         submit_started = time.monotonic()
         queued = async_execute(script=iife("return 'must-not-run';"))
         submit_seconds = time.monotonic() - submit_started
+        self.assertEqual(queued.status_code, 200, queued.text)
         queued_id = queued.json()["request_id"]
 
         status = requests.get(
@@ -409,6 +411,42 @@ class TestAsyncExecution(unittest.TestCase):
                 os.path.normcase(os.path.normpath(body.get("result"))),
                 os.path.normcase(os.path.normpath(script_path)),
             )
+        finally:
+            if script_path and os.path.exists(script_path):
+                os.unlink(script_path)
+
+    def test_async_inline_after_scriptfile_has_empty_file_identity(self):
+        script_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dsa", delete=False, encoding="utf-8"
+            ) as script_file:
+                script_file.write(iife("return getScriptFileName();"))
+                script_path = os.path.abspath(script_file.name)
+
+            file_request = async_execute(
+                script=iife("return 'inline-should-not-run';"),
+                script_file=script_path,
+            )
+            self.assertEqual(file_request.status_code, 200, file_request.text)
+            file_result = get_result(
+                file_request.json()["request_id"], wait=True, timeout=20
+            ).json()
+            self.assertTrue(file_result.get("success"), file_result.get("error"))
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(file_result.get("result"))),
+                os.path.normcase(os.path.normpath(script_path)),
+            )
+
+            inline_request = async_execute(
+                script=iife("return getScriptFileName();")
+            )
+            self.assertEqual(inline_request.status_code, 200, inline_request.text)
+            inline_result = get_result(
+                inline_request.json()["request_id"], wait=True, timeout=20
+            ).json()
+            self.assertTrue(inline_result.get("success"), inline_result.get("error"))
+            self.assertEqual(inline_result.get("result"), "")
         finally:
             if script_path and os.path.exists(script_path):
                 os.unlink(script_path)
