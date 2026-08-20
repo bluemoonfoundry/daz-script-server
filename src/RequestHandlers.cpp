@@ -246,6 +246,7 @@ void AsyncExecuteHandler::handle(HttpContext& ctx)
 #else
     // Qt 4's JsonStd parser uses QScriptEngine, so Studio 4 must retain the
     // main-thread crossing even though Studio 6 can enqueue directly.
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray clientIPBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncExecuteEnqueue",
@@ -277,6 +278,7 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
     HttpResult result = m_pPane->handleAsyncScriptEnqueue(
         scriptBytes, scriptIdBytes, bodyBytes);
 #else
+    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncScriptEnqueue",
         Qt::BlockingQueuedConnection,
