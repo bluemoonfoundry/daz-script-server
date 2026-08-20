@@ -4,6 +4,8 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-08-20
+
 ### Async script-file jobs
 
 `POST /execute/async` now implements the `scriptFile` form already described
