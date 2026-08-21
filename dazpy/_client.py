@@ -162,6 +162,8 @@ class DazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _get(
         self, path: str, params: dict | None = None, timeout: float | None = None
@@ -177,6 +179,8 @@ class DazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _delete(self, path: str) -> _requests.Response:
         try:
@@ -187,6 +191,8 @@ class DazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
         """Run *fn* (a zero-arg callable), retrying on DazBusyError while

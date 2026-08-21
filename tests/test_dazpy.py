@@ -1152,6 +1152,13 @@ class TestErrorMapping(unittest.TestCase):
         with self.assertRaises(exceptions.ConnectionError):
             client.execute("1;")
 
+    def test_other_transport_error_is_typed(self):
+        import requests as req
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = req.exceptions.ChunkedEncodingError("broken response")
+        with self.assertRaises(exceptions.ConnectionError):
+            client.execute("1;")
+
     def test_close_closes_session(self):
         client, mock_session = self._client_with_mock_session()
         client.close()
