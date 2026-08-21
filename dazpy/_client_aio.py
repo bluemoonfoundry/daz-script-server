@@ -102,6 +102,8 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except httpx.HTTPError as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _get(
         self, path: str, params: dict | None = None, timeout: float | None = None
@@ -116,6 +118,8 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except httpx.HTTPError as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _delete(self, path: str) -> "httpx.Response":
         try:
@@ -124,6 +128,8 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except httpx.HTTPError as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
         """Await *fn* (a zero-arg async callable), retrying on DazBusyError
@@ -434,6 +440,8 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise TimeoutError(f"Request timed out after {stream_timeout or self._timeout}s") from exc
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {exc}") from exc
 
     async def stream_scene_events(
         self,
@@ -461,6 +469,8 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise TimeoutError(f"Request timed out after {stream_timeout or self._timeout}s") from exc
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {exc}") from exc
 
     # ── USD export ────────────────────────────────────────────────────────────
 

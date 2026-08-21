@@ -164,6 +164,13 @@ class TestAsyncDazClientExecute:
             await client.execute("1;")
 
     @pytest.mark.asyncio
+    async def test_other_transport_error_maps_to_dazpy_connection_error(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.side_effect = httpx.ReadError("broken response", request=MagicMock())
+        with pytest.raises(exceptions.ConnectionError):
+            await client.execute("1;")
+
+    @pytest.mark.asyncio
     async def test_timeout_error_maps_to_dazpy_timeout_error(self):
         client, mock_http = _client_with_mock_http()
         mock_http.post.side_effect = httpx.TimeoutException("boom", request=MagicMock())
