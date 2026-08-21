@@ -132,6 +132,12 @@ class TestDazClientRegisteredScripts(unittest.TestCase):
             {"args": {"detail": True}, "reportFile": "C:/run/job.jsonl"},
         )
 
+    def test_cancel_render_does_not_cancel_script_request(self):
+        client = self._client({})
+        self.assertFalse(client.cancel_render("script-1"))
+        client._session.post.assert_not_called()
+        client._session.delete.assert_not_called()
+
 
 def _make_client(return_value=None, output=None):
     client = MagicMock(spec=DazClient)
