@@ -710,6 +710,8 @@ class DazClient:
             ``True`` if the server confirmed cancellation, ``False`` otherwise
             (already finished, not found, or connection error).
         """
+        if not request_id.startswith("rnd-"):
+            return False
         return self.cancel_request(request_id)
 
     def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "object | None":

@@ -295,6 +295,13 @@ class TestAsyncDazClientRequests:
         mock_http.delete.side_effect = httpx.ConnectError("boom", request=MagicMock())
         assert await client.cancel_request("abc") is False
 
+    @pytest.mark.asyncio
+    async def test_cancel_render_does_not_cancel_script_request(self):
+        client, mock_http = _client_with_mock_http()
+        assert await client.cancel_render("script-1") is False
+        mock_http.post.assert_not_awaited()
+        mock_http.delete.assert_not_awaited()
+
 
 class TestAsyncDazClientRender:
     @pytest.mark.asyncio

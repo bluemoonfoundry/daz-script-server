@@ -384,6 +384,8 @@ class AsyncDazClient:
 
     async def cancel_render(self, request_id: str) -> bool:
         """See :meth:`dazpy.DazClient.cancel_render`."""
+        if not request_id.startswith("rnd-"):
+            return False
         return await self.cancel_request(request_id)
 
     async def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0):
