@@ -230,7 +230,9 @@ class DazPose:
 
     # ── apply ─────────────────────────────────────────────────────────────────
 
-    def apply(self, skeleton: "DazSkeleton") -> None:
+    def apply(
+        self, skeleton: "DazSkeleton", *, retry_on_busy: bool = True, max_wait: float = 30.0
+    ) -> None:
         """Apply this pose to *skeleton* in a single HTTP call.
 
         Only channels present in the pose are changed.  Bones and morphs not
@@ -240,6 +242,15 @@ class DazPose:
 
         Args:
             skeleton: The figure to pose.
+            retry_on_busy: If ``True`` (the default), transparently retry with
+                backoff when the server reports ``StudioBusyError`` for the
+                HTTP call itself, up to *max_wait* seconds total. This does not
+                protect against DAZ Studio's main thread bailing partway
+                through the script under contention (see dpi-mxq) -- callers
+                that need correctness guarantees on the result should verify
+                with an independent read-back after applying.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``.
         """
         lookup = ScriptBuilder.skeleton_lookup(skeleton._identifier)
         bones_json  = json.dumps({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
@@ -298,9 +309,11 @@ class DazPose:
             return true;
         }})()"""
 
-        skeleton._client.execute(script)
+        skeleton._client.execute(script, retry_on_busy=retry_on_busy, max_wait=max_wait)
 
-    def apply_full(self, skeleton: "DazSkeleton") -> None:
+    def apply_full(
+        self, skeleton: "DazSkeleton", *, retry_on_busy: bool = True, max_wait: float = 30.0
+    ) -> None:
         """Apply this pose and zero every channel not present in the pose.
 
         Unlike :meth:`apply`, every bone rotation, morph, and node property on
@@ -309,6 +322,19 @@ class DazPose:
 
         Args:
             skeleton: The figure to pose.
+            retry_on_busy: If ``True`` (the default), transparently retry with
+                backoff when the server reports ``StudioBusyError`` for the
+                HTTP call itself, up to *max_wait* seconds total. This only
+                covers a busy error raised for the whole call -- it does not
+                detect DAZ Studio's main thread bailing partway through the
+                script under contention and leaving some writes unapplied
+                while the HTTP call still reports success (see dpi-mxq).
+                Callers that need correctness guarantees (e.g. checkpoint
+                restore) must independently verify the result with a fresh
+                :meth:`capture` read-back, such as
+                :meth:`~dazpy.DazSceneState.apply` does.
+            max_wait: Maximum total seconds to retry when *retry_on_busy* is
+                ``True``.
         """
         lookup = ScriptBuilder.skeleton_lookup(skeleton._identifier)
         bones_json  = json.dumps({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
@@ -363,7 +389,7 @@ class DazPose:
             return true;
         }})()"""
 
-        skeleton._client.execute(script)
+        skeleton._client.execute(script, retry_on_busy=retry_on_busy, max_wait=max_wait)
 
     # ── dunder ────────────────────────────────────────────────────────────────
 

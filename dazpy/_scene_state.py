@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ._pose import DazPose
+from ._pose import _ZERO3, DazPose
 from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
@@ -11,6 +11,38 @@ if TYPE_CHECKING:
 
 _TRANSFORM_KEYS = ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate", "Scale"]
 _LIGHT_EXTRA_KEYS = ["Flux", "Shadow Softness", "Spread Angle"]
+_DEFAULT_VERIFY_TOLERANCE = 0.05
+_DEFAULT_MAX_VERIFY_RETRIES = 2
+
+
+def _pose_mismatches(expected: DazPose, actual: DazPose, tolerance: float) -> list[str]:
+    """Return a description of every channel where *actual* does not match
+    *expected* within *tolerance*, or an empty list if they match.
+
+    Missing keys in either pose are treated as zero, matching the sparse
+    (zero-omitted) storage :class:`DazPose` uses.
+    """
+    mismatches: list[str] = []
+
+    for key in set(expected.bones) | set(actual.bones):
+        exp = expected.bones.get(key, _ZERO3)
+        act = actual.bones.get(key, _ZERO3)
+        if any(abs(e - a) > tolerance for e, a in zip(exp, act)):
+            mismatches.append(f"bone {key} (expected {exp}, got {act})")
+
+    for key in set(expected.morphs) | set(actual.morphs):
+        exp_v = expected.morphs.get(key, 0.0)
+        act_v = actual.morphs.get(key, 0.0)
+        if abs(exp_v - act_v) > tolerance:
+            mismatches.append(f"morph {key} (expected {exp_v}, got {act_v})")
+
+    for key in set(expected.props) | set(actual.props):
+        exp_v = expected.props.get(key, 0.0)
+        act_v = actual.props.get(key, 0.0)
+        if abs(exp_v - act_v) > tolerance:
+            mismatches.append(f"prop {key} (expected {exp_v}, got {act_v})")
+
+    return mismatches
 
 # Shared JS snippet: read a property's own dial value rather than getValue()'s
 # post-ERC computed total, for the same reason DazPose/DazProperty.raw_value
@@ -159,7 +191,13 @@ class DazSceneState:
 
     # ── apply ─────────────────────────────────────────────────────────────────
 
-    def apply(self, scene: "DazScene") -> dict:
+    def apply(
+        self,
+        scene: "DazScene",
+        *,
+        max_verify_retries: int = _DEFAULT_MAX_VERIFY_RETRIES,
+        verify_tolerance: float = _DEFAULT_VERIFY_TOLERANCE,
+    ) -> dict:
         """Apply this snapshot's skeleton poses, camera transforms, and light
         properties back onto *scene* in a small, fixed number of HTTP calls.
 
@@ -167,8 +205,25 @@ class DazSceneState:
         ``errors`` rather than raising -- matching the behaviour of the
         registered-script checkpoint this class replaces.
 
+        Each skeleton restore is independently verified: after
+        ``pose.apply_full(skel)`` returns, a fresh :meth:`DazPose.capture` is
+        taken and compared against the checkpoint. This guards against
+        ``apply_full()`` reporting success for a restore DAZ Studio's
+        single-threaded main loop only partially executed under contention
+        (see dpi-mxq) -- the HTTP call can return normally even though some
+        bone/morph/prop writes never happened. A skeleton whose read-back
+        doesn't match is retried (re-running ``apply_full`` and re-verifying)
+        up to *max_verify_retries* times before being reported in ``errors``
+        instead of ``restored``, so callers never trust an unverified result.
+
         Args:
             scene: The scene to restore state into.
+            max_verify_retries: How many additional ``apply_full`` attempts to
+                make for a skeleton whose read-back doesn't verify, before
+                giving up on it.
+            verify_tolerance: Per-channel tolerance (degrees for bones, raw
+                value units for morphs/props) allowed between the checkpoint
+                and the read-back before it's considered a mismatch.
 
         Returns:
             ``{"restored": [name, ...], "errors": [message, ...]}``.
@@ -182,10 +237,37 @@ class DazSceneState:
             except Exception:
                 errors.append(f"Skeleton not found: {name}")
                 continue
-            try:
-                pose.apply_full(skel)
-            except Exception as exc:
-                errors.append(f"Failed to restore skeleton {name}: {exc}")
+
+            attempt = 0
+            failed = False
+            mismatches: list[str] = []
+            while True:
+                try:
+                    pose.apply_full(skel)
+                except Exception as exc:
+                    errors.append(f"Failed to restore skeleton {name}: {exc}")
+                    failed = True
+                    break
+
+                try:
+                    actual = DazPose.capture(skel)
+                except Exception as exc:
+                    errors.append(f"Failed to verify restore of skeleton {name}: {exc}")
+                    failed = True
+                    break
+
+                mismatches = _pose_mismatches(pose, actual, verify_tolerance)
+                if not mismatches or attempt >= max_verify_retries:
+                    break
+                attempt += 1
+
+            if failed:
+                continue
+            if mismatches:
+                errors.append(
+                    f"Restore of skeleton {name} did not verify after "
+                    f"{attempt + 1} attempt(s): {'; '.join(mismatches)}"
+                )
                 continue
             restored.append(name)
 

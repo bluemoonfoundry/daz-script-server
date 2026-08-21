@@ -4897,6 +4897,10 @@ class TestDazSceneStateApply(unittest.TestCase):
         bad_pose.apply_full.side_effect = RuntimeError("boom")
 
         skel_good = MagicMock()
+        skel_good._identifier.value = "Good"
+        skel_good._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
         skel_bad = MagicMock()
         scene = MagicMock()
         scene.find_skeleton.side_effect = lambda name: {
@@ -4925,6 +4929,10 @@ class TestDazSceneStateApply(unittest.TestCase):
         missing_pose = MagicMock()
 
         skel_good = MagicMock()
+        skel_good._identifier.value = "Good"
+        skel_good._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
         scene = MagicMock()
 
         def _find_skeleton(name):
@@ -4947,6 +4955,109 @@ class TestDazSceneStateApply(unittest.TestCase):
         good_pose.apply_full.assert_called_once_with(skel_good)
         self.assertIn("Good", result["restored"])
         self.assertTrue(any("Missing" in e for e in result["errors"]))
+
+    def test_apply_does_not_trust_apply_full_success_without_verifying(self):
+        # Regression for dpi-mxq: apply_full() can return normally (no
+        # exception) while DAZ Studio's main thread only partially executed
+        # the restore script, silently leaving a bone unrestored. apply()
+        # must not report a skeleton as "restored" unless a fresh
+        # DazPose.capture() read-back actually matches the checkpoint.
+        from dazpy import DazPose
+        from dazpy._scene_state import DazSceneState
+
+        pose = DazPose("Stuck", bones={"lShldr": [10.0, 20.0, 30.0]}, morphs={}, props={})
+        skel = MagicMock()
+        skel._identifier.value = "Stuck"
+        skel._client.execute.side_effect = [
+            ExecutionResult(value=True, output=[], request_id="x"),  # apply_full()
+            # capture() read-back: shoulder never actually moved off zero,
+            # so it's absent from the sparse capture result -- yet apply_full
+            # raised no error.
+            ExecutionResult(value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x"),
+        ] * 3  # retried up to max_verify_retries, never matches
+
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Stuck": pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        self.assertNotIn("Stuck", result["restored"])
+        self.assertTrue(any("Stuck" in e and "lShldr" in e for e in result["errors"]))
+
+    def test_apply_retries_verification_and_recovers(self):
+        # First read-back doesn't match (simulating a partial restore under
+        # contention); the second attempt's read-back matches, so apply()
+        # should retry apply_full() and end up reporting success.
+        from dazpy import DazPose
+        from dazpy._scene_state import DazSceneState
+
+        pose = DazPose("Retry", bones={"hip": [0.0, 5.0, 0.0]}, morphs={}, props={})
+        skel = MagicMock()
+        skel._identifier.value = "Retry"
+        skel._client.execute.side_effect = [
+            ExecutionResult(value=True, output=[], request_id="x"),  # apply_full() #1
+            ExecutionResult(value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x"),  # capture #1: mismatch
+            ExecutionResult(value=True, output=[], request_id="x"),  # apply_full() #2
+            ExecutionResult(
+                value={"bones": {"hip": [0.0, 5.0, 0.0]}, "morphs": {}, "props": {}},
+                output=[], request_id="x",
+            ),  # capture #2: matches
+        ]
+
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Retry": pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        self.assertIn("Retry", result["restored"])
+        self.assertEqual(result["errors"], [])
+        # apply_full's script-executing call happens on attempts 1 and 2;
+        # capture's call happens once per attempt too -- 4 total execute() calls.
+        self.assertEqual(skel._client.execute.call_count, 4)
+
+    def test_apply_verification_tolerates_small_float_differences(self):
+        from dazpy import DazPose
+        from dazpy._scene_state import DazSceneState
+
+        pose = DazPose("Fuzzy", bones={"hip": [0.0, 5.0, 0.0]}, morphs={}, props={})
+        skel = MagicMock()
+        skel._identifier.value = "Fuzzy"
+        skel._client.execute.side_effect = [
+            ExecutionResult(value=True, output=[], request_id="x"),  # apply_full()
+            ExecutionResult(
+                value={"bones": {"hip": [0.0, 5.0001, 0.0]}, "morphs": {}, "props": {}},
+                output=[], request_id="x",
+            ),  # capture(): within default tolerance
+        ]
+
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Fuzzy": pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        self.assertIn("Fuzzy", result["restored"])
+        self.assertEqual(skel._client.execute.call_count, 2)
 
 
 class TestSceneSnapshot(unittest.TestCase):
