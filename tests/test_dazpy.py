@@ -7418,6 +7418,49 @@ class TestBatchAddOperation(unittest.TestCase):
         client.execute.assert_called_once()
 
 
+class TestExecuteBatchAsync(unittest.TestCase):
+    def test_submits_one_request_for_multiple_operations(self):
+        client = DazClient(token="")
+        client._session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"request_id": "batch-async-1", "status": "queued"}
+        response.headers = {}
+        client._session.post.return_value = response
+
+        request_id = client.execute_batch_async([
+            {"body_lines": ["var x = 1;"], "result_expression": "x"},
+            {"body_lines": ["var y = 2;"], "result_expression": "y"},
+        ])
+
+        self.assertEqual(request_id, "batch-async-1")
+        client._session.post.assert_called_once()
+        call_args = client._session.post.call_args
+        self.assertEqual(call_args[0][0], "http://127.0.0.1:18811/execute/async")
+        submitted_script = call_args[1]["json"]["script"]
+        self.assertIn("var x = 1;", submitted_script)
+        self.assertIn("var y = 2;", submitted_script)
+        self.assertIn('"_r0"', submitted_script)
+        self.assertIn('"_r1"', submitted_script)
+
+    def test_passes_args_through(self):
+        client = DazClient(token="")
+        client._session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"request_id": "batch-async-2", "status": "queued"}
+        response.headers = {}
+        client._session.post.return_value = response
+
+        client.execute_batch_async(
+            [{"body_lines": [], "result_expression": "1"}],
+            args={"mode": "probe"},
+        )
+
+        submitted_payload = client._session.post.call_args[1]["json"]
+        self.assertEqual(submitted_payload["args"], {"mode": "probe"})
+
+
 class TestCallCountBaseline(unittest.TestCase):
     """Pins down pre-batching call counts. Update these assertions in the
     same commit that fixes the corresponding helper in Task 2/3 — do not

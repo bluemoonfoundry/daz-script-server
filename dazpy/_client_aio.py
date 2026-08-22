@@ -159,6 +159,14 @@ class AsyncDazClient:
 
         return await self._with_busy_retry(_do, retry_on_busy, max_wait)
 
+    async def execute_batch_async(self, operations: list[dict], args: object = None) -> str:
+        """Submit multiple operations as one async request. See :meth:`dazpy.DazClient.execute_batch_async`."""
+        from ._batch import build_operations_script
+
+        pairs = [(op["body_lines"], op["result_expression"]) for op in operations]
+        script = build_operations_script(pairs)
+        return await self.execute_async_submit(script, args=args)
+
     async def get_request_status(self, request_id: str) -> dict:
         """See :meth:`dazpy.DazClient.get_request_status`."""
         resp = await self._get(f"/requests/{request_id}/status")

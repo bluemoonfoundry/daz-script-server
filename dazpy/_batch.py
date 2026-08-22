@@ -7,6 +7,26 @@ DEFAULT_MAX_OPERATIONS = 500
 DEFAULT_MAX_SCRIPT_LENGTH = 900_000  # stays under the server's default 1MB script cap
 
 
+def build_operations_script(operations: list[tuple[list[str], str]]) -> str:
+    """Build one IIFE script from a list of (body_lines, result_expression) pairs.
+
+    Shared by :meth:`Batch._build_script` and
+    :meth:`~dazpy.DazClient.execute_batch_async` so both produce scripts with
+    identical shape (keyed return object over ``_r0``, ``_r1``, ...).
+    """
+    body_lines = []
+    return_parts = []
+    for i, (lines, result_expression) in enumerate(operations):
+        key = f"_r{i}"
+        body_lines.extend(lines)
+        body_lines.append(f"var {key} = {result_expression};")
+        return_parts.append(f'"{key}": {key}')
+    return_obj = "{" + ", ".join(return_parts) + "}"
+    body_lines.append(f"return {return_obj};")
+    body = "\n".join(body_lines)
+    return f"(function(){{\n{body}\n}})()"
+
+
 class BatchFuture:
     """Placeholder for a single result within a :class:`Batch` execution.
 
