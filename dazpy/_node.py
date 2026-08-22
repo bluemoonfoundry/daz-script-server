@@ -144,6 +144,46 @@ class DazNode(DazElement):
         )
         self._client.execute(script)
 
+    def set_transform(
+        self,
+        position: tuple[float, float, float] | None = None,
+        rotation: tuple[float, float, float] | None = None,
+        scale: tuple[float, float, float] | None = None,
+    ) -> None:
+        """Set any combination of local position, rotation, and scale in one call.
+
+        Every argument is optional. Omitted components are left untouched.
+        Equivalent to calling :meth:`set_local_position`, :meth:`set_local_rotation`,
+        and/or :meth:`set_scale` individually, but round-trips only once.
+
+        Args:
+            position: ``(x, y, z)`` local-space position, or ``None`` to leave unchanged.
+            rotation: ``(x, y, z)`` Euler rotation in degrees, or ``None`` to leave unchanged.
+            scale: ``(x, y, z)`` per-axis scale, or ``None`` to leave unchanged.
+        """
+        lines = []
+        if position is not None:
+            x, y, z = position
+            lines.append(f"_node.setLocalPos(new DzVec3({x}, {y}, {z}));")
+        if rotation is not None:
+            x, y, z = rotation
+            lines.append(
+                f"_node.getXRotControl().setValue({x}); "
+                f"_node.getYRotControl().setValue({y}); "
+                f"_node.getZRotControl().setValue({z});"
+            )
+        if scale is not None:
+            x, y, z = scale
+            lines.append(
+                f"_node.getXScaleControl().setValue({x}); "
+                f"_node.getYScaleControl().setValue({y}); "
+                f"_node.getZScaleControl().setValue({z});"
+            )
+        if not lines:
+            return
+        script = ScriptBuilder.node_body(self._identifier, "\n".join(lines))
+        self._client.execute(script)
+
     @property
     def visible(self) -> bool | None:
         """General visibility flag (read/write).

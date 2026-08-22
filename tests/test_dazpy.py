@@ -7208,18 +7208,54 @@ class TestDazElementSnapshot(unittest.TestCase):
         self.assertEqual(result, {"Smile": None, "Blink": None})
 
 
-class TestCallCountBaseline(unittest.TestCase):
-    """Pins down pre-batching call counts. Update these assertions in the
-    same commit that fixes the corresponding helper in Task 2/3 — do not
-    let this class silently mask a regression by staying loose."""
+class TestDazNodeSetTransform(unittest.TestCase):
+    def test_all_components_issue_one_call(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        node.set_transform(position=(1.0, 2.0, 3.0), rotation=(4.0, 5.0, 6.0), scale=(1.5, 1.5, 1.5))
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getXScaleControl", script)
 
-    def test_reset_transforms_issues_three_calls_before_fix(self):
+    def test_omitted_component_not_present_in_script(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        node.set_transform(position=(1.0, 2.0, 3.0))
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertNotIn("getXRotControl", script)
+        self.assertNotIn("getXScaleControl", script)
+
+    def test_no_arguments_is_a_noop(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        node.set_transform()
+        client.execute.assert_not_called()
+
+
+class TestResetTransforms(unittest.TestCase):
+    def test_reset_transforms_issues_exactly_one_call(self):
         client = _make_client(None)
         from dazpy._node import DazNode, NodeIdentifier
         from dazpy.poses import reset_transforms
         node = DazNode(client, NodeIdentifier("name", "Camera"))
         reset_transforms(node)
-        self.assertEqual(client.execute.call_count, 3)
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getXScaleControl", script)
+
+
+class TestCallCountBaseline(unittest.TestCase):
+    """Pins down pre-batching call counts. Update these assertions in the
+    same commit that fixes the corresponding helper in Task 2/3 — do not
+    let this class silently mask a regression by staying loose."""
 
     def test_zero_figure_default_issues_four_calls_before_fix(self):
         client = MagicMock()
