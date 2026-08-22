@@ -7301,6 +7301,53 @@ class TestDazElementSetProperties(unittest.TestCase):
         self.assertIn("hasOwnProperty", script)
 
 
+class TestDazSkeletonSetState(unittest.TestCase):
+    def test_all_three_kinds_issue_one_call(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state(
+            bones={"Hip": (0.0, 0.0, 0.0)},
+            morphs={"Smile": 0.8},
+            props={"Scale": 100.0},
+        )
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertIn("DzMorph", script)
+        self.assertIn("getNumProperties", script)
+
+    def test_omitted_kind_not_present_in_script(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state(bones={"Hip": (0.0, 0.0, 0.0)})
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertNotIn("DzMorph", script)
+        self.assertNotIn("getNumProperties", script)
+
+    def test_all_omitted_is_a_noop(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state()
+        client.execute.assert_not_called()
+
+    def test_bone_and_morph_names_with_quotes_are_json_safe(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state(bones={'Weird "Bone"': (1.0, 2.0, 3.0)}, morphs={"Back\\Slash": 0.5})
+        script = client.execute.call_args[0][0]
+        self.assertIn(json.dumps({'Weird "Bone"': [1.0, 2.0, 3.0]}), script)
+        self.assertIn(json.dumps({"Back\\Slash": 0.5}), script)
+
+
 class TestCallCountBaseline(unittest.TestCase):
     """Pins down pre-batching call counts. Update these assertions in the
     same commit that fixes the corresponding helper in Task 2/3 — do not
