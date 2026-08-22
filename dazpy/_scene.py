@@ -260,20 +260,34 @@ class DazScene:
         names = self._client.execute(script).value or []
         return [DazSkeleton(self._client, NodeIdentifier(n)) for n in names]
 
-    def find_skeleton(self, name: str) -> "DazSkeleton":  # noqa: F821
+    def find_skeleton(
+        self, name: str, *, retry_attempts: int = 3, retry_delay: float = 0.15
+    ) -> "DazSkeleton":  # noqa: F821
         """Find a skeleton by its internal name.
 
         Args:
             name: Internal name of the skeleton node (e.g. ``"Genesis9"``).
                   To look up by the user-visible label shown in the Scene panel
                   (e.g. ``"Genesis 9"``), use :meth:`find_skeleton_by_label`.
+            retry_attempts: Number of ``Scene.getSkeletonList()`` lookups to
+                try before concluding the skeleton is really absent.
+                ``Scene.getSkeletonList()`` has been observed to transiently
+                omit a skeleton that is present under load from a burst of
+                other main-thread script calls (see daz-script-server-xtkd)
+                -- a momentary miss is retried rather than immediately
+                raised. Set to ``1`` to disable retrying.
+            retry_delay: Base seconds to sleep between retries (each attempt
+                after the first waits ``retry_delay * attempt_number``).
 
         Returns:
             A :class:`~dazpy.DazSkeleton` proxy.
 
         Raises:
-            NodeNotFoundError: If no skeleton with that name exists.
+            NodeNotFoundError: If no skeleton with that name exists after
+                *retry_attempts* lookups.
         """
+        import time
+
         from ._skeleton import DazSkeleton
         from .exceptions import NodeNotFoundError
         lookup = ScriptBuilder.iife(f"""
@@ -283,7 +297,14 @@ class DazScene:
             }}
             return false;
         """)
-        if not self._client.execute(lookup).value:
+        found = False
+        for attempt in range(retry_attempts):
+            if self._client.execute(lookup).value:
+                found = True
+                break
+            if attempt < retry_attempts - 1:
+                time.sleep(retry_delay * (attempt + 1))
+        if not found:
             hint = ScriptBuilder.iife("""
                 var info = [];
                 var skels = Scene.getSkeletonList();

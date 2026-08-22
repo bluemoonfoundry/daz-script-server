@@ -432,6 +432,47 @@ class TestDazScene(unittest.TestCase):
         with self.assertRaises(exceptions.NodeNotFoundError):
             scene.find_node("NonExistent")
 
+    def test_find_skeleton_success_first_try(self):
+        client = _make_client(True)
+        scene = DazScene(client)
+        skel = scene.find_skeleton("Genesis9")
+        self.assertEqual(skel._identifier.value, "Genesis9")
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_find_skeleton_retries_on_transient_miss(self):
+        # Regression for daz-script-server-xtkd: Scene.getSkeletonList() has
+        # been observed to transiently omit a skeleton that is actually
+        # present, under load from a burst of other main-thread script
+        # calls. A momentary lookup miss should be retried, not immediately
+        # reported as NodeNotFoundError.
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = [
+            ExecutionResult(value=False, output=[], request_id="a"),
+            ExecutionResult(value=False, output=[], request_id="b"),
+            ExecutionResult(value=True, output=[], request_id="c"),
+        ]
+        scene = DazScene(client)
+        with patch("time.sleep"):
+            skel = scene.find_skeleton("Genesis9Eyelashes")
+        self.assertEqual(skel._identifier.value, "Genesis9Eyelashes")
+        self.assertEqual(client.execute.call_count, 3)
+
+    def test_find_skeleton_raises_after_exhausting_retries(self):
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = [
+            ExecutionResult(value=False, output=[], request_id="a"),
+            ExecutionResult(value=False, output=[], request_id="b"),
+            ExecutionResult(value=False, output=[], request_id="c"),
+            ExecutionResult(
+                value=["Genesis9|Genesis 9"], output=[], request_id="d",
+            ),
+        ]
+        scene = DazScene(client)
+        with patch("time.sleep"):
+            with self.assertRaises(exceptions.NodeNotFoundError):
+                scene.find_skeleton("NonExistent")
+        self.assertEqual(client.execute.call_count, 4)
+
     def test_all_node_transforms(self):
         data = [{"name": "n1", "label": "Node 1", "position": [0, 0, 0], "rotation": [0, 0, 0], "visible": True}]
         client = _make_client(data)
