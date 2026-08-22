@@ -1794,6 +1794,12 @@ unique report file for every job.
 `reportFile` may not be the submitted `scriptFile`, because the server owns and
 truncates the former before the job is queued.
 
+DAZ Studio 6 ingests report events from polling workers, so progress, logs, and
+outputs are visible while the main thread is occupied by the script. DAZ Studio
+4's JSON parser is main-thread-only; Studio 4 therefore ingests the final report
+after execution returns and does not expose report-driven progress while the job
+is still running.
+
 **Response (immediate):**
 ```json
 {

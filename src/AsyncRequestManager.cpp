@@ -4,6 +4,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
+#include <QtCore/qobject.h>
 #include <QtCore/qthread.h>
 #include <QtCore/qmetaobject.h>
 
@@ -219,6 +220,12 @@ void AsyncRequestManager::applyReportEventLocked(AsyncRequest& req, const QVaria
 
 void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
 {
+#if DAZ_SDK_MAJOR_VERSION < 6
+    // Qt 4's JsonStd::parseObject() constructs a QScriptEngine. This method is
+    // therefore main-thread-only on Studio 4; worker-facing callers go through
+    // ingestReportFromWorkerLocked(), which deliberately no-ops there.
+    Q_ASSERT(!m_notifyTarget || QThread::currentThread() == m_notifyTarget->thread());
+#endif
     if (req.reportFile.isEmpty()) return;
 
     QFile report(req.reportFile);
@@ -288,6 +295,18 @@ void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
     }
 }
 
+void AsyncRequestManager::ingestReportFromWorkerLocked(AsyncRequest& req)
+{
+#if DAZ_SDK_MAJOR_VERSION >= 6
+    ingestReportLocked(req);
+#else
+    // Studio 4 cannot parse report JSON on a raw httplib worker because its
+    // JsonStd fallback uses QScriptEngine. markCompleted() performs the final
+    // ingestion on Daz's main thread after script execution returns.
+    (void)req;
+#endif
+}
+
 std::string AsyncRequestManager::observationJson(const AsyncRequest& req) const
 {
     QVariantMap manifest;
@@ -320,7 +339,7 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
         return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
 
     AsyncRequest& req = m_requests[qid];
-    ingestReportLocked(req);
+    ingestReportFromWorkerLocked(req);
     std::string status = statusToString(req.status);
 
     char progBuf[32];
@@ -375,7 +394,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
         return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
 
     AsyncRequest& mutableReq = m_requests[qid];
-    ingestReportLocked(mutableReq);
+    ingestReportFromWorkerLocked(mutableReq);
     const AsyncRequest& observedReq = mutableReq;
     std::string status = statusToString(observedReq.status);
 
@@ -554,7 +573,7 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
     for (QMap<QString, AsyncRequest>::iterator it = m_requests.begin();
          it != m_requests.end(); ++it) {
         AsyncRequest& req = it.value();
-        ingestReportLocked(req);
+        ingestReportFromWorkerLocked(req);
         std::string statusStr = statusToString(req.status);
 
         if (!statusFilter.empty() && statusStr != statusFilter)
@@ -662,13 +681,18 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
 
     AsyncRequest& req  = m_requests[id];
 
+    // This is the main-thread ingestion path for every SDK. It is also the
+    // only report parser used by Studio 4, where JsonStd relies on the
+    // thread-affine QScriptEngine. Parse before the terminal-state guard so a
+    // script that returned after client cancellation or stale-job failure can
+    // still publish its final observation safely.
+    ingestReportLocked(req, true);
+
     // If failStaleRunning() already timed this request out (RUNNING -> FAILED)
     // while the underlying DazScript call was blocked, that terminal state
     // sticks -- a late, real completion must not flip it back to
     // COMPLETED/CANCELLED after a client may have already acted on "failed".
     if (req.status != REQUEST_RUNNING) return;
-
-    ingestReportLocked(req, true);
 
     req.completedAt    = QDateTime::currentMSecsSinceEpoch();
     req.progress       = 1.0;

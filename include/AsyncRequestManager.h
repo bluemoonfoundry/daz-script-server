@@ -69,8 +69,10 @@ public:
     // REQUEST_TYPE_RENDER so cancel dispatch calls killRender() correctly.
     SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix);
 
-    // All five methods below are safe to call from HTTP threads. QtCore values
-    // and report files are local to the calling thread; shared state is locked.
+    // All five methods below are safe to call from HTTP threads. Studio 6 may
+    // ingest report JSON here because QJsonDocument is reentrant. Studio 4
+    // leaves report parsing to the main-thread completion path because its
+    // JsonStd parser constructs a thread-affine QScriptEngine.
     std::pair<int, std::string> getStatusJson(const std::string& requestId);
     std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec);
     std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP);
@@ -172,6 +174,7 @@ private:
     };
 
     std::string statusToString(RequestStatus s) const;
+    void ingestReportFromWorkerLocked(AsyncRequest& req);
     void ingestReportLocked(AsyncRequest& req, bool final = false);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);
     void appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry);

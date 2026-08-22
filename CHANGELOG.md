@@ -12,7 +12,8 @@ is occupied, and exposes one `observation` record through status and result:
 structured progress, the most recent 100 log entries with truncation metadata,
 and a deduplicated output manifest. Request lists carry a bounded observation
 summary. Both `DazClient` and `AsyncDazClient` accept `report_file=` for inline
-and file-backed async jobs.
+and file-backed async jobs. Live report ingestion is available on Studio 6;
+Studio 4 parses the final report on the main thread after execution returns.
 
 ## [2.9.2] - 2026-08-21
 

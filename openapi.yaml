@@ -848,6 +848,8 @@ components:
                 output, and manifest events into the async request's
                 observation record. The path is also injected into args as
                 reserved field `__dssReportFile`.
+                DAZ Studio 6 exposes report events while a job is running;
+                Studio 4 parses the final report after execution returns.
               example: "/path/to/run/job.jsonl"
 
     AsyncScriptExecuteRequest:
