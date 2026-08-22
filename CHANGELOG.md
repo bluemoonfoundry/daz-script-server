@@ -4,6 +4,25 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-08-21
+
+### dazpy script-call batching
+
+`Batch` gains `add_operation()`/`add_prelude()` with configurable size
+limits, plus `DazElement.snapshot()`/`set_properties()`,
+`DazNode.set_transform()`, `DazSkeleton.set_state()`, a single-call
+`zero_figure()` default path, and one-request async batch submission via
+`execute_batch_async()`. Main-thread wait time is now exposed in
+`GET /metrics`. See `docs/api/batch.rst` and `docs/quickstart.rst` for
+usage and the whole-batch failure/no-rollback semantics.
+
+### Fixed
+
+`DazScene.find_skeleton()` now retries `Scene.getSkeletonList()` on a
+transient miss instead of immediately raising `NodeNotFoundError` -- the
+lookup has been observed to momentarily omit a skeleton that is actually
+present, under load from a burst of other main-thread script calls.
+
 ## [2.9.1] - 2026-08-20
 
 ### Async script-file jobs
