@@ -119,11 +119,25 @@ class DazElement:
             fields: Property labels to read.
 
         Returns:
-            A dict mapping each label to its current value.
+            A dict mapping each label to its current value. Missing owner or
+            missing property both resolve to ``None`` for the affected label(s).
         """
         cache = object.__getattribute__(self, "_cache")
+        fields_json = json.dumps(fields)
+        script = ScriptBuilder.iife(f"""
+            var obj = {self._locator};
+            if (!obj) return null;
+            var _fields = {fields_json};
+            var _result = {{}};
+            for (var i = 0; i < _fields.length; i++) {{
+                var prop = obj.findPropertyByLabel(_fields[i]);
+                _result[_fields[i]] = prop ? prop.getValue() : null;
+            }}
+            return _result;
+        """)
+        values = self._client.execute(script).value or {}
         for field in fields:
-            cache[field] = self.get_property(field)
+            cache[field] = values.get(field)
         return {f: cache[f] for f in fields}
 
     def refresh(self) -> None:

@@ -7182,17 +7182,36 @@ def _result(value):
     return r
 
 
+class TestDazElementSnapshot(unittest.TestCase):
+    def test_snapshot_issues_exactly_one_call(self):
+        client = _make_client({"Smile": 0.8, "Blink": 0.0, "EyesClosed": None})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        result = el.snapshot(["Smile", "Blink", "EyesClosed"])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result, {"Smile": 0.8, "Blink": 0.0, "EyesClosed": None})
+
+    def test_snapshot_escapes_labels_with_quotes_and_backslashes(self):
+        client = _make_client({})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        el.snapshot(['Weird "Label"', "Back\\slash"])
+        script = client.execute.call_args[0][0]
+        self.assertIn(json.dumps('Weird "Label"'), script)
+        self.assertIn(json.dumps("Back\\slash"), script)
+
+    def test_snapshot_missing_owner_returns_none_for_all_fields(self):
+        client = _make_client(None)  # script's top-level `if (!obj) return null;`
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Missing')")
+        result = el.snapshot(["Smile", "Blink"])
+        self.assertEqual(result, {"Smile": None, "Blink": None})
+
+
 class TestCallCountBaseline(unittest.TestCase):
     """Pins down pre-batching call counts. Update these assertions in the
     same commit that fixes the corresponding helper in Task 2/3 — do not
     let this class silently mask a regression by staying loose."""
-
-    def test_snapshot_issues_one_call_per_field_before_fix(self):
-        client = _make_client(1.0)
-        from dazpy._element import DazElement
-        el = DazElement(client, "Scene.findNode('Fig')")
-        el.snapshot(["Smile", "Blink", "EyesClosed"])
-        self.assertEqual(client.execute.call_count, 3)
 
     def test_reset_transforms_issues_three_calls_before_fix(self):
         client = _make_client(None)
