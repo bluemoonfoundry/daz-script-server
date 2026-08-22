@@ -112,6 +112,16 @@ class RenderError(DazError):
         self.request_id = request_id
 
 
+class BatchLimitExceededError(DazError):
+    """Raised by :meth:`~dazpy.Batch.execute` (or ``add_operation``, for the
+    operation-count limit) when a batch would exceed its configured
+    operation-count or generated-script-length limit.
+
+    Raised client-side before any HTTP call, so an oversized batch never
+    reaches Studio's main thread.
+    """
+
+
 class MaterialError(DazError):
     """Raised when an Iray material/surface-property operation fails.
 

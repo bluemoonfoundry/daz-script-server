@@ -7348,6 +7348,76 @@ class TestDazSkeletonSetState(unittest.TestCase):
         self.assertIn(json.dumps({"Back\\Slash": 0.5}), script)
 
 
+class TestBatchAddOperation(unittest.TestCase):
+    def test_add_operation_resolves_without_caller_guessing_key(self):
+        client = _make_client({"_r0": 42})
+        from dazpy._batch import Batch
+        batch = Batch(client)
+        future = batch.add_operation(
+            body_lines=["var x = 20 + 22;"],
+            result_expression="x",
+        )
+        batch.execute()
+        self.assertEqual(future.value, 42)
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _r0 = x;", script)
+
+    def test_shared_prelude_emitted_once_for_two_operations(self):
+        client = _make_client({"_r0": 1, "_r1": 2})
+        from dazpy._batch import Batch
+        batch = Batch(client)
+        batch.add_prelude("node:Fig", ["var _node_Fig = Scene.findNode('Fig');"])
+        batch.add_operation(body_lines=[], result_expression="_node_Fig.getXRotControl().getValue()")
+        batch.add_prelude("node:Fig", ["var _node_Fig = Scene.findNode('Fig');"])  # same key, second call
+        batch.add_operation(body_lines=[], result_expression="_node_Fig.getYRotControl().getValue()")
+        batch.execute()
+        script = client.execute.call_args[0][0]
+        self.assertEqual(script.count("Scene.findNode('Fig')"), 1)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_read_after_write_order_preserved(self):
+        client = _make_client({"_r0": None, "_r1": 99})
+        from dazpy._batch import Batch
+        batch = Batch(client)
+        write_future = batch.add_operation(body_lines=["var _v = 99;"], result_expression="null")
+        read_future = batch.add_operation(body_lines=[], result_expression="_v")
+        batch.execute()
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index("var _v = 99;"), script.index("var _r1 = _v;"))
+
+    def test_operation_count_limit_raises_before_execute(self):
+        client = _make_client({})
+        from dazpy._batch import Batch
+        from dazpy.exceptions import BatchLimitExceededError
+        batch = Batch(client, max_operations=2)
+        batch.add_operation(body_lines=[], result_expression="1")
+        batch.add_operation(body_lines=[], result_expression="2")
+        with self.assertRaises(BatchLimitExceededError):
+            batch.add_operation(body_lines=[], result_expression="3")
+        client.execute.assert_not_called()
+
+    def test_script_length_limit_raises_on_execute(self):
+        client = _make_client({})
+        from dazpy._batch import Batch
+        from dazpy.exceptions import BatchLimitExceededError
+        batch = Batch(client, max_script_length=50)
+        batch.add_operation(body_lines=["var x = 1;" * 20], result_expression="x")
+        with self.assertRaises(BatchLimitExceededError):
+            batch.execute()
+        client.execute.assert_not_called()
+
+    def test_existing_raw_add_still_works_unmodified(self):
+        # Regression guard: add_operation()/add_prelude() must not change add()'s behavior.
+        client = _make_client({"_r0": 10, "_r1": 5})
+        from dazpy._batch import Batch
+        with Batch(client) as batch:
+            f_count = batch.add(["var _r0 = Scene.getNumNodes();"])
+            f_frame = batch.add(["var _r1 = Scene.getFrame();"])
+        self.assertEqual(f_count.value, 10)
+        self.assertEqual(f_frame.value, 5)
+        client.execute.assert_called_once()
+
+
 class TestCallCountBaseline(unittest.TestCase):
     """Pins down pre-batching call counts. Update these assertions in the
     same commit that fixes the corresponding helper in Task 2/3 — do not
