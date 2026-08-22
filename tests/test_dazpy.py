@@ -7274,6 +7274,33 @@ class TestZeroFigureDefaultPath(unittest.TestCase):
         mock_apply_full.assert_called_once()
 
 
+class TestDazElementSetProperties(unittest.TestCase):
+    def test_multiple_mutations_issue_one_call(self):
+        client = _make_client({"Smile": True, "Blink": True})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        result = el.set_properties({"Smile": 0.8, "Blink": 0.2})
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result, {"Smile": True, "Blink": True})
+
+    def test_missing_property_reported_false(self):
+        client = _make_client({"Smile": True, "Nonexistent": False})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        result = el.set_properties({"Smile": 0.8, "Nonexistent": 1.0})
+        self.assertEqual(result, {"Smile": True, "Nonexistent": False})
+
+    def test_labels_with_quotes_backslashes_newlines_are_json_safe(self):
+        client = _make_client({})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        el.set_properties({'Weird "Label"': 1, "Multi\nLine": 2, "Back\\Slash": 3})
+        script = client.execute.call_args[0][0]
+        payload = json.dumps({'Weird "Label"': 1, "Multi\nLine": 2, "Back\\Slash": 3})
+        self.assertIn(payload, script)
+        self.assertIn("hasOwnProperty", script)
+
+
 class TestCallCountBaseline(unittest.TestCase):
     """Pins down pre-batching call counts. Update these assertions in the
     same commit that fixes the corresponding helper in Task 2/3 — do not

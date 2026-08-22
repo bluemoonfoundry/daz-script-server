@@ -59,6 +59,36 @@ class DazElement:
         """)
         self._client.execute(script)
 
+    def set_properties(self, values: dict[str, object]) -> dict[str, bool]:
+        """Set multiple property values by display label in one call.
+
+        Args:
+            values: ``{label: value}``. Each value must be JSON-serialisable.
+
+        Returns:
+            ``{label: True}`` for labels that resolved to a real property and
+            were written, ``{label: False}`` for labels that did not resolve.
+        """
+        data_json = json.dumps(values)
+        script = ScriptBuilder.iife(f"""
+            var obj = {self._locator};
+            if (!obj) return null;
+            var _data = {data_json};
+            var _result = {{}};
+            for (var _label in _data) {{
+                if (!_data.hasOwnProperty(_label)) continue;
+                var prop = obj.findPropertyByLabel(_label);
+                if (prop) {{
+                    prop.setValue(_data[_label]);
+                    _result[_label] = true;
+                }} else {{
+                    _result[_label] = false;
+                }}
+            }}
+            return _result;
+        """)
+        return self._client.execute(script).value or {}
+
     def list_properties(self) -> list[dict]:
         """Return metadata for every property on this element.
 
