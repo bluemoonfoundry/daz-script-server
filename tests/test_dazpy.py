@@ -432,6 +432,47 @@ class TestDazScene(unittest.TestCase):
         with self.assertRaises(exceptions.NodeNotFoundError):
             scene.find_node("NonExistent")
 
+    def test_find_skeleton_success_first_try(self):
+        client = _make_client(True)
+        scene = DazScene(client)
+        skel = scene.find_skeleton("Genesis9")
+        self.assertEqual(skel._identifier.value, "Genesis9")
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_find_skeleton_retries_on_transient_miss(self):
+        # Regression for daz-script-server-xtkd: Scene.getSkeletonList() has
+        # been observed to transiently omit a skeleton that is actually
+        # present, under load from a burst of other main-thread script
+        # calls. A momentary lookup miss should be retried, not immediately
+        # reported as NodeNotFoundError.
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = [
+            ExecutionResult(value=False, output=[], request_id="a"),
+            ExecutionResult(value=False, output=[], request_id="b"),
+            ExecutionResult(value=True, output=[], request_id="c"),
+        ]
+        scene = DazScene(client)
+        with patch("time.sleep"):
+            skel = scene.find_skeleton("Genesis9Eyelashes")
+        self.assertEqual(skel._identifier.value, "Genesis9Eyelashes")
+        self.assertEqual(client.execute.call_count, 3)
+
+    def test_find_skeleton_raises_after_exhausting_retries(self):
+        client = MagicMock(spec=DazClient)
+        client.execute.side_effect = [
+            ExecutionResult(value=False, output=[], request_id="a"),
+            ExecutionResult(value=False, output=[], request_id="b"),
+            ExecutionResult(value=False, output=[], request_id="c"),
+            ExecutionResult(
+                value=["Genesis9|Genesis 9"], output=[], request_id="d",
+            ),
+        ]
+        scene = DazScene(client)
+        with patch("time.sleep"):
+            with self.assertRaises(exceptions.NodeNotFoundError):
+                scene.find_skeleton("NonExistent")
+        self.assertEqual(client.execute.call_count, 4)
+
     def test_all_node_transforms(self):
         data = [{"name": "n1", "label": "Node 1", "position": [0, 0, 0], "rotation": [0, 0, 0], "visible": True}]
         client = _make_client(data)
@@ -5059,6 +5100,148 @@ class TestDazSceneStateApply(unittest.TestCase):
         self.assertIn("Fuzzy", result["restored"])
         self.assertEqual(skel._client.execute.call_count, 2)
 
+    def _skel_for_follow_target_tests(self, name, execute_value):
+        skel = MagicMock()
+        skel._identifier.value = name
+        skel._client.execute.return_value = execute_value
+        return skel
+
+    def test_apply_restores_conforming_items_follow_target(self):
+        # Regression for daz-script-server-jz0e: DazPose.apply_full() writes
+        # back every property on a skeleton, including the internal "FID_*"
+        # property DAZ Studio uses to persist a conforming item's fit
+        # registration -- rewriting it (even to its own captured value)
+        # desyncs the live getFollowTarget() pointer without raising. apply()
+        # must independently re-fit any skeleton whose follow-target no
+        # longer matches what capture() recorded.
+        from dazpy._scene_state import DazSceneState
+
+        base_pose = MagicMock()
+        boots_pose = MagicMock()
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+
+        base_skel = self._skel_for_follow_target_tests("Genesis9", exec_result)
+        boots_skel = self._skel_for_follow_target_tests("Boots", exec_result)
+        base_skel.follow_target.return_value = None  # base figure has no follow-target
+        # apply_full() desynced the follow-target pointer even though the
+        # captured value ("Genesis9") is what we'll assert gets restored.
+        boots_skel.follow_target.return_value = None
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Genesis9": base_skel, "Boots": boots_skel,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": base_pose, "Boots": boots_pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None, "Boots": "Genesis9"},
+        )
+        result = state.apply(scene)
+
+        boots_skel.fit_to.assert_called_once_with(base_skel)
+        base_skel.fit_to.assert_not_called()
+        base_skel.unfit.assert_not_called()
+        self.assertEqual(result["errors"], [])
+
+    def test_apply_does_not_refit_when_follow_target_already_correct(self):
+        # A skeleton whose follow-target already matches the captured value
+        # (the common case -- apply_full() doesn't always desync it) should
+        # not get a redundant fit_to() call.
+        from dazpy._scene_state import DazSceneState
+
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        base_skel = self._skel_for_follow_target_tests("Genesis9", exec_result)
+        boots_skel = self._skel_for_follow_target_tests("Boots", exec_result)
+        base_skel.follow_target.return_value = None
+        already_correct_target = MagicMock()
+        already_correct_target._identifier.value = "Genesis9"
+        boots_skel.follow_target.return_value = already_correct_target
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Genesis9": base_skel, "Boots": boots_skel,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock(), "Boots": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None, "Boots": "Genesis9"},
+        )
+        state.apply(scene)
+
+        boots_skel.fit_to.assert_not_called()
+        boots_skel.unfit.assert_not_called()
+
+    def test_apply_unfits_skeleton_captured_with_no_follow_target(self):
+        from dazpy._scene_state import DazSceneState
+
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        skel = self._skel_for_follow_target_tests("Prop", exec_result)
+        stale_target = MagicMock()
+        stale_target._identifier.value = "SomeFigure"
+        skel.follow_target.return_value = stale_target
+
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Prop": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Prop": None},
+        )
+        state.apply(scene)
+
+        skel.unfit.assert_called_once()
+        skel.fit_to.assert_not_called()
+
+    def test_apply_retries_follow_target_restore_on_busy_error(self):
+        from dazpy._scene_state import DazSceneState
+        from dazpy.exceptions import StudioBusyError
+
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        base_skel = self._skel_for_follow_target_tests("Genesis9", exec_result)
+        boots_skel = self._skel_for_follow_target_tests("Boots", exec_result)
+        base_skel.follow_target.return_value = None
+        boots_skel.follow_target.side_effect = [StudioBusyError("busy"), None]
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Genesis9": base_skel, "Boots": boots_skel,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock(), "Boots": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None, "Boots": "Genesis9"},
+        )
+        with patch("dazpy._scene_state.time.sleep"):
+            result = state.apply(scene)
+
+        self.assertEqual(boots_skel.follow_target.call_count, 2)
+        boots_skel.fit_to.assert_called_once_with(base_skel)
+        self.assertEqual(result["errors"], [])
+
 
 class TestSceneSnapshot(unittest.TestCase):
     """Tests for DazScene.scene_snapshot() and build_rig_profiles_from_snapshot()."""
@@ -5340,39 +5523,27 @@ class TestZeroFigure(unittest.TestCase):
 
     def test_default_zeroes_only_bones_and_morphs(self):
         """The new default (include_props omitted) must take the bones/morphs-only path,
-        never the apply_full path — that's what guarantees root transform is untouched."""
+        never the apply_full path — that's what guarantees root transform is untouched.
+        Since Task 2C, this path is a single generated script (see
+        TestZeroFigureDefaultPath), not per-bone/per-morph client calls."""
         from dazpy.poses import zero_figure
         skeleton = MagicMock()
-        skeleton.bone_rotations.return_value = {"hip": (1.0, 2.0, 3.0), "chest": (0.0, 5.0, 0.0)}
-        skeleton.morph_values.return_value = {"PHMSmile": 0.8}
 
         zero_figure(skeleton)
 
-        skeleton.set_bone_rotations.assert_called_once_with(
-            {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
-        )
-        skeleton.morph_values.assert_called_once_with(nonzero_only=True)
-        skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
+        skeleton._zero_bones_and_morphs.assert_called_once_with()
 
     def test_include_props_false_zeroes_only_bones_and_morphs(self):
         from dazpy.poses import zero_figure
         skeleton = MagicMock()
-        skeleton.bone_rotations.return_value = {"hip": (1.0, 2.0, 3.0), "chest": (0.0, 5.0, 0.0)}
-        skeleton.morph_values.return_value = {"PHMSmile": 0.8}
 
         zero_figure(skeleton, include_props=False)
 
-        skeleton.set_bone_rotations.assert_called_once_with(
-            {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
-        )
-        skeleton.morph_values.assert_called_once_with(nonzero_only=True)
-        skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
+        skeleton._zero_bones_and_morphs.assert_called_once_with()
 
     def test_include_props_false_does_not_use_dazpose(self):
         from dazpy.poses import zero_figure
         skeleton = MagicMock()
-        skeleton.bone_rotations.return_value = {}
-        skeleton.morph_values.return_value = {}
 
         zero_figure(skeleton, include_props=False)
 
@@ -7032,6 +7203,317 @@ class TestMaterialsExports(unittest.TestCase):
         self.assertIn("get_surface_property", dazpy.__all__)
         self.assertIn("set_surface_property", dazpy.__all__)
         self.assertIn("MaterialError", dazpy.__all__)
+
+
+def _result(value):
+    r = MagicMock()
+    r.value = value
+    return r
+
+
+class TestDazElementSnapshot(unittest.TestCase):
+    def test_snapshot_issues_exactly_one_call(self):
+        client = _make_client({"Smile": 0.8, "Blink": 0.0, "EyesClosed": None})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        result = el.snapshot(["Smile", "Blink", "EyesClosed"])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result, {"Smile": 0.8, "Blink": 0.0, "EyesClosed": None})
+
+    def test_snapshot_escapes_labels_with_quotes_and_backslashes(self):
+        client = _make_client({})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        el.snapshot(['Weird "Label"', "Back\\slash"])
+        script = client.execute.call_args[0][0]
+        self.assertIn(json.dumps('Weird "Label"'), script)
+        self.assertIn(json.dumps("Back\\slash"), script)
+
+    def test_snapshot_missing_owner_returns_none_for_all_fields(self):
+        client = _make_client(None)  # script's top-level `if (!obj) return null;`
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Missing')")
+        result = el.snapshot(["Smile", "Blink"])
+        self.assertEqual(result, {"Smile": None, "Blink": None})
+
+
+class TestDazNodeSetTransform(unittest.TestCase):
+    def test_all_components_issue_one_call(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        node.set_transform(position=(1.0, 2.0, 3.0), rotation=(4.0, 5.0, 6.0), scale=(1.5, 1.5, 1.5))
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getXScaleControl", script)
+
+    def test_omitted_component_not_present_in_script(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        node.set_transform(position=(1.0, 2.0, 3.0))
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertNotIn("getXRotControl", script)
+        self.assertNotIn("getXScaleControl", script)
+
+    def test_no_arguments_is_a_noop(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        node.set_transform()
+        client.execute.assert_not_called()
+
+
+class TestResetTransforms(unittest.TestCase):
+    def test_reset_transforms_issues_exactly_one_call(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        from dazpy.poses import reset_transforms
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        reset_transforms(node)
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getXScaleControl", script)
+
+
+class TestZeroFigureDefaultPath(unittest.TestCase):
+    def test_default_mode_issues_exactly_one_call(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy.poses import zero_figure
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        zero_figure(skel)
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertIn("DzMorph", script)
+
+    def test_default_mode_zeroes_bones_and_nonzero_morphs_only(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy.poses import zero_figure
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        zero_figure(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setValue(0)", script)
+
+    def test_include_props_true_still_uses_apply_full(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy.poses import zero_figure
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        with patch("dazpy._pose.DazPose.apply_full") as mock_apply_full:
+            zero_figure(skel, include_props=True)
+        mock_apply_full.assert_called_once()
+
+
+class TestDazElementSetProperties(unittest.TestCase):
+    def test_multiple_mutations_issue_one_call(self):
+        client = _make_client({"Smile": True, "Blink": True})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        result = el.set_properties({"Smile": 0.8, "Blink": 0.2})
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(result, {"Smile": True, "Blink": True})
+
+    def test_missing_property_reported_false(self):
+        client = _make_client({"Smile": True, "Nonexistent": False})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        result = el.set_properties({"Smile": 0.8, "Nonexistent": 1.0})
+        self.assertEqual(result, {"Smile": True, "Nonexistent": False})
+
+    def test_labels_with_quotes_backslashes_newlines_are_json_safe(self):
+        client = _make_client({})
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        el.set_properties({'Weird "Label"': 1, "Multi\nLine": 2, "Back\\Slash": 3})
+        script = client.execute.call_args[0][0]
+        payload = json.dumps({'Weird "Label"': 1, "Multi\nLine": 2, "Back\\Slash": 3})
+        self.assertIn(payload, script)
+        self.assertIn("hasOwnProperty", script)
+
+
+class TestDazSkeletonSetState(unittest.TestCase):
+    def test_all_three_kinds_issue_one_call(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state(
+            bones={"Hip": (0.0, 0.0, 0.0)},
+            morphs={"Smile": 0.8},
+            props={"Scale": 100.0},
+        )
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertIn("DzMorph", script)
+        self.assertIn("getNumProperties", script)
+
+    def test_omitted_kind_not_present_in_script(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state(bones={"Hip": (0.0, 0.0, 0.0)})
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertNotIn("DzMorph", script)
+        self.assertNotIn("getNumProperties", script)
+
+    def test_all_omitted_is_a_noop(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state()
+        client.execute.assert_not_called()
+
+    def test_bone_and_morph_names_with_quotes_are_json_safe(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        skel.set_state(bones={'Weird "Bone"': (1.0, 2.0, 3.0)}, morphs={"Back\\Slash": 0.5})
+        script = client.execute.call_args[0][0]
+        self.assertIn(json.dumps({'Weird "Bone"': [1.0, 2.0, 3.0]}), script)
+        self.assertIn(json.dumps({"Back\\Slash": 0.5}), script)
+
+
+class TestBatchAddOperation(unittest.TestCase):
+    def test_add_operation_resolves_without_caller_guessing_key(self):
+        client = _make_client({"_r0": 42})
+        from dazpy._batch import Batch
+        batch = Batch(client)
+        future = batch.add_operation(
+            body_lines=["var x = 20 + 22;"],
+            result_expression="x",
+        )
+        batch.execute()
+        self.assertEqual(future.value, 42)
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _r0 = x;", script)
+
+    def test_shared_prelude_emitted_once_for_two_operations(self):
+        client = _make_client({"_r0": 1, "_r1": 2})
+        from dazpy._batch import Batch
+        batch = Batch(client)
+        batch.add_prelude("node:Fig", ["var _node_Fig = Scene.findNode('Fig');"])
+        batch.add_operation(body_lines=[], result_expression="_node_Fig.getXRotControl().getValue()")
+        batch.add_prelude("node:Fig", ["var _node_Fig = Scene.findNode('Fig');"])  # same key, second call
+        batch.add_operation(body_lines=[], result_expression="_node_Fig.getYRotControl().getValue()")
+        batch.execute()
+        script = client.execute.call_args[0][0]
+        self.assertEqual(script.count("Scene.findNode('Fig')"), 1)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_read_after_write_order_preserved(self):
+        client = _make_client({"_r0": None, "_r1": 99})
+        from dazpy._batch import Batch
+        batch = Batch(client)
+        write_future = batch.add_operation(body_lines=["var _v = 99;"], result_expression="null")
+        read_future = batch.add_operation(body_lines=[], result_expression="_v")
+        batch.execute()
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index("var _v = 99;"), script.index("var _r1 = _v;"))
+
+    def test_operation_count_limit_raises_before_execute(self):
+        client = _make_client({})
+        from dazpy._batch import Batch
+        from dazpy.exceptions import BatchLimitExceededError
+        batch = Batch(client, max_operations=2)
+        batch.add_operation(body_lines=[], result_expression="1")
+        batch.add_operation(body_lines=[], result_expression="2")
+        with self.assertRaises(BatchLimitExceededError):
+            batch.add_operation(body_lines=[], result_expression="3")
+        client.execute.assert_not_called()
+
+    def test_script_length_limit_raises_on_execute(self):
+        client = _make_client({})
+        from dazpy._batch import Batch
+        from dazpy.exceptions import BatchLimitExceededError
+        batch = Batch(client, max_script_length=50)
+        batch.add_operation(body_lines=["var x = 1;" * 20], result_expression="x")
+        with self.assertRaises(BatchLimitExceededError):
+            batch.execute()
+        client.execute.assert_not_called()
+
+    def test_existing_raw_add_still_works_unmodified(self):
+        # Regression guard: add_operation()/add_prelude() must not change add()'s behavior.
+        client = _make_client({"_r0": 10, "_r1": 5})
+        from dazpy._batch import Batch
+        with Batch(client) as batch:
+            f_count = batch.add(["var _r0 = Scene.getNumNodes();"])
+            f_frame = batch.add(["var _r1 = Scene.getFrame();"])
+        self.assertEqual(f_count.value, 10)
+        self.assertEqual(f_frame.value, 5)
+        client.execute.assert_called_once()
+
+
+class TestExecuteBatchAsync(unittest.TestCase):
+    def test_submits_one_request_for_multiple_operations(self):
+        client = DazClient(token="")
+        client._session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"request_id": "batch-async-1", "status": "queued"}
+        response.headers = {}
+        client._session.post.return_value = response
+
+        request_id = client.execute_batch_async([
+            {"body_lines": ["var x = 1;"], "result_expression": "x"},
+            {"body_lines": ["var y = 2;"], "result_expression": "y"},
+        ])
+
+        self.assertEqual(request_id, "batch-async-1")
+        client._session.post.assert_called_once()
+        call_args = client._session.post.call_args
+        self.assertEqual(call_args[0][0], "http://127.0.0.1:18811/execute/async")
+        submitted_script = call_args[1]["json"]["script"]
+        self.assertIn("var x = 1;", submitted_script)
+        self.assertIn("var y = 2;", submitted_script)
+        self.assertIn('"_r0"', submitted_script)
+        self.assertIn('"_r1"', submitted_script)
+
+    def test_passes_args_through(self):
+        client = DazClient(token="")
+        client._session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"request_id": "batch-async-2", "status": "queued"}
+        response.headers = {}
+        client._session.post.return_value = response
+
+        client.execute_batch_async(
+            [{"body_lines": [], "result_expression": "1"}],
+            args={"mode": "probe"},
+        )
+
+        submitted_payload = client._session.post.call_args[1]["json"]
+        self.assertEqual(submitted_payload["args"], {"mode": "probe"})
+
+
+class TestCallCountBaseline(unittest.TestCase):
+    """Pins down pre-batching call counts. Update these assertions in the
+    same commit that fixes the corresponding helper in Task 2/3 — do not
+    let this class silently mask a regression by staying loose."""
+
+    def test_batch_add_issues_one_call_for_two_ops(self):
+        client = _make_client({"_r0": 10, "_r1": 5})
+        from dazpy._batch import Batch
+        with Batch(client) as b:
+            b.add(["var _r0 = Scene.getNumNodes();"])
+            b.add(["var _r1 = Scene.getFrame();"])
+        self.assertEqual(client.execute.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -321,6 +321,25 @@ class DazClient:
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
+    def execute_batch_async(self, operations: list[dict], args: object = None) -> str:
+        """Submit multiple operations as one async request (one queue slot, one script).
+
+        Args:
+            operations: List of ``{"body_lines": [...], "result_expression": "..."}``
+                dicts — same shape as :meth:`~dazpy.Batch.add_operation`'s arguments.
+            args: Optional argument passed to the combined script.
+
+        Returns:
+            The server-assigned ``request_id``. Poll it like any other async
+            request; the result's ``result`` field is a dict keyed ``"_r0"``,
+            ``"_r1"``, ... in submission order.
+        """
+        from ._batch import build_operations_script
+
+        pairs = [(op["body_lines"], op["result_expression"]) for op in operations]
+        script = build_operations_script(pairs)
+        return self.execute_async_submit(script, args=args)
+
     def get_request_status(self, request_id: str) -> dict:
         """Return the current status of an async request.
 

@@ -1524,9 +1524,11 @@ std::string DzScriptServerPane::listAsyncRequestsJson(const std::string& statusF
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
 
-HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP)
+HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP, qint64 acceptedAtMs)
 {
 	QTime startTime = QTime::currentTime();
+	qint64 dispatchedAtMs = QDateTime::currentMSecsSinceEpoch();
+	m_metrics.recordMainThreadWait(dispatchedAtMs - acceptedAtMs);
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
 	QString requestId = MetricsCollector::generateRequestId();
 
@@ -2903,6 +2905,10 @@ std::string DzScriptServerPane::getMetricsJson() const
 	s += std::to_string(uptime);
 	s += ",\"success_rate_percent\":";
 	s += rateBuf;
+	s += ",\"avg_main_thread_wait_ms\":";
+	s += std::to_string((long long)m_metrics.getAvgMainThreadWaitMs());
+	s += ",\"max_main_thread_wait_ms\":";
+	s += std::to_string((long long)m_metrics.getMaxMainThreadWaitMs());
 	s += "}";
 	return s;
 }
@@ -2921,8 +2927,23 @@ bool DzScriptServerPane::isMainThreadBusy() const
 
 std::string DzScriptServerPane::mainThreadBusyMessage() const
 {
-	if (!m_pEventBroker) return "DAZ Studio is busy";
-	return MainThreadBusy::reasonMessage(m_pEventBroker->busyReason());
+	if (m_pEventBroker && m_pEventBroker->busyReason() != MainThreadBusy::Idle) {
+		return MainThreadBusy::reasonMessage(m_pEventBroker->busyReason());
+	}
+	// isMainThreadBusy()'s second check (DzProgress/DzBackgroundProgress) has
+	// no matching SceneEventBroker reason -- distinguish the two paths so a
+	// caller isn't left with a generic message for what's usually several
+	// seconds of DAZ Studio streaming in lazy-loaded content after a scene
+	// load, not a real hang. Neither DzProgress nor DzBackgroundProgress
+	// exposes a readable status/info string (setInfo() has no getter), so
+	// this is the most specific message obtainable from the SDK.
+	if (DzBackgroundProgress::isActive()) {
+		return "DAZ Studio is busy loading background content (e.g. lazy-loaded/referenced scene assets)";
+	}
+	if (DzProgress::isActive()) {
+		return "DAZ Studio is showing a progress dialog for a foreground operation";
+	}
+	return "DAZ Studio is busy";
 }
 
 // ─── Async Execution (main thread) ───────────────────────────────────────────

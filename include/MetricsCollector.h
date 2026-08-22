@@ -15,6 +15,14 @@ public:
     void recordRequest(bool success);
     void recordAuthFailure();
 
+    // Records how long a synchronous /execute request waited between the
+    // HTTP thread issuing the BlockingQueuedConnection call and
+    // handleExecuteRequest() starting to run on the main thread.
+    void recordMainThreadWait(qint64 waitMs);
+
+    qint64 getAvgMainThreadWaitMs() const;
+    qint64 getMaxMainThreadWaitMs() const;
+
     void saveToSettings();
     void loadFromSettings();
 
@@ -35,5 +43,8 @@ private:
     int       m_nFailed;
     int       m_nAuthFailures;
     QDateTime m_startTime;
+    qint64    m_nMainThreadWaitSamples;
+    qint64    m_nMainThreadWaitSumMs;
+    qint64    m_nMainThreadWaitMaxMs;
     mutable QMutex m_mutex;
 };

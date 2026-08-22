@@ -148,6 +148,45 @@ class TestAsyncDazClientExecute:
             await client.execute("1;")
 
 
+class TestAsyncDazClientExecuteBatchAsync:
+    @pytest.mark.asyncio
+    async def test_submits_one_request_for_multiple_operations(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.return_value = _mock_resp(
+            json_data={"request_id": "batch-async-1", "status": "queued"}
+        )
+
+        request_id = await client.execute_batch_async([
+            {"body_lines": ["var x = 1;"], "result_expression": "x"},
+            {"body_lines": ["var y = 2;"], "result_expression": "y"},
+        ])
+
+        assert request_id == "batch-async-1"
+        mock_http.post.assert_awaited_once()
+        args, kwargs = mock_http.post.call_args
+        assert args[0] == "http://127.0.0.1:18811/execute/async"
+        submitted_script = kwargs["json"]["script"]
+        assert "var x = 1;" in submitted_script
+        assert "var y = 2;" in submitted_script
+        assert '"_r0"' in submitted_script
+        assert '"_r1"' in submitted_script
+
+    @pytest.mark.asyncio
+    async def test_passes_args_through(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.return_value = _mock_resp(
+            json_data={"request_id": "batch-async-2", "status": "queued"}
+        )
+
+        await client.execute_batch_async(
+            [{"body_lines": [], "result_expression": "1"}],
+            args={"mode": "probe"},
+        )
+
+        _, kwargs = mock_http.post.call_args
+        assert kwargs["json"]["args"] == {"mode": "probe"}
+
+
 class TestAsyncDazClientRetryOnBusy:
     @pytest.mark.asyncio
     async def test_retries_then_succeeds(self, monkeypatch):

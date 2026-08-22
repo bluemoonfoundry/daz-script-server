@@ -9,6 +9,9 @@ MetricsCollector::MetricsCollector()
     , m_nFailed(0)
     , m_nAuthFailures(0)
     , m_startTime(QDateTime::currentDateTime())
+    , m_nMainThreadWaitSamples(0)
+    , m_nMainThreadWaitSumMs(0)
+    , m_nMainThreadWaitMaxMs(0)
 {}
 
 void MetricsCollector::recordRequest(bool success)
@@ -31,6 +34,26 @@ void MetricsCollector::recordAuthFailure()
 {
     QMutexLocker lock(&m_mutex);
     m_nAuthFailures++;
+}
+
+void MetricsCollector::recordMainThreadWait(qint64 waitMs)
+{
+    QMutexLocker lock(&m_mutex);
+    m_nMainThreadWaitSamples++;
+    m_nMainThreadWaitSumMs += waitMs;
+    if (waitMs > m_nMainThreadWaitMaxMs) m_nMainThreadWaitMaxMs = waitMs;
+}
+
+qint64 MetricsCollector::getAvgMainThreadWaitMs() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_nMainThreadWaitSamples > 0 ? m_nMainThreadWaitSumMs / m_nMainThreadWaitSamples : 0;
+}
+
+qint64 MetricsCollector::getMaxMainThreadWaitMs() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_nMainThreadWaitMaxMs;
 }
 
 void MetricsCollector::saveToSettings()

@@ -35,13 +35,16 @@ def reset_transforms(node: "DazNode") -> None:
     """Reset *node*'s local position and rotation to zero, and scale to 1.0.
 
     Works on any :class:`~dazpy.DazNode` — camera, prop, or figure root.
+    Uses a single DazScript evaluation via :meth:`~dazpy.DazNode.set_transform`.
 
     Args:
         node: The node to reset.
     """
-    node.set_local_position(0.0, 0.0, 0.0)
-    node.set_local_rotation(0.0, 0.0, 0.0)
-    node.set_scale(1.0, 1.0, 1.0)
+    node.set_transform(
+        position=(0.0, 0.0, 0.0),
+        rotation=(0.0, 0.0, 0.0),
+        scale=(1.0, 1.0, 1.0),
+    )
 
 
 def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = False) -> None:
@@ -82,7 +85,4 @@ def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = False) -> None
         pose.apply_full(skeleton)
         return
 
-    zero_bones = {name: (0.0, 0.0, 0.0) for name in skeleton.bone_rotations()}
-    zero_morphs = {name: 0.0 for name in skeleton.morph_values(nonzero_only=True)}
-    skeleton.set_bone_rotations(zero_bones)
-    skeleton.set_morph_values(zero_morphs)
+    skeleton._zero_bones_and_morphs()

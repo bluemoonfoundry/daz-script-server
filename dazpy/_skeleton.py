@@ -249,6 +249,110 @@ class DazSkeleton(DazNode):
         """)
         self._client.execute(script)
 
+    def _zero_bones_and_morphs(self) -> None:
+        """Drive every bone rotation to 0 and every non-zero DzMorph to 0, in
+        one DazScript evaluation. Used by :func:`~dazpy.poses.zero_figure`'s
+        default (``include_props=False``) path — does not touch node-level
+        properties or the figure root transform.
+        """
+        script = self._skeleton_body("""
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {
+                var _b = _bones[i];
+                _b.getXRotControl().setValue(0);
+                _b.getYRotControl().setValue(0);
+                _b.getZRotControl().setValue(0);
+            }
+            var _obj = _node.getObject();
+            if (_obj) {
+                for (var j = 0; j < _obj.getNumModifiers(); j++) {
+                    var _m = _obj.getModifier(j);
+                    if (_m.className() === "DzMorph") {
+                        var _ch = _m.getValueChannel();
+                        if (Math.abs(_ch.getValue()) > 0.0001) {
+                            _ch.setValue(0);
+                        }
+                    }
+                }
+            }
+        """)
+        self._client.execute(script)
+
+    def set_state(
+        self,
+        bones: dict[str, tuple | list] | None = None,
+        morphs: dict[str, float] | None = None,
+        props: dict[str, object] | None = None,
+    ) -> None:
+        """Set bone rotations, morph values, and/or node properties in one call.
+
+        Equivalent to calling :meth:`set_bone_rotations`, :meth:`set_morph_values`,
+        and/or repeated :meth:`~dazpy.DazElement.set_property` calls, but
+        round-trips only once. Each argument is independently optional.
+
+        ``bones``/``morphs`` use plain ``setValue()`` writes, matching
+        :meth:`set_bone_rotations`/:meth:`set_morph_values` exactly — this method
+        does not change which write path those two use. ``props`` also uses plain
+        ``setValue()`` (like :meth:`~dazpy.DazElement.set_property`); it is NOT
+        routed through :meth:`~dazpy.DazPose.apply_full`'s ``DzERCLink``-avoidance
+        logic (see ``dazpy/_pose.py`` ~lines 117-125), so on ERC-driven node
+        properties this can double-apply a controller contribution the same way
+        :meth:`~dazpy.DazElement.set_property` already can.
+
+        Args:
+            bones: ``{bone_name: (x, y, z)}`` Euler degrees. Bones not named are unchanged.
+            morphs: ``{morph_name: float}``. Morphs not named are unchanged.
+            props: ``{property_label: value}`` node-level properties. Properties
+                not named are unchanged.
+        """
+        lines = []
+        if bones:
+            bones_json = json.dumps({k: list(v) for k, v in bones.items()})
+            lines.append(f"""
+                var _bonesData = {bones_json};
+                var _allBones = _node.getAllBones();
+                for (var i = 0; i < _allBones.length; i++) {{
+                    var _b = _allBones[i];
+                    var _bn = _b.getName();
+                    if (_bonesData.hasOwnProperty(_bn)) {{
+                        var _r = _bonesData[_bn];
+                        _b.getXRotControl().setValue(_r[0]);
+                        _b.getYRotControl().setValue(_r[1]);
+                        _b.getZRotControl().setValue(_r[2]);
+                    }}
+                }}
+            """)
+        if morphs:
+            morphs_json = json.dumps(morphs)
+            lines.append(f"""
+                var _morphsData = {morphs_json};
+                var _obj = _node.getObject();
+                if (_obj) {{
+                    for (var j = 0; j < _obj.getNumModifiers(); j++) {{
+                        var _m = _obj.getModifier(j);
+                        if (_m.className() === "DzMorph" && _morphsData.hasOwnProperty(_m.getName())) {{
+                            _m.getValueChannel().setValue(_morphsData[_m.getName()]);
+                        }}
+                    }}
+                }}
+            """)
+        if props:
+            props_json = json.dumps(props)
+            lines.append(f"""
+                var _propsData = {props_json};
+                for (var k = 0; k < _node.getNumProperties(); k++) {{
+                    var _p = _node.getProperty(k);
+                    var _pl = _p.getLabel();
+                    if (_propsData.hasOwnProperty(_pl)) {{
+                        _p.setValue(_propsData[_pl]);
+                    }}
+                }}
+            """)
+        if not lines:
+            return
+        script = self._skeleton_body("\n".join(lines))
+        self._client.execute(script)
+
     def evaluate_pose(
         self,
         rotations: dict[str, tuple | list],
