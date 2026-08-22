@@ -5059,6 +5059,148 @@ class TestDazSceneStateApply(unittest.TestCase):
         self.assertIn("Fuzzy", result["restored"])
         self.assertEqual(skel._client.execute.call_count, 2)
 
+    def _skel_for_follow_target_tests(self, name, execute_value):
+        skel = MagicMock()
+        skel._identifier.value = name
+        skel._client.execute.return_value = execute_value
+        return skel
+
+    def test_apply_restores_conforming_items_follow_target(self):
+        # Regression for daz-script-server-jz0e: DazPose.apply_full() writes
+        # back every property on a skeleton, including the internal "FID_*"
+        # property DAZ Studio uses to persist a conforming item's fit
+        # registration -- rewriting it (even to its own captured value)
+        # desyncs the live getFollowTarget() pointer without raising. apply()
+        # must independently re-fit any skeleton whose follow-target no
+        # longer matches what capture() recorded.
+        from dazpy._scene_state import DazSceneState
+
+        base_pose = MagicMock()
+        boots_pose = MagicMock()
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+
+        base_skel = self._skel_for_follow_target_tests("Genesis9", exec_result)
+        boots_skel = self._skel_for_follow_target_tests("Boots", exec_result)
+        base_skel.follow_target.return_value = None  # base figure has no follow-target
+        # apply_full() desynced the follow-target pointer even though the
+        # captured value ("Genesis9") is what we'll assert gets restored.
+        boots_skel.follow_target.return_value = None
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Genesis9": base_skel, "Boots": boots_skel,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": base_pose, "Boots": boots_pose},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None, "Boots": "Genesis9"},
+        )
+        result = state.apply(scene)
+
+        boots_skel.fit_to.assert_called_once_with(base_skel)
+        base_skel.fit_to.assert_not_called()
+        base_skel.unfit.assert_not_called()
+        self.assertEqual(result["errors"], [])
+
+    def test_apply_does_not_refit_when_follow_target_already_correct(self):
+        # A skeleton whose follow-target already matches the captured value
+        # (the common case -- apply_full() doesn't always desync it) should
+        # not get a redundant fit_to() call.
+        from dazpy._scene_state import DazSceneState
+
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        base_skel = self._skel_for_follow_target_tests("Genesis9", exec_result)
+        boots_skel = self._skel_for_follow_target_tests("Boots", exec_result)
+        base_skel.follow_target.return_value = None
+        already_correct_target = MagicMock()
+        already_correct_target._identifier.value = "Genesis9"
+        boots_skel.follow_target.return_value = already_correct_target
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Genesis9": base_skel, "Boots": boots_skel,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock(), "Boots": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None, "Boots": "Genesis9"},
+        )
+        state.apply(scene)
+
+        boots_skel.fit_to.assert_not_called()
+        boots_skel.unfit.assert_not_called()
+
+    def test_apply_unfits_skeleton_captured_with_no_follow_target(self):
+        from dazpy._scene_state import DazSceneState
+
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        skel = self._skel_for_follow_target_tests("Prop", exec_result)
+        stale_target = MagicMock()
+        stale_target._identifier.value = "SomeFigure"
+        skel.follow_target.return_value = stale_target
+
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Prop": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Prop": None},
+        )
+        state.apply(scene)
+
+        skel.unfit.assert_called_once()
+        skel.fit_to.assert_not_called()
+
+    def test_apply_retries_follow_target_restore_on_busy_error(self):
+        from dazpy._scene_state import DazSceneState
+        from dazpy.exceptions import StudioBusyError
+
+        exec_result = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        base_skel = self._skel_for_follow_target_tests("Genesis9", exec_result)
+        boots_skel = self._skel_for_follow_target_tests("Boots", exec_result)
+        base_skel.follow_target.return_value = None
+        boots_skel.follow_target.side_effect = [StudioBusyError("busy"), None]
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = lambda name: {
+            "Genesis9": base_skel, "Boots": boots_skel,
+        }[name]
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock(), "Boots": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None, "Boots": "Genesis9"},
+        )
+        with patch("dazpy._scene_state.time.sleep"):
+            result = state.apply(scene)
+
+        self.assertEqual(boots_skel.follow_target.call_count, 2)
+        boots_skel.fit_to.assert_called_once_with(base_skel)
+        self.assertEqual(result["errors"], [])
+
 
 class TestSceneSnapshot(unittest.TestCase):
     """Tests for DazScene.scene_snapshot() and build_rig_profiles_from_snapshot()."""

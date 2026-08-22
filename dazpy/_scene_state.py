@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING
 
+from .exceptions import DazBusyError
 from ._pose import _ZERO3, DazPose
 from ._script_builder import ScriptBuilder
 
@@ -13,6 +15,32 @@ _TRANSFORM_KEYS = ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate
 _LIGHT_EXTRA_KEYS = ["Flux", "Shadow Softness", "Spread Angle"]
 _DEFAULT_VERIFY_TOLERANCE = 0.05
 _DEFAULT_MAX_VERIFY_RETRIES = 2
+_FOLLOW_TARGET_RETRY_MAX_WAIT = 30.0
+
+
+def _retry_on_busy(fn, max_wait: float = _FOLLOW_TARGET_RETRY_MAX_WAIT):
+    """Run *fn* (a zero-arg callable), retrying with backoff on DazBusyError.
+
+    follow_target()/fit_to()/unfit() (unlike DazPose.apply_full(), which
+    takes its own retry_on_busy param) don't expose retry-on-busy directly,
+    but apply()'s follow-target restoration pass makes several of these
+    calls back-to-back per skeleton on top of the pose-restore/verify calls
+    already made for every skeleton in the scene -- under that load a
+    single skeleton's follow-target fix can transiently hit StudioBusyError
+    even though the overall restore succeeds for every other skeleton. This
+    mirrors DazClient._with_busy_retry's backoff without depending on it.
+    """
+    deadline = time.monotonic() + max_wait
+    backoff = 1.0
+    while True:
+        try:
+            return fn()
+        except DazBusyError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(backoff, remaining))
+            backoff = min(backoff + 1.0, 5.0)
 
 
 def _pose_mismatches(expected: DazPose, actual: DazPose, tolerance: float) -> list[str]:
@@ -86,11 +114,23 @@ class DazSceneState:
         camera_transforms: dict[str, dict[str, float]],
         light_transforms: dict[str, dict[str, float]],
         light_extra: dict[str, dict[str, float]],
+        follow_targets: dict[str, str | None] | None = None,
     ) -> None:
         self.skeleton_poses = skeleton_poses
         self.camera_transforms = camera_transforms
         self.light_transforms = light_transforms
         self.light_extra = light_extra
+        # Each skeleton's conform/fit-to relationship (by target skeleton
+        # name, or None if unfitted), captured and restored independently
+        # of DazPose's generic bones/morphs/props. DazPose.apply_full()
+        # writes back every property on a skeleton, including the internal
+        # "FID_<name>" property DAZ Studio uses to persist a conforming
+        # item's fit registration -- rewriting that property (even to the
+        # exact value captured) desyncs the live getFollowTarget() pointer
+        # without raising any error. See daz-script-server-jz0e: a
+        # dedicated capture/restore pass via the real
+        # getFollowTarget()/setFollowTarget() API is the only reliable fix.
+        self.follow_targets = follow_targets or {}
 
     # ── construction ──────────────────────────────────────────────────────────
 
@@ -104,9 +144,13 @@ class DazSceneState:
         Returns:
             A new :class:`DazSceneState`.
         """
-        skeleton_poses = {
-            skel._identifier.value: DazPose.capture(skel) for skel in scene.skeletons()
-        }
+        skeleton_poses: dict[str, DazPose] = {}
+        follow_targets: dict[str, str | None] = {}
+        for skel in scene.skeletons():
+            name = skel._identifier.value
+            skeleton_poses[name] = DazPose.capture(skel)
+            target = skel.follow_target()
+            follow_targets[name] = target._identifier.value if target is not None else None
 
         cam_script = ScriptBuilder.iife(f"""
             var _keys = {json.dumps(_TRANSFORM_KEYS)};
@@ -162,6 +206,7 @@ class DazSceneState:
             camera_transforms=camera_transforms,
             light_transforms=light_result.get("transforms", {}),
             light_extra=light_result.get("extra", {}),
+            follow_targets=follow_targets,
         )
 
     # ── serialisation ─────────────────────────────────────────────────────────
@@ -172,6 +217,7 @@ class DazSceneState:
             "skeletons": {name: pose.to_dict() for name, pose in self.skeleton_poses.items()},
             "cameras": self.camera_transforms,
             "lights": {"transforms": self.light_transforms, "extra": self.light_extra},
+            "follow_targets": self.follow_targets,
         }
 
     @classmethod
@@ -187,6 +233,7 @@ class DazSceneState:
             camera_transforms=data.get("cameras", {}),
             light_transforms=lights.get("transforms", {}),
             light_extra=lights.get("extra", {}),
+            follow_targets=data.get("follow_targets", {}),
         )
 
     # ── apply ─────────────────────────────────────────────────────────────────
@@ -230,10 +277,12 @@ class DazSceneState:
         """
         restored: list[str] = []
         errors: list[str] = []
+        resolved_skeletons: dict[str, "DazSkeleton"] = {}  # noqa: F821
 
         for name, pose in self.skeleton_poses.items():
             try:
                 skel = scene.find_skeleton(name)
+                resolved_skeletons[name] = skel
             except Exception:
                 errors.append(f"Skeleton not found: {name}")
                 continue
@@ -271,6 +320,30 @@ class DazSceneState:
                 continue
             restored.append(name)
 
+        # Restore each successfully-restored skeleton's conform/fit-to
+        # relationship explicitly via the real getFollowTarget()/
+        # setFollowTarget() API -- apply_full() above already wrote back
+        # this skeleton's own "FID_*" property as part of its generic
+        # props restore, but doing so does not reliably re-resolve the
+        # live follow-target pointer (see daz-script-server-jz0e). Only
+        # touches skeletons whose current follow-target doesn't already
+        # match what was captured, to avoid redundant calls.
+        for name in restored:
+            skel = resolved_skeletons[name]
+            target_name = self.follow_targets.get(name)
+            try:
+                current = _retry_on_busy(skel.follow_target)
+                current_name = current._identifier.value if current is not None else None
+                if current_name == target_name:
+                    continue
+                if target_name is None:
+                    _retry_on_busy(skel.unfit)
+                else:
+                    target_skel = resolved_skeletons.get(target_name) or scene.find_skeleton(target_name)
+                    _retry_on_busy(lambda: skel.fit_to(target_skel))
+            except Exception as exc:
+                errors.append(f"Failed to restore follow-target for skeleton {name}: {exc}")
+
         restore_script = ScriptBuilder.iife(f"""
             var _camTransforms = {json.dumps(self.camera_transforms)};
             var _lightTransforms = {json.dumps(self.light_transforms)};
@@ -306,7 +379,9 @@ class DazSceneState:
 
             return {{restored: restored, errors: errors}};
         """)
-        node_result = scene._client.execute(restore_script).value or {"restored": [], "errors": []}
+        node_result = scene._client.execute(
+            restore_script, retry_on_busy=True, max_wait=_FOLLOW_TARGET_RETRY_MAX_WAIT
+        ).value or {"restored": [], "errors": []}
         restored.extend(node_result.get("restored", []))
         errors.extend(node_result.get("errors", []))
 
