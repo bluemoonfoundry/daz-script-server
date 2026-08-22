@@ -7176,5 +7176,55 @@ class TestMaterialsExports(unittest.TestCase):
         self.assertIn("MaterialError", dazpy.__all__)
 
 
+def _result(value):
+    r = MagicMock()
+    r.value = value
+    return r
+
+
+class TestCallCountBaseline(unittest.TestCase):
+    """Pins down pre-batching call counts. Update these assertions in the
+    same commit that fixes the corresponding helper in Task 2/3 — do not
+    let this class silently mask a regression by staying loose."""
+
+    def test_snapshot_issues_one_call_per_field_before_fix(self):
+        client = _make_client(1.0)
+        from dazpy._element import DazElement
+        el = DazElement(client, "Scene.findNode('Fig')")
+        el.snapshot(["Smile", "Blink", "EyesClosed"])
+        self.assertEqual(client.execute.call_count, 3)
+
+    def test_reset_transforms_issues_three_calls_before_fix(self):
+        client = _make_client(None)
+        from dazpy._node import DazNode, NodeIdentifier
+        from dazpy.poses import reset_transforms
+        node = DazNode(client, NodeIdentifier("name", "Camera"))
+        reset_transforms(node)
+        self.assertEqual(client.execute.call_count, 3)
+
+    def test_zero_figure_default_issues_four_calls_before_fix(self):
+        client = MagicMock()
+        client.execute.side_effect = [
+            _result({"Hip": [0, 0, 0]}),   # bone_rotations()
+            _result({"Smile": 0.5}),        # morph_values(nonzero_only=True)
+            _result(None),                  # set_bone_rotations()
+            _result(None),                  # set_morph_values()
+        ]
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy.poses import zero_figure
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        zero_figure(skel)
+        self.assertEqual(client.execute.call_count, 4)
+
+    def test_batch_add_issues_one_call_for_two_ops(self):
+        client = _make_client({"_r0": 10, "_r1": 5})
+        from dazpy._batch import Batch
+        with Batch(client) as b:
+            b.add(["var _r0 = Scene.getNumNodes();"])
+            b.add(["var _r1 = Scene.getFrame();"])
+        self.assertEqual(client.execute.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
