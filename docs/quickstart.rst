@@ -141,6 +141,46 @@ Collect multiple reads into one HTTP round-trip::
 
    print(n_nodes.value, n_cameras.value)
 
+Before: a bulk pose update issuing one HTTP round-trip per bone/property::
+
+   for name, rot in bone_rotations.items():
+       skeleton.set_bone_rotations({name: rot})
+   for name, val in morph_values.items():
+       skeleton.set_morph_values({name: val})
+   skeleton.set_property("Scale", 100.0)
+
+After: the same update as one HTTP round-trip and one DazScript evaluation,
+via :meth:`~dazpy.DazSkeleton.set_state`::
+
+   skeleton.set_state(bones=bone_rotations, morphs=morph_values, props={"Scale": 100.0})
+
+For updates that don't map onto ``set_state()`` (mixed node types, custom
+expressions), build the same shape with :class:`~dazpy.Batch`::
+
+   from dazpy import Batch
+
+   with Batch(client) as b:
+       futures = {}
+       for name, rot in bone_rotations.items():
+           futures[name] = b.add_operation(
+               [f'Scene.findNode("Figure").findBone("{name}").setRotation({list(rot)});'],
+               "null",
+           )
+   # all bones written in one round-trip; futures[name].value is None (mutation-only)
+
+See :doc:`api/batch` for the full semantics — in particular, a ``Batch`` is
+not a transaction: a failing operation fails the whole call, and earlier
+mutations in the same script are not rolled back.
+
+Prefer a synchronous ``Batch`` when the combined script will finish quickly
+(sub-second to a few seconds) and the caller can afford to block. For a
+combined script expected to run longer, submit it via
+:meth:`~dazpy.DazClient.execute_batch_async` instead of blocking an HTTP
+worker thread on it — poll ``/requests/:id/status`` and
+``/requests/:id/result?wait=true`` (see :doc:`api/batch`'s
+``execute_batch_async`` section and the async endpoints in the project's
+``CLAUDE.md``) rather than holding a synchronous connection open.
+
 Error Handling
 --------------
 
