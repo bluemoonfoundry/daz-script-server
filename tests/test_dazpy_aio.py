@@ -395,6 +395,19 @@ class TestAsyncDazClientRealHttpxWiring:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_stream_render_progress_flushes_final_event_at_eof(self):
+        sse_body = b'event: complete\ndata: {"output_path": "C:/out.png"}'
+        respx.get("http://127.0.0.1:18811/render/r1/progress").mock(
+            return_value=httpx.Response(
+                200, content=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+        async with AsyncDazClient() as client:
+            events = [e async for e in client.stream_render_progress("r1")]
+        assert events == [("complete", {"output_path": "C:/out.png"})]
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_render_forwards_animation_frame_progress(self):
         from dazpy.aio import render
 
