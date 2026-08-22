@@ -85,7 +85,4 @@ def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = False) -> None
         pose.apply_full(skeleton)
         return
 
-    zero_bones = {name: (0.0, 0.0, 0.0) for name in skeleton.bone_rotations()}
-    zero_morphs = {name: 0.0 for name in skeleton.morph_values(nonzero_only=True)}
-    skeleton.set_bone_rotations(zero_bones)
-    skeleton.set_morph_values(zero_morphs)
+    skeleton._zero_bones_and_morphs()

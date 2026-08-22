@@ -5482,39 +5482,27 @@ class TestZeroFigure(unittest.TestCase):
 
     def test_default_zeroes_only_bones_and_morphs(self):
         """The new default (include_props omitted) must take the bones/morphs-only path,
-        never the apply_full path — that's what guarantees root transform is untouched."""
+        never the apply_full path — that's what guarantees root transform is untouched.
+        Since Task 2C, this path is a single generated script (see
+        TestZeroFigureDefaultPath), not per-bone/per-morph client calls."""
         from dazpy.poses import zero_figure
         skeleton = MagicMock()
-        skeleton.bone_rotations.return_value = {"hip": (1.0, 2.0, 3.0), "chest": (0.0, 5.0, 0.0)}
-        skeleton.morph_values.return_value = {"PHMSmile": 0.8}
 
         zero_figure(skeleton)
 
-        skeleton.set_bone_rotations.assert_called_once_with(
-            {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
-        )
-        skeleton.morph_values.assert_called_once_with(nonzero_only=True)
-        skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
+        skeleton._zero_bones_and_morphs.assert_called_once_with()
 
     def test_include_props_false_zeroes_only_bones_and_morphs(self):
         from dazpy.poses import zero_figure
         skeleton = MagicMock()
-        skeleton.bone_rotations.return_value = {"hip": (1.0, 2.0, 3.0), "chest": (0.0, 5.0, 0.0)}
-        skeleton.morph_values.return_value = {"PHMSmile": 0.8}
 
         zero_figure(skeleton, include_props=False)
 
-        skeleton.set_bone_rotations.assert_called_once_with(
-            {"hip": (0.0, 0.0, 0.0), "chest": (0.0, 0.0, 0.0)}
-        )
-        skeleton.morph_values.assert_called_once_with(nonzero_only=True)
-        skeleton.set_morph_values.assert_called_once_with({"PHMSmile": 0.0})
+        skeleton._zero_bones_and_morphs.assert_called_once_with()
 
     def test_include_props_false_does_not_use_dazpose(self):
         from dazpy.poses import zero_figure
         skeleton = MagicMock()
-        skeleton.bone_rotations.return_value = {}
-        skeleton.morph_values.return_value = {}
 
         zero_figure(skeleton, include_props=False)
 
@@ -7252,25 +7240,44 @@ class TestResetTransforms(unittest.TestCase):
         self.assertIn("getXScaleControl", script)
 
 
-class TestCallCountBaseline(unittest.TestCase):
-    """Pins down pre-batching call counts. Update these assertions in the
-    same commit that fixes the corresponding helper in Task 2/3 — do not
-    let this class silently mask a regression by staying loose."""
-
-    def test_zero_figure_default_issues_four_calls_before_fix(self):
-        client = MagicMock()
-        client.execute.side_effect = [
-            _result({"Hip": [0, 0, 0]}),   # bone_rotations()
-            _result({"Smile": 0.5}),        # morph_values(nonzero_only=True)
-            _result(None),                  # set_bone_rotations()
-            _result(None),                  # set_morph_values()
-        ]
+class TestZeroFigureDefaultPath(unittest.TestCase):
+    def test_default_mode_issues_exactly_one_call(self):
+        client = _make_client(None)
         from dazpy._skeleton import DazSkeleton
         from dazpy._node import NodeIdentifier
         from dazpy.poses import zero_figure
         skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
         zero_figure(skel)
-        self.assertEqual(client.execute.call_count, 4)
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("getAllBones", script)
+        self.assertIn("DzMorph", script)
+
+    def test_default_mode_zeroes_bones_and_nonzero_morphs_only(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy.poses import zero_figure
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        zero_figure(skel)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setValue(0)", script)
+
+    def test_include_props_true_still_uses_apply_full(self):
+        client = _make_client(None)
+        from dazpy._skeleton import DazSkeleton
+        from dazpy._node import NodeIdentifier
+        from dazpy.poses import zero_figure
+        skel = DazSkeleton(client, NodeIdentifier("name", "Genesis9"))
+        with patch("dazpy._pose.DazPose.apply_full") as mock_apply_full:
+            zero_figure(skel, include_props=True)
+        mock_apply_full.assert_called_once()
+
+
+class TestCallCountBaseline(unittest.TestCase):
+    """Pins down pre-batching call counts. Update these assertions in the
+    same commit that fixes the corresponding helper in Task 2/3 — do not
+    let this class silently mask a regression by staying loose."""
 
     def test_batch_add_issues_one_call_for_two_ops(self):
         client = _make_client({"_r0": 10, "_r1": 5})

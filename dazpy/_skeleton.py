@@ -249,6 +249,35 @@ class DazSkeleton(DazNode):
         """)
         self._client.execute(script)
 
+    def _zero_bones_and_morphs(self) -> None:
+        """Drive every bone rotation to 0 and every non-zero DzMorph to 0, in
+        one DazScript evaluation. Used by :func:`~dazpy.poses.zero_figure`'s
+        default (``include_props=False``) path — does not touch node-level
+        properties or the figure root transform.
+        """
+        script = self._skeleton_body("""
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {
+                var _b = _bones[i];
+                _b.getXRotControl().setValue(0);
+                _b.getYRotControl().setValue(0);
+                _b.getZRotControl().setValue(0);
+            }
+            var _obj = _node.getObject();
+            if (_obj) {
+                for (var j = 0; j < _obj.getNumModifiers(); j++) {
+                    var _m = _obj.getModifier(j);
+                    if (_m.className() === "DzMorph") {
+                        var _ch = _m.getValueChannel();
+                        if (Math.abs(_ch.getValue()) > 0.0001) {
+                            _ch.setValue(0);
+                        }
+                    }
+                }
+            }
+        """)
+        self._client.execute(script)
+
     def evaluate_pose(
         self,
         rotations: dict[str, tuple | list],
