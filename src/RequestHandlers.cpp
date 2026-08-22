@@ -3,6 +3,7 @@
 #include "RequestHandler.h"
 #include "ErrorResponse.h"
 #include <QtCore/qmetaobject.h>
+#include <QtCore/qdatetime.h>
 
 // ─── MiddlewareChain ──────────────────────────────────────────────────────────
 
@@ -152,6 +153,7 @@ ExecuteScriptHandler::ExecuteScriptHandler(DzScriptServerPane* pane) : m_pPane(p
 void ExecuteScriptHandler::handle(HttpContext& ctx)
 {
     if (respondIfMainThreadBusy(m_pPane, ctx)) return;
+    qint64 acceptedAtMs = QDateTime::currentMSecsSinceEpoch();
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
     QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
     HttpResult result;
@@ -159,7 +161,8 @@ void ExecuteScriptHandler::handle(HttpContext& ctx)
         Qt::BlockingQueuedConnection,
         Q_RETURN_ARG(HttpResult, result),
         Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, ipBytes));
+        Q_ARG(QByteArray, ipBytes),
+        Q_ARG(qint64, acceptedAtMs));
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 

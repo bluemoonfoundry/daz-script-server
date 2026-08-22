@@ -112,7 +112,7 @@ public slots:
 
 	// Called on main thread via BlockingQueuedConnection from httplib handler threads.
 	// Returns HttpResult (status, jsonBody) so handlers can set the correct HTTP status code.
-	Q_INVOKABLE HttpResult handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP);
+	Q_INVOKABLE HttpResult handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP, qint64 acceptedAtMs);
 	Q_INVOKABLE HttpResult handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
 	Q_INVOKABLE HttpResult handleRegistryExecuteRequest(const QByteArray& scriptText, const QByteArray& scriptId, const QByteArray& requestBody, const QByteArray& clientIP);
 

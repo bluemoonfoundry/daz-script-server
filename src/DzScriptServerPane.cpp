@@ -1524,9 +1524,11 @@ std::string DzScriptServerPane::listAsyncRequestsJson(const std::string& statusF
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
 
-HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP)
+HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP, qint64 acceptedAtMs)
 {
 	QTime startTime = QTime::currentTime();
+	qint64 dispatchedAtMs = QDateTime::currentMSecsSinceEpoch();
+	m_metrics.recordMainThreadWait(dispatchedAtMs - acceptedAtMs);
 	QString clientIPStr = QString::fromUtf8(clientIP.constData(), clientIP.size());
 	QString requestId = MetricsCollector::generateRequestId();
 
@@ -2903,6 +2905,10 @@ std::string DzScriptServerPane::getMetricsJson() const
 	s += std::to_string(uptime);
 	s += ",\"success_rate_percent\":";
 	s += rateBuf;
+	s += ",\"avg_main_thread_wait_ms\":";
+	s += std::to_string((long long)m_metrics.getAvgMainThreadWaitMs());
+	s += ",\"max_main_thread_wait_ms\":";
+	s += std::to_string((long long)m_metrics.getMaxMainThreadWaitMs());
 	s += "}";
 	return s;
 }
