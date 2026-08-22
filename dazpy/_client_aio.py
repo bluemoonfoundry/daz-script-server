@@ -519,3 +519,13 @@ async def _aiter_sse_events(resp: "httpx.Response"):
             event_type = line[6:].strip()
         elif line.startswith("data:"):
             data_lines.append(line[5:].strip())
+
+    # A closed stream is also an event boundary. Servers normally terminate
+    # SSE events with a blank line, but do not silently drop a complete final
+    # event if the connection closes immediately after its data field.
+    if data_lines:
+        data_str = "\n".join(data_lines)
+        try:
+            yield event_type, json.loads(data_str)
+        except json.JSONDecodeError:
+            yield event_type, {"_raw": data_str}
