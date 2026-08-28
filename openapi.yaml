@@ -281,7 +281,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExecuteRequest'
+              $ref: '#/components/schemas/AsyncExecuteRequest'
       responses:
         '200':
           description: Request queued — poll `/requests/{id}/status` for progress
@@ -315,7 +315,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ScriptExecuteRequest'
+              $ref: '#/components/schemas/AsyncScriptExecuteRequest'
       responses:
         '200':
           description: Request queued
@@ -835,6 +835,32 @@ components:
           type: object
           additionalProperties: true
 
+    AsyncExecuteRequest:
+      allOf:
+        - $ref: '#/components/schemas/ExecuteRequest'
+        - type: object
+          properties:
+            reportFile:
+              type: string
+              description: |
+                Optional absolute path to a per-job JSONL event file. The
+                server truncates it at submission and ingests progress, log,
+                output, and manifest events into the async request's
+                observation record. The path is also injected into args as
+                reserved field `__dssReportFile`.
+                DAZ Studio 6 exposes report events while a job is running;
+                Studio 4 parses the final report after execution returns.
+              example: "/path/to/run/job.jsonl"
+
+    AsyncScriptExecuteRequest:
+      allOf:
+        - $ref: '#/components/schemas/ScriptExecuteRequest'
+        - type: object
+          properties:
+            reportFile:
+              type: string
+              description: Optional absolute path to the per-job JSONL event file
+
     DeleteScriptResponse:
       type: object
       required: [success, id]
@@ -902,6 +928,8 @@ components:
           format: float
           minimum: 0
           maximum: 1
+        observation:
+          $ref: '#/components/schemas/JobObservation'
         elapsed_ms:
           type: integer
         queue_position:
@@ -921,6 +949,87 @@ components:
               format: date-time
             status:
               $ref: '#/components/schemas/RequestStatus'
+            observation:
+              $ref: '#/components/schemas/JobObservation'
+
+    JobObservation:
+      type: object
+      required: [progress, log_tail, log_total, log_truncated, output_manifest]
+      properties:
+        progress:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/JobProgress'
+        log_tail:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/JobLogEntry'
+        log_total:
+          type: integer
+        log_truncated:
+          type: boolean
+        output_manifest:
+          $ref: '#/components/schemas/JobOutputManifest'
+        report_file:
+          type: string
+
+    JobProgress:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: number
+          minimum: 0
+          maximum: 1
+        current:
+          type: number
+        total:
+          type: number
+        phase:
+          type: string
+        message:
+          type: string
+        at:
+          type: string
+
+    JobLogEntry:
+      type: object
+      required: [message, level, source]
+      properties:
+        message:
+          type: string
+        level:
+          type: string
+        source:
+          type: string
+        at:
+          type: string
+
+    JobOutputManifest:
+      type: object
+      required: [count, outputs]
+      properties:
+        count:
+          type: integer
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobOutput'
+
+    JobOutput:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
 
     CancelResponse:
       type: object

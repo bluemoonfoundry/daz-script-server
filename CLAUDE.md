@@ -65,6 +65,9 @@ Synchronous execution crosses to `handleExecuteRequest()` via
 and validate with local reentrant Qt Core values, then submit to mutex-protected
 services without blocking on the main thread. Studio 4 must keep submission on
 the main thread because `JsonStd::parseObject()` uses `QScriptEngine` there.
+The same split applies to structured job reports: Studio 6 may ingest JSONL
+from polling workers for live observation, while Studio 4 parses the final
+report from `markCompleted()` on the main thread after script execution returns.
 Neither path may touch GUI objects, `DzScript`, the DAZ API, or shared mutable
 state from a worker. Settings used by an async handler are snapshotted before
 the server starts.

@@ -1772,7 +1772,33 @@ result = requests.get(f"{BASE}/requests/{req_id}/result?wait=true&timeout=300",
 **Purpose:** Submit an inline script or host-side script file for asynchronous execution
 **Authentication:** Required (if enabled)
 
-**Request Body:** Same as `POST /execute`
+**Request Body:** Same as `POST /execute`, plus optional `reportFile` for
+structured job observation.
+
+`reportFile` is an absolute host-side path to a JSONL file owned by this job.
+The server truncates it when the request is accepted. The script may then write
+one JSON object per line. The path is injected into the script's argument object
+as reserved field `getArguments()[0].__dssReportFile`, so callers do not have to
+duplicate it inside `args`:
+
+```jsonl
+{"type":"progress","value":0.25,"current":1,"total":4,"phase":"render","message":"Plate 1"}
+{"type":"log","level":"info","message":"Loaded scene"}
+{"type":"output","path":"C:/renders/run/plate-1.png","kind":"image","label":"plate"}
+```
+
+Progress events require either `value` (0–1) or `current` plus `total`. Log
+events require `message`. Output events require `path`; repeating a path updates
+that manifest entry. A `manifest` event may provide an `outputs` array. Use a
+unique report file for every job.
+`reportFile` may not be the submitted `scriptFile`, because the server owns and
+truncates the former before the job is queued.
+
+DAZ Studio 6 ingests report events from polling workers, so progress, logs, and
+outputs are visible while the main thread is occupied by the script. DAZ Studio
+4's JSON parser is main-thread-only; Studio 4 therefore ingests the final report
+after execution returns and does not expose report-driven progress while the job
+is still running.
 
 **Response (immediate):**
 ```json
@@ -1806,7 +1832,15 @@ result = requests.get(f"{BASE}/requests/{req_id}/result?wait=true&timeout=300",
 {
   "request_id": "a3f2b891",
   "status": "running",
-  "progress": 0.0,
+  "progress": 0.25,
+  "observation": {
+    "progress": {"value": 0.25, "current": 1, "total": 4, "phase": "render"},
+    "log_tail": [{"level": "info", "source": "script", "message": "Loaded scene"}],
+    "log_total": 1,
+    "log_truncated": false,
+    "output_manifest": {"count": 0, "outputs": []},
+    "report_file": "C:/renders/run/job.jsonl"
+  },
   "elapsed_ms": 1240,
   "queue_position": 0
 }
@@ -1843,6 +1877,11 @@ result = requests.get(f"{BASE}/requests/{req_id}/result?wait=true&timeout=300",
   "status": "completed"
 }
 ```
+
+Completed, failed, and cancelled results also include `observation`. The log
+tail is capped at the newest 100 entries; `log_total` and `log_truncated` make
+the loss explicit. Ordinary captured `print()` output is folded into the same
+tail at completion while remaining available in the legacy `output` field.
 
 Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 

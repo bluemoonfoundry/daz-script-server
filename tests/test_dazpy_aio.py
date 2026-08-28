@@ -79,7 +79,9 @@ class TestAsyncDazClientExecute:
             json_data={"request_id": "execute-file-123", "status": "queued"}
         )
         request_id = await client.execute_file_async_submit(
-            "C:/scripts/foo.dsa", args={"mode": "probe"}
+            "C:/scripts/foo.dsa",
+            args={"mode": "probe"},
+            report_file="C:/runs/probe/job.jsonl",
         )
         assert request_id == "execute-file-123"
         args, kwargs = mock_http.post.call_args
@@ -87,6 +89,7 @@ class TestAsyncDazClientExecute:
         assert kwargs["json"] == {
             "scriptFile": "C:/scripts/foo.dsa",
             "args": {"mode": "probe"},
+            "reportFile": "C:/runs/probe/job.jsonl",
         }
 
     @pytest.mark.asyncio
@@ -181,10 +184,12 @@ class TestAsyncDazClientExecuteBatchAsync:
         await client.execute_batch_async(
             [{"body_lines": [], "result_expression": "1"}],
             args={"mode": "probe"},
+            report_file="C:/runs/probe/batch.jsonl",
         )
 
         _, kwargs = mock_http.post.call_args
         assert kwargs["json"]["args"] == {"mode": "probe"}
+        assert kwargs["json"]["reportFile"] == "C:/runs/probe/batch.jsonl"
 
 
 class TestAsyncDazClientRetryOnBusy:

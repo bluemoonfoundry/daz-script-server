@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -76,7 +77,9 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
 
         try:
             request_id = client.execute_file_async_submit(
-                "C:/scripts/pose-probe.dsa", args={"mode": "probe"}
+                "C:/scripts/pose-probe.dsa",
+                args={"mode": "probe"},
+                report_file="C:/runs/probe/job.jsonl",
             )
         finally:
             original_session.close()
@@ -87,6 +90,7 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
             json={
                 "scriptFile": "C:/scripts/pose-probe.dsa",
                 "args": {"mode": "probe"},
+                "reportFile": "C:/runs/probe/job.jsonl",
             },
             headers={},
             timeout=30.0,
@@ -7496,10 +7500,14 @@ class TestExecuteBatchAsync(unittest.TestCase):
         client.execute_batch_async(
             [{"body_lines": [], "result_expression": "1"}],
             args={"mode": "probe"},
+            report_file="C:/runs/probe/batch.jsonl",
         )
 
         submitted_payload = client._session.post.call_args[1]["json"]
         self.assertEqual(submitted_payload["args"], {"mode": "probe"})
+        self.assertEqual(
+            submitted_payload["reportFile"], "C:/runs/probe/batch.jsonl"
+        )
 
 
 class TestCallCountBaseline(unittest.TestCase):
@@ -7514,6 +7522,49 @@ class TestCallCountBaseline(unittest.TestCase):
             b.add(["var _r0 = Scene.getNumNodes();"])
             b.add(["var _r1 = Scene.getFrame();"])
         self.assertEqual(client.execute.call_count, 1)
+
+
+class TestObservationThreadingContract(unittest.TestCase):
+    """Source ratchets for the SDK4/SDK6 report-ingestion boundary.
+
+    The C++ plugin is not built in Python CI, so keep the worker/main-thread
+    split mechanically visible to the gate that runs on every PR.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "src" / "AsyncRequestManager.cpp"
+        cls.source = source_path.read_text(encoding="utf-8")
+
+    def test_worker_endpoints_use_sdk_guarded_report_ingestion(self):
+        start = self.source.index(
+            "std::pair<int, std::string> AsyncRequestManager::getStatusJson"
+        )
+        end = self.source.index("// ─── Main-thread API", start)
+        worker_api = self.source[start:end]
+
+        self.assertNotIn("ingestReportLocked(", worker_api)
+        self.assertEqual(worker_api.count("ingestReportFromWorkerLocked("), 3)
+
+        helper_start = self.source.index(
+            "void AsyncRequestManager::ingestReportFromWorkerLocked"
+        )
+        helper_end = self.source.index(
+            "std::string AsyncRequestManager::observationJson", helper_start
+        )
+        helper = self.source[helper_start:helper_end]
+        self.assertIn("#if DAZ_SDK_MAJOR_VERSION >= 6", helper)
+        self.assertIn("ingestReportLocked(req);", helper)
+
+    def test_main_thread_completion_ingests_before_terminal_guard(self):
+        start = self.source.index("void AsyncRequestManager::markCompleted")
+        end = self.source.index("void AsyncRequestManager::markCancelled", start)
+        completion = self.source[start:end]
+
+        self.assertLess(
+            completion.index("ingestReportLocked(req, true);"),
+            completion.index("if (req.status != REQUEST_RUNNING) return;"),
+        )
 
 
 if __name__ == "__main__":

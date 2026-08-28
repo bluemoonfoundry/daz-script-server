@@ -1465,13 +1465,14 @@ bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string
 
 QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
                                                 const QString& scriptFile,
+                                                const QString& reportFile,
                                                 const QVariantMap& args,
                                                 const QString& idPrefix,
                                                 qint64& outSubmittedAt,
                                                 QString& outError)
 {
 	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(
-		scriptText, scriptFile, args, idPrefix);
+		scriptText, scriptFile, reportFile, args, idPrefix);
 	outSubmittedAt = r.submittedAt;
 	outError       = r.error;
 	if (!r.accepted) {
@@ -1482,7 +1483,7 @@ QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
 	return r.id;
 }
 
-std::pair<int, std::string> DzScriptServerPane::getAsyncStatusJson(const std::string& requestId) const
+std::pair<int, std::string> DzScriptServerPane::getAsyncStatusJson(const std::string& requestId)
 {
 	return m_pAsyncMgr->getStatusJson(requestId);
 }
@@ -1517,7 +1518,7 @@ std::pair<int, std::string> DzScriptServerPane::cancelRenderRequestJson(const st
 	return result;
 }
 
-std::string DzScriptServerPane::listAsyncRequestsJson(const std::string& statusFilter) const
+std::string DzScriptServerPane::listAsyncRequestsJson(const std::string& statusFilter)
 {
 	return m_pAsyncMgr->listJson(statusFilter);
 }
@@ -1801,7 +1802,8 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, scriptFile, body.value("args").toMap(), "execute",
+		scriptText, scriptFile, body.value("reportFile").toString(),
+		body.value("args").toMap(), "execute",
 		submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
@@ -1829,17 +1831,20 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 	QString scriptId   = QString::fromUtf8(scriptIdBytes.constData(), scriptIdBytes.size());
 
 	QVariantMap argsMap;
+	QString reportFile;
 	if (!bodyBytes.isEmpty()) {
 		QVariantMap parsedBody;
 		std::string parseErrDetail;
-		if (JsonStd::parseObject(bodyBytes, parsedBody, parseErrDetail))
+		if (JsonStd::parseObject(bodyBytes, parsedBody, parseErrDetail)) {
 			argsMap = parsedBody.value("args").toMap();
+			reportFile = parsedBody.value("reportFile").toString();
+		}
 	}
 
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, QString(), argsMap, "script", submittedAt, enqueueError);
+		scriptText, QString(), reportFile, argsMap, "script", submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(

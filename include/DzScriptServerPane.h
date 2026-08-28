@@ -161,14 +161,14 @@ public:
 	// Qt value types here are protected by AsyncRequestManager's mutex and are
 	// only called directly from documented reentrant Studio 6 worker paths.
 	QString              enqueueAsyncRequest(const QString& scriptText, const QString& scriptFile,
-	                                         const QVariantMap& args,
+	                                         const QString& reportFile, const QVariantMap& args,
 	                                         const QString& idPrefix, qint64& outSubmittedAt,
 	                                         QString& outError);
-	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId) const;
+	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId);
 	std::pair<int, std::string> getAsyncResultJson(const std::string& requestId, bool doWait, int timeoutSec);
 	std::pair<int, std::string> cancelAsyncRequestJson(const std::string& requestId, const std::string& clientIP);
 	std::pair<int, std::string> cancelRenderRequestJson(const std::string& requestId, const std::string& clientIP);
-	std::string                 listAsyncRequestsJson(const std::string& statusFilter) const;
+	std::string                 listAsyncRequestsJson(const std::string& statusFilter);
 
 private slots:
 	void onStartClicked();
