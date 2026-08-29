@@ -722,11 +722,20 @@ class DazRenderSettings:
             // instead of guessing at doRender()'s return code.
             var renderSucceeded = null;
             function _onRenderFinished(succeeded) {{ renderSucceeded = succeeded; }}
-            mgr["renderFinished(bool)"].connect(_onRenderFinished);
+            var _finishedSig = null;
+            try {{ _finishedSig = mgr["renderFinished(bool)"]; }} catch (_eSig) {{ _finishedSig = null; }}
+            if (!(_finishedSig && typeof _finishedSig.connect === "function")) {{
+                try {{ _finishedSig = mgr.renderFinished; }} catch (_eSig2) {{ _finishedSig = null; }}
+            }}
+            var _finishedBound = _finishedSig && typeof _finishedSig.connect === "function";
+            if (_finishedBound) _finishedSig.connect(_onRenderFinished);
             try {{
                 mgr.doRender(opts);
+                if (!_finishedBound && renderSucceeded === null) renderSucceeded = true;
             }} finally {{
-                mgr["renderFinished(bool)"].disconnect(_onRenderFinished);
+                if (_finishedBound && _finishedSig && typeof _finishedSig.disconnect === "function") {{
+                    _finishedSig.disconnect(_onRenderFinished);
+                }}
             }}
             if (vp && prevCam) vp.setCamera(prevCam);
             return {{
