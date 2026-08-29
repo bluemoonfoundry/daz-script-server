@@ -1441,8 +1441,9 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         rs, client = self._make_render({"success": True, "output_path": "/tmp/render.png"})
         rs.render()
         script = client.execute.call_args[0][0]
-        self.assertIn('mgr["renderFinished(bool)"].connect(', script)
-        self.assertIn('mgr["renderFinished(bool)"].disconnect(', script)
+        self.assertIn("renderFinished(bool)", script)
+        self.assertIn("_finishedBound", script)
+        self.assertNotIn('mgr["renderFinished(bool)"].connect(', script)
         self.assertIn("renderSucceeded === true", script)
         self.assertNotIn("err === 0", script)
         self.assertNotIn("err === true", script)
