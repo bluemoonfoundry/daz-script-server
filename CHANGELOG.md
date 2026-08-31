@@ -4,6 +4,16 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Unified dazpy protocol surface
+
+`DazClient` and `AsyncDazClient` now own registered-script registration and
+execution, detailed script/render cancellation, long-poll timeout policy, and
+generic server-error mapping through `ServerResponseError`. Status, health,
+metrics, request management, exports, and async SSE streams all use the same
+typed authentication, connection, timeout, busy, and server-response errors.
+This lets integrations depend on dazpy instead of duplicating endpoint URLs,
+wire payloads, and error handling.
+
 ### Structured async job observation
 
 Async script submissions may name a per-job `reportFile`. The server truncates
