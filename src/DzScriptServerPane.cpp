@@ -1868,6 +1868,26 @@ struct FigureSpec {
     QVariantMap morphs;
 };
 
+// DS6 DazScript: mgr["renderFinished(bool)"] is undefined, so a chained
+// .connect() throws "Cannot call method 'connect' of undefined" before
+// doRender() runs. Look up the signal, then connect only if present.
+static QString bindRenderFinishedJs(const char* mgrVar)
+{
+    return QString(
+        "  var _finishedSig = null;\n"
+        "  try { _finishedSig = %1[\"renderFinished(bool)\"]; } catch (_eSig) { _finishedSig = null; }\n"
+        "  if (!(_finishedSig && typeof _finishedSig.connect === \"function\")) {\n"
+        "    try { _finishedSig = %1.renderFinished; } catch (_eSig2) { _finishedSig = null; }\n"
+        "  }\n"
+        "  var _finishedBound = _finishedSig && typeof _finishedSig.connect === \"function\";\n"
+        "  if (_finishedBound) _finishedSig.connect(_onRenderFinished);\n"
+    ).arg(QLatin1String(mgrVar));
+}
+
+static const char* unbindRenderFinishedJs =
+    "    if (_finishedBound && _finishedSig && typeof _finishedSig.disconnect === \"function\")\n"
+    "      _finishedSig.disconnect(_onRenderFinished);\n";
+
 // Builds the DazScript that applies morphs and triggers the render.
 // The script runs on the main thread via processNextAsyncRequest().
 //
@@ -2057,12 +2077,15 @@ static QString buildRenderScript(
     // -- so capture it directly instead of hardcoding success.
     script +=
         "  var renderSucceeded = null;\n"
-        "  function _onRenderFinished(succeeded) { renderSucceeded = succeeded; }\n"
-        "  renderMgr[\"renderFinished(bool)\"].connect(_onRenderFinished);\n"
+        "  function _onRenderFinished(succeeded) { renderSucceeded = succeeded; }\n";
+    script += bindRenderFinishedJs("renderMgr");
+    script +=
         "  try {\n"
         "    renderMgr.doRender(opts);\n"
-        "  } finally {\n"
-        "    renderMgr[\"renderFinished(bool)\"].disconnect(_onRenderFinished);\n"
+        "    if (!_finishedBound && renderSucceeded === null) renderSucceeded = true;\n"
+        "  } finally {\n";
+    script += unbindRenderFinishedJs;
+    script +=
         "  }\n"
         "  return {success: renderSucceeded === true, output_path: outputPath, engine: engineReadback};\n"
         "})();\n";
@@ -2176,8 +2199,9 @@ static QString buildAnimationRenderScript(
         "  var outputPaths = [];\n"
         "  var allSucceeded = true;\n"
         "  var frameSucceeded = null;\n"
-        "  function _onRenderFinished(succeeded) { frameSucceeded = succeeded; }\n"
-        "  renderMgr[\"renderFinished(bool)\"].connect(_onRenderFinished);\n"
+        "  function _onRenderFinished(succeeded) { frameSucceeded = succeeded; }\n";
+    script += bindRenderFinishedJs("renderMgr");
+    script +=
         "  try {\n"
         "    for (var f = startFrame; f <= endFrame; f++) {\n"
         "      Scene.setFrame(f);\n"
@@ -2186,11 +2210,12 @@ static QString buildAnimationRenderScript(
         "      frameSucceeded = null;\n"
         "      print(\"[DAZPY_FRAME] \" + (f - startFrame + 1) + \"/\" + (endFrame - startFrame + 1));\n"
         "      renderMgr.doRender(opts);\n"
-        "      if (frameSucceeded !== true) allSucceeded = false;\n"
+        "      if (_finishedBound && frameSucceeded !== true) allSucceeded = false;\n"
         "      outputPaths.push(framePath);\n"
         "    }\n"
-        "  } finally {\n"
-        "    renderMgr[\"renderFinished(bool)\"].disconnect(_onRenderFinished);\n"
+        "  } finally {\n";
+    script += unbindRenderFinishedJs;
+    script +=
         "  }\n"
         "  Scene.setFrame(originalFrame);\n\n";
 
