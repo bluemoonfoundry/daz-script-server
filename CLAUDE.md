@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+Handoff: `D:\OpenCode\Projects\daz-mcp-dev-handoff.md`
+Bug-Katalog: `D:\Devpinkcharakter\docs\daz-mcp-bridge-bugs.md`
+
 This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
