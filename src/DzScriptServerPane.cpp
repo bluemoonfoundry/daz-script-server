@@ -3035,6 +3035,18 @@ void DzScriptServerPane::processNextAsyncRequest()
 		if (runResult.errorLine > 0)
 			errorMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errorMsg);
 	}
+	if (executed && isRender) {
+		const QVariantMap renderResult = scriptResult.toMap();
+		const QString outputPath = renderResult.value("output_path").toString();
+		const QFileInfo outputInfo(outputPath);
+		if (outputPath.isEmpty() || !outputInfo.isFile() || outputInfo.size() <= 0) {
+			executed = false;
+			errorMsg = outputPath.isEmpty()
+				? "Render completed without declaring an output path"
+				: QString("Render completed without a non-empty output file: %1")
+					.arg(outputPath);
+		}
+	}
 	QStringList capturedOutput = m_aCapturedLogLines;
 
 	disconnect(dzApp, DSS_DEBUG_SIGNAL,
