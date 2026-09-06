@@ -122,8 +122,8 @@ describe("DazClient.executeBatchAsync", () => {
 
     const client = new DazClient({ token: "" });
     const id = await client.executeBatchAsync([
-      { body_lines: ["var a = 1;"], result_expression: "a" },
-      { body_lines: ["var b = 2;"], result_expression: "b" },
+      { bodyLines: ["var a = 1;"], resultExpression: "a" },
+      { bodyLines: ["var b = 2;"], resultExpression: "b" },
     ]);
 
     expect(id).toBe("async-1");

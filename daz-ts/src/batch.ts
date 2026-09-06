@@ -10,9 +10,14 @@ export const DEFAULT_MAX_SCRIPT_LENGTH = 900_000; // stays under the server's de
  * Shared by {@link Batch}'s internal script builder and
  * {@link DazClient.executeBatchAsync} so both produce scripts with an
  * identical shape (keyed return object over `_r0`, `_r1`, ...).
+ *
+ * @param operations - `[bodyLines, resultExpression]` pairs, in submission order.
+ * @param preludeLines - Optional shared setup lines emitted once, before any
+ * operation's lines. Used by {@link Batch}, which deduplicates its preludes
+ * before passing them here; `executeBatchAsync` has no preludes and omits this.
  */
-export function buildOperationsScript(operations: Array<[string[], string]>): string {
-  const bodyLines: string[] = [];
+export function buildOperationsScript(operations: Array<[string[], string]>, preludeLines: string[] = []): string {
+  const bodyLines: string[] = [...preludeLines];
   const returnParts: string[] = [];
   operations.forEach(([lines, resultExpression], i) => {
     const key = `_r${i}`;
@@ -89,7 +94,7 @@ export interface BatchOptions {
  */
 export class Batch {
   private readonly client: DazClient;
-  private readonly ops: Array<{ key: string; lines: string[]; future: BatchFuture }> = [];
+  private readonly ops: Array<{ key: string; lines: string[]; resultExpression: string; future: BatchFuture }> = [];
   private readonly preludes = new Map<string, string[]>();
   private readonly preludeOrder: string[] = [];
   private counter = 0;
@@ -113,7 +118,9 @@ export class Batch {
   add(lines: string[]): BatchFuture {
     const key = `_r${this.counter++}`;
     const future = new BatchFuture(key);
-    this.ops.push({ key, lines: [...lines], future });
+    // `lines` is expected to already assign `key` itself, so the result
+    // "expression" fed to the shared builder is just the key it already holds.
+    this.ops.push({ key, lines: [...lines], resultExpression: key, future });
     return future;
   }
 
@@ -147,25 +154,29 @@ export class Batch {
     }
     const key = `_r${this.counter++}`;
     const future = new BatchFuture(key);
-    const lines = [...bodyLines, `var ${key} = ${resultExpression};`];
-    this.ops.push({ key, lines, future });
+    this.ops.push({ key, lines: [...bodyLines], resultExpression, future });
     return future;
   }
 
+  /**
+   * Build the combined script for this batch: shared preludes followed by
+   * every operation, via the same "operations → keyed return object → IIFE"
+   * builder used by {@link buildOperationsScript} (and, in turn,
+   * `DazClient.executeBatchAsync`). `this.ops` is always appended to in
+   * counter order, so array index `i` and each op's own `_r${i}` key line up
+   * exactly with the `_r${i}` keys `buildOperationsScript` generates from
+   * the array position.
+   */
   private buildScript(): string {
-    const bodyLines: string[] = [];
+    const preludeLines: string[] = [];
     for (const preludeKey of this.preludeOrder) {
-      bodyLines.push(...(this.preludes.get(preludeKey) ?? []));
+      preludeLines.push(...(this.preludes.get(preludeKey) ?? []));
     }
-    const returnParts: string[] = [];
-    for (const { key, lines } of this.ops) {
-      bodyLines.push(...lines);
-      returnParts.push(`"${key}": ${key}`);
-    }
-    const returnObj = `{${returnParts.join(", ")}}`;
-    bodyLines.push(`return ${returnObj};`);
-    const body = bodyLines.join("\n");
-    return `(function(){\n${body}\n})()`;
+    const operations: Array<[string[], string]> = this.ops.map(({ lines, resultExpression }) => [
+      lines,
+      resultExpression,
+    ]);
+    return buildOperationsScript(operations, preludeLines);
   }
 
   /**

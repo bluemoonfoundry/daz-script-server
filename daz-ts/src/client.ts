@@ -373,11 +373,11 @@ export class DazClient {
    * request; the result's `result` field is a dict keyed `"_r0"`, `"_r1"`, ... in submission order.
    */
   async executeBatchAsync(
-    operations: Array<{ body_lines: string[]; result_expression: string }>,
+    operations: Array<{ bodyLines: string[]; resultExpression: string }>,
     args?: unknown,
   ): Promise<string> {
     const { buildOperationsScript } = await import("./batch.js");
-    const pairs: Array<[string[], string]> = operations.map((op) => [op.body_lines, op.result_expression]);
+    const pairs: Array<[string[], string]> = operations.map((op) => [op.bodyLines, op.resultExpression]);
     const script = buildOperationsScript(pairs);
     return this.executeAsyncSubmit(script, args);
   }
