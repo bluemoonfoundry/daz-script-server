@@ -2,16 +2,10 @@ name: Build daz-ts Package
 
 on:
   workflow_call:
-    outputs:
-      artifact-name:
-        description: 'Name of the uploaded artifact'
-        value: ${{ jobs.build.outputs.artifact-name }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      artifact-name: ${{ steps.upload.outputs.artifact-name }}
 
     defaults:
       run:

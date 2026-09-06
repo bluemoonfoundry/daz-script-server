@@ -13,6 +13,7 @@
     "dist"
   ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
