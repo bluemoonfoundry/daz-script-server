@@ -2914,7 +2914,12 @@ function eulerToQuat(hx: number, hy: number, hz: number, order: RotationOrder): 
     case "ZXY":
       return [sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz + sx*sy*cz, cx*cy*cz - sx*sy*sz];
     case "ZYX":
-      return [sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz - sx*sy*cz, cx*cy*cz - sx*sy*sz];
+      // Note: dazpy's own math3.py has a sign bug here (w = cx*cy*cz - sx*sy*sz);
+      // verified by hand-deriving qz.multiply(qy).multiply(qx) via the Hamilton
+      // product — the correct w term is cx*cy*cz + sx*sy*sz. daz-ts fixes this
+      // rather than porting the bug, since this is pure math with no wire format
+      // to stay compatible with.
+      return [sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz - sx*sy*cz, cx*cy*cz + sx*sy*sz];
     default:
       throw new Error(`Unknown rotation order: ${String(order)}. Expected one of XYZ XZY YXZ YZX ZXY ZYX.`);
   }
