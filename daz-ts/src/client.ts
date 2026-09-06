@@ -244,4 +244,106 @@ export class DazClient {
       maxWait,
     );
   }
+
+  /**
+   * Submit a script for asynchronous execution and return immediately.
+   *
+   * @returns The server-assigned `requestId`. Use it with {@link getRequestStatus}
+   * or {@link getRequestResult} to poll for the outcome.
+   */
+  async executeAsyncSubmit(script: string, args?: unknown, opts: RetryOptions = {}): Promise<string> {
+    const { retryOnBusy = false, maxWait = 30.0 } = opts;
+    const payload: Record<string, unknown> = { script };
+    if (args !== undefined) {
+      payload.args = args;
+    }
+    return this.withBusyRetry(
+      async () => {
+        const resp = await this.post("/execute/async", payload);
+        const data = (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
+        return (data.request_id as string) ?? "";
+      },
+      retryOnBusy,
+      maxWait,
+    );
+  }
+
+  /**
+   * Submit a host-side `.dsa` file for asynchronous execution.
+   *
+   * The file is loaded by DAZ Studio when the queued job starts, preserving
+   * its filename for `getScriptFileName()` and relative `include()` calls.
+   */
+  async executeFileAsyncSubmit(scriptFile: string, args?: unknown, opts: RetryOptions = {}): Promise<string> {
+    const { retryOnBusy = false, maxWait = 30.0 } = opts;
+    const payload: Record<string, unknown> = { scriptFile };
+    if (args !== undefined) {
+      payload.args = args;
+    }
+    return this.withBusyRetry(
+      async () => {
+        const resp = await this.post("/execute/async", payload);
+        const data = (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
+        return (data.request_id as string) ?? "";
+      },
+      retryOnBusy,
+      maxWait,
+    );
+  }
+
+  /**
+   * Return the current status of an async request.
+   *
+   * @returns A dict with at least a `status` key: `"queued"`, `"running"`,
+   * `"completed"`, `"failed"`, `"cancelled"`, or `"not_found"`.
+   */
+  async getRequestStatus(requestId: string): Promise<Record<string, unknown>> {
+    const resp = await this.get(`/requests/${requestId}/status`);
+    if (resp.status === 404) {
+      return { status: "not_found" };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * Fetch the result of a completed async request.
+   *
+   * @param wait - If `true`, the server long-polls until the request completes or `waitTimeout` is reached.
+   * @param waitTimeout - Maximum seconds the server should wait (only relevant when `wait` is `true`).
+   */
+  async getRequestResult(requestId: string, wait = false, waitTimeout = 30): Promise<Record<string, unknown>> {
+    const params: Record<string, string> = {};
+    if (wait) {
+      params.wait = "true";
+      params.timeout = String(waitTimeout);
+    }
+    const resp = await this.get(`/requests/${requestId}/result`, Object.keys(params).length ? params : undefined);
+    if (resp.status === 404) {
+      return { status: "not_found" };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * List all tracked async requests (script and render) with their status.
+   *
+   * @param status - Optional filter: `"queued"`, `"running"`, `"completed"`, `"failed"`, `"cancelled"`.
+   */
+  async listRequests(status?: string): Promise<Record<string, unknown>> {
+    const resp = await this.get("/requests", status ? { status } : undefined);
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * Cancel a queued or running async request.
+   *
+   * @returns `true` if the server confirmed cancellation, `false` otherwise.
+   */
+  async cancelRequest(requestId: string): Promise<boolean> {
+    const resp = await this.delete_(`/requests/${requestId}`);
+    return resp !== null && resp.status === 200;
+  }
 }
