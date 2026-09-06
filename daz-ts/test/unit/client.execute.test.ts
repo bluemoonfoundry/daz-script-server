@@ -133,6 +133,32 @@ describe("DazClient.execute", () => {
     const client = new DazClient({ token: "" });
     await expect(client.execute("1;")).rejects.toBeInstanceOf(ConnectionError);
   });
+
+  it("throws ScriptRuntimeError on generic HTTP 200 with success: false and no recognized error_code", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { success: false, error: "malformed script", output: ["log"], request_id: "r5" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new DazClient({ token: "" });
+    const err = await client.execute("bad script").catch((e) => e);
+    expect(err).toBeInstanceOf(ScriptRuntimeError);
+    expect(err.message).toBe("malformed script");
+    expect(err.output).toEqual(["log"]);
+  });
+
+  it("maps response body correctly even when raiseForError consumes it for error checking", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { success: false, error: "some error", output: [], request_id: "r6" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new DazClient({ token: "" });
+    const err = await client.execute("1;").catch((e) => e);
+    expect(err).toBeInstanceOf(ScriptRuntimeError);
+    expect(err.message).toBe("some error");
+    expect(err.requestId).toBe("r6");
+  });
 });
 
 describe("DazClient.executeFile", () => {

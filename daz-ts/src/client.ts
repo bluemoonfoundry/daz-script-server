@@ -31,14 +31,19 @@ function parseRetryAfter(headers: Headers): number {
   return Number.isFinite(value) ? value : 2.0;
 }
 
-async function raiseForError(resp: Response): Promise<void> {
+/**
+ * Check the response status and raise an exception for errors, or return the parsed body for caller reuse.
+ * Callers must use the returned value instead of re-reading the response body, since Node's fetch only allows one read.
+ * @returns undefined if status < 400, or the parsed JSON body if >= 400 and no exception was thrown.
+ */
+async function raiseForError(resp: Response): Promise<Record<string, unknown> | undefined> {
   const status = resp.status;
   if (status === 401 || status === 403) {
     const text = await resp.text();
     throw new AuthenticationError(`HTTP ${status}: ${text.slice(0, 200)}`);
   }
   if (status < 400) {
-    return;
+    return undefined;
   }
   const data = (await resp.json()) as Record<string, unknown>;
   const errorCode = (data.error_code as string) ?? "";
@@ -50,11 +55,12 @@ async function raiseForError(resp: Response): Promise<void> {
   if (errorCode === "CONCURRENT_LIMIT_EXCEEDED") {
     throw new ConcurrencyLimitError(errorMsg, errorMsg, retryAfter);
   }
+  return data;
 }
 
 async function mapResponse(resp: Response, script = ""): Promise<ExecutionResult> {
-  await raiseForError(resp);
-  const data = (await resp.json()) as Record<string, unknown>;
+  const errData = await raiseForError(resp);
+  const data = errData ?? ((await resp.json()) as Record<string, unknown>);
   const requestId = (data.request_id as string) ?? "";
 
   if (data.success === false) {
