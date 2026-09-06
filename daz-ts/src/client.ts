@@ -115,6 +115,29 @@ export interface RetryOptions {
   maxWait?: number;
 }
 
+/** Options accepted by {@link DazClient.renderSubmit}. */
+export interface RenderSubmitOptions extends RetryOptions {
+  figure?: string;
+  morphs?: Record<string, number>;
+  figures?: Array<{ name: string; morphs?: Record<string, number> }>;
+  width?: number;
+  height?: number;
+  camera?: string;
+  engine?: string;
+  iraySamples?: number;
+  resetMorphs?: boolean;
+}
+
+/** Options accepted by {@link DazClient.exportUsdSubmit}. */
+export interface ExportUsdOptions {
+  includeGeometry?: boolean;
+  includeMaterials?: boolean;
+  includeSkeleton?: boolean;
+  includeMorphs?: boolean;
+  includeLights?: boolean;
+  includeCamera?: boolean;
+}
+
 /**
  * HTTP client for the DAZ Studio Script Server.
  *
@@ -345,5 +368,171 @@ export class DazClient {
   async cancelRequest(requestId: string): Promise<boolean> {
     const resp = await this.delete_(`/requests/${requestId}`);
     return resp !== null && resp.status === 200;
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────
+
+  /** Submit a render job and return immediately. */
+  async renderSubmit(outputPath: string, opts: RenderSubmitOptions = {}): Promise<Record<string, unknown>> {
+    const { figure, morphs, figures, width, height, camera, engine, iraySamples, resetMorphs, retryOnBusy = false, maxWait = 30.0 } = opts;
+    const payload: Record<string, unknown> = { output_path: outputPath };
+    if (width && height) {
+      payload.width = width;
+      payload.height = height;
+    }
+    if (camera) payload.camera = camera;
+    if (engine) payload.engine = engine;
+    if (iraySamples) payload.iray_samples = iraySamples;
+    if (resetMorphs) payload.reset_morphs = true;
+    if (figures !== undefined) {
+      payload.figures = figures;
+    } else if (figure) {
+      payload.figure = figure;
+      if (morphs) payload.morphs = morphs;
+    }
+
+    return this.withBusyRetry(
+      async () => {
+        const resp = await this.post("/render", payload);
+        return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
+      },
+      retryOnBusy,
+      maxWait,
+    );
+  }
+
+  /** Submit a batch render job (multiple variants sharing optional defaults) and return immediately. */
+  async renderBatchSubmit(
+    variants: Array<Record<string, unknown>>,
+    base?: Record<string, unknown>,
+    opts: RetryOptions = {},
+  ): Promise<Record<string, unknown>> {
+    const { retryOnBusy = false, maxWait = 30.0 } = opts;
+    const payload: Record<string, unknown> = { variants };
+    if (base) payload.base = base;
+
+    return this.withBusyRetry(
+      async () => {
+        const resp = await this.post("/render/batch", payload);
+        return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
+      },
+      retryOnBusy,
+      maxWait,
+    );
+  }
+
+  /** Submit an animation render job spanning a frame range and return immediately. */
+  async renderAnimationSubmit(
+    outputPath: string,
+    startFrame: number,
+    endFrame: number,
+    opts: RetryOptions & { framePadding?: number; width?: number; height?: number; camera?: string; engine?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    const { framePadding = 4, width, height, camera, engine, retryOnBusy = false, maxWait = 30.0 } = opts;
+    const payload: Record<string, unknown> = {
+      output_path: outputPath,
+      start_frame: startFrame,
+      end_frame: endFrame,
+      frame_padding: framePadding,
+    };
+    if (width && height) {
+      payload.width = width;
+      payload.height = height;
+    }
+    if (camera) payload.camera = camera;
+    if (engine) payload.engine = engine;
+
+    return this.withBusyRetry(
+      async () => {
+        const resp = await this.post("/render/animation", payload);
+        return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
+      },
+      retryOnBusy,
+      maxWait,
+    );
+  }
+
+  /** Cancel a queued or running render job. */
+  async cancelRender(requestId: string): Promise<boolean> {
+    try {
+      const resp = await this.fetchWithTimeout(`${this.baseUrl}/render/${requestId}/cancel`, {
+        method: "POST",
+        headers: this.headers,
+      });
+      return resp.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Open the SSE progress stream for a render request. Implemented in Task 7. */
+
+  // ── USD export ──────────────────────────────────────────────────────────
+
+  /** Submit a USD export job and return immediately. */
+  async exportUsdSubmit(outputPath: string, opts: ExportUsdOptions = {}): Promise<Record<string, unknown>> {
+    const {
+      includeGeometry = true,
+      includeMaterials = true,
+      includeSkeleton = false,
+      includeMorphs = false,
+      includeLights = false,
+      includeCamera = false,
+    } = opts;
+    const payload = {
+      outputPath,
+      includeGeometry,
+      includeMaterials,
+      includeSkeleton,
+      includeMorphs,
+      includeLights,
+      includeCamera,
+    };
+    const resp = await this.post("/export/usd", payload);
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /** Poll the status of a USD export job. */
+  async getUsdExportStatus(jobId: string): Promise<Record<string, unknown>> {
+    const resp = await this.get(`/export/usd/${jobId}`);
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    if (resp.status === 404) {
+      return { job_id: jobId, status: "not_found" };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  // ── Server health ───────────────────────────────────────────────────────
+
+  /** Return the server status dict from `GET /status`. */
+  async status(): Promise<Record<string, unknown>> {
+    const resp = await this.get("/status");
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /** Return the health check dict from `GET /health`. */
+  async health(): Promise<Record<string, unknown>> {
+    const resp = await this.get("/health");
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /** Return the metrics dict from `GET /metrics`. */
+  async metrics(): Promise<Record<string, unknown>> {
+    const resp = await this.get("/metrics");
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    return (await resp.json()) as Record<string, unknown>;
   }
 }
