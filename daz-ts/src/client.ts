@@ -86,6 +86,57 @@ function sleep(seconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
+/**
+ * Parse a Server-Sent-Events HTTP response body into `{event, data}` pairs.
+ *
+ * Lines starting with `:` are keepalive comments and are skipped. An event
+ * block with no explicit `event:` line defaults to `"message"`, matching
+ * the SSE specification.
+ */
+export async function* parseSseStream(response: Response): AsyncGenerator<{ event: string; data: string }> {
+  const body = response.body;
+  if (!body) {
+    return;
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+
+        let eventName = "message";
+        const dataLines: string[] = [];
+        for (const line of rawEvent.split("\n")) {
+          if (line.startsWith(":") || line === "") {
+            continue;
+          }
+          if (line.startsWith("event:")) {
+            eventName = line.slice("event:".length).trim();
+          } else if (line.startsWith("data:")) {
+            dataLines.push(line.slice("data:".length).trim());
+          }
+        }
+        if (dataLines.length > 0) {
+          yield { event: eventName, data: dataLines.join("\n") };
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 /** Options accepted by the {@link DazClient} constructor. */
 export interface DazClientOptions {
   /** Hostname or IP address of the Script Server. Default `"127.0.0.1"`. */
@@ -465,7 +516,52 @@ export class DazClient {
     }
   }
 
-  /** Open the SSE progress stream for a render request. Implemented in Task 7. */
+  /**
+   * Open the SSE progress stream for a render request.
+   *
+   * @returns The raw streaming `Response` on success, `null` if the
+   * endpoint is unavailable. Pass the result to {@link parseSseStream} to
+   * consume it, and remember to let the body drain or cancel the reader.
+   */
+  async streamRenderProgress(requestId: string, streamTimeoutMs = 305_000): Promise<Response | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), streamTimeoutMs);
+      const resp = await fetch(`${this.baseUrl}/render/${requestId}/progress`, {
+        headers: this.headers,
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
+      return resp.status === 200 ? resp : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Open the SSE stream for general scene-change events (`GET /scene/events`).
+   *
+   * @param categories - Optional subset of event categories to subscribe to
+   * (`"node"`, `"skeleton"`, `"light"`, `"camera"`, `"selection"`, `"scene"`,
+   * `"time"`, `"render"`). Omit to subscribe to all categories.
+   * @param streamTimeoutMs - Socket timeout in milliseconds. Omit to wait
+   * indefinitely — the server sends a keepalive comment every 15 seconds.
+   */
+  async streamSceneEvents(categories?: string[], streamTimeoutMs?: number): Promise<Response | null> {
+    try {
+      const url = new URL(`${this.baseUrl}/scene/events`);
+      if (categories && categories.length > 0) {
+        url.searchParams.set("filter", categories.join(","));
+      }
+      const controller = new AbortController();
+      const timer = streamTimeoutMs !== undefined ? setTimeout(() => controller.abort(), streamTimeoutMs) : undefined;
+      const resp = await fetch(url.toString(), { headers: this.headers, signal: controller.signal }).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+      return resp.status === 200 ? resp : null;
+    } catch {
+      return null;
+    }
+  }
 
   // ── USD export ──────────────────────────────────────────────────────────
 
