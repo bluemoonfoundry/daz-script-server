@@ -788,14 +788,25 @@ function parseRetryAfter(headers: Headers): number {
   return Number.isFinite(value) ? value : 2.0;
 }
 
-async function raiseForError(resp: Response): Promise<void> {
+/**
+ * Check `resp` for an authentication or server-busy error and throw the
+ * matching typed exception.
+ *
+ * Returns the parsed JSON body for any `status >= 400` response that did
+ * NOT throw (i.e. an error whose `error_code` isn't `STUDIO_BUSY` or
+ * `CONCURRENT_LIMIT_EXCEEDED`), or `undefined` for a `status < 400`
+ * response (whose body is left unread). Every caller MUST use this
+ * returned value instead of calling `resp.json()` again — a `Response`
+ * body can only be consumed once, and a second read throws.
+ */
+async function raiseForError(resp: Response): Promise<Record<string, unknown> | undefined> {
   const status = resp.status;
   if (status === 401 || status === 403) {
     const text = await resp.text();
     throw new AuthenticationError(`HTTP ${status}: ${text.slice(0, 200)}`);
   }
   if (status < 400) {
-    return;
+    return undefined;
   }
   const data = (await resp.json()) as Record<string, unknown>;
   const errorCode = (data.error_code as string) ?? "";
@@ -807,11 +818,12 @@ async function raiseForError(resp: Response): Promise<void> {
   if (errorCode === "CONCURRENT_LIMIT_EXCEEDED") {
     throw new ConcurrencyLimitError(errorMsg, errorMsg, retryAfter);
   }
+  return data;
 }
 
 async function mapResponse(resp: Response, script = ""): Promise<ExecutionResult> {
-  await raiseForError(resp);
-  const data = (await resp.json()) as Record<string, unknown>;
+  const errData = await raiseForError(resp);
+  const data = errData ?? ((await resp.json()) as Record<string, unknown>);
   const requestId = (data.request_id as string) ?? "";
 
   if (data.success === false) {
@@ -1181,8 +1193,7 @@ Add `AuthenticationError` to the existing import from `./exceptions.js` (it's al
     return this.withBusyRetry(
       async () => {
         const resp = await this.post("/execute/async", payload);
-        await raiseForError(resp);
-        const data = (await resp.json()) as Record<string, unknown>;
+        const data = (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
         return (data.request_id as string) ?? "";
       },
       retryOnBusy,
@@ -1205,8 +1216,7 @@ Add `AuthenticationError` to the existing import from `./exceptions.js` (it's al
     return this.withBusyRetry(
       async () => {
         const resp = await this.post("/execute/async", payload);
-        await raiseForError(resp);
-        const data = (await resp.json()) as Record<string, unknown>;
+        const data = (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
         return (data.request_id as string) ?? "";
       },
       retryOnBusy,
@@ -1549,8 +1559,7 @@ Add these methods inside the `DazClient` class, after `cancelRequest`:
     return this.withBusyRetry(
       async () => {
         const resp = await this.post("/render", payload);
-        await raiseForError(resp);
-        return (await resp.json()) as Record<string, unknown>;
+        return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
       },
       retryOnBusy,
       maxWait,
@@ -1570,8 +1579,7 @@ Add these methods inside the `DazClient` class, after `cancelRequest`:
     return this.withBusyRetry(
       async () => {
         const resp = await this.post("/render/batch", payload);
-        await raiseForError(resp);
-        return (await resp.json()) as Record<string, unknown>;
+        return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
       },
       retryOnBusy,
       maxWait,
@@ -1602,8 +1610,7 @@ Add these methods inside the `DazClient` class, after `cancelRequest`:
     return this.withBusyRetry(
       async () => {
         const resp = await this.post("/render/animation", payload);
-        await raiseForError(resp);
-        return (await resp.json()) as Record<string, unknown>;
+        return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
       },
       retryOnBusy,
       maxWait,
