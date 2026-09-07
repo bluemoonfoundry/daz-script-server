@@ -49,3 +49,16 @@ export { DazViewport } from "./viewport.js";
 export { DazTimeline } from "./timeline.js";
 
 export { UndoGroup, withUndo } from "./undo.js";
+
+export { DazRenderSettings } from "./render.js";
+export type { Canvas, RenderOptions, RenderOutcome } from "./render.js";
+
+export { render, renderVariants } from "./renderApi.js";
+export type {
+  FigureMorphs,
+  RenderBaseSpec,
+  RenderCallOptions,
+  RenderResult,
+  RenderVariantSpec,
+  RenderVariantsOptions,
+} from "./renderApi.js";

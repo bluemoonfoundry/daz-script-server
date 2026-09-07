@@ -201,3 +201,42 @@ pattern as Phase 1's `client.integration.test.ts`; run with
 
 See `docs/superpowers/specs/2026-09-06-daz-ts-design.md` (in the repo root)
 for the full design spec and phased roadmap.
+
+## Phase 3: Rendering
+
+Phase 3 adds live Render Settings control and high-level render helpers on
+top of Phase 1's raw job-queue client methods, ported from `dazpy`'s
+`_render.py` and `_render_api(_aio).py`.
+
+- `DazRenderSettings` — talks directly to DAZ Studio's render manager
+  (`App.getRenderMgr()`) via `DazClient.execute()`: engine selection
+  (`activeEngine()`/`setActiveEngine()`, plus the stricter
+  `renderEngineState()`/`setRenderEngine()` pair that requires an exact live
+  readback before reporting success), resolution, output path, gamma,
+  double-sided rendering, Iray quality (`maxSamples`, `maxTimeSecs`,
+  `quality`, `setQualityPreset()`), Iray Canvases (`listCanvases()`,
+  `addCanvas()`, `removeCanvas()`, `canvasOutputPaths()`), and `render()` /
+  `renderAndWait()`, which drive `DzRenderMgr.doRender()` synchronously and
+  resolve from its `renderFinished(bool)` signal rather than trusting
+  `doRender()`'s own (undocumented, unreliable-on-cancel) return value.
+- `Canvas`, `RenderOutcome` — plain result types for the above. Unlike
+  dazpy's `RenderOutcome` (which overrides `__bool__`), TS callers must
+  check `.success` explicitly.
+- `render()`, `renderVariants()` (in `renderApi.ts`) — high-level helpers
+  over the HTTP `/render` and `/render/batch` job-queue endpoints already on
+  `DazClient` (`renderSubmit`, `renderBatchSubmit`, `streamRenderProgress`).
+  Both wait for completion via the SSE progress stream
+  (`GET /render/:id/progress`), falling back to long-poll on
+  `/requests/:id/result` if the stream is unavailable or ends without a
+  `complete`/`error` event. `renderVariants()` submits every variant in one
+  batch request, then awaits each in order, recording a failed variant's
+  error without aborting the rest.
+- USD export submission/status (`DazClient.exportUsdSubmit`,
+  `getUsdExportStatus`) was already ported in Phase 1 alongside the other
+  job-queue endpoints — see `src/client.ts`.
+
+`DazRenderSettings`'s environment-map/property methods
+(`getEnvironmentProperty`, `setEnvironmentProperty`,
+`setEnvironmentPropertyFromString`, `setEnvironmentMap`) are exposed
+primarily for the Phase 4 `lighting.ts` domain helper, mirroring dazpy's
+`lighting.py` usage of `_render.py`'s equivalent internal methods.

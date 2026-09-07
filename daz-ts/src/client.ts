@@ -171,7 +171,7 @@ export interface RetryOptions {
 export interface RenderSubmitOptions extends RetryOptions {
   figure?: string;
   morphs?: Record<string, number>;
-  figures?: Array<{ name: string; morphs?: Record<string, number> }>;
+  figures?: Array<{ name: string | null; morphs?: Record<string, number> }>;
   width?: number;
   height?: number;
   camera?: string;
