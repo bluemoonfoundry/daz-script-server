@@ -37,6 +37,16 @@ export class DazScene {
     this.client = client ?? new DazClient();
   }
 
+  /**
+   * The underlying {@link DazClient}, for domain-helper modules
+   * (`sceneState.ts`, `lighting.ts`, `cinematics.ts`, ...) that need to
+   * issue their own custom scripts. Mirrors dazpy's soft-private `_client`
+   * attribute, which sibling modules access directly.
+   */
+  getClient(): DazClient {
+    return this.client;
+  }
+
   // ---------------------------------------------------------------------
   // Node factories
   // ---------------------------------------------------------------------

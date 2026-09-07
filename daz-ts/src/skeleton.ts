@@ -576,6 +576,41 @@ export class DazSkeleton extends DazNode {
   }
 
   // ---------------------------------------------------------------------
+  // Zeroing
+  // ---------------------------------------------------------------------
+
+  /**
+   * Drive every bone rotation to 0 and every non-zero `DzMorph` to 0, in one
+   * DazScript evaluation. Used by `poses.ts`'s `zeroFigure()` default
+   * (`includeProps: false`) path -- does not touch node-level properties or
+   * the figure root transform.
+   */
+  async zeroBonesAndMorphs(): Promise<void> {
+    const script = this.skeletonScript(`
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {
+                var _b = _bones[i];
+                _b.getXRotControl().setValue(0);
+                _b.getYRotControl().setValue(0);
+                _b.getZRotControl().setValue(0);
+            }
+            var _obj = _node.getObject();
+            if (_obj) {
+                for (var j = 0; j < _obj.getNumModifiers(); j++) {
+                    var _m = _obj.getModifier(j);
+                    if (_m.className() === "DzMorph") {
+                        var _ch = _m.getValueChannel();
+                        if (Math.abs(_ch.getValue()) > 0.0001) {
+                            _ch.setValue(0);
+                        }
+                    }
+                }
+            }
+        `);
+    await this.client.execute(script);
+  }
+
+  // ---------------------------------------------------------------------
   // Follow target
   // ---------------------------------------------------------------------
 

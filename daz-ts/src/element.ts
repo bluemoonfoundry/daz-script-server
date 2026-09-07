@@ -19,6 +19,22 @@ export class DazElement {
     this.locator = locator;
   }
 
+  /**
+   * The underlying {@link DazClient}, for domain-helper modules (`pose.ts`,
+   * `sceneState.ts`, `animation.ts`, `materials.ts`, ...) that need to issue
+   * their own custom scripts against this element. Mirrors dazpy's
+   * soft-private `_client` attribute, which sibling modules like
+   * `materials.py`/`lighting.py` access directly.
+   */
+  getClient(): DazClient {
+    return this.client;
+  }
+
+  /** The DazScript locator expression for this element. See {@link getClient}. */
+  getLocator(): string {
+    return this.locator;
+  }
+
   /** Return the current value of a property looked up by its display label, or `null` if not found. */
   async getProperty(label: string): Promise<unknown> {
     const script = ScriptBuilder.iife(
