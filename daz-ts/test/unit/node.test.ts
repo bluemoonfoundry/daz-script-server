@@ -31,7 +31,9 @@ describe("DazNode transforms", () => {
     const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
     await node.setPosition(1, 2, 3);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.setWSPos(new DzVec3(1, 2, 3));");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n_node.setWSPos(new DzVec3(1, 2, 3));\n})()',
+    );
   });
 
   it("setTransform emits only the lines for the provided components, in position/rotation/scale order", async () => {
@@ -39,9 +41,9 @@ describe("DazNode transforms", () => {
     const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
     await node.setTransform({ position: [1, 0, 0], scale: [2, 2, 2] });
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.setLocalPos(new DzVec3(1, 0, 0));");
-    expect(script).toContain("_node.getXScaleControl().setValue(2)");
-    expect(script).not.toContain("RotControl().setValue");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n_node.setLocalPos(new DzVec3(1, 0, 0));\n_node.getXScaleControl().setValue(2); _node.getYScaleControl().setValue(2); _node.getZScaleControl().setValue(2);\n})()',
+    );
   });
 
   it("setTransform with no arguments makes no HTTP call", async () => {
@@ -58,14 +60,20 @@ describe("DazNode transforms", () => {
     expect(parent).toBeInstanceOf(DazNode);
     expect(parent?.identifier).toEqual({ value: "Torso", kind: "name" });
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("var p = _node.getNodeParent(); return p ? p.getName() : null;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Head");\nif (!_node) return null;\nvar p = _node.getNodeParent(); return p ? p.getName() : null;\n})()',
+    );
   });
 
   it("children() maps each returned name to a DazNode", async () => {
-    stub(["Hand", "Foot"]);
+    const fetchMock = stub(["Hand", "Foot"]);
     const node = new DazNode(new DazClient({ token: "" }), { value: "Torso", kind: "name" });
     const children = await node.children();
     expect(children.map((c) => c.identifier.value)).toEqual(["Hand", "Foot"]);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Torso");\nif (!_node) return null;\nvar names = []; for (var i = 0; i < _node.getNumNodeChildren(); i++) { names.push(_node.getNodeChild(i).getName()); } return names;\n})()',
+    );
   });
 
   it("delete() returns the boolean result of Scene.removeNode", async () => {
@@ -73,14 +81,20 @@ describe("DazNode transforms", () => {
     const node = new DazNode(new DazClient({ token: "" }), { value: "Prop", kind: "name" });
     expect(await node.delete()).toBe(true);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return Scene.removeNode(_node);");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Prop");\nif (!_node) return null;\nreturn Scene.removeNode(_node);\n})()',
+    );
   });
 
   it("reparent throws ScriptRuntimeError when the server reports a non-null result", async () => {
-    stub("new parent not found");
+    const fetchMock = stub("new parent not found");
     const node = new DazNode(new DazClient({ token: "" }), { value: "Prop", kind: "name" });
     const other = new DazNode(new DazClient({ token: "" }), { value: "Ghost", kind: "name" });
     await expect(node.reparent(other)).rejects.toThrow(/reparent failed/);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Prop");\nif (!_node) return null;\n\n            var _newParent = Scene.findNode("Ghost");\n            if (!_newParent) return "new parent not found";\n            var _oldParent = _node.getNodeParent();\n            if (_oldParent) _oldParent.removeNodeChild(_node, true);\n            var _err = _newParent.addNodeChild(_node, true);\n            var _errNum = _err ? _err.valueOf() : 0;\n            return _errNum !== 0 ? ("DzError code " + _errNum) : null;\n            \n})()',
+    );
   });
 
   it("visible getter/setter round-trip isVisible/setVisible", async () => {
@@ -88,7 +102,9 @@ describe("DazNode transforms", () => {
     const node = new DazNode(new DazClient({ token: "" }), { value: "Prop", kind: "name" });
     await node.setVisible(false);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.setVisible(false);");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Prop");\nif (!_node) return null;\n_node.setVisible(false);\n})()',
+    );
   });
 
   it("label() reads getLabel", async () => {
@@ -292,7 +308,9 @@ describe("DazNode transforms", () => {
     const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
     await node.select(false);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.select(false);");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n_node.select(false);\n})()',
+    );
   });
 
   it("isInScene() reads isInScene", async () => {
@@ -363,8 +381,9 @@ describe("DazNode transforms", () => {
     const other = new DazNode(new DazClient({ token: "" }), { value: "NewParent", kind: "name" });
     await node.reparent(other, { preserveWorldTransform: false });
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('_oldParent.removeNodeChild(_node, false);');
-    expect(script).toContain('_newParent.addNodeChild(_node, false);');
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Prop");\nif (!_node) return null;\n\n            var _newParent = Scene.findNode("NewParent");\n            if (!_newParent) return "new parent not found";\n            var _oldParent = _node.getNodeParent();\n            if (_oldParent) _oldParent.removeNodeChild(_node, false);\n            var _err = _newParent.addNodeChild(_node, false);\n            var _errNum = _err ? _err.valueOf() : 0;\n            return _errNum !== 0 ? ("DzError code " + _errNum) : null;\n            \n})()',
+    );
   });
 
   it("reparent resolves without throwing when the server reports null", async () => {

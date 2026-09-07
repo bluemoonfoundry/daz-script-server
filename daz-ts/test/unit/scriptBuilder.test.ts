@@ -64,6 +64,8 @@ describe("ScriptBuilder node helpers", () => {
       'var _skel=null,_skels=Scene.getSkeletonList();for(var _i=0;_i<_skels.length;_i++){if(_skels[_i].getLabel() === "Genesis 9"){_skel=_skels[_i];break;}}',
     );
     const byName: NodeIdentifier = { value: "Genesis9", kind: "name" };
-    expect(ScriptBuilder.skeletonLookup(byName)).toContain('_skels[_i].getName() === "Genesis9"');
+    expect(ScriptBuilder.skeletonLookup(byName)).toBe(
+      'var _skel=null,_skels=Scene.getSkeletonList();for(var _i=0;_i<_skels.length;_i++){if(_skels[_i].getName() === "Genesis9"){_skel=_skels[_i];break;}}',
+    );
   });
 });

@@ -64,7 +64,11 @@ export class DazNode extends DazElement {
   }
 
   async setPosition(x: number, y: number, z: number): Promise<void> {
-    await this.client.execute(this.nodeScript(`_node.setWSPos(new DzVec3(${x}, ${y}, ${z}));`));
+    await this.client.execute(
+      this.nodeScript(
+        `_node.setWSPos(new DzVec3(${ScriptBuilder.serializeArg(x)}, ${ScriptBuilder.serializeArg(y)}, ${ScriptBuilder.serializeArg(z)}));`,
+      ),
+    );
   }
 
   /** World-space rotation as `{x, y, z, w}` quaternion (read-only; use {@link setRotation} for Euler degrees). */
@@ -96,7 +100,7 @@ export class DazNode extends DazElement {
   async setScale(x: number, y: number, z: number): Promise<void> {
     await this.client.execute(
       this.nodeScript(
-        `_node.getXScaleControl().setValue(${x}); _node.getYScaleControl().setValue(${y}); _node.getZScaleControl().setValue(${z});`,
+        `_node.getXScaleControl().setValue(${ScriptBuilder.serializeArg(x)}); _node.getYScaleControl().setValue(${ScriptBuilder.serializeArg(y)}); _node.getZScaleControl().setValue(${ScriptBuilder.serializeArg(z)});`,
       ),
     );
   }
@@ -110,18 +114,20 @@ export class DazNode extends DazElement {
     const lines: string[] = [];
     if (opts.position !== undefined) {
       const [x, y, z] = opts.position;
-      lines.push(`_node.setLocalPos(new DzVec3(${x}, ${y}, ${z}));`);
+      lines.push(
+        `_node.setLocalPos(new DzVec3(${ScriptBuilder.serializeArg(x)}, ${ScriptBuilder.serializeArg(y)}, ${ScriptBuilder.serializeArg(z)}));`,
+      );
     }
     if (opts.rotation !== undefined) {
       const [x, y, z] = opts.rotation;
       lines.push(
-        `_node.getXRotControl().setValue(${x}); _node.getYRotControl().setValue(${y}); _node.getZRotControl().setValue(${z});`,
+        `_node.getXRotControl().setValue(${ScriptBuilder.serializeArg(x)}); _node.getYRotControl().setValue(${ScriptBuilder.serializeArg(y)}); _node.getZRotControl().setValue(${ScriptBuilder.serializeArg(z)});`,
       );
     }
     if (opts.scale !== undefined) {
       const [x, y, z] = opts.scale;
       lines.push(
-        `_node.getXScaleControl().setValue(${x}); _node.getYScaleControl().setValue(${y}); _node.getZScaleControl().setValue(${z});`,
+        `_node.getXScaleControl().setValue(${ScriptBuilder.serializeArg(x)}); _node.getYScaleControl().setValue(${ScriptBuilder.serializeArg(y)}); _node.getZScaleControl().setValue(${ScriptBuilder.serializeArg(z)});`,
       );
     }
     if (lines.length === 0) return;
@@ -132,7 +138,7 @@ export class DazNode extends DazElement {
   async setRotation(x: number, y: number, z: number): Promise<void> {
     await this.client.execute(
       this.nodeScript(
-        `_node.getXRotControl().setValue(${x}); _node.getYRotControl().setValue(${y}); _node.getZRotControl().setValue(${z});`,
+        `_node.getXRotControl().setValue(${ScriptBuilder.serializeArg(x)}); _node.getYRotControl().setValue(${ScriptBuilder.serializeArg(y)}); _node.getZRotControl().setValue(${ScriptBuilder.serializeArg(z)});`,
       ),
     );
   }
@@ -145,7 +151,7 @@ export class DazNode extends DazElement {
   async setPositionAtFrame(frame: number, x: number, y: number, z: number): Promise<void> {
     await this.client.execute(
       this.nodeScript(
-        `var _tm = ${Math.trunc(frame)} * Scene.getTimeStep(); _node.setWSPos(_tm, new DzVec3(${x}, ${y}, ${z}));`,
+        `var _tm = ${ScriptBuilder.serializeArg(Math.trunc(frame))} * Scene.getTimeStep(); _node.setWSPos(_tm, new DzVec3(${ScriptBuilder.serializeArg(x)}, ${ScriptBuilder.serializeArg(y)}, ${ScriptBuilder.serializeArg(z)}));`,
       ),
     );
   }
@@ -154,10 +160,10 @@ export class DazNode extends DazElement {
   async setRotationAtFrame(frame: number, x: number, y: number, z: number): Promise<void> {
     await this.client.execute(
       this.nodeScript(
-        `var _tm = ${Math.trunc(frame)} * Scene.getTimeStep(); ` +
-          `_node.getXRotControl().setDoubleValue(_tm, ${x}); ` +
-          `_node.getYRotControl().setDoubleValue(_tm, ${y}); ` +
-          `_node.getZRotControl().setDoubleValue(_tm, ${z});`,
+        `var _tm = ${ScriptBuilder.serializeArg(Math.trunc(frame))} * Scene.getTimeStep(); ` +
+          `_node.getXRotControl().setDoubleValue(_tm, ${ScriptBuilder.serializeArg(x)}); ` +
+          `_node.getYRotControl().setDoubleValue(_tm, ${ScriptBuilder.serializeArg(y)}); ` +
+          `_node.getZRotControl().setDoubleValue(_tm, ${ScriptBuilder.serializeArg(z)});`,
       ),
     );
   }
@@ -191,7 +197,11 @@ export class DazNode extends DazElement {
   }
 
   async setLocalPosition(x: number, y: number, z: number): Promise<void> {
-    await this.client.execute(this.nodeScript(`_node.setLocalPos(new DzVec3(${x}, ${y}, ${z}));`));
+    await this.client.execute(
+      this.nodeScript(
+        `_node.setLocalPos(new DzVec3(${ScriptBuilder.serializeArg(x)}, ${ScriptBuilder.serializeArg(y)}, ${ScriptBuilder.serializeArg(z)}));`,
+      ),
+    );
   }
 
   /** Local-space rotation as `(x, y, z)` Euler degrees; exact inverse of {@link setLocalRotation}. */
@@ -215,7 +225,7 @@ export class DazNode extends DazElement {
   async setLocalRotation(x: number, y: number, z: number): Promise<void> {
     await this.client.execute(
       this.nodeScript(
-        `_node.getXRotControl().setValue(${x}); _node.getYRotControl().setValue(${y}); _node.getZRotControl().setValue(${z});`,
+        `_node.getXRotControl().setValue(${ScriptBuilder.serializeArg(x)}); _node.getYRotControl().setValue(${ScriptBuilder.serializeArg(y)}); _node.getZRotControl().setValue(${ScriptBuilder.serializeArg(z)});`,
       ),
     );
   }
@@ -230,7 +240,7 @@ export class DazNode extends DazElement {
   }
 
   async setVisible(value: boolean): Promise<void> {
-    await this.client.execute(this.nodeScript(`_node.setVisible(${value ? "true" : "false"});`));
+    await this.client.execute(this.nodeScript(`_node.setVisible(${ScriptBuilder.serializeArg(value)});`));
   }
 
   async isVisibleInRender(): Promise<boolean> {
@@ -238,7 +248,7 @@ export class DazNode extends DazElement {
   }
 
   async setVisibleInRender(on: boolean): Promise<void> {
-    await this.client.execute(this.nodeScript(`_node.setVisibleInRender(${on ? "true" : "false"});`));
+    await this.client.execute(this.nodeScript(`_node.setVisibleInRender(${ScriptBuilder.serializeArg(on)});`));
   }
 
   async isVisibleInViewport(): Promise<boolean> {
@@ -246,7 +256,7 @@ export class DazNode extends DazElement {
   }
 
   async setVisibleInViewport(on: boolean): Promise<void> {
-    await this.client.execute(this.nodeScript(`_node.setVisibleInViewport(${on ? "true" : "false"});`));
+    await this.client.execute(this.nodeScript(`_node.setVisibleInViewport(${ScriptBuilder.serializeArg(on)});`));
   }
 
   // ---------------------------------------------------------------------
@@ -258,7 +268,7 @@ export class DazNode extends DazElement {
   }
 
   async select(on = true): Promise<void> {
-    await this.client.execute(this.nodeScript(`_node.select(${on ? "true" : "false"});`));
+    await this.client.execute(this.nodeScript(`_node.select(${ScriptBuilder.serializeArg(on)});`));
   }
 
   async isInScene(): Promise<boolean> {
@@ -309,7 +319,7 @@ export class DazNode extends DazElement {
   async reparent(newParent: DazNode, opts: { preserveWorldTransform?: boolean } = {}): Promise<void> {
     const { preserveWorldTransform = true } = opts;
     const parentExpr = ScriptBuilder.findNodeExpr(newParent.identifier);
-    const inPlace = preserveWorldTransform ? "true" : "false";
+    const inPlace = ScriptBuilder.serializeArg(preserveWorldTransform);
     const result = (
       await this.client.execute(
         this.nodeScript(`
