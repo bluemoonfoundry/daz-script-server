@@ -35,14 +35,15 @@ export class DazElement {
   /** Set a property value by display label. `value` must be JSON-serializable. */
   async setProperty(label: string, value: unknown): Promise<void> {
     const serialized = ScriptBuilder.serializeArg(value);
-    const script = ScriptBuilder.iife(`
-            var obj = ${this.locator};
+    const script = ScriptBuilder.iife(
+            `            var obj = ${this.locator};
             if (!obj) return {"error": "not_found"};
             var prop = obj.findPropertyByLabel(${ScriptBuilder.escapeString(label)});
             if (!prop) return {"error": "property_not_found"};
             prop.setValue(${serialized});
             return {"success": true};
-        `);
+        `
+    );
     await this.client.execute(script);
   }
 
@@ -52,8 +53,8 @@ export class DazElement {
    */
   async setProperties(values: Record<string, unknown>): Promise<Record<string, boolean>> {
     const dataJson = JSON.stringify(values);
-    const script = ScriptBuilder.iife(`
-            var obj = ${this.locator};
+    const script = ScriptBuilder.iife(
+            `            var obj = ${this.locator};
             if (!obj) return null;
             var _data = ${dataJson};
             var _result = {};
@@ -68,14 +69,15 @@ export class DazElement {
                 }
             }
             return _result;
-        `);
+        `
+    );
     return ((await this.client.execute(script)).value as Record<string, boolean>) ?? {};
   }
 
   /** Return metadata (`label`/`name`/`type`) for every property on this element. */
   async listProperties(): Promise<Array<{ label: string; name: string; type: string }>> {
-    const script = ScriptBuilder.iife(`
-            var obj = ${this.locator};
+    const script = ScriptBuilder.iife(
+            `            var obj = ${this.locator};
             if (!obj) return null;
             var result = [];
             for (var i = 0; i < obj.getNumProperties(); i++) {
@@ -83,14 +85,15 @@ export class DazElement {
                 result.push({"label": p.getLabel(), "name": p.getName(), "type": p.className()});
             }
             return result;
-        `);
+        `
+    );
     return ((await this.client.execute(script)).value as Array<{ label: string; name: string; type: string }>) ?? [];
   }
 
   /** Return every numeric property on this element as `{label: value}` in a single HTTP round-trip. */
   async numericProperties(): Promise<Record<string, unknown>> {
-    const script = ScriptBuilder.iife(`
-            var obj = ${this.locator};
+    const script = ScriptBuilder.iife(
+            `            var obj = ${this.locator};
             if (!obj) return null;
             var result = {};
             for (var i = 0; i < obj.getNumProperties(); i++) {
@@ -100,7 +103,8 @@ export class DazElement {
                 }
             }
             return result;
-        `);
+        `
+    );
     return ((await this.client.execute(script)).value as Record<string, unknown>) ?? {};
   }
 
@@ -116,8 +120,8 @@ export class DazElement {
    */
   async snapshot(fields: string[]): Promise<Record<string, unknown>> {
     const fieldsJson = JSON.stringify(fields);
-    const script = ScriptBuilder.iife(`
-            var obj = ${this.locator};
+    const script = ScriptBuilder.iife(
+            `            var obj = ${this.locator};
             if (!obj) return null;
             var _fields = ${fieldsJson};
             var _result = {};
@@ -126,7 +130,8 @@ export class DazElement {
                 _result[_fields[i]] = prop ? prop.getValue() : null;
             }
             return _result;
-        `);
+        `
+    );
     const values = ((await this.client.execute(script)).value as Record<string, unknown>) ?? {};
     for (const field of fields) {
       this.cache.set(field, values[field] ?? null);
