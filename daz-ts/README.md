@@ -157,13 +157,13 @@ getter/setter is an async method pair (`foo()`/`setFoo()`) rather than a TS
 accessor, since accessors can't be `async`.
 
 - `DazElement` — base proxy for any `DzElement`-derived object (locator
-  resolution, `findProperty()`, the `rawValue`/`setDoubleValue`/`getNumKeys`
-  gotchas ported from dazpy).
+  resolution and property get/set by label).
 - `DazProperty` — a single node/material property (`value()`, `setValue()`,
-  keyframe helpers).
+  keyframe helpers, and the `rawValue`/`setDoubleValue`/`getNumKeys` gotchas
+  ported from dazpy).
 - `DazNode`, `NodeIdentifier` — the general scene-node proxy (transforms,
-  visibility, selection, parenting) and the `{value, kind}` shape used to
-  resolve nodes by name or label.
+  visibility, selection, parenting, `findProperty()`) and the `{value, kind}`
+  shape used to resolve nodes by name or label.
 - `DazScene` — the primary entry point: node/camera/light/skeleton
   factories, selection, bulk scene snapshots (`overview()`,
   `sceneSnapshot()`, `allNodeTransforms()`, `nodeTree()`,

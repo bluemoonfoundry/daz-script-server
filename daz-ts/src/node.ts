@@ -37,6 +37,21 @@ export class DazNode extends DazElement {
   /**
    * Construct a `DazNode` from a pre-built DazScript locator expression.
    * Used by subclasses like `DazBone` that work with skeleton-relative locators.
+   *
+   * IMPORTANT: `locator` is honored only by the base-class (`DazElement`)
+   * property methods (`getProperty`/`setProperty`/`className`/`snapshot`,
+   * plus `node.ts`'s own `modifierLocator`/`materialLocator` helpers).
+   * `DazNode`'s own transform/hierarchy/modifier/material methods (e.g.
+   * `position`, `setPosition`, `setRotation`, `setScale`, `setTransform`,
+   * `label`, `select`, `parent`, `children`, `boundingBox`,
+   * `setPositionAtFrame`, `modifiers`, `materials`, ...) always resolve via
+   * {@link nodeScript}, which rebuilds its script body from `this.identifier`
+   * (a `Scene.findNode()`-style lookup) regardless of any `locator` supplied
+   * here. This matches dazpy's own `_node.py`, which has the same split.
+   * Subclasses that need full locator-scoped resolution for those methods
+   * (e.g. `DazBone`) must override the relevant methods individually — see
+   * `DazBone`'s overridden rotation/position methods in `bone.ts` for the
+   * pattern.
    */
   constructor(client: DazClient, identifier: NodeIdentifier, locator: string);
   constructor(client: DazClient, identifier: NodeIdentifier, locator?: string) {

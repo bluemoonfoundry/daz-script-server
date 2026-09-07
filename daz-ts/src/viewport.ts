@@ -122,7 +122,7 @@ export class DazViewport {
     const bgCaptureJs = backdropColor !== undefined ? "var prevBg = vp.background;" : "";
     let bgApplyJs = "";
     if (backdropColor !== undefined) {
-      const [r, g, b] = backdropColor;
+      const [r, g, b] = backdropColor.map((c) => Math.trunc(c));
       const hex = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
       bgApplyJs = `vp.background = new QColor(${ScriptBuilder.escapeString(hex)});`;
     }

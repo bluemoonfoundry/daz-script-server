@@ -5,6 +5,16 @@ import { ScriptBuilder } from "./scriptBuilder.js";
 /**
  * Proxy for a `DzBone` (a single joint within a {@link DazSkeleton}).
  * Extends `DazNode` with bone-specific rotation helpers.
+ *
+ * Resolution note: only this class's own overrides — `localEuler`,
+ * `localRotation`, `setLocalRotation`, `localPosition`, `rotationOrder`, and
+ * `getSkeleton` (all routed through the private `nb()` helper) — resolve via
+ * the skeleton-relative `locator` passed to {@link fromLocator}. Every method
+ * `DazBone` inherits from `DazNode` without overriding (e.g. `position`,
+ * `setPosition`, `setRotation`, `label`, `select`, `parent`, `children`,
+ * `modifiers`, `materials`, ...) resolves via `this.identifier` instead — a
+ * scene-wide `Scene.findNode()`-style lookup that ignores the locator. See
+ * the constructor overload doc on `DazNode` for details.
  */
 export class DazBone extends DazNode {
   /**

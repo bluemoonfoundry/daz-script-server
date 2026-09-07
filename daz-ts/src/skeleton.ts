@@ -13,14 +13,8 @@ import { ScriptBuilder } from "./scriptBuilder.js";
  * class.
  */
 export class DazSkeleton extends DazNode {
-  constructor(client: DazClient, identifier: NodeIdentifier);
-  constructor(client: DazClient, identifier: NodeIdentifier, locator: string);
-  constructor(client: DazClient, identifier: NodeIdentifier, locator?: string) {
-    if (locator !== undefined) {
-      super(client, identifier, locator);
-    } else {
-      super(client, identifier);
-    }
+  constructor(client: DazClient, identifier: NodeIdentifier) {
+    super(client, identifier);
   }
 
   // ---------------------------------------------------------------------
@@ -302,7 +296,7 @@ export class DazSkeleton extends DazNode {
     effectorBoneNames: string[],
   ): Promise<Record<string, [number, number, number]>> {
     const rotationsJson = JSON.stringify(rotations);
-    const effectorsJson = JSON.stringify(effectorBoneNames);
+    const effectorsJson = ScriptBuilder.serializeArg(effectorBoneNames);
     const script = this.skeletonScript(`
             var _data = ${rotationsJson};
             var _effNames = ${effectorsJson};
@@ -365,8 +359,8 @@ export class DazSkeleton extends DazNode {
     effectorBoneName: string,
     stepDegrees = 1.0,
   ): Promise<{ basePosition: [number, number, number]; columns: Array<[number, number, number]> } | null> {
-    const chainJson = JSON.stringify(chainBoneNames);
-    const effectorJson = JSON.stringify(effectorBoneName);
+    const chainJson = ScriptBuilder.serializeArg(chainBoneNames);
+    const effectorJson = ScriptBuilder.escapeString(effectorBoneName);
     const script = this.skeletonScript(`
             var _chain = ${chainJson};
             var _effName = ${effectorJson};

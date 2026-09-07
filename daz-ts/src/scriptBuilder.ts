@@ -55,29 +55,31 @@ export class ScriptBuilder {
 
   /**
    * Return a JS snippet (not wrapped in an IIFE) that finds a skeleton by
+   * `identifier` and binds it to `varName`. Embed at the top of a larger
+   * body and follow with `if (!<varName>) return null;`.
+   */
+  private static skeletonLookupAs(identifier: NodeIdentifier, varName: string): string {
+    const value = ScriptBuilder.escapeString(identifier.value);
+    const match =
+      identifier.kind === "label" ? `_skels[_i].getLabel() === ${value}` : `_skels[_i].getName() === ${value}`;
+    return (
+      `var ${varName}=null,_skels=Scene.getSkeletonList();` +
+      `for(var _i=0;_i<_skels.length;_i++){` +
+      `if(${match}){${varName}=_skels[_i];break;}}`
+    );
+  }
+
+  /**
+   * Return a JS snippet (not wrapped in an IIFE) that finds a skeleton by
    * `identifier` and binds it to `_skel`. Embed at the top of a larger body
    * and follow with `if (!_skel) return null;`.
    */
   static skeletonLookup(identifier: NodeIdentifier): string {
-    const value = ScriptBuilder.escapeString(identifier.value);
-    const match =
-      identifier.kind === "label" ? `_skels[_i].getLabel() === ${value}` : `_skels[_i].getName() === ${value}`;
-    return (
-      `var _skel=null,_skels=Scene.getSkeletonList();` +
-      `for(var _i=0;_i<_skels.length;_i++){` +
-      `if(${match}){_skel=_skels[_i];break;}}`
-    );
+    return ScriptBuilder.skeletonLookupAs(identifier, "_skel");
   }
 
   /** Like {@link skeletonLookup} but binds the result to `_node` instead of `_skel`, for callers using the shared `_node`-based body convention. */
   static skeletonLookupAsNode(identifier: NodeIdentifier): string {
-    const value = ScriptBuilder.escapeString(identifier.value);
-    const match =
-      identifier.kind === "label" ? `_skels[_i].getLabel() === ${value}` : `_skels[_i].getName() === ${value}`;
-    return (
-      `var _node=null,_skels=Scene.getSkeletonList();` +
-      `for(var _i=0;_i<_skels.length;_i++){` +
-      `if(${match}){_node=_skels[_i];break;}}`
-    );
+    return ScriptBuilder.skeletonLookupAs(identifier, "_node");
   }
 }
