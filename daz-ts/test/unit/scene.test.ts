@@ -5,7 +5,7 @@ import { DazSkeleton } from "../../src/skeleton.js";
 import { DazCamera } from "../../src/camera.js";
 import { DazLight } from "../../src/light.js";
 import { DazNode } from "../../src/node.js";
-import { NodeNotFoundError } from "../../src/exceptions.js";
+import { NodeNotFoundError, ScriptRuntimeError } from "../../src/exceptions.js";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -547,5 +547,327 @@ describe("DazScene bulk snapshots", () => {
     const scene = new DazScene(new DazClient({ token: "" }));
     const result = await scene.overview();
     expect(result).toEqual({ scene_file: "", selected_node: null, figures: [], cameras: [], lights: [], total_nodes: 0 });
+  });
+});
+
+describe("DazScene I/O, playback, undo, dForce", () => {
+  it("load() calls Scene.loadScene(path, 0) in merge mode", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.load("C:/scene.duf");
+    expect(scriptOf(fetchMock)).toBe(iife('Scene.loadScene("C:/scene.duf", 0);'));
+  });
+
+  it("save() calls Scene.saveScene(path)", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.save("C:/scene.duf");
+    expect(scriptOf(fetchMock)).toBe(iife('Scene.saveScene("C:/scene.duf");'));
+  });
+
+  it("saveCopy() delegates to DazClient.sceneSaveCopy via POST /scene/save-copy", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, path: "C:/copy.duf", source: "copy", method: "copy" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    const result = await scene.saveCopy("C:/copy.duf");
+    expect(result).toEqual({ ok: true, path: "C:/copy.duf", source: "copy", method: "copy" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:18811/scene/save-copy");
+    expect(JSON.parse(init.body as string)).toEqual({ path: "C:/copy.duf" });
+  });
+
+  it("exportFbx() with defaults sets the documented default option overrides on DzFbxExporter", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.exportFbx("C:/out.fbx");
+    expect(scriptOf(fetchMock)).toBe(
+      iife(`
+            var mgr = App.getExportMgr();
+            var exp = mgr.findExporterByClassName("DzFbxExporter");
+            if (!exp) return;
+            var settings = new DzFileIOSettings();
+            exp.getDefaultOptions(settings);
+            settings.setBoolValue("IncludeSelectedOnly", false); settings.setBoolValue("IncludeFigures", true); settings.setBoolValue("IncludeProps", false); settings.setBoolValue("IncludeLights", false); settings.setBoolValue("IncludeCameras", false); settings.setBoolValue("IncludeAnimations", false); settings.setBoolValue("EmbedTextures", true); settings.setIntValue("RunSilent", 1);
+            exp.writeFile("C:/out.fbx", settings);
+        `),
+    );
+  });
+
+  it("exportFbx() applies opts overrides (selectedOnly, includeProps) and additional raw options", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.exportFbx("C:/out.fbx", { selectedOnly: true, includeProps: true, options: { CustomFlag: 2.5 } });
+    expect(scriptOf(fetchMock)).toBe(
+      iife(`
+            var mgr = App.getExportMgr();
+            var exp = mgr.findExporterByClassName("DzFbxExporter");
+            if (!exp) return;
+            var settings = new DzFileIOSettings();
+            exp.getDefaultOptions(settings);
+            settings.setBoolValue("IncludeSelectedOnly", true); settings.setBoolValue("IncludeFigures", true); settings.setBoolValue("IncludeProps", true); settings.setBoolValue("IncludeLights", false); settings.setBoolValue("IncludeCameras", false); settings.setBoolValue("IncludeAnimations", false); settings.setBoolValue("EmbedTextures", true); settings.setFloatValue("CustomFlag", 2.5); settings.setIntValue("RunSilent", 1);
+            exp.writeFile("C:/out.fbx", settings);
+        `),
+    );
+  });
+
+  it("exportObj() with defaults sets the documented default option overrides on DzObjExporter", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.exportObj("C:/out.obj");
+    expect(scriptOf(fetchMock)).toBe(
+      iife(`
+            var mgr = App.getExportMgr();
+            var exp = mgr.findExporterByClassName("DzObjExporter");
+            if (!exp) return;
+            var settings = new DzFileIOSettings();
+            exp.getDefaultOptions(settings);
+            settings.setBoolValue("SelectedOnly", false); settings.setBoolValue("IgnoreInvisible", true); settings.setBoolValue("WriteVN", false); settings.setBoolValue("CollectMaps", false); settings.setIntValue("RunSilent", 1);
+            exp.writeFile("C:/out.obj", settings);
+        `),
+    );
+  });
+
+  it("filename() returns Scene.getFilename(), or '' when the server returns null", async () => {
+    stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.filename()).toBe("");
+  });
+
+  it("filename() script and return value", async () => {
+    const fetchMock = stubSeq("C:/scene.duf");
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.filename()).toBe("C:/scene.duf");
+    expect(scriptOf(fetchMock)).toBe(iife("return Scene.getFilename();"));
+  });
+
+  it("needsSave() calls Scene.needsSave()", async () => {
+    const fetchMock = stubSeq(true);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.needsSave()).toBe(true);
+    expect(scriptOf(fetchMock)).toBe(iife("return Scene.needsSave();"));
+  });
+
+  it("playRange() converts DzTimeRange ticks to frames via getTimeStep()", async () => {
+    const fetchMock = stubSeq({ start: 0, end: 90 });
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.playRange()).toEqual({ start: 0, end: 90 });
+    expect(scriptOf(fetchMock)).toBe(
+      iife(
+        "var r = Scene.getPlayRange(); var step = Scene.getTimeStep(); return {start: Math.round(r.start / step), end: Math.round(r.end / step)};",
+      ),
+    );
+  });
+
+  it("playRange() falls back to {start: 0, end: 0} when the server returns null", async () => {
+    stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.playRange()).toEqual({ start: 0, end: 0 });
+  });
+
+  it("setPlayRange multiplies frame numbers by Scene.getTimeStep()", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.setPlayRange(0, 30);
+    expect(scriptOf(fetchMock)).toBe(
+      iife("var step = Scene.getTimeStep();Scene.setPlayRange(new DzTimeRange(0 * step, 30 * step));"),
+    );
+  });
+
+  it("setPlayRange truncates non-integer frame numbers", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.setPlayRange(1.9, 30.4);
+    expect(scriptOf(fetchMock)).toBe(
+      iife("var step = Scene.getTimeStep();Scene.setPlayRange(new DzTimeRange(1 * step, 30 * step));"),
+    );
+  });
+
+  it("animRange() converts DzTimeRange ticks to frames via getTimeStep()", async () => {
+    const fetchMock = stubSeq({ start: 0, end: 100 });
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.animRange()).toEqual({ start: 0, end: 100 });
+    expect(scriptOf(fetchMock)).toBe(
+      iife(
+        "var r = Scene.getAnimRange(); var step = Scene.getTimeStep(); return {start: Math.round(r.start / step), end: Math.round(r.end / step)};",
+      ),
+    );
+  });
+
+  it("animRange() falls back to {start: 0, end: 0} when the server returns null", async () => {
+    stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.animRange()).toEqual({ start: 0, end: 0 });
+  });
+
+  it("setAnimRange multiplies frame numbers by Scene.getTimeStep()", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.setAnimRange(10, 200);
+    expect(scriptOf(fetchMock)).toBe(
+      iife("var step = Scene.getTimeStep();Scene.setAnimRange(new DzTimeRange(10 * step, 200 * step));"),
+    );
+  });
+
+  it("isPlaying() calls Scene.isPlaying()", async () => {
+    const fetchMock = stubSeq(true);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.isPlaying()).toBe(true);
+    expect(scriptOf(fetchMock)).toBe(iife("return Scene.isPlaying();"));
+  });
+
+  it("loopPlayback(true) calls Scene.loopPlayback(true)", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.loopPlayback(true);
+    expect(scriptOf(fetchMock)).toBe(iife("Scene.loopPlayback(true);"));
+  });
+
+  it("loopPlayback(false) calls Scene.loopPlayback(false)", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.loopPlayback(false);
+    expect(scriptOf(fetchMock)).toBe(iife("Scene.loopPlayback(false);"));
+  });
+
+  it("undoLast() calls App.getUndoStack().undo()", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.undoLast();
+    expect(scriptOf(fetchMock)).toBe(iife("App.getUndoStack().undo();"));
+  });
+
+  it("redoLast() calls App.getUndoStack().redo()", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.redoLast();
+    expect(scriptOf(fetchMock)).toBe(iife("App.getUndoStack().redo();"));
+  });
+
+  it("isSimulating() calls App.getSimulationMgr().isSimulating()", async () => {
+    const fetchMock = stubSeq(true);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.isSimulating()).toBe(true);
+    expect(scriptOf(fetchMock)).toBe(iife("return App.getSimulationMgr().isSimulating();"));
+  });
+
+  it("clearDforceSimulation() calls App.getSimulationMgr().clearSimulation()", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.clearDforceSimulation();
+    expect(scriptOf(fetchMock)).toBe(iife("App.getSimulationMgr().clearSimulation();"));
+  });
+
+  it("frame() calls Scene.getFrame(), falling back to 0 when the server returns null", async () => {
+    stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.frame()).toBe(0);
+  });
+
+  it("frame() script and return value", async () => {
+    const fetchMock = stubSeq(12);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.frame()).toBe(12);
+    expect(scriptOf(fetchMock)).toBe(iife("return Scene.getFrame();"));
+  });
+
+  it("setFrame() calls Scene.setFrame() with a truncated integer", async () => {
+    const fetchMock = stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.setFrame(24.7);
+    expect(scriptOf(fetchMock)).toBe(iife("Scene.setFrame(24);"));
+  });
+
+  it("undo() delegates to withUndo, committing on success", async () => {
+    const fetchMock = stubSeq(null, null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    const result = await scene.undo("Move figure", async () => "done");
+    expect(result).toBe("done");
+    expect(scriptOf(fetchMock, 0)).toBe(iife("beginUndo();"));
+    expect(scriptOf(fetchMock, 1)).toBe(iife('acceptUndo("Move figure");'));
+  });
+
+  it("undo() cancels and rethrows when fn throws", async () => {
+    const fetchMock = stubSeq(null, null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await expect(
+      scene.undo("x", async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(scriptOf(fetchMock, 0)).toBe(iife("beginUndo();"));
+    expect(scriptOf(fetchMock, 1)).toBe(iife("cancelUndo();"));
+  });
+
+  it("runDforceSimulation() with no nodes calls DzSimulationMgr.simulate() and resolves null on success", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "job-1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "completed", success: true, result: { error: null }, output: [], duration_ms: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    const result = await scene.runDforceSimulation();
+    expect(result).toBeNull();
+    const submitScript = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(submitScript).toBe(
+      iife(`
+                var mgr = App.getSimulationMgr();
+                var err = mgr.simulate();
+                return {"error": err ? String(err) : null};
+            `),
+    );
+  });
+
+  it("runDforceSimulation(nodes) calls customSimulate() on the active engine with the resolved node expressions", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "job-2" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "completed", success: true, result: { error: null }, output: [], duration_ms: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new DazClient({ token: "" });
+    const scene = new DazScene(client);
+    const node1 = new DazNode(client, { value: "Genesis9", kind: "name" });
+    const node2 = new DazNode(client, { value: "Genesis9 2", kind: "label" });
+    const result = await scene.runDforceSimulation([node1, node2]);
+    expect(result).toBeNull();
+    const submitScript = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(submitScript).toBe(
+      iife(`
+                var mgr = App.getSimulationMgr();
+                var engine = mgr.getActiveSimulationEngine();
+                if (!engine) return {"error": "no_active_engine"};
+                var err = engine.customSimulate([Scene.findNode("Genesis9"),Scene.findNodeByLabel("Genesis9 2")]);
+                return {"error": err ? String(err) : null};
+            `),
+    );
+  });
+
+  it("runDforceSimulation() throws ScriptRuntimeError when the simulation engine reports an error", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "job-3" }));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ status: "completed", success: true, result: { error: "cloth collision failure" }, output: [], duration_ms: 0 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await expect(scene.runDforceSimulation()).rejects.toThrow(ScriptRuntimeError);
+  });
+
+  it("runDforceSimulation(wait: false) submits async and returns the requestId without polling", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ request_id: "job-4" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    const requestId = await scene.runDforceSimulation(undefined, { wait: false });
+    expect(requestId).toBe("job-4");
+    expect(fetchMock.mock.calls.length).toBe(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:18811/execute/async");
+    const submitScript = JSON.parse(init.body as string).script;
+    expect(submitScript).toBe(
+      iife(`
+                var mgr = App.getSimulationMgr();
+                var err = mgr.simulate();
+                return {"error": err ? String(err) : null};
+            `),
+    );
   });
 });

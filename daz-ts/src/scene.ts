@@ -1,10 +1,12 @@
 import { DazCamera } from "./camera.js";
 import { DazClient } from "./client.js";
-import { NodeNotFoundError } from "./exceptions.js";
+import { NodeNotFoundError, ScriptRuntimeError } from "./exceptions.js";
 import { DazLight } from "./light.js";
 import { DazNode, type NodeIdentifier } from "./node.js";
+import { executeLong } from "./polling.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 import { DazSkeleton } from "./skeleton.js";
+import { withUndo } from "./undo.js";
 
 const LIGHT_TYPE_CLASSES: Record<string, string> = {
   spot: "DzSpotLight",
@@ -23,6 +25,10 @@ function sleep(seconds: number): Promise<void> {
  * This file covers node/camera/light/skeleton factories and selection
  * (Phase 2 Task 12); later tasks (13-14) add bulk scene snapshots and
  * I/O/playback/undo/dForce methods to this same class.
+ *
+ * @remarks
+ * `applyInteractionRecipe()` (dazpy's multi-figure IK recipe application) is
+ * Phase 5 scope (`daz-script-server-sf7y`), not implemented here.
  */
 export class DazScene {
   private readonly client: DazClient;
@@ -444,5 +450,225 @@ export class DazScene {
     return (
       (await this.client.execute(script)).value as Record<string, unknown> | null
     ) ?? { scene_file: "", selected_node: null, figures: [], cameras: [], lights: [], total_nodes: 0 };
+  }
+
+  // ---------------------------------------------------------------------
+  // I/O, playback, undo, dForce
+  // ---------------------------------------------------------------------
+
+  private async exportViaNativeExporter(exporterClass: string, path: string, overrides: Record<string, unknown>): Promise<void> {
+    const settingsCalls: string[] = [];
+    for (const [key, value] of Object.entries(overrides)) {
+      const jsKey = ScriptBuilder.escapeString(key);
+      if (typeof value === "boolean") {
+        settingsCalls.push(`settings.setBoolValue(${jsKey}, ${ScriptBuilder.serializeArg(value)});`);
+      } else if (Number.isInteger(value)) {
+        settingsCalls.push(`settings.setIntValue(${jsKey}, ${ScriptBuilder.serializeArg(value)});`);
+      } else if (typeof value === "number") {
+        settingsCalls.push(`settings.setFloatValue(${jsKey}, ${ScriptBuilder.serializeArg(value)});`);
+      } else {
+        settingsCalls.push(`settings.setStringValue(${jsKey}, ${ScriptBuilder.escapeString(String(value))});`);
+      }
+    }
+    const script = ScriptBuilder.iife(`
+            var mgr = App.getExportMgr();
+            var exp = mgr.findExporterByClassName(${ScriptBuilder.escapeString(exporterClass)});
+            if (!exp) return;
+            var settings = new DzFileIOSettings();
+            exp.getDefaultOptions(settings);
+            ${settingsCalls.join(" ")}
+            exp.writeFile(${ScriptBuilder.escapeString(path)}, settings);
+        `);
+    await this.client.execute(script);
+  }
+
+  /** Load a scene file (merge mode — does not clear the existing scene). `path` is an absolute path on the server host. */
+  async load(path: string): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife(`Scene.loadScene(${ScriptBuilder.escapeString(path)}, 0);`));
+  }
+
+  /** Save the scene to `path` (absolute path on the server host). */
+  async save(path: string): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife(`Scene.saveScene(${ScriptBuilder.escapeString(path)});`));
+  }
+
+  /** Save a copy of the scene without changing its current file or dirty state. See `DazClient.sceneSaveCopy` for the copy-vs-serialize tradeoff. */
+  async saveCopy(path: string): Promise<Record<string, unknown>> {
+    return this.client.sceneSaveCopy(path);
+  }
+
+  /** Export the scene to FBX via DAZ Studio's built-in `DzFbxExporter` (synchronous — no async job to poll, unlike `DazClient.exportUsdSubmit`). */
+  async exportFbx(
+    path: string,
+    opts: {
+      selectedOnly?: boolean;
+      includeFigures?: boolean;
+      includeProps?: boolean;
+      includeLights?: boolean;
+      includeCameras?: boolean;
+      includeAnimations?: boolean;
+      embedTextures?: boolean;
+      options?: Record<string, unknown>;
+    } = {},
+  ): Promise<void> {
+    const overrides: Record<string, unknown> = {
+      IncludeSelectedOnly: opts.selectedOnly ?? false,
+      IncludeFigures: opts.includeFigures ?? true,
+      IncludeProps: opts.includeProps ?? false,
+      IncludeLights: opts.includeLights ?? false,
+      IncludeCameras: opts.includeCameras ?? false,
+      IncludeAnimations: opts.includeAnimations ?? false,
+      EmbedTextures: opts.embedTextures ?? true,
+      ...opts.options,
+      RunSilent: 1,
+    };
+    await this.exportViaNativeExporter("DzFbxExporter", path, overrides);
+  }
+
+  /** Export the scene to OBJ via DAZ Studio's built-in `DzObjExporter` (synchronous, see {@link exportFbx}). */
+  async exportObj(
+    path: string,
+    opts: {
+      selectedOnly?: boolean;
+      ignoreInvisible?: boolean;
+      includeNormals?: boolean;
+      collectMaps?: boolean;
+      options?: Record<string, unknown>;
+    } = {},
+  ): Promise<void> {
+    const overrides: Record<string, unknown> = {
+      SelectedOnly: opts.selectedOnly ?? false,
+      IgnoreInvisible: opts.ignoreInvisible ?? true,
+      WriteVN: opts.includeNormals ?? false,
+      CollectMaps: opts.collectMaps ?? false,
+      ...opts.options,
+      RunSilent: 1,
+    };
+    await this.exportViaNativeExporter("DzObjExporter", path, overrides);
+  }
+
+  async filename(): Promise<string> {
+    return ((await this.client.execute(ScriptBuilder.iife("return Scene.getFilename();"))).value as string) ?? "";
+  }
+
+  async needsSave(): Promise<boolean> {
+    return Boolean((await this.client.execute(ScriptBuilder.iife("return Scene.needsSave();"))).value);
+  }
+
+  /** Playback range as `{start, end}` in frames. */
+  async playRange(): Promise<{ start: number; end: number }> {
+    const script = ScriptBuilder.iife(
+      "var r = Scene.getPlayRange(); var step = Scene.getTimeStep(); return {start: Math.round(r.start / step), end: Math.round(r.end / step)};",
+    );
+    return ((await this.client.execute(script)).value as { start: number; end: number }) ?? { start: 0, end: 0 };
+  }
+
+  async setPlayRange(start: number, end: number): Promise<void> {
+    const script = ScriptBuilder.iife(
+      `var step = Scene.getTimeStep();Scene.setPlayRange(new DzTimeRange(${ScriptBuilder.serializeArg(
+        Math.trunc(start),
+      )} * step, ${ScriptBuilder.serializeArg(Math.trunc(end))} * step));`,
+    );
+    await this.client.execute(script);
+  }
+
+  /** Animation range as `{start, end}` in frames. */
+  async animRange(): Promise<{ start: number; end: number }> {
+    const script = ScriptBuilder.iife(
+      "var r = Scene.getAnimRange(); var step = Scene.getTimeStep(); return {start: Math.round(r.start / step), end: Math.round(r.end / step)};",
+    );
+    return ((await this.client.execute(script)).value as { start: number; end: number }) ?? { start: 0, end: 0 };
+  }
+
+  async setAnimRange(start: number, end: number): Promise<void> {
+    const script = ScriptBuilder.iife(
+      `var step = Scene.getTimeStep();Scene.setAnimRange(new DzTimeRange(${ScriptBuilder.serializeArg(
+        Math.trunc(start),
+      )} * step, ${ScriptBuilder.serializeArg(Math.trunc(end))} * step));`,
+    );
+    await this.client.execute(script);
+  }
+
+  async isPlaying(): Promise<boolean> {
+    return Boolean((await this.client.execute(ScriptBuilder.iife("return Scene.isPlaying();"))).value);
+  }
+
+  async loopPlayback(on: boolean): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife(`Scene.loopPlayback(${ScriptBuilder.serializeArg(on)});`));
+  }
+
+  /** Step back one level in DAZ Studio's undo stack (the *global* stack — use {@link undo} to group a series of changes instead). */
+  async undoLast(): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife("App.getUndoStack().undo();"));
+  }
+
+  async redoLast(): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife("App.getUndoStack().redo();"));
+  }
+
+  async isSimulating(): Promise<boolean> {
+    return Boolean((await this.client.execute(ScriptBuilder.iife("return App.getSimulationMgr().isSimulating();"))).value);
+  }
+
+  async clearDforceSimulation(): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife("App.getSimulationMgr().clearSimulation();"));
+  }
+
+  /**
+   * Run a dForce simulation. `nodes` omitted simulates the whole scene via
+   * `DzSimulationMgr.simulate()` (follows the configured Simulation
+   * Settings frame range); `nodes` provided runs `customSimulate()` on
+   * that subset via the active engine.
+   * @param wait When `true` (default), block (via the async execute-and-poll endpoint, since dForce runs can take minutes) until finished, returning `null`. When `false`, submit and return the `requestId` immediately.
+   * @throws ScriptRuntimeError if the simulation engine reports an error (only when `wait` is `true`).
+   */
+  async runDforceSimulation(nodes?: DazNode[], opts: { wait?: boolean; timeout?: number } = {}): Promise<string | null> {
+    const { wait = true, timeout = 300.0 } = opts;
+    let body: string;
+    if (nodes && nodes.length > 0) {
+      const nodeExprs = nodes.map((n) => ScriptBuilder.findNodeExpr(n.identifier)).join(",");
+      body = `
+                var mgr = App.getSimulationMgr();
+                var engine = mgr.getActiveSimulationEngine();
+                if (!engine) return {"error": "no_active_engine"};
+                var err = engine.customSimulate([${nodeExprs}]);
+                return {"error": err ? String(err) : null};
+            `;
+    } else {
+      body = `
+                var mgr = App.getSimulationMgr();
+                var err = mgr.simulate();
+                return {"error": err ? String(err) : null};
+            `;
+    }
+    const script = ScriptBuilder.iife(body);
+
+    if (!wait) {
+      return this.client.executeAsyncSubmit(script);
+    }
+
+    const result = await executeLong(this.client, script, undefined, { timeoutMs: timeout * 1000 });
+    const data = (result.value as { error: string | null } | null) ?? { error: null };
+    if (data.error) {
+      throw new ScriptRuntimeError(`dForce simulation failed: ${data.error}`);
+    }
+    return null;
+  }
+
+  async frame(): Promise<number> {
+    return ((await this.client.execute(ScriptBuilder.iife("return Scene.getFrame();"))).value as number) ?? 0;
+  }
+
+  async setFrame(frame: number): Promise<void> {
+    await this.client.execute(ScriptBuilder.iife(`Scene.setFrame(${ScriptBuilder.serializeArg(Math.trunc(frame))});`));
+  }
+
+  /**
+   * Run `fn` with all its changes grouped into a single undo step labeled
+   * `label` (see {@link withUndo}). TS equivalent of dazpy's
+   * `with scene.undo(label): ...` context manager.
+   */
+  async undo<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    return withUndo(this.client, label, fn);
   }
 }
