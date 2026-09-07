@@ -415,3 +415,41 @@ describe("DazScene node/camera/light/skeleton factories", () => {
     expect(scriptOf(fetchMock)).toBe(iife("Scene.selectAllNodes(false);"));
   });
 });
+
+describe("DazScene bulk snapshots", () => {
+  it("sceneSnapshot passes a JSON null filter when skeletonLabels is omitted", async () => {
+    const fetchMock = stubSeq([]);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.sceneSnapshot();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toContain("var _filter = null;");
+  });
+
+  it("sceneSnapshot passes the label/name filter as a JSON array when provided", async () => {
+    const fetchMock = stubSeq([]);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.sceneSnapshot(["Genesis 9"]);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toContain('var _filter = ["Genesis 9"];');
+  });
+
+  it("nodeHierarchy raises NodeNotFoundError when the root cannot be found", async () => {
+    stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await expect(scene.nodeHierarchy({ root: "Ghost" })).rejects.toBeInstanceOf(NodeNotFoundError);
+  });
+
+  it("nodeHierarchy maps total_descendants to totalDescendants", async () => {
+    stubSeq({ node: "Genesis 9", hierarchy: { label: "Genesis 9", name: "Genesis9", type: "DzFigure" }, total_descendants: 5 });
+    const scene = new DazScene(new DazClient({ token: "" }));
+    const result = await scene.nodeHierarchy({ root: "Genesis 9", maxDepth: 2 });
+    expect(result.totalDescendants).toBe(5);
+  });
+
+  it("overview() falls back to an empty-scene default when the server returns null", async () => {
+    stubSeq(null);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    const result = await scene.overview();
+    expect(result).toEqual({ scene_file: "", selected_node: null, figures: [], cameras: [], lights: [], total_nodes: 0 });
+  });
+});

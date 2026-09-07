@@ -263,4 +263,186 @@ export class DazScene {
   async selectAll(on = true): Promise<void> {
     await this.client.execute(ScriptBuilder.iife(`Scene.selectAllNodes(${ScriptBuilder.serializeArg(on)});`));
   }
+
+  // ---------------------------------------------------------------------
+  // Bulk scene snapshots
+  // ---------------------------------------------------------------------
+
+  /**
+   * Full skeleton and bone metadata for the scene in one HTTP call.
+   * @param skeletonLabels Optional subset of skeleton names/labels to include; omit to return every skeleton.
+   */
+  async sceneSnapshot(skeletonLabels?: string[]): Promise<Array<Record<string, unknown>>> {
+    const filterJs = skeletonLabels !== undefined ? JSON.stringify(skeletonLabels) : "null";
+    const script = ScriptBuilder.iife(`
+            var _filter = ${filterJs};
+            var _skels = Scene.getSkeletonList();
+            var _result = [];
+            for (var _s = 0; _s < _skels.length; _s++) {
+                var _skel = _skels[_s];
+                if (_filter !== null) {
+                    var _found = false;
+                    for (var _f = 0; _f < _filter.length; _f++) {
+                        if (_filter[_f] === _skel.getName() || _filter[_f] === _skel.getLabel()) {
+                            _found = true; break;
+                        }
+                    }
+                    if (!_found) continue;
+                }
+                var _bones = _skel.getAllBones();
+                var _boneList = [];
+                for (var _i = 0; _i < _bones.length; _i++) {
+                    var _b = _bones[_i];
+                    var _parent = _b.getNodeParent();
+                    var _parentName = null;
+                    if (_parent && _parent.className && _parent.className() === "DzBone") {
+                        _parentName = _parent.getName();
+                    }
+                    var _lpos = _b.getLocalPos();
+                    var _wpos = _b.getWSPos();
+                    _boneList.push({
+                        name: _b.getName(),
+                        label: _b.getLabel(),
+                        parent_name: _parentName,
+                        rotation_order: _b.getRotationOrder(),
+                        local_position: {x: _lpos.x, y: _lpos.y, z: _lpos.z},
+                        world_position: {x: _wpos.x, y: _wpos.y, z: _wpos.z},
+                        local_euler: {
+                            x: _b.getXRotControl().getValue(),
+                            y: _b.getYRotControl().getValue(),
+                            z: _b.getZRotControl().getValue()
+                        }
+                    });
+                }
+                _result.push({
+                    name: _skel.getName(),
+                    label: _skel.getLabel(),
+                    bones: _boneList
+                });
+            }
+            return _result;
+        `);
+    return ((await this.client.execute(script)).value as Array<Record<string, unknown>>) ?? [];
+  }
+
+  /** World-space transforms (`name`/`label`/`position`/`rotation`/`visible`) for every node, in one HTTP call. */
+  async allNodeTransforms(): Promise<Array<Record<string, unknown>>> {
+    const script = ScriptBuilder.iife(`
+            var result = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {
+                var n = Scene.getNode(i);
+                var pos = n.getWSPos();
+                var rot = n.getWSRot();
+                result.push({
+                    name: n.getName(),
+                    label: n.getLabel(),
+                    position: [pos.x, pos.y, pos.z],
+                    rotation: [rot.x, rot.y, rot.z],
+                    visible: n.isVisible()
+                });
+            }
+            return result;
+        `);
+    return ((await this.client.execute(script)).value as Array<Record<string, unknown>>) ?? [];
+  }
+
+  /** Full scene hierarchy as nested `{name, label, children}` dicts, one entry per root-level node. */
+  async nodeTree(): Promise<Array<Record<string, unknown>>> {
+    const script = ScriptBuilder.iife(`
+            function nodeToDict(n) {
+                var children = [];
+                for (var i = 0; i < n.getNumNodeChildren(); i++) {
+                    children.push(nodeToDict(n.getNodeChild(i)));
+                }
+                return {name: n.getName(), label: n.getLabel(), children: children};
+            }
+            var roots = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {
+                var n = Scene.getNode(i);
+                if (!n.getNodeParent()) roots.push(nodeToDict(n));
+            }
+            return roots;
+        `);
+    return ((await this.client.execute(script)).value as Array<Record<string, unknown>>) ?? [];
+  }
+
+  /**
+   * Descendant tree rooted at a single node (searched by label first, then internal name), with an optional recursion-depth limit.
+   * @throws NodeNotFoundError if `root` cannot be found.
+   */
+  async nodeHierarchy(opts: { root?: string; maxDepth?: number } = {}): Promise<{
+    node: string;
+    hierarchy: Record<string, unknown> | null;
+    totalDescendants: number;
+  }> {
+    const rootJson = JSON.stringify(opts.root ?? null);
+    const depthJs = opts.maxDepth ? String(Math.trunc(opts.maxDepth)) : "0";
+    const script = ScriptBuilder.iife(`
+            var _rootLabel = ${rootJson};
+            var _node = Scene.findNodeByLabel(_rootLabel);
+            if (!_node) _node = Scene.findNode(_rootLabel);
+            if (!_node) return null;
+
+            var _maxDepth = ${depthJs};
+            var _totalDescendants = 0;
+
+            function _build(n, depth) {
+                if (_maxDepth > 0 && depth >= _maxDepth) return null;
+                var info = {label: n.getLabel(), name: n.getName(), type: n.className()};
+                var children = [];
+                for (var i = 0; i < n.getNumNodeChildren(); i++) {
+                    _totalDescendants++;
+                    var childInfo = _build(n.getNodeChild(i), depth + 1);
+                    if (childInfo) children.push(childInfo);
+                }
+                if (children.length > 0) info.children = children;
+                return info;
+            }
+
+            var hierarchy = _build(_node, 0);
+            return {node: _node.getLabel(), hierarchy: hierarchy, total_descendants: _totalDescendants};
+        `);
+    const result = (await this.client.execute(script)).value as
+      | { node: string; hierarchy: Record<string, unknown> | null; total_descendants: number }
+      | null;
+    if (result === null) {
+      throw new NodeNotFoundError(`Node not found: ${JSON.stringify(opts.root)}`);
+    }
+    return { node: result.node, hierarchy: result.hierarchy, totalDescendants: result.total_descendants };
+  }
+
+  /** Lightweight top-level snapshot: root-level figures, cameras, lights, scene file, and primary selection. Follower figures (parented under another figure) are excluded from `figures`. */
+  async overview(): Promise<Record<string, unknown>> {
+    const script = ScriptBuilder.iife(`
+            var figures = [];
+            for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+                var s = Scene.getSkeleton(i);
+                var parent = s.getNodeParent();
+                if (parent && parent.inherits("DzFigure")) continue;
+                figures.push({name: s.getName(), label: s.getLabel(), type: s.className()});
+            }
+            var cameras = [];
+            for (var i = 0; i < Scene.getNumCameras(); i++) {
+                var c = Scene.getCamera(i);
+                cameras.push({name: c.getName(), label: c.getLabel()});
+            }
+            var lights = [];
+            for (var i = 0; i < Scene.getNumLights(); i++) {
+                var l = Scene.getLight(i);
+                lights.push({name: l.getName(), label: l.getLabel(), type: l.className()});
+            }
+            var sel = Scene.getPrimarySelection();
+            return {
+                scene_file: Scene.getFilename(),
+                selected_node: sel ? sel.getLabel() : null,
+                figures: figures,
+                cameras: cameras,
+                lights: lights,
+                total_nodes: Scene.getNumNodes()
+            };
+        `);
+    return (
+      (await this.client.execute(script)).value as Record<string, unknown> | null
+    ) ?? { scene_file: "", selected_node: null, figures: [], cameras: [], lights: [], total_nodes: 0 };
+  }
 }
