@@ -6,6 +6,7 @@ import {
   ConnectionError,
   ConcurrencyLimitError,
   DazBusyError,
+  DazError,
   DazTimeoutError,
   ScriptRuntimeError,
   ScriptSyntaxError,
@@ -645,6 +646,25 @@ export class DazClient {
     const resp = await this.get("/metrics");
     if (resp.status === 401 || resp.status === 403) {
       throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * Save a copy of the scene to `path` without changing the scene's current
+   * file or dirty state (like "Save a Copy As..."). See dazpy's
+   * `DazScene.save_copy` for the copy-vs-serialize tradeoff this makes
+   * server-side.
+   */
+  async sceneSaveCopy(path: string): Promise<Record<string, unknown>> {
+    const resp = await this.post("/scene/save-copy", { path });
+    if (resp.status === 401 || resp.status === 403) {
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    if (!resp.ok) {
+      const body = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+      const msg = (body.error as string) ?? (body.detail as string) ?? `HTTP ${resp.status}`;
+      throw new DazError(`sceneSaveCopy failed (${resp.status}): ${msg}`);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
