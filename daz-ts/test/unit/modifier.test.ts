@@ -96,7 +96,16 @@ describe("DazDForce", () => {
     const result = await dforce.freezeSimulation();
     expect(result).toBe(true);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Freeze Simulation")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "\n" +
+      "            var m = DFLOC;\n" +
+      "            if (!m) return null;\n" +
+      "            var p = m.findPropertyByLabel(\"Freeze Simulation\");\n" +
+      "            return p ? p.getValue() : null;\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("setFreezeSimulation(true) delegates to freeze via setValue", async () => {
@@ -104,7 +113,16 @@ describe("DazDForce", () => {
     const dforce = new DazDForce(new DazClient({ token: "" }), "DFLOC");
     await dforce.setFreezeSimulation(true);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("p.setValue(true)");
+    expect(script).toBe(
+      "(function(){\n" +
+      "\n" +
+      "            var m = DFLOC;\n" +
+      "            if (!m) return;\n" +
+      "            var p = m.findPropertyByLabel(\"Freeze Simulation\");\n" +
+      "            if (p) p.setValue(true);\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("setFreezeSimulation(false) delegates via setValue", async () => {
@@ -112,7 +130,16 @@ describe("DazDForce", () => {
     const dforce = new DazDForce(new DazClient({ token: "" }), "DFLOC");
     await dforce.setFreezeSimulation(false);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("p.setValue(false)");
+    expect(script).toBe(
+      "(function(){\n" +
+      "\n" +
+      "            var m = DFLOC;\n" +
+      "            if (!m) return;\n" +
+      "            var p = m.findPropertyByLabel(\"Freeze Simulation\");\n" +
+      "            if (p) p.setValue(false);\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("freeze() delegates to setFreezeSimulation(true)", async () => {
@@ -120,7 +147,16 @@ describe("DazDForce", () => {
     const dforce = new DazDForce(new DazClient({ token: "" }), "DFLOC");
     await dforce.freeze();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("p.setValue(true)");
+    expect(script).toBe(
+      "(function(){\n" +
+      "\n" +
+      "            var m = DFLOC;\n" +
+      "            if (!m) return;\n" +
+      "            var p = m.findPropertyByLabel(\"Freeze Simulation\");\n" +
+      "            if (p) p.setValue(true);\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("unfreeze() delegates to setFreezeSimulation(false)", async () => {
@@ -128,6 +164,15 @@ describe("DazDForce", () => {
     const dforce = new DazDForce(new DazClient({ token: "" }), "DFLOC");
     await dforce.unfreeze();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("p.setValue(false)");
+    expect(script).toBe(
+      "(function(){\n" +
+      "\n" +
+      "            var m = DFLOC;\n" +
+      "            if (!m) return;\n" +
+      "            var p = m.findPropertyByLabel(\"Freeze Simulation\");\n" +
+      "            if (p) p.setValue(false);\n" +
+      "        \n" +
+      "})()"
+    );
   });
 });
