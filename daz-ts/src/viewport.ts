@@ -117,14 +117,14 @@ export class DazViewport {
     } = {},
   ): Promise<string> {
     const { hideOverlays = true, backdropColor, convergenceWait = 3.0 } = opts;
-    const jsPath = JSON.stringify(path);
+    const jsPath = ScriptBuilder.escapeString(path);
 
     const bgCaptureJs = backdropColor !== undefined ? "var prevBg = vp.background;" : "";
     let bgApplyJs = "";
     if (backdropColor !== undefined) {
       const [r, g, b] = backdropColor;
       const hex = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-      bgApplyJs = `vp.background = new QColor(${JSON.stringify(hex)});`;
+      bgApplyJs = `vp.background = new QColor(${ScriptBuilder.escapeString(hex)});`;
     }
     const bgReturnField = backdropColor !== undefined ? ", bg: prevBg" : "";
 
