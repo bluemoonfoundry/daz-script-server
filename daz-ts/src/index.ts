@@ -46,5 +46,6 @@ export { DazDForce } from "./dforce.js";
 export { DazScene } from "./scene.js";
 export { DazGeometry } from "./geometry.js";
 export { DazViewport } from "./viewport.js";
+export { DazTimeline } from "./timeline.js";
 
 export { UndoGroup, withUndo } from "./undo.js";
