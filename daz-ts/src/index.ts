@@ -43,3 +43,4 @@ export { DazMaterial } from "./material.js";
 export { DazModifier } from "./modifier.js";
 export { DazMorph } from "./morph.js";
 export { DazDForce } from "./dforce.js";
+export { DazScene } from "./scene.js";
