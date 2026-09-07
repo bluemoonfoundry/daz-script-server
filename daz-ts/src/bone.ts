@@ -13,25 +13,20 @@ export class DazBone extends DazNode {
   constructor(client: DazClient, identifier: NodeIdentifier);
   /**
    * Construct from a pre-built skeleton-relative locator (used by {@link fromLocator}).
-   * The name parameter provides the identifier for the bone.
+   * The identifier's value provides the bone's name.
    */
-  constructor(client: DazClient, locator: string, name: string);
-  constructor(client: DazClient, identifierOrLocator: NodeIdentifier | string, name?: string) {
-    if (typeof identifierOrLocator === "string" && name !== undefined) {
-      // Two-argument form: locator + name
-      const identifier: NodeIdentifier = { value: name, kind: "name" };
-      super(client, identifier);
-      // Override the locator to use the pre-built one instead of Scene.findNode
-      (this as any).locator = identifierOrLocator;
+  constructor(client: DazClient, identifier: NodeIdentifier, locator: string);
+  constructor(client: DazClient, identifier: NodeIdentifier, locator?: string) {
+    if (locator !== undefined) {
+      super(client, identifier, locator);
     } else {
-      // One-argument form: standard identifier
-      super(client, identifierOrLocator as NodeIdentifier);
+      super(client, identifier);
     }
   }
 
   /** Construct a `DazBone` from a pre-built skeleton-relative locator (see `DazSkeleton`'s bone lookup). */
   static fromLocator(client: DazClient, locator: string, name: string): DazBone {
-    return new DazBone(client, locator, name);
+    return new DazBone(client, { value: name, kind: "name" }, locator);
   }
 
   private nb(body: string): string {

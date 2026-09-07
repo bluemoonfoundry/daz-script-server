@@ -36,6 +36,7 @@ export { DazElement } from "./element.js";
 export { DazProperty } from "./property.js";
 export { DazNode, type NodeIdentifier } from "./node.js";
 export { DazBone } from "./bone.js";
+export { DazSkeleton } from "./skeleton.js";
 export { DazMaterial } from "./material.js";
 export { DazModifier } from "./modifier.js";
 export { DazMorph } from "./morph.js";

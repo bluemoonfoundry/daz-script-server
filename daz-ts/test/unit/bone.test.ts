@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
 import { DazBone } from "../../src/bone.js";
+import { DazSkeleton } from "../../src/skeleton.js";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -80,5 +81,18 @@ describe("DazBone", () => {
     stub(null);
     const bone = DazBone.fromLocator(new DazClient({ token: "" }), "BONELOC", "r_forearm");
     expect(await bone.getSkeleton()).toBeNull();
+  });
+
+  it("getSkeleton returns a DazSkeleton instance with the skeleton name when found", async () => {
+    const fetchMock = stub("Genesis9");
+    const bone = DazBone.fromLocator(new DazClient({ token: "" }), "BONELOC", "r_forearm");
+    const skeleton = await bone.getSkeleton();
+    expect(skeleton).toBeInstanceOf(DazSkeleton);
+    expect(skeleton?.identifier).toEqual({ value: "Genesis9", kind: "name" });
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      "(function(){\nvar _node = BONELOC;\nif (!_node) return null;\n" +
+      "var s = _node.getSkeleton(); return s ? s.getName() : null;\n})()",
+    );
   });
 });

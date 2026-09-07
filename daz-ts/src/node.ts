@@ -30,8 +30,17 @@ export interface NodeIdentifier {
 export class DazNode extends DazElement {
   readonly identifier: NodeIdentifier;
 
-  constructor(client: DazClient, identifier: NodeIdentifier) {
-    super(client, ScriptBuilder.findNodeExpr(identifier));
+  /**
+   * Construct a `DazNode` from a standard scene node lookup by identifier.
+   */
+  constructor(client: DazClient, identifier: NodeIdentifier);
+  /**
+   * Construct a `DazNode` from a pre-built DazScript locator expression.
+   * Used by subclasses like `DazBone` that work with skeleton-relative locators.
+   */
+  constructor(client: DazClient, identifier: NodeIdentifier, locator: string);
+  constructor(client: DazClient, identifier: NodeIdentifier, locator?: string) {
+    super(client, locator ?? ScriptBuilder.findNodeExpr(identifier));
     this.identifier = identifier;
   }
 
