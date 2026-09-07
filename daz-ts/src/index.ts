@@ -33,3 +33,4 @@ export type { ExecuteLongOptions } from "./polling.js";
 export { AxisRemap, BoundingBox, Quat, Vec3, Y_UP_TO_Z_UP } from "./math3.js";
 
 export { DazElement } from "./element.js";
+export { DazProperty } from "./property.js";
