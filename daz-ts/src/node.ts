@@ -1,6 +1,11 @@
 import type { DazClient } from "./client.js";
+import { DazDForce } from "./dforce.js";
 import { DazElement } from "./element.js";
-import { ScriptRuntimeError } from "./exceptions.js";
+import { NodeNotFoundError, ScriptRuntimeError } from "./exceptions.js";
+import { DazMaterial } from "./material.js";
+import { DazModifier } from "./modifier.js";
+import { DazMorph } from "./morph.js";
+import { DazProperty } from "./property.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 
 /** Identifies a scene node by name or label. */
@@ -336,5 +341,275 @@ export class DazNode extends DazElement {
     if (result) {
       throw new ScriptRuntimeError(`reparent failed: ${result}`);
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // Modifiers / Materials / Fitting / Bounding box
+  // ---------------------------------------------------------------------
+
+  private modifierClassFor(className: string): typeof DazModifier {
+    if (className === "DzMorph") return DazMorph;
+    if (className === "DzDForceModifier") return DazDForce;
+    return DazModifier;
+  }
+
+  private modifierLocator(modifierName: string): string {
+    return (
+      `(function(){` +
+      ` var _o = ${this.locator};` +
+      ` _o = _o ? _o.getObject() : null;` +
+      ` return _o ? _o.findModifier(${ScriptBuilder.escapeString(modifierName)}) : null;` +
+      `})()`
+    );
+  }
+
+  /** Return all modifiers (morphs, constraints, etc.) on this node, typed via the DzMorph/DzDForceModifier dispatch table. */
+  async modifiers(): Promise<DazModifier[]> {
+    const items =
+      ((await this.client.execute(
+        this.nodeScript(`
+            var obj = _node.getObject();
+            if (!obj) return [];
+            var mods = [];
+            for (var i = 0; i < obj.getNumModifiers(); i++) {
+                var m = obj.getModifier(i);
+                mods.push({name: m.getName(), className: m.className()});
+            }
+            return mods;
+            `),
+      )).value as Array<{ name: string; className: string }>) ?? [];
+    return items.map((item) => {
+      const Cls = this.modifierClassFor(item.className);
+      return new Cls(this.client, this.modifierLocator(item.name));
+    });
+  }
+
+  /** Find a modifier by internal name. */
+  async findModifier(name: string): Promise<DazModifier | null> {
+    const result = (await this.client.execute(
+      this.nodeScript(`
+            var obj = _node.getObject();
+            if (!obj) return null;
+            var m = obj.findModifier(${ScriptBuilder.escapeString(name)});
+            return m ? {name: m.getName(), className: m.className()} : null;
+            `),
+    )).value as { name: string; className: string } | null;
+    if (result === null) return null;
+    const Cls = this.modifierClassFor(result.className);
+    return new Cls(this.client, this.modifierLocator(result.name));
+  }
+
+  /** Find a modifier by its user-visible label (the name shown in the DAZ UI), matching {@link findModifier}'s internal-name lookup on label instead. */
+  async findModifierByLabel(label: string): Promise<DazModifier | null> {
+    const result = (await this.client.execute(
+      this.nodeScript(`
+            var obj = _node.getObject();
+            if (!obj) return null;
+            for (var i = 0; i < obj.getNumModifiers(); i++) {
+                var m = obj.getModifier(i);
+                if (m.getLabel() === ${ScriptBuilder.escapeString(label)}) {
+                    return {name: m.getName(), className: m.className()};
+                }
+            }
+            return null;
+            `),
+    )).value as { name: string; className: string } | null;
+    if (result === null) return null;
+    const Cls = this.modifierClassFor(result.className);
+    return new Cls(this.client, this.modifierLocator(result.name));
+  }
+
+  private materialLocator(materialName: string): string {
+    return (
+      `(function(){` +
+      ` var _n = ${this.locator};` +
+      ` if (!_n) return null;` +
+      ` var _o = _n.getObject();` +
+      ` if (!_o) return null;` +
+      ` var _s = _o.getCurrentShape();` +
+      ` return _s ? _s.findMaterial(${ScriptBuilder.escapeString(materialName)}) : null;` +
+      `})()`
+    );
+  }
+
+  /** Return all surface materials on this node's current shape. */
+  async materials(): Promise<DazMaterial[]> {
+    const names =
+      ((await this.client.execute(
+        this.nodeScript(`
+            var obj = _node.getObject();
+            if (!obj) return [];
+            var shape = obj.getCurrentShape();
+            if (!shape) return [];
+            var names = [];
+            for (var i = 0; i < shape.getNumMaterials(); i++) {
+                names.push(shape.getMaterial(i).getName());
+            }
+            return names;
+            `),
+      )).value as string[]) ?? [];
+    return names.map((n) => new DazMaterial(this.client, this.materialLocator(n)));
+  }
+
+  /** Find a surface material by name. */
+  async findMaterial(name: string): Promise<DazMaterial | null> {
+    const result = (await this.client.execute(
+      this.nodeScript(`
+            var obj = _node.getObject();
+            if (!obj) return null;
+            var shape = obj.getCurrentShape();
+            if (!shape) return null;
+            var m = shape.findMaterial(${ScriptBuilder.escapeString(name)});
+            return m ? m.getName() : null;
+            `),
+    )).value as string | null;
+    if (result === null) return null;
+    return new DazMaterial(this.client, this.materialLocator(result));
+  }
+
+  /**
+   * Find a node-level property by internal name via `DzNode::findProperty` —
+   * covers pose controls/FACS dials that are not geometry modifiers and so
+   * are invisible to {@link findModifier}.
+   */
+  async findProperty(name: string): Promise<DazProperty | null> {
+    const locator = `(function(){var _n=${this.locator};return _n ? _n.findProperty(${ScriptBuilder.escapeString(
+      name,
+    )}) : null;})()`;
+    const exists = (await this.client.execute(ScriptBuilder.iife(`return !!(${locator});`))).value;
+    if (!exists) return null;
+    return DazProperty.fromLocator(this.client, locator);
+  }
+
+  /** Like {@link findProperty} but matches `getLabel()` instead of `getName()`. */
+  async findPropertyByLabel(label: string): Promise<DazProperty | null> {
+    const locator = `(function(){var _n=${this.locator};return _n ? _n.findPropertyByLabel(${ScriptBuilder.escapeString(
+      label,
+    )}) : null;})()`;
+    const exists = (await this.client.execute(ScriptBuilder.iife(`return !!(${locator});`))).value;
+    if (!exists) return null;
+    return DazProperty.fromLocator(this.client, locator);
+  }
+
+  /** Only the morph modifiers on this node (convenience filter over {@link modifiers}). */
+  async morphs(): Promise<DazMorph[]> {
+    return (await this.modifiers()).filter((m): m is DazMorph => m instanceof DazMorph);
+  }
+
+  /** Only the dForce simulation modifiers on this node (convenience filter over {@link modifiers}). */
+  async dforceModifiers(): Promise<DazDForce[]> {
+    return (await this.modifiers()).filter((m): m is DazDForce => m instanceof DazDForce);
+  }
+
+  /** World-space axis-aligned bounding box, or `null` if the node has no geometry. */
+  async boundingBox(): Promise<{ min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } | null> {
+    const script = this.nodeScript(
+      "var bb = _node.getWSBoundingBox(); return {min: {x: bb.min.x, y: bb.min.y, z: bb.min.z}, max: {x: bb.max.x, y: bb.max.y, z: bb.max.z}};",
+    );
+    return (await this.client.execute(script)).value as {
+      min: { x: number; y: number; z: number };
+      max: { x: number; y: number; z: number };
+    } | null;
+  }
+
+  /**
+   * Fit this clothing/hair/prop node to a base figure, preferring
+   * `setFollowTarget`/`followSkeleton` (conforming items) and falling back
+   * to parenting (plain props). @returns which DazScript API was used.
+   */
+  async fitTo(figure: DazNode): Promise<string> {
+    const figureExpr = ScriptBuilder.findNodeExpr(figure.identifier);
+    const result = (await this.client.execute(
+      this.nodeScript(`
+            var _figure = ${figureExpr};
+            if (!_figure) return null;
+            var _method;
+            if (typeof _node.setFollowTarget === 'function') {
+                _node.setFollowTarget(_figure);
+                _method = "setFollowTarget";
+            } else if (typeof _node.followSkeleton === 'function') {
+                _node.followSkeleton(_figure);
+                _method = "followSkeleton";
+            } else {
+                _figure.addNodeChild(_node, true);
+                _method = "addNodeChild";
+            }
+            return _method;
+            `),
+    )).value as string | null;
+    if (result === null) {
+      throw new NodeNotFoundError("Could not fit node to figure: one of the nodes was not found.");
+    }
+    return result;
+  }
+
+  /** Remove this node's fitting relationship with its figure (follow-target and/or skeleton parenting). */
+  async unfit(): Promise<{ previousFigure: string | null; actions: string[] }> {
+    const script = this.nodeScript(`
+            var _prevFigure = null;
+            var _actions = [];
+            if (typeof _node.getFollowTarget === 'function') {
+                var _ft = _node.getFollowTarget();
+                if (_ft) {
+                    _prevFigure = _ft.getName();
+                    if (typeof _node.setFollowTarget === 'function') {
+                        _node.setFollowTarget(null);
+                        _actions.push("cleared follow target");
+                    }
+                }
+            }
+            var _parent = _node.getNodeParent();
+            if (_parent && _parent.inherits && _parent.inherits("DzSkeleton")) {
+                _prevFigure = _prevFigure || _parent.getName();
+                _parent.removeNodeChild(_node, true);
+                _actions.push("detached from parent");
+            }
+            return {previous_figure: _prevFigure, actions: _actions};
+        `);
+    const result = (await this.client.execute(script)).value as
+      | { previous_figure: string | null; actions: string[] }
+      | null;
+    return { previousFigure: result?.previous_figure ?? null, actions: result?.actions ?? [] };
+  }
+
+  /** Every clothing/hair/prop node fitted to this figure (following it, or directly parented to it). */
+  async fittedItems(): Promise<DazNode[]> {
+    const names =
+      ((await this.client.execute(
+        this.nodeScript(`
+            var _fitted = [];
+            var _numNodes = Scene.getNumNodes();
+            for (var i = 0; i < _numNodes; i++) {
+                var _n = Scene.getNode(i);
+                if (!_n || _n === _node) continue;
+                var _isFitted = false;
+                if (typeof _n.getFollowTarget === 'function') {
+                    var _ft = _n.getFollowTarget();
+                    if (_ft && _ft.elementID === _node.elementID) _isFitted = true;
+                }
+                if (!_isFitted && typeof _n.getNodeParent === 'function') {
+                    var _p = _n.getNodeParent();
+                    if (_p && _p.elementID === _node.elementID) _isFitted = true;
+                }
+                if (_isFitted) _fitted.push(_n.getName());
+            }
+            return _fitted;
+            `),
+      )).value as string[]) ?? [];
+    return names.map((n) => new DazNode(this.client, { value: n, kind: "name" }));
+  }
+
+  /** Total vertex count of this node's current geometry, or `null`. */
+  async geometryVertexCount(): Promise<number | null> {
+    const script = this.nodeScript(`
+            var obj = _node.getObject();
+            if (!obj) return null;
+            var shape = obj.getCurrentShape();
+            if (!shape) return null;
+            var geo = shape.getGeometry();
+            if (!geo) return null;
+            return geo.getNumVertices();
+        `);
+    return (await this.client.execute(script)).value as number | null;
   }
 }

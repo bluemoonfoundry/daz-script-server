@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
+import { DazDForce } from "../../src/dforce.js";
+import { DazMaterial } from "../../src/material.js";
+import { DazModifier } from "../../src/modifier.js";
+import { DazMorph } from "../../src/morph.js";
 import { DazNode } from "../../src/node.js";
 
 function jsonResponse(body: unknown): Response {
@@ -391,5 +395,187 @@ describe("DazNode transforms", () => {
     const node = new DazNode(new DazClient({ token: "" }), { value: "Prop", kind: "name" });
     const other = new DazNode(new DazClient({ token: "" }), { value: "NewParent", kind: "name" });
     await expect(node.reparent(other)).resolves.toBeUndefined();
+  });
+});
+
+describe("DazNode modifiers/materials/fitting", () => {
+  it("modifiers() dispatches DzMorph -> DazMorph, DzDForceModifier -> DazDForce, else DazModifier", async () => {
+    const fetchMock = stub([
+      { name: "PHMSmile", className: "DzMorph" },
+      { name: "Cloth Sim", className: "DzDForceModifier" },
+      { name: "SomeConstraint", className: "DzMorphMod" },
+    ]);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const mods = await node.modifiers();
+    expect(mods[0]).toBeInstanceOf(DazMorph);
+    expect(mods[1]).toBeInstanceOf(DazDForce);
+    expect(mods[2]).toBeInstanceOf(DazModifier);
+    expect(mods[2]).not.toBeInstanceOf(DazMorph);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var obj = _node.getObject();\n            if (!obj) return [];\n            var mods = [];\n            for (var i = 0; i < obj.getNumModifiers(); i++) {\n                var m = obj.getModifier(i);\n                mods.push({name: m.getName(), className: m.className()});\n            }\n            return mods;\n            \n})()',
+    );
+  });
+
+  it("materials() returns DazMaterial instances located via getCurrentShape().findMaterial()", async () => {
+    const fetchMock = stub(["Skin", "Eyes"]);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const mats = await node.materials();
+    expect(mats).toHaveLength(2);
+    expect(mats[0]).toBeInstanceOf(DazMaterial);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var obj = _node.getObject();\n            if (!obj) return [];\n            var shape = obj.getCurrentShape();\n            if (!shape) return [];\n            var names = [];\n            for (var i = 0; i < shape.getNumMaterials(); i++) {\n                names.push(shape.getMaterial(i).getName());\n            }\n            return names;\n            \n})()',
+    );
+  });
+
+  it("findModifier returns null when the server reports no match", async () => {
+    const fetchMock = stub(null);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await node.findModifier("Missing")).toBeNull();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var obj = _node.getObject();\n            if (!obj) return null;\n            var m = obj.findModifier("Missing");\n            return m ? {name: m.getName(), className: m.className()} : null;\n            \n})()',
+    );
+  });
+
+  it("findModifierByLabel returns a typed modifier via getLabel() matching", async () => {
+    const fetchMock = stub({ name: "PHMSmile", className: "DzMorph" });
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const found = await node.findModifierByLabel("Smile");
+    expect(found).toBeInstanceOf(DazMorph);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var obj = _node.getObject();\n            if (!obj) return null;\n            for (var i = 0; i < obj.getNumModifiers(); i++) {\n                var m = obj.getModifier(i);\n                if (m.getLabel() === "Smile") {\n                    return {name: m.getName(), className: m.className()};\n                }\n            }\n            return null;\n            \n})()',
+    );
+  });
+
+  it("findMaterial returns a DazMaterial located via getCurrentShape().findMaterial()", async () => {
+    const fetchMock = stub("Skin");
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const found = await node.findMaterial("Skin");
+    expect(found).toBeInstanceOf(DazMaterial);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var obj = _node.getObject();\n            if (!obj) return null;\n            var shape = obj.getCurrentShape();\n            if (!shape) return null;\n            var m = shape.findMaterial("Skin");\n            return m ? m.getName() : null;\n            \n})()',
+    );
+  });
+
+  it("findProperty resolves to a DazProperty when the locator exists on the node", async () => {
+    const fetchMock = stub(true);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const prop = await node.findProperty("XRotate");
+    expect(prop).not.toBeNull();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nreturn !!((function(){var _n=Scene.findNode("Genesis9");return _n ? _n.findProperty("XRotate") : null;})());\n})()',
+    );
+  });
+
+  it("findProperty returns null when the existence check reports falsy", async () => {
+    stub(false);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await node.findProperty("Missing")).toBeNull();
+  });
+
+  it("findPropertyByLabel resolves to a DazProperty when the locator exists on the node", async () => {
+    const fetchMock = stub(true);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const prop = await node.findPropertyByLabel("X Rotate");
+    expect(prop).not.toBeNull();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nreturn !!((function(){var _n=Scene.findNode("Genesis9");return _n ? _n.findPropertyByLabel("X Rotate") : null;})());\n})()',
+    );
+  });
+
+  it("morphs() filters modifiers() down to DazMorph instances", async () => {
+    stub([
+      { name: "PHMSmile", className: "DzMorph" },
+      { name: "Cloth Sim", className: "DzDForceModifier" },
+    ]);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const morphs = await node.morphs();
+    expect(morphs).toHaveLength(1);
+    expect(morphs[0]).toBeInstanceOf(DazMorph);
+  });
+
+  it("dforceModifiers() filters modifiers() down to DazDForce instances", async () => {
+    stub([
+      { name: "PHMSmile", className: "DzMorph" },
+      { name: "Cloth Sim", className: "DzDForceModifier" },
+    ]);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const sims = await node.dforceModifiers();
+    expect(sims).toHaveLength(1);
+    expect(sims[0]).toBeInstanceOf(DazDForce);
+  });
+
+  it("boundingBox() reads getWSBoundingBox() as {min,max}", async () => {
+    const fetchMock = stub({ min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } });
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await node.boundingBox()).toEqual({ min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } });
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\nvar bb = _node.getWSBoundingBox(); return {min: {x: bb.min.x, y: bb.min.y, z: bb.min.z}, max: {x: bb.max.x, y: bb.max.y, z: bb.max.z}};\n})()',
+    );
+  });
+
+  it("fitTo returns the DazScript API name the server used", async () => {
+    const fetchMock = stub("setFollowTarget");
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Shirt", kind: "name" });
+    const figure = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await node.fitTo(figure)).toBe("setFollowTarget");
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Shirt");\nif (!_node) return null;\n\n            var _figure = Scene.findNode("Genesis9");\n            if (!_figure) return null;\n            var _method;\n            if (typeof _node.setFollowTarget === \'function\') {\n                _node.setFollowTarget(_figure);\n                _method = "setFollowTarget";\n            } else if (typeof _node.followSkeleton === \'function\') {\n                _node.followSkeleton(_figure);\n                _method = "followSkeleton";\n            } else {\n                _figure.addNodeChild(_node, true);\n                _method = "addNodeChild";\n            }\n            return _method;\n            \n})()',
+    );
+  });
+
+  it("fitTo raises NodeNotFoundError-style rejection when the script returns null", async () => {
+    stub(null);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Shirt", kind: "name" });
+    const figure = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    await expect(node.fitTo(figure)).rejects.toThrow(/not found/);
+  });
+
+  it("unfit() defaults previousFigure to null and actions to [] when nothing was fitted", async () => {
+    const fetchMock = stub(null);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Prop", kind: "name" });
+    expect(await node.unfit()).toEqual({ previousFigure: null, actions: [] });
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Prop");\nif (!_node) return null;\n\n            var _prevFigure = null;\n            var _actions = [];\n            if (typeof _node.getFollowTarget === \'function\') {\n                var _ft = _node.getFollowTarget();\n                if (_ft) {\n                    _prevFigure = _ft.getName();\n                    if (typeof _node.setFollowTarget === \'function\') {\n                        _node.setFollowTarget(null);\n                        _actions.push("cleared follow target");\n                    }\n                }\n            }\n            var _parent = _node.getNodeParent();\n            if (_parent && _parent.inherits && _parent.inherits("DzSkeleton")) {\n                _prevFigure = _prevFigure || _parent.getName();\n                _parent.removeNodeChild(_node, true);\n                _actions.push("detached from parent");\n            }\n            return {previous_figure: _prevFigure, actions: _actions};\n        \n})()',
+    );
+  });
+
+  it("unfit() surfaces the previous figure and actions reported by the server", async () => {
+    stub({ previous_figure: "Genesis9", actions: ["cleared follow target"] });
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Shirt", kind: "name" });
+    expect(await node.unfit()).toEqual({ previousFigure: "Genesis9", actions: ["cleared follow target"] });
+  });
+
+  it("fittedItems() maps each returned name to a DazNode", async () => {
+    const fetchMock = stub(["Shirt", "Pants"]);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const items = await node.fittedItems();
+    expect(items.map((n) => n.identifier)).toEqual([
+      { value: "Shirt", kind: "name" },
+      { value: "Pants", kind: "name" },
+    ]);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var _fitted = [];\n            var _numNodes = Scene.getNumNodes();\n            for (var i = 0; i < _numNodes; i++) {\n                var _n = Scene.getNode(i);\n                if (!_n || _n === _node) continue;\n                var _isFitted = false;\n                if (typeof _n.getFollowTarget === \'function\') {\n                    var _ft = _n.getFollowTarget();\n                    if (_ft && _ft.elementID === _node.elementID) _isFitted = true;\n                }\n                if (!_isFitted && typeof _n.getNodeParent === \'function\') {\n                    var _p = _n.getNodeParent();\n                    if (_p && _p.elementID === _node.elementID) _isFitted = true;\n                }\n                if (_isFitted) _fitted.push(_n.getName());\n            }\n            return _fitted;\n            \n})()',
+    );
+  });
+
+  it("geometryVertexCount() reads getGeometry().getNumVertices()", async () => {
+    const fetchMock = stub(1234);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await node.geometryVertexCount()).toBe(1234);
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Genesis9");\nif (!_node) return null;\n\n            var obj = _node.getObject();\n            if (!obj) return null;\n            var shape = obj.getCurrentShape();\n            if (!shape) return null;\n            var geo = shape.getGeometry();\n            if (!geo) return null;\n            return geo.getNumVertices();\n        \n})()',
+    );
   });
 });
