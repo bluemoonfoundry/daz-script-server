@@ -44,5 +44,6 @@ export { DazModifier } from "./modifier.js";
 export { DazMorph } from "./morph.js";
 export { DazDForce } from "./dforce.js";
 export { DazScene } from "./scene.js";
+export { DazGeometry } from "./geometry.js";
 
 export { UndoGroup, withUndo } from "./undo.js";
