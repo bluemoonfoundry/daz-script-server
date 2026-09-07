@@ -5,10 +5,10 @@ that embeds an HTTP API inside DAZ Studio for remotely executing DazScript
 code. `daz-ts` is the Node.js/TypeScript counterpart to
 [`dazpy`](../dazpy), the mature Python SDK — same wire protocol, same
 server, a single `DazClient` class (no sync/async split; `async`/`await`
-covers both). This is a Phase 1 release: client core (`execute`, async job
+covers both). Phase 1 shipped the client core (`execute`, async job
 submission/polling, batching, render/USD submission, SSE plumbing) plus a
-dependency-free `math3` module. Scene-graph proxies (nodes, materials,
-skeletons, etc.) land in a later phase.
+dependency-free `math3` module. Phase 2 (below) adds the scene-graph proxy
+layer (nodes, materials, skeletons, etc.).
 
 ## Install
 
@@ -147,6 +147,57 @@ respectively).
   `renderAnimationSubmit`, `exportUsdSubmit`, ...) and SSE streaming helpers
   (`streamRenderProgress`, `streamSceneEvents`, `parseSseStream`) on
   `DazClient` — see `src/client.ts` for full signatures.
+
+## Phase 2: Scene Graph Proxies
+
+Phase 2 adds a scene-graph proxy layer on top of the Phase 1 client core —
+typed, promise-based wrappers around DAZ Studio's `DzNode`/`DzElement`
+object model, ported from `dazpy`'s equivalent classes. Every property
+getter/setter is an async method pair (`foo()`/`setFoo()`) rather than a TS
+accessor, since accessors can't be `async`.
+
+- `DazElement` — base proxy for any `DzElement`-derived object (locator
+  resolution, `findProperty()`, the `rawValue`/`setDoubleValue`/`getNumKeys`
+  gotchas ported from dazpy).
+- `DazProperty` — a single node/material property (`value()`, `setValue()`,
+  keyframe helpers).
+- `DazNode`, `NodeIdentifier` — the general scene-node proxy (transforms,
+  visibility, selection, parenting) and the `{value, kind}` shape used to
+  resolve nodes by name or label.
+- `DazScene` — the primary entry point: node/camera/light/skeleton
+  factories, selection, bulk scene snapshots (`overview()`,
+  `sceneSnapshot()`, `allNodeTransforms()`, `nodeTree()`,
+  `nodeHierarchy()`), scene I/O (`load()`, `save()`, `exportFbx()`,
+  `exportObj()`), playback/frame range, dForce simulation, and
+  `undo()`/`UndoGroup` integration.
+- `DazSkeleton` — figure proxy: bones, pose/morph values, bone-rotation
+  bake, IK-free pose evaluation.
+- `DazBone` — a single skeleton bone (rotation, local/world position).
+- `DazCamera` — camera-specific node proxy (focal length, FOV, DOF).
+- `DazLight` — light-specific node proxy (intensity, color, shadow
+  settings).
+- `DazMaterial` — a single surface's material properties.
+- `DazModifier`, `DazMorph`, `DazDForce` — modifier-stack proxies: general
+  modifiers, ERC morphs, and dForce simulation modifiers.
+- `DazGeometry` — a node's resolved mesh geometry (vertex positions,
+  bounding box, posed vs. unposed).
+- `DazViewport` — the active 3D viewport (draw style, size, `capture()`).
+- `DazTimeline` — the global timeline (current frame, frame range,
+  play/pause).
+- `UndoGroup`, `withUndo` — group a series of changes into a single undo
+  step; `withUndo(client, label, fn)` is the TS equivalent of dazpy's
+  `with scene.undo(label): ...` context manager (TS has no `with`
+  statement).
+
+`capture_sprite()` (dazpy's `rembg`-based background removal) and
+IK-dependent methods (`DazSkeleton.handToTarget`/`.footToTarget`,
+`DazScene.applyInteractionRecipe`) are out of scope for this phase — they
+require the Phase 5 IK solver.
+
+See `test/integration/proxies.integration.test.ts` for a live-server
+integration suite covering these classes (gated on `DAZ_SERVER_URL`, same
+pattern as Phase 1's `client.integration.test.ts`; run with
+`DAZ_SERVER_URL=http://127.0.0.1:18811 npm run test:integration`).
 
 See `docs/superpowers/specs/2026-09-06-daz-ts-design.md` (in the repo root)
 for the full design spec and phased roadmap.
