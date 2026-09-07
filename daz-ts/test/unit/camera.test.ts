@@ -50,7 +50,16 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.depthOfField();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Depth of Field")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return null;\n" +
+      "            var prop = obj.findPropertyByLabel(\"Depth of Field\");\n" +
+      "            if (!prop) return null;\n" +
+      "            return prop.getValue();\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("depthOfField setter uses findPropertyByLabel with serialized value", async () => {
@@ -58,7 +67,17 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setDepthOfField(true);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Depth of Field")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return {\"error\": \"not_found\"};\n" +
+      "            var prop = obj.findPropertyByLabel(\"Depth of Field\");\n" +
+      "            if (!prop) return {\"error\": \"property_not_found\"};\n" +
+      "            prop.setValue(true);\n" +
+      "            return {\"success\": true};\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("lensShiftX getter uses findPropertyByLabel", async () => {
@@ -66,7 +85,16 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.lensShiftX();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Lens Shift X (mm)")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return null;\n" +
+      "            var prop = obj.findPropertyByLabel(\"Lens Shift X (mm)\");\n" +
+      "            if (!prop) return null;\n" +
+      "            return prop.getValue();\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("lensShiftX setter uses findPropertyByLabel with serialized value", async () => {
@@ -74,7 +102,17 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setLensShiftX(1.5);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Lens Shift X (mm)")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return {\"error\": \"not_found\"};\n" +
+      "            var prop = obj.findPropertyByLabel(\"Lens Shift X (mm)\");\n" +
+      "            if (!prop) return {\"error\": \"property_not_found\"};\n" +
+      "            prop.setValue(1.5);\n" +
+      "            return {\"success\": true};\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("lensShiftY getter uses findPropertyByLabel", async () => {
@@ -82,7 +120,16 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.lensShiftY();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Lens Shift Y (mm)")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return null;\n" +
+      "            var prop = obj.findPropertyByLabel(\"Lens Shift Y (mm)\");\n" +
+      "            if (!prop) return null;\n" +
+      "            return prop.getValue();\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("lensShiftY setter uses findPropertyByLabel with serialized value", async () => {
@@ -90,7 +137,17 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setLensShiftY(0.8);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Lens Shift Y (mm)")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return {\"error\": \"not_found\"};\n" +
+      "            var prop = obj.findPropertyByLabel(\"Lens Shift Y (mm)\");\n" +
+      "            if (!prop) return {\"error\": \"property_not_found\"};\n" +
+      "            prop.setValue(0.8);\n" +
+      "            return {\"success\": true};\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("fStop getter uses findPropertyByLabel", async () => {
@@ -98,7 +155,16 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.fStop();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("F/Stop")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return null;\n" +
+      "            var prop = obj.findPropertyByLabel(\"F/Stop\");\n" +
+      "            if (!prop) return null;\n" +
+      "            return prop.getValue();\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("fStop setter uses findPropertyByLabel with serialized value", async () => {
@@ -106,7 +172,17 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setFStop(5.6);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("F/Stop")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return {\"error\": \"not_found\"};\n" +
+      "            var prop = obj.findPropertyByLabel(\"F/Stop\");\n" +
+      "            if (!prop) return {\"error\": \"property_not_found\"};\n" +
+      "            prop.setValue(5.6);\n" +
+      "            return {\"success\": true};\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("apertureBlades getter uses findPropertyByLabel", async () => {
@@ -114,7 +190,16 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.apertureBlades();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Aperture Blades")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return null;\n" +
+      "            var prop = obj.findPropertyByLabel(\"Aperture Blades\");\n" +
+      "            if (!prop) return null;\n" +
+      "            return prop.getValue();\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("apertureBlades setter truncates value and uses findPropertyByLabel", async () => {
@@ -122,7 +207,17 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setApertureBlades(6.7);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Aperture Blades")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return {\"error\": \"not_found\"};\n" +
+      "            var prop = obj.findPropertyByLabel(\"Aperture Blades\");\n" +
+      "            if (!prop) return {\"error\": \"property_not_found\"};\n" +
+      "            prop.setValue(6);\n" +
+      "            return {\"success\": true};\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("apertureBladeRotation getter uses findPropertyByLabel", async () => {
@@ -130,7 +225,16 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.apertureBladeRotation();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Aperture Blade Rotation")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return null;\n" +
+      "            var prop = obj.findPropertyByLabel(\"Aperture Blade Rotation\");\n" +
+      "            if (!prop) return null;\n" +
+      "            return prop.getValue();\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("apertureBladeRotation setter uses findPropertyByLabel with serialized value", async () => {
@@ -138,7 +242,17 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setApertureBladeRotation(45);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('findPropertyByLabel("Aperture Blade Rotation")');
+    expect(script).toBe(
+      "(function(){\n" +
+      "            var obj = Scene.findNode(\"Camera\");\n" +
+      "            if (!obj) return {\"error\": \"not_found\"};\n" +
+      "            var prop = obj.findPropertyByLabel(\"Aperture Blade Rotation\");\n" +
+      "            if (!prop) return {\"error\": \"property_not_found\"};\n" +
+      "            prop.setValue(45);\n" +
+      "            return {\"success\": true};\n" +
+      "        \n" +
+      "})()"
+    );
   });
 
   it("frameWidth getter calls _node.frameWidth", async () => {
