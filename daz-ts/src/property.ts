@@ -7,22 +7,35 @@ import { ScriptBuilder } from "./scriptBuilder.js";
  * single named property, including keyframe support for animated properties.
  */
 export class DazProperty extends DazElement {
-  constructor(client: DazClient, ownerLocator: string, propertyLabel: string) {
-    const locator =
-      `(function(){` +
-      `var obj = ${ownerLocator};` +
-      `return obj ? obj.findPropertyByLabel(${ScriptBuilder.escapeString(propertyLabel)}) : null;` +
-      `})()`;
+  /**
+   * Construct from an owner element locator and property label.
+   * Builds a `findPropertyByLabel()` locator internally.
+   */
+  constructor(client: DazClient, ownerLocator: string, propertyLabel: string);
+  /**
+   * Construct from a pre-built DazScript locator expression.
+   * Used by {@link fromLocator} and by parent Tasks (e.g., DazNode.findProperty).
+   */
+  constructor(client: DazClient, locator: string);
+  constructor(client: DazClient, locatorOrOwner: string, propertyLabel?: string) {
+    let locator: string;
+    if (propertyLabel !== undefined) {
+      // Two-argument form: build findPropertyByLabel locator
+      locator =
+        `(function(){` +
+        `var obj = ${locatorOrOwner};` +
+        `return obj ? obj.findPropertyByLabel(${ScriptBuilder.escapeString(propertyLabel)}) : null;` +
+        `})()`;
+    } else {
+      // One-argument form (beyond first param): use locator as-is
+      locator = locatorOrOwner;
+    }
     super(client, locator);
   }
 
   /** Construct a `DazProperty` from a pre-built DazScript locator expression. */
   static fromLocator(client: DazClient, locator: string): DazProperty {
-    const prop = Object.create(DazProperty.prototype) as DazProperty;
-    (prop as any).client = client;
-    (prop as any).locator = locator;
-    (prop as any).cache = new Map();
-    return prop;
+    return new DazProperty(client, locator);
   }
 
   /** Current property value (read/write). */
@@ -94,7 +107,7 @@ export class DazProperty extends DazElement {
   async setKey(time: number, value: number): Promise<void> {
     const script = ScriptBuilder.iife(
       "            var p = " + this.locator + ";\n" +
-      "            if (p && p.setDoubleValue) p.setDoubleValue(" + time + ", " + value + ");"
+      "            if (p && p.setDoubleValue) p.setDoubleValue(" + ScriptBuilder.serializeArg(time) + ", " + ScriptBuilder.serializeArg(value) + ");"
     );
     await this.client.execute(script);
   }
@@ -131,9 +144,10 @@ export class DazProperty extends DazElement {
 
   /** Remove a single keyframe at the given time (no-op if no key exists exactly there). */
   async removeKey(time: number): Promise<void> {
+    const serializedTime = ScriptBuilder.serializeArg(time);
     const script = ScriptBuilder.iife(
       "            var p = " + this.locator + ";\n" +
-      "            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange(" + time + ", " + time + "));"
+      "            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange(" + serializedTime + ", " + serializedTime + "));"
     );
     await this.client.execute(script);
   }
