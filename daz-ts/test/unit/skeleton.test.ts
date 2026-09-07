@@ -376,6 +376,457 @@ describe("DazSkeleton bulk morph state", () => {
   });
 });
 
+describe("DazSkeleton pose evaluation and baking", () => {
+  it("evaluatePose applies rotations, reads effector positions, restores originals, and generates the exact script", async () => {
+    const fetchMock = stub({ r_hand: [10, 20, 30] });
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.evaluatePose({ r_forearm: [45, 0, 0] }, ["r_hand"]);
+    expect(result).toEqual({ r_hand: [10, 20, 30] });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _data = {"r_forearm":[45,0,0]};
+            var _effNames = ["r_hand"];
+            var _allBones = _node.getAllBones();
+
+            var _originals = {};
+            for (var i = 0; i < _allBones.length; i++) {
+                var _b = _allBones[i]; var _n = _b.getName();
+                if (_data.hasOwnProperty(_n)) {
+                    _originals[_n] = [
+                        _b.getXRotControl().getValue(),
+                        _b.getYRotControl().getValue(),
+                        _b.getZRotControl().getValue()
+                    ];
+                    var _r = _data[_n];
+                    _b.getXRotControl().setValue(_r[0]);
+                    _b.getYRotControl().setValue(_r[1]);
+                    _b.getZRotControl().setValue(_r[2]);
+                }
+            }
+
+            var _result = {};
+            var _effSet = {};
+            for (var j = 0; j < _effNames.length; j++) { _effSet[_effNames[j]] = true; }
+            for (var i = 0; i < _allBones.length; i++) {
+                var _b = _allBones[i]; var _n = _b.getName();
+                if (_effSet.hasOwnProperty(_n)) {
+                    var _p = _b.getWSPos();
+                    _result[_n] = [_p.x, _p.y, _p.z];
+                }
+            }
+
+            for (var i = 0; i < _allBones.length; i++) {
+                var _b = _allBones[i]; var _n = _b.getName();
+                if (_originals.hasOwnProperty(_n)) {
+                    var _r = _originals[_n];
+                    _b.getXRotControl().setValue(_r[0]);
+                    _b.getYRotControl().setValue(_r[1]);
+                    _b.getZRotControl().setValue(_r[2]);
+                }
+            }
+            return _result;
+        `),
+    );
+  });
+
+  it("evaluatePose defaults to {} when the script result is null", async () => {
+    stub(null);
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await skel.evaluatePose({ r_forearm: [45, 0, 0] }, ["r_hand"])).toEqual({});
+  });
+
+  it("evaluatePoseJacobian returns null when the effector bone cannot be found, and generates the exact script with the default step", async () => {
+    const fetchMock = stub(null);
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await skel.evaluatePoseJacobian(["r_shoulder", "r_forearm"], "r_hand")).toBeNull();
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _chain = ["r_shoulder","r_forearm"];
+            var _effName = "r_hand";
+            var _step = 1;
+
+            var _allBones = _node.getAllBones();
+            var _boneMap = {};
+            for (var i = 0; i < _allBones.length; i++) {
+                _boneMap[_allBones[i].getName()] = _allBones[i];
+            }
+
+            var _eff = _boneMap[_effName];
+            if (!_eff) return null;
+
+            var _bp = _eff.getWSPos();
+            var _base = [_bp.x, _bp.y, _bp.z];
+
+            var _columns = [];
+            for (var c = 0; c < _chain.length; c++) {
+                var _b = _boneMap[_chain[c]];
+                if (!_b) {
+                    _columns.push([0,0,0]); _columns.push([0,0,0]); _columns.push([0,0,0]);
+                    continue;
+                }
+                var _ctrls = [_b.getXRotControl(), _b.getYRotControl(), _b.getZRotControl()];
+                for (var axis = 0; axis < 3; axis++) {
+                    var _ctrl = _ctrls[axis];
+                    var _orig = _ctrl.getValue();
+                    _ctrl.setValue(_orig + _step);
+                    var _tp = _eff.getWSPos();
+                    _ctrl.setValue(_orig);
+                    _columns.push([
+                        (_tp.x - _base[0]) / _step,
+                        (_tp.y - _base[1]) / _step,
+                        (_tp.z - _base[2]) / _step
+                    ]);
+                }
+            }
+            return {base_position: _base, columns: _columns};
+        `),
+    );
+  });
+
+  it("evaluatePoseJacobian returns basePosition/columns and embeds a custom stepDegrees, generating the exact script", async () => {
+    const fetchMock = stub({ base_position: [1, 2, 3], columns: [[0.1, 0, 0]] });
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.evaluatePoseJacobian(["r_shoulder"], "r_hand", 2.5);
+    expect(result).toEqual({ basePosition: [1, 2, 3], columns: [[0.1, 0, 0]] });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _chain = ["r_shoulder"];
+            var _effName = "r_hand";
+            var _step = 2.5;
+
+            var _allBones = _node.getAllBones();
+            var _boneMap = {};
+            for (var i = 0; i < _allBones.length; i++) {
+                _boneMap[_allBones[i].getName()] = _allBones[i];
+            }
+
+            var _eff = _boneMap[_effName];
+            if (!_eff) return null;
+
+            var _bp = _eff.getWSPos();
+            var _base = [_bp.x, _bp.y, _bp.z];
+
+            var _columns = [];
+            for (var c = 0; c < _chain.length; c++) {
+                var _b = _boneMap[_chain[c]];
+                if (!_b) {
+                    _columns.push([0,0,0]); _columns.push([0,0,0]); _columns.push([0,0,0]);
+                    continue;
+                }
+                var _ctrls = [_b.getXRotControl(), _b.getYRotControl(), _b.getZRotControl()];
+                for (var axis = 0; axis < 3; axis++) {
+                    var _ctrl = _ctrls[axis];
+                    var _orig = _ctrl.getValue();
+                    _ctrl.setValue(_orig + _step);
+                    var _tp = _eff.getWSPos();
+                    _ctrl.setValue(_orig);
+                    _columns.push([
+                        (_tp.x - _base[0]) / _step,
+                        (_tp.y - _base[1]) / _step,
+                        (_tp.z - _base[2]) / _step
+                    ]);
+                }
+            }
+            return {base_position: _base, columns: _columns};
+        `),
+    );
+  });
+
+  it("bakeBoneRotations defaults start/end to the scene play range when omitted", async () => {
+    const fetchMock = stub({ frames_baked: 30, bones_baked: 2 });
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.bakeBoneRotations();
+    expect(result).toEqual({ framesBaked: 30, bonesBaked: 2 });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _step    = Scene.getTimeStep();
+            var _pr      = Scene.getPlayRange();
+            var _prStart = Math.round(_pr.start / _step);
+            var _prEnd   = Math.round(_pr.end   / _step);
+            var _bkStart = (null !== null) ? null : _prStart;
+            var _bkEnd   = (null   !== null) ? null   : _prEnd;
+            var _filter  = null;
+
+            var _all = _node.getAllBones();
+            var _bones = [];
+            for (var i = 0; i < _all.length; i++) {
+                if (_filter === null || _filter.hasOwnProperty(_all[i].getName()))
+                    _bones.push(_all[i]);
+            }
+
+            var _origFrame = Scene.getFrame();
+            for (var f = _bkStart; f <= _bkEnd; f++) {
+                Scene.setFrame(f);
+                var _t = f * _step;
+                for (var i = 0; i < _bones.length; i++) {
+                    var _b = _bones[i];
+                    _b.getXRotControl().insertKey(_t, _b.getXRotControl().getValue());
+                    _b.getYRotControl().insertKey(_t, _b.getYRotControl().getValue());
+                    _b.getZRotControl().insertKey(_t, _b.getZRotControl().getValue());
+                }
+            }
+            Scene.setFrame(_origFrame);
+            return {frames_baked: _bkEnd - _bkStart + 1, bones_baked: _bones.length};
+        `),
+    );
+  });
+
+  it("bakeBoneRotations with start/end/boneNames embeds the explicit values and bone filter, and defaults on a null result", async () => {
+    const fetchMock = stub(null);
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.bakeBoneRotations({ start: 5, end: 10, boneNames: ["hip"] });
+    expect(result).toEqual({ framesBaked: 0, bonesBaked: 0 });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _step    = Scene.getTimeStep();
+            var _pr      = Scene.getPlayRange();
+            var _prStart = Math.round(_pr.start / _step);
+            var _prEnd   = Math.round(_pr.end   / _step);
+            var _bkStart = (5 !== null) ? 5 : _prStart;
+            var _bkEnd   = (10   !== null) ? 10   : _prEnd;
+            var _filter  = {"hip":true};
+
+            var _all = _node.getAllBones();
+            var _bones = [];
+            for (var i = 0; i < _all.length; i++) {
+                if (_filter === null || _filter.hasOwnProperty(_all[i].getName()))
+                    _bones.push(_all[i]);
+            }
+
+            var _origFrame = Scene.getFrame();
+            for (var f = _bkStart; f <= _bkEnd; f++) {
+                Scene.setFrame(f);
+                var _t = f * _step;
+                for (var i = 0; i < _bones.length; i++) {
+                    var _b = _bones[i];
+                    _b.getXRotControl().insertKey(_t, _b.getXRotControl().getValue());
+                    _b.getYRotControl().insertKey(_t, _b.getYRotControl().getValue());
+                    _b.getZRotControl().insertKey(_t, _b.getZRotControl().getValue());
+                }
+            }
+            Scene.setFrame(_origFrame);
+            return {frames_baked: _bkEnd - _bkStart + 1, bones_baked: _bones.length};
+        `),
+    );
+  });
+
+  it("bakeMorphs defaults start/end to the scene play range and generates the exact script", async () => {
+    const fetchMock = stub({ frames_baked: 12, morphs_baked: 3 });
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.bakeMorphs();
+    expect(result).toEqual({ framesBaked: 12, morphsBaked: 3 });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _step    = Scene.getTimeStep();
+            var _pr      = Scene.getPlayRange();
+            var _prStart = Math.round(_pr.start / _step);
+            var _prEnd   = Math.round(_pr.end   / _step);
+            var _bkStart = (null !== null) ? null : _prStart;
+            var _bkEnd   = (null   !== null) ? null   : _prEnd;
+            var _filter  = null;
+
+            var _obj = _node.getObject();
+            if (!_obj) return {frames_baked: 0, morphs_baked: 0};
+            var _channels = [];
+            for (var i = 0; i < _obj.getNumModifiers(); i++) {
+                var _m = _obj.getModifier(i);
+                if (_m.className() === "DzMorph" &&
+                    (_filter === null || _filter.hasOwnProperty(_m.getName())))
+                    _channels.push(_m.getValueChannel());
+            }
+
+            var _origFrame = Scene.getFrame();
+            for (var f = _bkStart; f <= _bkEnd; f++) {
+                Scene.setFrame(f);
+                var _t = f * _step;
+                for (var i = 0; i < _channels.length; i++) {
+                    _channels[i].insertKey(_t, _channels[i].getValue());
+                }
+            }
+            Scene.setFrame(_origFrame);
+            return {frames_baked: _bkEnd - _bkStart + 1, morphs_baked: _channels.length};
+        `),
+    );
+  });
+
+  it("bakeMorphs with start/end/morphNames embeds the explicit values and morph filter, and defaults on a null result", async () => {
+    const fetchMock = stub(null);
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.bakeMorphs({ start: 1, end: 4, morphNames: ["SmileFull"] });
+    expect(result).toEqual({ framesBaked: 0, morphsBaked: 0 });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _step    = Scene.getTimeStep();
+            var _pr      = Scene.getPlayRange();
+            var _prStart = Math.round(_pr.start / _step);
+            var _prEnd   = Math.round(_pr.end   / _step);
+            var _bkStart = (1 !== null) ? 1 : _prStart;
+            var _bkEnd   = (4   !== null) ? 4   : _prEnd;
+            var _filter  = {"SmileFull":true};
+
+            var _obj = _node.getObject();
+            if (!_obj) return {frames_baked: 0, morphs_baked: 0};
+            var _channels = [];
+            for (var i = 0; i < _obj.getNumModifiers(); i++) {
+                var _m = _obj.getModifier(i);
+                if (_m.className() === "DzMorph" &&
+                    (_filter === null || _filter.hasOwnProperty(_m.getName())))
+                    _channels.push(_m.getValueChannel());
+            }
+
+            var _origFrame = Scene.getFrame();
+            for (var f = _bkStart; f <= _bkEnd; f++) {
+                Scene.setFrame(f);
+                var _t = f * _step;
+                for (var i = 0; i < _channels.length; i++) {
+                    _channels[i].insertKey(_t, _channels[i].getValue());
+                }
+            }
+            Scene.setFrame(_origFrame);
+            return {frames_baked: _bkEnd - _bkStart + 1, morphs_baked: _channels.length};
+        `),
+    );
+  });
+
+  it("bake() combines bones and morphs when includeMorphs is true, generating the exact script", async () => {
+    const fetchMock = stub({ frames_baked: 10, bones_baked: 1, morphs_baked: 1 });
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.bake({ includeMorphs: true });
+    expect(result).toEqual({ framesBaked: 10, bonesBaked: 1, morphsBaked: 1 });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _step    = Scene.getTimeStep();
+            var _pr      = Scene.getPlayRange();
+            var _prStart = Math.round(_pr.start / _step);
+            var _prEnd   = Math.round(_pr.end   / _step);
+            var _bkStart    = (null !== null) ? null : _prStart;
+            var _bkEnd      = (null   !== null) ? null   : _prEnd;
+            var _boneFilter = null;
+            var _mFilter    = null;
+            var _withMorphs = true;
+
+            var _all = _node.getAllBones();
+            var _bones = [];
+            for (var i = 0; i < _all.length; i++) {
+                if (_boneFilter === null || _boneFilter.hasOwnProperty(_all[i].getName()))
+                    _bones.push(_all[i]);
+            }
+
+            var _mChannels = [];
+            if (_withMorphs) {
+                var _obj = _node.getObject();
+                if (_obj) {
+                    for (var i = 0; i < _obj.getNumModifiers(); i++) {
+                        var _m = _obj.getModifier(i);
+                        if (_m.className() === "DzMorph" &&
+                            (_mFilter === null || _mFilter.hasOwnProperty(_m.getName())))
+                            _mChannels.push(_m.getValueChannel());
+                    }
+                }
+            }
+
+            var _origFrame = Scene.getFrame();
+            for (var f = _bkStart; f <= _bkEnd; f++) {
+                Scene.setFrame(f);
+                var _t = f * _step;
+                for (var i = 0; i < _bones.length; i++) {
+                    var _b = _bones[i];
+                    _b.getXRotControl().insertKey(_t, _b.getXRotControl().getValue());
+                    _b.getYRotControl().insertKey(_t, _b.getYRotControl().getValue());
+                    _b.getZRotControl().insertKey(_t, _b.getZRotControl().getValue());
+                }
+                for (var i = 0; i < _mChannels.length; i++) {
+                    _mChannels[i].insertKey(_t, _mChannels[i].getValue());
+                }
+            }
+            Scene.setFrame(_origFrame);
+            return {
+                frames_baked: _bkEnd - _bkStart + 1,
+                bones_baked:  _bones.length,
+                morphs_baked: _mChannels.length
+            };
+        `),
+    );
+  });
+
+  it("bake() with no opts defaults includeMorphs to false and generates the exact script and default result", async () => {
+    const fetchMock = stub(null);
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const result = await skel.bake();
+    expect(result).toEqual({ framesBaked: 0, bonesBaked: 0, morphsBaked: 0 });
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript(`
+            var _step    = Scene.getTimeStep();
+            var _pr      = Scene.getPlayRange();
+            var _prStart = Math.round(_pr.start / _step);
+            var _prEnd   = Math.round(_pr.end   / _step);
+            var _bkStart    = (null !== null) ? null : _prStart;
+            var _bkEnd      = (null   !== null) ? null   : _prEnd;
+            var _boneFilter = null;
+            var _mFilter    = null;
+            var _withMorphs = false;
+
+            var _all = _node.getAllBones();
+            var _bones = [];
+            for (var i = 0; i < _all.length; i++) {
+                if (_boneFilter === null || _boneFilter.hasOwnProperty(_all[i].getName()))
+                    _bones.push(_all[i]);
+            }
+
+            var _mChannels = [];
+            if (_withMorphs) {
+                var _obj = _node.getObject();
+                if (_obj) {
+                    for (var i = 0; i < _obj.getNumModifiers(); i++) {
+                        var _m = _obj.getModifier(i);
+                        if (_m.className() === "DzMorph" &&
+                            (_mFilter === null || _mFilter.hasOwnProperty(_m.getName())))
+                            _mChannels.push(_m.getValueChannel());
+                    }
+                }
+            }
+
+            var _origFrame = Scene.getFrame();
+            for (var f = _bkStart; f <= _bkEnd; f++) {
+                Scene.setFrame(f);
+                var _t = f * _step;
+                for (var i = 0; i < _bones.length; i++) {
+                    var _b = _bones[i];
+                    _b.getXRotControl().insertKey(_t, _b.getXRotControl().getValue());
+                    _b.getYRotControl().insertKey(_t, _b.getYRotControl().getValue());
+                    _b.getZRotControl().insertKey(_t, _b.getZRotControl().getValue());
+                }
+                for (var i = 0; i < _mChannels.length; i++) {
+                    _mChannels[i].insertKey(_t, _mChannels[i].getValue());
+                }
+            }
+            Scene.setFrame(_origFrame);
+            return {
+                frames_baked: _bkEnd - _bkStart + 1,
+                bones_baked:  _bones.length,
+                morphs_baked: _mChannels.length
+            };
+        `),
+    );
+  });
+
+  it("followTarget returns null when no IK target is set, and generates the exact script", async () => {
+    const fetchMock = stub(null);
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    expect(await skel.followTarget()).toBeNull();
+    expect(scriptOf(fetchMock)).toBe(
+      skeletonScript("var t = _node.getFollowTarget(); return t ? t.getName() : null;"),
+    );
+  });
+
+  it("followTarget returns a typed DazSkeleton bound to the follow-target name when set", async () => {
+    stub("TargetRig");
+    const skel = new DazSkeleton(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });
+    const target = await skel.followTarget();
+    expect(target).toBeInstanceOf(DazSkeleton);
+  });
+});
+
 describe("DazSkeleton bone locator disambiguates same-named figures", () => {
   it("bones() binds each returned DazBone to a locator scoped to this skeleton's lookup, not Scene.findNode", async () => {
     const fetchMock = stub(["hip"]);
