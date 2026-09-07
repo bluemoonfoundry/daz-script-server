@@ -421,16 +421,112 @@ describe("DazScene bulk snapshots", () => {
     const fetchMock = stubSeq([]);
     const scene = new DazScene(new DazClient({ token: "" }));
     await scene.sceneSnapshot();
-    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("var _filter = null;");
+    expect(scriptOf(fetchMock)).toBe(
+      iife(`
+            var _filter = null;
+            var _skels = Scene.getSkeletonList();
+            var _result = [];
+            for (var _s = 0; _s < _skels.length; _s++) {
+                var _skel = _skels[_s];
+                if (_filter !== null) {
+                    var _found = false;
+                    for (var _f = 0; _f < _filter.length; _f++) {
+                        if (_filter[_f] === _skel.getName() || _filter[_f] === _skel.getLabel()) {
+                            _found = true; break;
+                        }
+                    }
+                    if (!_found) continue;
+                }
+                var _bones = _skel.getAllBones();
+                var _boneList = [];
+                for (var _i = 0; _i < _bones.length; _i++) {
+                    var _b = _bones[_i];
+                    var _parent = _b.getNodeParent();
+                    var _parentName = null;
+                    if (_parent && _parent.className && _parent.className() === "DzBone") {
+                        _parentName = _parent.getName();
+                    }
+                    var _lpos = _b.getLocalPos();
+                    var _wpos = _b.getWSPos();
+                    _boneList.push({
+                        name: _b.getName(),
+                        label: _b.getLabel(),
+                        parent_name: _parentName,
+                        rotation_order: _b.getRotationOrder(),
+                        local_position: {x: _lpos.x, y: _lpos.y, z: _lpos.z},
+                        world_position: {x: _wpos.x, y: _wpos.y, z: _wpos.z},
+                        local_euler: {
+                            x: _b.getXRotControl().getValue(),
+                            y: _b.getYRotControl().getValue(),
+                            z: _b.getZRotControl().getValue()
+                        }
+                    });
+                }
+                _result.push({
+                    name: _skel.getName(),
+                    label: _skel.getLabel(),
+                    bones: _boneList
+                });
+            }
+            return _result;
+        `),
+    );
   });
 
   it("sceneSnapshot passes the label/name filter as a JSON array when provided", async () => {
     const fetchMock = stubSeq([]);
     const scene = new DazScene(new DazClient({ token: "" }));
     await scene.sceneSnapshot(["Genesis 9"]);
-    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain('var _filter = ["Genesis 9"];');
+    expect(scriptOf(fetchMock)).toBe(
+      iife(`
+            var _filter = ["Genesis 9"];
+            var _skels = Scene.getSkeletonList();
+            var _result = [];
+            for (var _s = 0; _s < _skels.length; _s++) {
+                var _skel = _skels[_s];
+                if (_filter !== null) {
+                    var _found = false;
+                    for (var _f = 0; _f < _filter.length; _f++) {
+                        if (_filter[_f] === _skel.getName() || _filter[_f] === _skel.getLabel()) {
+                            _found = true; break;
+                        }
+                    }
+                    if (!_found) continue;
+                }
+                var _bones = _skel.getAllBones();
+                var _boneList = [];
+                for (var _i = 0; _i < _bones.length; _i++) {
+                    var _b = _bones[_i];
+                    var _parent = _b.getNodeParent();
+                    var _parentName = null;
+                    if (_parent && _parent.className && _parent.className() === "DzBone") {
+                        _parentName = _parent.getName();
+                    }
+                    var _lpos = _b.getLocalPos();
+                    var _wpos = _b.getWSPos();
+                    _boneList.push({
+                        name: _b.getName(),
+                        label: _b.getLabel(),
+                        parent_name: _parentName,
+                        rotation_order: _b.getRotationOrder(),
+                        local_position: {x: _lpos.x, y: _lpos.y, z: _lpos.z},
+                        world_position: {x: _wpos.x, y: _wpos.y, z: _wpos.z},
+                        local_euler: {
+                            x: _b.getXRotControl().getValue(),
+                            y: _b.getYRotControl().getValue(),
+                            z: _b.getZRotControl().getValue()
+                        }
+                    });
+                }
+                _result.push({
+                    name: _skel.getName(),
+                    label: _skel.getLabel(),
+                    bones: _boneList
+                });
+            }
+            return _result;
+        `),
+    );
   });
 
   it("nodeHierarchy raises NodeNotFoundError when the root cannot be found", async () => {

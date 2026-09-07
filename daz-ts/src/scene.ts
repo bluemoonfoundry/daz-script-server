@@ -273,7 +273,7 @@ export class DazScene {
    * @param skeletonLabels Optional subset of skeleton names/labels to include; omit to return every skeleton.
    */
   async sceneSnapshot(skeletonLabels?: string[]): Promise<Array<Record<string, unknown>>> {
-    const filterJs = skeletonLabels !== undefined ? JSON.stringify(skeletonLabels) : "null";
+    const filterJs = skeletonLabels !== undefined ? ScriptBuilder.serializeArg(skeletonLabels) : "null";
     const script = ScriptBuilder.iife(`
             var _filter = ${filterJs};
             var _skels = Scene.getSkeletonList();
@@ -375,8 +375,8 @@ export class DazScene {
     hierarchy: Record<string, unknown> | null;
     totalDescendants: number;
   }> {
-    const rootJson = JSON.stringify(opts.root ?? null);
-    const depthJs = opts.maxDepth ? String(Math.trunc(opts.maxDepth)) : "0";
+    const rootJson = opts.root !== undefined ? ScriptBuilder.escapeString(opts.root) : "null";
+    const depthJs = opts.maxDepth ? ScriptBuilder.serializeArg(Math.trunc(opts.maxDepth)) : "0";
     const script = ScriptBuilder.iife(`
             var _rootLabel = ${rootJson};
             var _node = Scene.findNodeByLabel(_rootLabel);
