@@ -20,7 +20,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.focalLength();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.focalLength;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.focalLength;\n})()'
+    );
   });
 
   it("focalLength setter writes _node.focalLength = value with serialized value", async () => {
@@ -28,7 +30,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setFocalLength(50);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.focalLength = 50;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.focalLength = 50;\n})()'
+    );
   });
 
   it("fov getter calls _node.getFieldOfView()", async () => {
@@ -36,7 +40,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.fov();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.getFieldOfView();");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.getFieldOfView();\n})()'
+    );
   });
 
   it("depthOfField getter uses findPropertyByLabel", async () => {
@@ -140,7 +146,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.frameWidth();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.frameWidth;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.frameWidth;\n})()'
+    );
   });
 
   it("focalDistance getter calls _node.focalDistance", async () => {
@@ -148,7 +156,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.focalDistance();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.focalDistance;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.focalDistance;\n})()'
+    );
   });
 
   it("focalDistance setter writes _node.focalDistance with serialized value", async () => {
@@ -156,7 +166,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setFocalDistance(100);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.focalDistance = 100;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.focalDistance = 100;\n})()'
+    );
   });
 
   it("aspectWidth getter calls _node.aspectWidth", async () => {
@@ -164,7 +176,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.aspectWidth();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.aspectWidth;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.aspectWidth;\n})()'
+    );
   });
 
   it("aspectWidth setter writes _node.aspectWidth with serialized value", async () => {
@@ -172,7 +186,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setAspectWidth(1.777);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.aspectWidth = 1.777;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.aspectWidth = 1.777;\n})()'
+    );
   });
 
   it("aspectHeight getter calls _node.aspectHeight", async () => {
@@ -180,7 +196,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.aspectHeight();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.aspectHeight;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.aspectHeight;\n})()'
+    );
   });
 
   it("aspectHeight setter writes _node.aspectHeight with serialized value", async () => {
@@ -188,7 +206,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setAspectHeight(1);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.aspectHeight = 1;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.aspectHeight = 1;\n})()'
+    );
   });
 
   it("pixelsWidth getter calls _node.pixelsWidth", async () => {
@@ -196,7 +216,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.pixelsWidth();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.pixelsWidth;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.pixelsWidth;\n})()'
+    );
   });
 
   it("pixelsWidth setter truncates value and writes _node.pixelsWidth", async () => {
@@ -204,7 +226,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setPixelsWidth(1920);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.pixelsWidth = 1920;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.pixelsWidth = 1920;\n})()'
+    );
   });
 
   it("pixelsHeight getter calls _node.pixelsHeight", async () => {
@@ -212,7 +236,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.pixelsHeight();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.pixelsHeight;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.pixelsHeight;\n})()'
+    );
   });
 
   it("pixelsHeight setter truncates value and writes _node.pixelsHeight", async () => {
@@ -220,7 +246,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.setPixelsHeight(1080);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.pixelsHeight = 1080;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.pixelsHeight = 1080;\n})()'
+    );
   });
 
   it("nearClippingPlane getter calls _node.nearClippingPlane", async () => {
@@ -228,7 +256,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.nearClippingPlane();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.nearClippingPlane;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.nearClippingPlane;\n})()'
+    );
   });
 
   it("farClippingPlane getter calls _node.farClippingPlane", async () => {
@@ -236,7 +266,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.farClippingPlane();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.farClippingPlane;");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.farClippingPlane;\n})()'
+    );
   });
 
   it("aimAt creates DzVec3 with serialized arguments", async () => {
@@ -244,7 +276,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.aimAt(1, 2, 3);
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("_node.aimAt(new DzVec3(1, 2, 3));");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\n_node.aimAt(new DzVec3(1, 2, 3));\n})()'
+    );
   });
 
   it("focalPoint returns world-space focal point object", async () => {
@@ -252,8 +286,9 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.focalPoint();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("var fp = _node.getFocalPoint();");
-    expect(script).toContain("return {x: fp.x, y: fp.y, z: fp.z};");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nvar fp = _node.getFocalPoint(); return {x: fp.x, y: fp.y, z: fp.z};\n})()'
+    );
   });
 
   it("isViewCamera calls _node.isViewCamera()", async () => {
@@ -261,6 +296,8 @@ describe("DazCamera", () => {
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
     await cam.isViewCamera();
     const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(script).toContain("return _node.isViewCamera();");
+    expect(script).toBe(
+      '(function(){\nvar _node = Scene.findNode("Camera");\nif (!_node) return null;\nreturn _node.isViewCamera();\n})()'
+    );
   });
 });
