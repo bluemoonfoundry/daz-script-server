@@ -240,3 +240,68 @@ top of Phase 1's raw job-queue client methods, ported from `dazpy`'s
 `setEnvironmentPropertyFromString`, `setEnvironmentMap`) are exposed
 primarily for the Phase 4 `lighting.ts` domain helper, mirroring dazpy's
 `lighting.py` usage of `_render.py`'s equivalent internal methods.
+
+## Phase 4: Capture/Restore and Domain Helpers
+
+Phase 4 ports dazpy's checkpoint/restore primitives and its higher-level
+domain-helper modules, which apply typed configuration objects to the Phase
+2/3 proxies rather than wrapping them in new classes ("typed data +
+`apply()` function", matching dazpy's own module-function style for these).
+
+- `DazPose` (`pose.ts`, from `_pose.py`) — a figure's complete pose
+  (sparse bone rotations, morphs, node properties), captured/applied via
+  each channel's *raw* (pre-ERC) value so repeated capture/apply cycles stay
+  idempotent even on `DzERCLink`-driven dials. `capture()`/`apply()`/
+  `applyFull()` are async (one HTTP call each); `lerp()`/`toDict()`/
+  `fromDict()`/`save()`/`load()` are pure/local.
+- `DazSceneState` (`sceneState.ts`, from `_scene_state.py`) — a full scene
+  checkpoint: every skeleton's `DazPose`, plus camera/light transforms and a
+  few extra light properties, restored in a small fixed number of HTTP
+  calls. `apply()` independently verifies each skeleton restore with a
+  fresh `DazPose.capture()` read-back (retrying up to `maxVerifyRetries`
+  times on mismatch) since a 200 response can reflect a restore DAZ
+  Studio's main thread only partially executed under contention, and
+  restores each skeleton's conform/fit-to relationship via the real
+  `followTarget()`/`fitTo()`/`unfit()` API rather than trusting
+  `DazPose.applyFull()`'s generic property write-back.
+- `DazAnimation` (`animation.ts`, from `_animation.py`) — a captured
+  timeline clip (parallel-list bone rotations + optional varying-morph
+  detection per frame). `capture()`/`apply()` are async; `clip()`/`blend()`/
+  `asPose()`/`append()` are pure.
+- `shotGeometry.ts` (from `_shot_geometry.py`) — pure camera/light placement
+  math (`sphericalOffset`, `lookAtEuler`, `resolveTarget`) shared by
+  `lighting.ts` and `cinematics.ts`. `resolveTarget` is async in TS (unlike
+  Python's synchronous property access) since resolving a `DazNode` target
+  requires an HTTP round-trip via `position()`.
+- `poses.ts` (from `poses.py`) — `applyPose`, `resetTransforms`,
+  `zeroFigure` convenience wrappers over `DazPose`/`DazNode`/`DazSkeleton`.
+- `materials.ts` (from `materials.py`) — `IrayMaterial`/`TextureMap`/
+  `SurfaceProperty` typed specs plus `applyIrayMaterial`/`applyTextureMap`/
+  `getSurfaceProperty`/`setSurfaceProperty` over `DazMaterial`. Texture
+  paths are validated (absolute + exists on disk) before any DazScript call
+  is made, since an invalid path passed to the underlying `setMap()` can
+  hang or crash DAZ Studio via a blocking file-not-found dialog.
+- `lighting.ts` (from `lighting.py`) — `applyThreePointLightSetup` (key/
+  fill/rim rig via `shotGeometry`) and `applyHdriEnvironment` (drives
+  `DazRenderSettings`'s environment-holder methods, verifying the apply via
+  an "Environment Intensity" readback).
+- `cinematics.ts` (from `cinematics.py`) — `applyStaticShot`,
+  `applyOrbitCamera` (a per-frame sweep via `scene.setFrame()`, **not** real
+  keyframes — widens the scene's animation range as a documented side
+  effect), `applyFrameSubject` (shot-distance presets), and
+  `applyAnimatedShot` (real DAZ Studio keyframes via
+  `setPositionAtFrame`/`setRotationAtFrame`, letting DAZ Studio interpolate).
+- `sceneEvents.ts` (from `_scene_events.py`) — `watchSceneEvents`/
+  `waitForSceneEvent`, typed SSE parsing over `GET /scene/events`, reusing
+  `client.ts`'s `parseSseStream`/`streamSceneEvents` already added in
+  Phase 3 for the render-progress stream.
+
+Client-side input validation (file existence, path shape) happens in every
+domain helper that touches user-supplied filesystem paths (`materials.ts`,
+`lighting.ts`'s `applyHdriEnvironment`), matching dazpy's
+blocking-dialog-avoidance pattern — a bad path reaching DAZ Studio's
+underlying `setMap()`/environment-map call can hang or crash the app via a
+modal file-not-found dialog rather than raising a script error.
+
+Not ported in Phase 4: `_interaction.py` (multi-figure IK posing) — that's
+Phase 5 (`daz-script-server-sf7y`).

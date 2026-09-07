@@ -62,3 +62,38 @@ export type {
   RenderVariantSpec,
   RenderVariantsOptions,
 } from "./renderApi.js";
+
+// ── Phase 4: capture/restore and domain helpers ────────────────────────────
+
+export { DazPose } from "./pose.js";
+export type { DazPoseDict } from "./pose.js";
+
+export { DazSceneState } from "./sceneState.js";
+export type { ApplyOptions, ApplyResult, DazSceneStateDict } from "./sceneState.js";
+
+export { DazAnimation } from "./animation.js";
+export type { AnimationFrame, DazAnimationDict } from "./animation.js";
+
+export { sphericalOffset, lookAtEuler, resolveTarget } from "./shotGeometry.js";
+
+export { applyPose, resetTransforms, zeroFigure } from "./poses.js";
+export type { ZeroFigureOptions } from "./poses.js";
+
+export { applyIrayMaterial, applyTextureMap, getSurfaceProperty, setSurfaceProperty } from "./materials.js";
+export type { IrayMaterial, SurfaceProperty, TextureMap } from "./materials.js";
+
+export { applyHdriEnvironment, applyThreePointLightSetup, setLightColor } from "./lighting.js";
+export type { HDRIEnvironment, LightSpec, ThreePointLightRig, ThreePointLightSetup } from "./lighting.js";
+
+export { applyAnimatedShot, applyFrameSubject, applyOrbitCamera, applyStaticShot } from "./cinematics.js";
+export type {
+  CameraKeyframe,
+  CameraTargetOptions,
+  CinematicAnimatedShot,
+  CinematicStaticShot,
+  FrameSubject,
+  OrbitCamera,
+} from "./cinematics.js";
+
+export { watchSceneEvents, waitForSceneEvent } from "./sceneEvents.js";
+export type { SceneEvent } from "./sceneEvents.js";
