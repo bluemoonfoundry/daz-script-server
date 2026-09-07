@@ -261,6 +261,6 @@ export class DazScene {
   }
 
   async selectAll(on = true): Promise<void> {
-    await this.client.execute(ScriptBuilder.iife(`Scene.selectAllNodes(${on ? "true" : "false"});`));
+    await this.client.execute(ScriptBuilder.iife(`Scene.selectAllNodes(${ScriptBuilder.serializeArg(on)});`));
   }
 }
