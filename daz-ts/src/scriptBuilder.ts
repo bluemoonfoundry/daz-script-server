@@ -68,4 +68,16 @@ export class ScriptBuilder {
       `if(${match}){_skel=_skels[_i];break;}}`
     );
   }
+
+  /** Like {@link skeletonLookup} but binds the result to `_node` instead of `_skel`, for callers using the shared `_node`-based body convention. */
+  static skeletonLookupAsNode(identifier: NodeIdentifier): string {
+    const value = ScriptBuilder.escapeString(identifier.value);
+    const match =
+      identifier.kind === "label" ? `_skels[_i].getLabel() === ${value}` : `_skels[_i].getName() === ${value}`;
+    return (
+      `var _node=null,_skels=Scene.getSkeletonList();` +
+      `for(var _i=0;_i<_skels.length;_i++){` +
+      `if(${match}){_node=_skels[_i];break;}}`
+    );
+  }
 }

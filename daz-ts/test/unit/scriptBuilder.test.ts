@@ -68,4 +68,15 @@ describe("ScriptBuilder node helpers", () => {
       'var _skel=null,_skels=Scene.getSkeletonList();for(var _i=0;_i<_skels.length;_i++){if(_skels[_i].getName() === "Genesis9"){_skel=_skels[_i];break;}}',
     );
   });
+
+  it("skeletonLookupAsNode matches like skeletonLookup but binds _node instead of _skel", () => {
+    const byLabel: NodeIdentifier = { value: "Genesis 9", kind: "label" };
+    expect(ScriptBuilder.skeletonLookupAsNode(byLabel)).toBe(
+      'var _node=null,_skels=Scene.getSkeletonList();for(var _i=0;_i<_skels.length;_i++){if(_skels[_i].getLabel() === "Genesis 9"){_node=_skels[_i];break;}}',
+    );
+    const byName: NodeIdentifier = { value: "Genesis9", kind: "name" };
+    expect(ScriptBuilder.skeletonLookupAsNode(byName)).toBe(
+      'var _node=null,_skels=Scene.getSkeletonList();for(var _i=0;_i<_skels.length;_i++){if(_skels[_i].getName() === "Genesis9"){_node=_skels[_i];break;}}',
+    );
+  });
 });
