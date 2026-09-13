@@ -4736,6 +4736,23 @@ class TestQuat(unittest.TestCase):
 
     def test_euler_roundtrip_ZYX(self):
         self._euler_roundtrip(10, 20, 30, "ZYX")
+        self._euler_roundtrip(10, 20, 15, "ZYX")
+        self._euler_roundtrip(-25, 40, 65, "ZYX")
+
+    def test_from_euler_ZYX_w_sign(self):
+        # Regression test for daz-script-server-z0c1: the ZYX branch of
+        # _euler_to_quat previously flipped the sign on the sx*sy*sz term,
+        # producing the wrong w. Verify against the Hamilton product of the
+        # per-axis quaternions (qz.multiply(qy).multiply(qx)), independent of
+        # _euler_to_quat's own formula.
+        from dazpy import Quat, Vec3
+        x, y, z = 10, 20, 15
+        qx = Quat.from_axis_angle(Vec3(1, 0, 0), x)
+        qy = Quat.from_axis_angle(Vec3(0, 1, 0), y)
+        qz = Quat.from_axis_angle(Vec3(0, 0, 1), z)
+        expected = qz.multiply(qy).multiply(qx)
+        actual = Quat.from_euler(x, y, z, "ZYX")
+        self._approx_quat(actual, expected)
 
     def test_euler_identity_is_no_rotation(self):
         from dazpy import Quat
