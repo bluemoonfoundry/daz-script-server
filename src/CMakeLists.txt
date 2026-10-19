@@ -31,6 +31,7 @@ add_library(DazScriptServer SHARED
 	PackageDependencyInstaller.cpp
 	DzPackageInputsDialog.cpp
 	DzPackageImporter.cpp
+	GeometryExport.cpp
 	package_runner.qrc
 	httplib.h
 	../include/DzScriptServerPane.h
@@ -58,6 +59,7 @@ add_library(DazScriptServer SHARED
 	../include/PackageDependencyInstaller.h
 	../include/DzPackageInputsDialog.h
 	../include/DzPackageImporter.h
+	../include/GeometryExport.h
 	miniz.h
 )
 

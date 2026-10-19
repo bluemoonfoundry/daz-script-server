@@ -81,6 +81,7 @@ namespace ServerConfig {
 }
 
 class DzScript;
+class GeometryFramesHandler;  // fork: GeometryExport.h
 
 class DzScriptServerPane : public DzPane {
 	Q_OBJECT
@@ -316,6 +317,7 @@ private:
 	std::unique_ptr<RenderAnimationHandler> m_pRenderAnimationHandler;
 	std::unique_ptr<RenderCancelHandler>    m_pRenderCancelHandler;
 	std::unique_ptr<SaveCopyHandler>      m_pSaveCopyHandler;
+	std::unique_ptr<GeometryFramesHandler> m_pGeometryFramesHandler;  // fork: GeometryExport.h
 
 	// UI widgets
 	QLineEdit*   m_pHostEdit;

@@ -10,6 +10,7 @@
 #include "ErrorResponse.h"
 #include "RequestValidator.h"
 #include "common_version.h"
+#include "GeometryExport.h"
 
 #include <dzapp.h>
 #include <dzscript.h>
@@ -890,7 +891,7 @@ static void applyContext(const HttpContext& ctx, httplib::Response& res)
 {
 	res.status = ctx.responseStatus;
 	if (!ctx.responseBody.empty())
-		res.set_content(ctx.responseBody, "application/json");
+		res.set_content(ctx.responseBody, ctx.responseContentType);
 	for (std::map<std::string, std::string>::const_iterator it = ctx.responseHeaders.begin();
 	     it != ctx.responseHeaders.end(); ++it)
 		res.set_header(it->first.c_str(), it->second.c_str());
@@ -945,6 +946,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pRenderAnimationHandler.reset(new RenderAnimationHandler(this));
 	m_pRenderCancelHandler.reset(new RenderCancelHandler(this));
 	m_pSaveCopyHandler.reset(new SaveCopyHandler(this));
+	m_pGeometryFramesHandler.reset(new GeometryFramesHandler());
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -1082,6 +1084,13 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Post("/scene/save-copy", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (m_pAuthChain->run(ctx)) m_pSaveCopyHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	// Fork: deformed figure vertices for a frame list as binary (GeometryExport.h)
+	m_pServer->Post("/geometry/frames", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pAuthChain->run(ctx)) m_pGeometryFramesHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1383,7 +1392,8 @@ void DzScriptServerPane::applyPluginRoutes()
 			                          Q_ARG(QByteArray, ip));
 			res.status = result.first;
 			if (!result.second.isEmpty())
-				res.set_content(result.second.constData(), "application/json");
+				res.set_content(result.second.constData(), static_cast<size_t>(result.second.size()),
+				                "application/json");
 		};
 	};
 
