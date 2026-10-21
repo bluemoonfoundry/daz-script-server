@@ -25,8 +25,9 @@ struct HttpContext {
 
     int         responseStatus;
     std::string responseBody;
+    std::string responseContentType;
 
-    HttpContext() : responseStatus(200) {}
+    HttpContext() : responseStatus(200), responseContentType("application/json") {}
 
     std::string getHeader(const std::string& name) const {
         std::map<std::string, std::string>::const_iterator it = headers.find(name);
