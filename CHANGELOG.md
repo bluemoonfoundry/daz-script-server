@@ -2,7 +2,7 @@
 
 All notable changes to DazScript Server are documented here.
 
-## [Unreleased]
+## [2.9.3] - 2026-10-21
 
 ### Structured async job observation
 
@@ -14,6 +14,24 @@ and a deduplicated output manifest. Request lists carry a bounded observation
 summary. Both `DazClient` and `AsyncDazClient` accept `report_file=` for inline
 and file-backed async jobs. Live report ingestion is available on Studio 6;
 Studio 4 parses the final report on the main thread after execution returns.
+
+### `POST /geometry/frames` — binary deformed-vertex export
+
+Returns the deformed figure mesh (optionally a vertex/surface subset) plus
+world-space bone origins for a list of frames as one `application/octet-stream`
+payload. Only the figure is re-evaluated per frame, not the whole scene; ~9ms
+per frame on a dressed Genesis 8 figure vs. ~232ms/frame for the equivalent
+DazScript loop, with bit-identical values.
+
+### Fixed
+
+- DS6 leaves `mgr[renderFinished(bool)]` undefined, so a chained `.connect()`
+  threw before `doRender()` could run. The signal is now bound only if it
+  exists; otherwise a completed `doRender()` is treated as success.
+- Plugin-route responses were sent through the `const char*` overload of
+  `set_content()`, which calls `strlen()` internally and silently truncated
+  any response body at its first NUL byte. The body length is now passed
+  explicitly.
 
 ## [2.9.2] - 2026-08-21
 
