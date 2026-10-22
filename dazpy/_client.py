@@ -10,10 +10,12 @@ from .exceptions import (
     AuthenticationError,
     ConcurrencyLimitError,
     ConnectionError,
+    DazError,
     DazBusyError,
     ScriptRuntimeError,
     ScriptSyntaxError,
     StudioBusyError,
+    ServerResponseError,
     TimeoutError,
 )
 from ._result import ExecutionResult
@@ -50,14 +52,24 @@ def _raise_for_error(resp: _requests.Response) -> None:
         raise AuthenticationError(f"HTTP {status}: {resp.text[:200]}")
     if status < 400:
         return
-    data = resp.json()
+    try:
+        parsed = resp.json()
+    except (TypeError, ValueError):
+        parsed = {}
+    data = parsed if isinstance(parsed, dict) else {}
     error_code = data.get("error_code", "")
-    error_msg = data.get("error") or f"HTTP {status}"
+    error_msg = data.get("error") or resp.text[:200] or f"HTTP {status}"
     retry_after = _parse_retry_after(resp)
     if error_code == "STUDIO_BUSY":
         raise StudioBusyError(error_msg, reason=data.get("detail", error_msg), retry_after=retry_after)
     if error_code == "CONCURRENT_LIMIT_EXCEEDED":
         raise ConcurrencyLimitError(error_msg, reason=error_msg, retry_after=retry_after)
+    raise ServerResponseError(
+        error_msg,
+        status_code=status,
+        error_code=error_code,
+        detail=str(data.get("detail", "")),
+    )
 
 
 def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult:
@@ -150,19 +162,37 @@ class DazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
-    def _get(self, path: str, params: dict | None = None) -> _requests.Response:
+    def _get(
+        self, path: str, params: dict | None = None, timeout: float | None = None
+    ) -> _requests.Response:
         try:
             return self._session.get(
                 f"{self._base}{path}",
                 headers=self._headers,
                 params=params,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else timeout,
             )
         except _requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
+
+    def _delete(self, path: str) -> _requests.Response:
+        try:
+            return self._session.delete(
+                f"{self._base}{path}", headers=self._headers, timeout=self._timeout
+            )
+        except _requests.exceptions.ConnectionError as e:
+            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
+        except _requests.exceptions.Timeout as e:
+            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
         """Run *fn* (a zero-arg callable), retrying on DazBusyError while
@@ -352,6 +382,47 @@ class DazClient:
         script = build_operations_script(pairs)
         return self.execute_async_submit(script, args=args, report_file=report_file)
 
+    def register_script(self, name: str, script: str, description: str = "") -> dict:
+        """Register or replace a named DazScript on the server."""
+        resp = self._post(
+            "/scripts/register",
+            {"name": name, "description": description, "script": script},
+        )
+        _raise_for_error(resp)
+        return resp.json()
+
+    def execute_registered(
+        self, name: str, args: object = None, *, retry_on_busy: bool = False,
+        max_wait: float = 30.0,
+    ) -> ExecutionResult:
+        """Execute a registered script by name."""
+        payload: dict = {}
+        if args is not None:
+            payload["args"] = args
+
+        def _do():
+            return _map_response(self._post(f"/scripts/{name}/execute", payload))
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+
+    def execute_registered_async_submit(
+        self, name: str, args: object = None, *, report_file: str | None = None,
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+    ) -> str:
+        """Submit a registered script and return its async request id."""
+        payload: dict = {}
+        if args is not None:
+            payload["args"] = args
+        if report_file is not None:
+            payload["reportFile"] = report_file
+
+        def _do():
+            resp = self._post(f"/scripts/{name}/async", payload)
+            _raise_for_error(resp)
+            return resp.json().get("request_id", "")
+
+        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+
     def get_request_status(self, request_id: str) -> dict:
         """Return the current status of an async request.
 
@@ -368,6 +439,7 @@ class DazClient:
         resp = self._get(f"/requests/{request_id}/status")
         if resp.status_code == 404:
             return {"status": "not_found"}
+        _raise_for_error(resp)
         return resp.json()
 
     def get_request_result(self, request_id: str, wait: bool = False, wait_timeout: int = 30) -> dict:
@@ -388,9 +460,15 @@ class DazClient:
         if wait:
             params["wait"] = "true"
             params["timeout"] = str(wait_timeout)
-        resp = self._get(f"/requests/{request_id}/result", params=params or None)
+        request_timeout = wait_timeout + 10.0 if wait else None
+        resp = self._get(
+            f"/requests/{request_id}/result",
+            params=params or None,
+            timeout=request_timeout,
+        )
         if resp.status_code == 404:
             return {"status": "not_found"}
+        _raise_for_error(resp)
         return resp.json()
 
     def list_requests(self, status: str | None = None) -> dict:
@@ -408,8 +486,16 @@ class DazClient:
         """
         params = {"status": status} if status else None
         resp = self._get("/requests", params=params)
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        _raise_for_error(resp)
+        return resp.json()
+
+    def cancel_request_detail(self, request_id: str) -> dict:
+        """Cancel a script or render request and return the server response."""
+        if request_id.startswith("rnd-"):
+            resp = self._post(f"/render/{request_id}/cancel", {})
+        else:
+            resp = self._delete(f"/requests/{request_id}")
+        _raise_for_error(resp)
         return resp.json()
 
     def cancel_request(self, request_id: str) -> bool:
@@ -422,13 +508,9 @@ class DazClient:
             ``True`` if the server confirmed cancellation, ``False`` otherwise.
         """
         try:
-            resp = self._session.delete(
-                f"{self._base}/requests/{request_id}",
-                headers=self._headers,
-                timeout=self._timeout,
-            )
-            return resp.status_code == 200
-        except _requests.exceptions.RequestException:
+            self.cancel_request_detail(request_id)
+            return True
+        except DazError:
             return False
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -628,15 +710,9 @@ class DazClient:
             ``True`` if the server confirmed cancellation, ``False`` otherwise
             (already finished, not found, or connection error).
         """
-        try:
-            resp = self._session.post(
-                f"{self._base}/render/{request_id}/cancel",
-                headers=self._headers,
-                timeout=self._timeout,
-            )
-            return resp.status_code == 200
-        except _requests.exceptions.RequestException:
+        if not request_id.startswith("rnd-"):
             return False
+        return self.cancel_request(request_id)
 
     def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "object | None":
         """Open the SSE progress stream for a render request.
@@ -732,8 +808,7 @@ class DazClient:
             "includeCamera": include_camera,
         }
         resp = self._post("/export/usd", payload)
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        _raise_for_error(resp)
         return resp.json()
 
     def get_usd_export_status(self, job_id: str) -> dict:
@@ -751,10 +826,9 @@ class DazClient:
             AuthenticationError: On HTTP 401/403.
         """
         resp = self._get(f"/export/usd/{job_id}")
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         if resp.status_code == 404:
             return {"job_id": job_id, "status": "not_found"}
+        _raise_for_error(resp)
         return resp.json()
 
     # ── Server health ─────────────────────────────────────────────────────────
@@ -766,8 +840,7 @@ class DazClient:
             AuthenticationError: On HTTP 401/403.
         """
         resp = self._get("/status")
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        _raise_for_error(resp)
         return resp.json()
 
     def health(self) -> dict:
@@ -777,8 +850,7 @@ class DazClient:
             AuthenticationError: On HTTP 401/403.
         """
         resp = self._get("/health")
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        _raise_for_error(resp)
         return resp.json()
 
     def metrics(self) -> dict:
@@ -788,6 +860,5 @@ class DazClient:
             AuthenticationError: On HTTP 401/403.
         """
         resp = self._get("/metrics")
-        if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        _raise_for_error(resp)
         return resp.json()
