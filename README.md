@@ -1314,6 +1314,21 @@ There are two options for getting the plugin. For most users, Option A, download
 
    Output: `build/plugin/Release/DazScriptServer.dll` (Windows) or `build/plugin/DazScriptServer.dylib` (macOS)
 
+#### Daz Studio 6.26 compatibility
+
+Daz Studio 6.26 checks an SDK version tag in the plugin file before loading it.
+Build with the [Daz Studio 6.x SDK](https://www.daz3d.com/daz-studio-6-sdk),
+version **6.26.2026.27900 or newer**, within the SDK range supported by your
+installed Studio version. Older DS6 release DLLs without this tag must be rebuilt;
+renaming them does not resolve the loader rejection.
+
+Install a separate Qt 6.10 development kit matching Studio's bundled Qt version,
+including the `qt5compat` module. Set `DAZ_SDK_DIR_V6` to the SDK root and
+`QT6_DIR` to the development kit's `lib/cmake/Qt6` directory, then run
+`./build.sh build --sdk-version 6`. The Windows output is
+`build-sdk6/plugin/Release/dsp_DazScriptServer.dll`. Close Studio before replacing
+the installed plugin, then restart Studio to load the rebuilt DLL.
+
 ### build.sh convenience script
 
 `build.sh` auto-detects CMake and loads environment variables from `.env`.
