@@ -2,6 +2,15 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Emit the SDK-provided version tag for Windows Studio 6 plugins when the
+  SDK supports it. Rebuilding with SDK 6.26.2026.27900 or newer resolves the
+  "it has no SDK version tag" loader rejection in Studio 6.26
+  ([bluemoonfoundry/daz-script-server#45](https://github.com/bluemoonfoundry/daz-script-server/issues/45)).
+
 ## [2.9.3] - 2026-10-21
 
 ### Structured async job observation
