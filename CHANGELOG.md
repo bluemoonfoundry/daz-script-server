@@ -2,6 +2,16 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [Unreleased]
+
+### Added
+
+- dazpy: `DazClient` and `AsyncDazClient` check the server version on their
+  first request and emit `ServerVersionWarning` when the plugin's major.minor
+  is older than dazpy's (e.g. a Studio 6.25 user on plugin v2.9.3 with a newer
+  dazpy). Best-effort and non-blocking; opt out with `check_version=False`.
+  New `DazClient.server_version` / `AsyncDazClient.get_server_version()`.
+
 ## [2.10.0] - 2026-11-12
 
 **Daz Studio 6 builds now require Studio 6.26.** Studio 6.25 users: stay on
