@@ -7,6 +7,17 @@ on:
     branches: [master, main]
 
 jobs:
+  version-consistency:
+    name: Release version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check version is the same in every file
+        run: python scripts/check_version_consistency.py
+
   unit-tests:
     name: dazpy unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

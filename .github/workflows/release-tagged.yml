@@ -78,9 +78,22 @@ jobs:
     name: Build dazpy Wheel
     uses: ./.github/workflows/build-dazpy.yml
 
+  check-version:
+    # PyPI publishing uses skip-existing, so a tag without a matching version
+    # bump would "succeed" while PyPI keeps the old upload and its README.
+    name: Check tag matches release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check version consistency against the tag
+        run: python scripts/check_version_consistency.py --tag "${GITHUB_REF_NAME}"
+
   publish-pypi:
     name: Publish dazpy to PyPI
-    needs: build-dazpy
+    needs: [check-version, build-dazpy]
     runs-on: ubuntu-latest
 
     steps:
@@ -100,6 +113,7 @@ jobs:
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     name: Create GitHub Release
     needs:
+      - check-version
       - build-windows-ds4
       - build-windows-ds6
       - build-macos-intel-ds4

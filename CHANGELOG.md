@@ -32,6 +32,26 @@ All notable changes to DazScript Server are documented here.
   plain dicts. 404 on request status/result and USD export status still returns
   `{"status": "not_found"}`.
 
+### Documentation
+
+- README (also the PyPI project page): added "What's New" sections for
+  v2.9.1 to v2.10.1, which were missing, so the newest release notes no longer
+  stop at v2.9.0. Install instructions now point to PyPI instead of a pinned
+  2.9.0 wheel.
+- Documented `POST /geometry/frames` (added in 2.9.3) in the README and
+  `openapi.yaml`. `openapi.yaml`'s `info.version` was stuck at 2.9.1.
+
+### CI
+
+- `scripts/check_version_consistency.py` checks that the version in
+  `pyproject.toml` matches `dazpy/__init__.py`, `docs/conf.py`,
+  `include/common_version.h`, `openapi.yaml`, the README badge and newest
+  "What's New" section, and the newest CHANGELOG entry. It runs in CI, and
+  tagged releases also check the tag against it before publishing to PyPI or
+  creating the GitHub release. PyPI publishing uses `skip-existing`, so before
+  this a tag without a matching bump appeared to succeed while PyPI kept the
+  previous upload and README.
+
 ## [2.10.0] - 2026-11-12
 
 **Daz Studio 6 builds now require Studio 6.26.** Studio 6.25 users: stay on

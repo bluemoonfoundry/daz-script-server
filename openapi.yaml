@@ -22,7 +22,7 @@ info:
     queue behind each other. The `/execute/async` family lets callers submit
     work without blocking their HTTP connection.
 
-  version: 2.9.1
+  version: 2.10.1
   contact:
     name: Blue Moon Foundry
     url: https://github.com/bluemoonfoundry/daz-script-server/issues
@@ -45,6 +45,8 @@ tags:
     description: Asynchronous script execution and request lifecycle
   - name: SceneEvents
     description: Real-time DAZ Studio scene change notifications via SSE (v2.3.0+)
+  - name: Geometry
+    description: Deformed-mesh export for animation frames
   - name: Render
     description: Render job submission, progress streaming, and cancellation (v2.6.0+)
 
@@ -621,6 +623,82 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /geometry/frames:
+    post:
+      tags: [Geometry]
+      summary: Export deformed figure vertices for a list of frames
+      description: |
+        Returns the deformed figure mesh (base cage by default, optionally a
+        vertex/surface subset) plus world-space bone origins for each requested
+        frame as one little-endian binary payload. Only the figure is
+        re-evaluated per frame; the original frame and resolution level are
+        restored afterwards, followed by one Scene update unless
+        `sceneUpdate` is false.
+
+        Response layout: `char magic[4]="DZGF"`, `uint32 version=1`,
+        `uint32 numFrames`, `uint32 numVerts`, `uint32 numBones`,
+        `uint32 flags` (bit 0 = index section present), `uint32 reserved[2]`,
+        `int32 frames[numFrames]`, `uint32 indices[numVerts]` (only if
+        `flags & 1`), `float32 verts[numFrames][numVerts][3]`,
+        `float32 bones[numFrames][numBones][3]`.
+      operationId: exportGeometryFrames
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [frames]
+              properties:
+                frames:
+                  type: array
+                  minItems: 1
+                  items: {type: integer}
+                  description: Frame numbers to evaluate
+                node:
+                  type: string
+                  description: Figure name or label (default is the first figure)
+                indices:
+                  type: array
+                  items: {type: integer}
+                  description: Vertex subset to return
+                surfaces:
+                  type: array
+                  items: {type: string}
+                  description: Adds every vertex of these surfaces to the subset
+                bones:
+                  type: array
+                  items: {type: string}
+                  description: Bones whose world-space origins are returned per frame
+                resolution:
+                  type: string
+                  enum: [base, current]
+                  default: base
+                sceneUpdate:
+                  type: boolean
+                  default: true
+                  description: false skips the final Scene update
+            example:
+              frames: [0, 10, 20]
+              bones: [lHand, rHand]
+      responses:
+        '200':
+          description: Binary DZGF payload
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
 components:
   securitySchemes:
