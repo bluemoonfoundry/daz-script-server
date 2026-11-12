@@ -135,3 +135,16 @@ class MaterialError(DazError):
     def __init__(self, message: str, request_id: str = ""):
         super().__init__(message)
         self.request_id = request_id
+
+
+class ServerVersionWarning(UserWarning):
+    """Warned when the connected Script Server is older than this dazpy.
+
+    Newer dazpy releases may call endpoints an older server doesn't have, which
+    then fail with opaque HTTP errors. Upgrade the DAZ Studio plugin, or pin
+    dazpy to the server's version (e.g. Daz Studio 6.25 users, whose last
+    compatible plugin is v2.9.3: ``pip install dazpy==2.9.3``).
+
+    Silence with ``DazClient(check_version=False)`` or the standard
+    :mod:`warnings` filters.
+    """

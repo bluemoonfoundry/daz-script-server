@@ -18,6 +18,7 @@ from .exceptions import (
     TimeoutError,
 )
 from ._result import ExecutionResult
+from ._version import server_version_from_status, warn_if_server_older
 from ._client import _DEFAULT_HOST, _DEFAULT_PORT, _load_token, _raise_for_error, _map_response
 
 
@@ -36,17 +37,24 @@ class AsyncDazClient:
     Or managed manually via :meth:`aclose`.
     """
 
+    # Class defaults keep instances built without __init__ (tests) check-free.
+    _version_checked: bool = True
+    _server_version: str | None = None
+
     def __init__(
         self,
         host: str = _DEFAULT_HOST,
         port: int = _DEFAULT_PORT,
         token: str | None = None,
         timeout: float = 30.0,
+        check_version: bool = True,
     ):
         self._base = f"http://{host}:{port}"
         self._token = token if token is not None else _load_token()
         self._timeout = timeout
         self._http = httpx.AsyncClient(timeout=timeout)
+        self._version_checked = not check_version
+        self._server_version: str | None = None
 
     async def __aenter__(self) -> "AsyncDazClient":
         return self
@@ -65,7 +73,29 @@ class AsyncDazClient:
             h["X-API-Token"] = self._token
         return h
 
+    async def _check_server_version(self) -> None:
+        """One-time, best-effort server version check (see ``DazClient``)."""
+        if self._version_checked:
+            return
+        self._version_checked = True
+        try:
+            resp = await self._http.get(f"{self._base}/status", headers=self._headers)
+            self._server_version = server_version_from_status(resp.json())
+        except Exception:
+            return  # unreachable/odd server: let the real request report it
+        warn_if_server_older(self._server_version, self._base)
+
+    async def get_server_version(self) -> str | None:
+        """The connected server's version string, or ``None`` if unknown."""
+        if self._server_version is None:
+            try:
+                self._server_version = server_version_from_status(await self.status())
+            except Exception:
+                return None
+        return self._server_version
+
     async def _post(self, path: str, payload: dict) -> "httpx.Response":
+        await self._check_server_version()
         try:
             return await self._http.post(f"{self._base}{path}", json=payload, headers=self._headers)
         except httpx.ConnectError as e:
@@ -74,6 +104,7 @@ class AsyncDazClient:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
 
     async def _get(self, path: str, params: dict | None = None) -> "httpx.Response":
+        await self._check_server_version()
         try:
             return await self._http.get(f"{self._base}{path}", headers=self._headers, params=params)
         except httpx.ConnectError as e:

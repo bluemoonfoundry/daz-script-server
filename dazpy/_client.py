@@ -17,6 +17,7 @@ from .exceptions import (
     TimeoutError,
 )
 from ._result import ExecutionResult
+from ._version import server_version_from_status, warn_if_server_older
 
 
 _TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
@@ -98,6 +99,10 @@ class DazClient:
         token: API token.  Pass an empty string to disable authentication or
             ``None`` to auto-load from the default token file.
         timeout: Per-request HTTP timeout in seconds.
+        check_version: On the first request, read the server version from
+            ``GET /status`` and emit a :class:`~dazpy.exceptions.ServerVersionWarning`
+            if the server's major.minor is older than this dazpy. Failures of
+            the check itself are ignored.
 
     Requests are issued through a pooled ``requests.Session`` for connection
     reuse. Call :meth:`close` when done, or use as a context manager::
@@ -109,17 +114,24 @@ class DazClient:
             result = client.execute("1 + 1;")
     """
 
+    # Class defaults keep instances built without __init__ (tests) check-free.
+    _version_checked: bool = True
+    _server_version: str | None = None
+
     def __init__(
         self,
         host: str = _DEFAULT_HOST,
         port: int = _DEFAULT_PORT,
         token: str | None = None,
         timeout: float = 30.0,
+        check_version: bool = True,
     ):
         self._base = f"http://{host}:{port}"
         self._token = token if token is not None else _load_token()
         self._timeout = timeout
         self._session = _requests.Session()
+        self._version_checked = not check_version
+        self._server_version: str | None = None
 
     def __enter__(self) -> "DazClient":
         return self
@@ -138,7 +150,32 @@ class DazClient:
             h["X-API-Token"] = self._token
         return h
 
+    def _check_server_version(self) -> None:
+        """One-time, best-effort server version check (see ``check_version``)."""
+        if self._version_checked:
+            return
+        self._version_checked = True
+        try:
+            resp = self._session.get(
+                f"{self._base}/status", headers=self._headers, timeout=self._timeout
+            )
+            self._server_version = server_version_from_status(resp.json())
+        except Exception:
+            return  # unreachable/odd server: let the real request report it
+        warn_if_server_older(self._server_version, self._base)
+
+    @property
+    def server_version(self) -> str | None:
+        """The connected server's version string, or ``None`` if unknown."""
+        if self._server_version is None:
+            try:
+                self._server_version = server_version_from_status(self.status())
+            except Exception:
+                return None
+        return self._server_version
+
     def _post(self, path: str, payload: dict) -> _requests.Response:
+        self._check_server_version()
         try:
             return self._session.post(
                 f"{self._base}{path}",
@@ -152,6 +189,7 @@ class DazClient:
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
 
     def _get(self, path: str, params: dict | None = None) -> _requests.Response:
+        self._check_server_version()
         try:
             return self._session.get(
                 f"{self._base}{path}",

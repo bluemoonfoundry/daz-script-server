@@ -920,6 +920,16 @@ scene = DazScene(client)     # or just DazScene() to use a default client
 
 `DazClient` also exposes `status()`, `health()`, and `metrics()` for server introspection.
 
+**Server version check.** On its first request, `DazClient` (and `AsyncDazClient`)
+reads the plugin version from `GET /status` and emits a
+`dazpy.exceptions.ServerVersionWarning` if the server's major.minor is older than
+dazpy's: newer clients may call endpoints an older plugin doesn't have. Upgrade
+the plugin, or pin dazpy to the server's version (Studio 6.25 users:
+`pip install dazpy==2.9.3`). The check is best-effort and never blocks a request;
+disable it with `DazClient(check_version=False)`. `client.server_version`
+(`await client.get_server_version()` on the async client) returns the server's
+version string.
+
 ---
 
 ### Scene Graph

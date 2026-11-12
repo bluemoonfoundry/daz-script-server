@@ -397,3 +397,36 @@ class TestAsyncDazClientRealHttpxWiring:
 
         assert [r.output_path for r in results] == ["C:/a.png", "C:/b.png"]
         assert seen == [(1, 2), (2, 2)]
+
+
+class TestAsyncServerVersionCheck:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_older_server_warns_once(self, monkeypatch):
+        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
+        status = respx.get("http://127.0.0.1:18811/status").mock(
+            return_value=httpx.Response(200, json={"running": True, "version": "2.9.3"})
+        )
+        respx.post("http://127.0.0.1:18811/execute").mock(
+            return_value=httpx.Response(200, json={"success": True, "result": 1, "request_id": "r"})
+        )
+        async with AsyncDazClient(token="") as client:
+            with pytest.warns(exceptions.ServerVersionWarning, match="2.9.3"):
+                await client.execute("1;")
+            await client.execute("1;")
+            assert await client.get_server_version() == "2.9.3"
+        assert status.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_check_version_false_skips_status(self, monkeypatch):
+        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
+        status = respx.get("http://127.0.0.1:18811/status").mock(
+            return_value=httpx.Response(200, json={"version": "1.0.0"})
+        )
+        respx.post("http://127.0.0.1:18811/execute").mock(
+            return_value=httpx.Response(200, json={"success": True, "result": 1, "request_id": "r"})
+        )
+        async with AsyncDazClient(token="", check_version=False) as client:
+            await client.execute("1;")
+        assert status.call_count == 0
