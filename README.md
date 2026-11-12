@@ -82,6 +82,9 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.10.1](#whats-new-in-v2101)
+- [What's New in v2.10.0](#whats-new-in-v2100)
+- [What's New in v2.9.1 – v2.9.3](#whats-new-in-v291--v293)
 - [What's New in v2.9.0](#whats-new-in-v290)
 - [What's New in v2.8.0](#whats-new-in-v280)
 - [What's New in v2.7.2](#whats-new-in-v272)
@@ -120,6 +123,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 - [API Reference](#-api-reference)
 - [Script Registry](#-script-registry)
 - [Async Operations](#-async-operations)
+- [Geometry Frames Export](#-geometry-frames-export)
 - [Scene Events (SSE)](#-scene-events-sse)
 - [Client Examples](#-client-examples)
 
@@ -167,6 +171,93 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.10.1
+
+### 🔌 dazpy owns the whole automation protocol
+
+`DazClient` and `AsyncDazClient` now cover every operation an integration
+needs, so callers no longer build endpoint URLs or inspect raw HTTP responses:
+
+- **Registered scripts:** `register_script(name, script, description="")`,
+  `execute_registered(name, args=None)`, and
+  `execute_registered_async_submit(name, args=None, report_file=None)`.
+- **Cancellation:** `cancel_request_detail(request_id)` cancels a script or
+  render request (`rnd-` ids) and returns the server's response;
+  `cancel_request()` / `cancel_render()` keep their `True`/`False` contract.
+- **Long-poll timeouts:** `get_request_result(..., wait=True)` now gives the
+  HTTP request more time than the server's wait window, so long polls no
+  longer time out on the client first.
+- **SSE streams:** a final async SSE event is delivered even when the server
+  closes the connection without a trailing blank line.
+
+```python
+from dazpy import DazClient
+
+with DazClient() as client:
+    client.register_script("count-nodes", "return Scene.getNumNodes();")
+    print(client.execute_registered("count-nodes").value)
+```
+
+Contributed by [@abrady](https://github.com/abrady)
+([#38](https://github.com/bluemoonfoundry/daz-script-server/pull/38)).
+
+### ⚠️ Typed errors for every non-2xx response — `ServerResponseError`
+
+All client methods now raise typed `dazpy.exceptions` errors for transport
+failures and error responses. Anything not covered by a more specific
+exception (`AuthenticationError`, `StudioBusyError`, `ConcurrencyLimitError`,
+...) raises the new `ServerResponseError`, which carries `status_code`,
+`error_code`, and `detail`.
+
+**Behaviour change:** `status()`, `health()`, `metrics()`, `list_requests()`,
+the request status/result calls, and the USD export calls used to return
+error responses (other than 401/403) as plain dicts; they now raise
+`ServerResponseError`. A 404 from the request status/result and USD export
+status calls still returns `{"status": "not_found"}`.
+
+### 🔎 Server version check
+
+On its first request each client reads the plugin version from `GET /status`
+and emits `dazpy.exceptions.ServerVersionWarning` if the plugin's major.minor
+is older than dazpy's. See [Connecting to DAZ Studio](#connecting-to-daz-studio) for details and how to
+turn it off.
+
+---
+
+## What's New in v2.10.0
+
+**Daz Studio 6 builds now require Studio 6.26.** Studio 6.26 only loads
+plugins built against SDK 6.26.2026.27900 and Studio 6.25 rejects them, so the
+DS6 release assets are now `dsp_DazScriptServer-ds6.26-*`. **Studio 6.25 users
+should stay on v2.9.3** and pin the client with `pip install dazpy==2.9.3`. See
+[Daz Studio 6.26 compatibility](#daz-studio-626-compatibility).
+
+---
+
+## What's New in v2.9.1 – v2.9.3
+
+- **v2.9.3: Structured async job observation.** Async submissions can name a
+  per-job JSONL `reportFile` (`report_file=` in dazpy). Status and result then
+  carry an `observation` record with progress, recent log entries, and an
+  output manifest. See [`POST /execute/async`](#post-executeasync).
+- **v2.9.3: `POST /geometry/frames`.** Exports the deformed figure mesh and
+  bone origins for a list of frames as one binary payload, about 25× faster
+  than a DazScript loop. See [Geometry Frames Export](#-geometry-frames-export).
+- **v2.9.3 fixes:** renders no longer fail on DS6 when the `renderFinished`
+  signal is missing, and plugin-route responses are no longer truncated at
+  the first NUL byte.
+- **v2.9.2: Script-call batching.** `Batch.add_operation()` /
+  `add_prelude()`, `DazSkeleton.set_state()`, `DazNode.set_transform()`, and
+  one-request async batches via `execute_batch_async()`. See the
+  [batching docs](https://bluemoonfoundry.github.io/daz-script-server/api/batch.html).
+- **v2.9.1: Async script-file jobs.** `execute_file_async_submit()` queues a
+  `.dsa` file by path, keeping `getScriptFileName()` and relative `include()`
+  working.
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ---
 
@@ -256,13 +347,6 @@ async def main():
 ```
 
 Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
-
-Both clients also own the complete automation protocol used by integrations:
-registered-script registration/execution, request status/result/list/cancel,
-render cancellation, health checks, exports, and SSE event streams. Non-2xx
-server responses surface as typed `dazpy.exceptions` errors (including
-`ServerResponseError` for ordinary protocol rejections), so callers do not
-need to construct endpoint URLs or inspect raw HTTP responses.
 
 ### `DazClient` connection pooling + `close()`
 
@@ -849,11 +933,16 @@ automation code without authoring DazScript by hand.
 
 ### Installation
 
-Download the `.whl` file from the [latest release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest) and install it:
+Install from PyPI (add `[aio]` for the async client):
 
 ```bash
-pip install dazpy-2.9.0-py3-none-any.whl
+pip install dazpy            # or: pip install "dazpy[aio]"
 ```
+
+Keep dazpy's major.minor version no newer than the plugin's. Studio 6.25 users
+are on plugin v2.9.3 and should run `pip install dazpy==2.9.3`. Each
+[GitHub release](https://github.com/bluemoonfoundry/daz-script-server/releases/latest)
+also ships the matching `dazpy-*.whl`.
 
 Or install directly from the repo for development:
 
@@ -1972,6 +2061,63 @@ Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 ```
 
 **Note:** Completed, failed, and cancelled requests are automatically purged after 1 hour.
+
+---
+
+## 🧊 Geometry Frames Export
+
+### `POST /geometry/frames`
+
+**Purpose:** Return the deformed figure mesh (and optionally world-space bone
+origins) for a list of frames as one binary payload. Only the figure is
+re-evaluated per frame, not the whole scene: about 9 ms per frame on a dressed
+Genesis 8 figure, compared with about 232 ms per frame for the equivalent
+DazScript loop, with bit-identical values.
+
+**Request Body:**
+```json
+{
+  "frames": [0, 10, 20],
+  "node": "Genesis 8 Female",
+  "indices": [0, 1, 2],
+  "surfaces": ["Face"],
+  "bones": ["lHand", "rHand"],
+  "resolution": "base",
+  "sceneUpdate": true
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `frames` | yes | Non-empty list of frame numbers |
+| `node` | no | Figure name or label. Default: the first figure (a skeleton without a follow target) |
+| `indices` | no | Vertex subset to return |
+| `surfaces` | no | Adds every vertex of these surfaces to the subset |
+| `bones` | no | Bones whose world-space origins are returned per frame |
+| `resolution` | no | `"base"` (default) or `"current"`. `"base"` switches Resolution Level to Base only if the cached mesh isn't already the base cage (rare, about 1 s) |
+| `sceneUpdate` | no | Default `true`. `false` skips the final Scene update (about 130 ms); for back-to-back calls, let only the last one update |
+
+Without `indices` or `surfaces`, all vertices are returned. The original frame
+and resolution level are restored afterwards.
+
+**Response 200** (`application/octet-stream`, little-endian):
+
+```
+char    magic[4]      "DZGF"
+uint32  version       1
+uint32  numFrames
+uint32  numVerts      vertices per frame (subset size if a subset was given)
+uint32  numBones
+uint32  flags         bit 0: index section present
+uint32  reserved[2]
+int32   frames[numFrames]
+uint32  indices[numVerts]                   only if flags & 1
+float32 verts[numFrames][numVerts][3]
+float32 bones[numFrames][numBones][3]
+```
+
+Errors use the usual JSON error body (for example a missing `frames` field, an
+invalid `resolution`, or `figure not found`).
 
 ---
 
