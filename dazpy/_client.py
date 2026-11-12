@@ -221,6 +221,7 @@ class DazClient:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _delete(self, path: str) -> _requests.Response:
+        self._check_server_version()
         try:
             return self._session.delete(
                 f"{self._base}{path}", headers=self._headers, timeout=self._timeout

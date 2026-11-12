@@ -122,6 +122,7 @@ class AsyncDazClient:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _delete(self, path: str) -> "httpx.Response":
+        await self._check_server_version()
         try:
             return await self._http.delete(f"{self._base}{path}", headers=self._headers)
         except httpx.ConnectError as e:

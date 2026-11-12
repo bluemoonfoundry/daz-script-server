@@ -488,6 +488,21 @@ class TestAsyncServerVersionCheck:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_delete_as_first_request_checks_version(self, monkeypatch):
+        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
+        status = respx.get("http://127.0.0.1:18811/status").mock(
+            return_value=httpx.Response(200, json={"running": True, "version": "2.9.3"})
+        )
+        respx.delete("http://127.0.0.1:18811/requests/abcd1234").mock(
+            return_value=httpx.Response(200, json={"status": "cancelled"})
+        )
+        async with AsyncDazClient(token="") as client:
+            with pytest.warns(exceptions.ServerVersionWarning, match="2.9.3"):
+                await client.cancel_request_detail("abcd1234")
+        assert status.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_check_version_false_skips_status(self, monkeypatch):
         monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
         status = respx.get("http://127.0.0.1:18811/status").mock(

@@ -7683,6 +7683,20 @@ class TestServerVersionCheck(unittest.TestCase):
                 self.assertEqual(self._run(client), [], kwargs)
             session.post.assert_called_once()  # real request still sent
 
+    def test_delete_as_first_request_checks_version(self):
+        import warnings
+
+        client, session = self._client({"version": "2.9.3"})
+        session.delete.return_value = MagicMock(status_code=200)
+        session.delete.return_value.json.return_value = {"status": "cancelled"}
+        with patch("dazpy._version.client_version", return_value="2.10.0"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                client.cancel_request_detail("abcd1234")
+        caught = [w for w in caught if issubclass(w.category, exceptions.ServerVersionWarning)]
+        self.assertEqual(len(caught), 1)
+        session.get.assert_called_once()
+
     def test_check_version_false_skips_status_call(self):
         client, session = self._client({"version": "1.0.0"}, check_version=False)
         with patch("dazpy._version.client_version", return_value="2.10.0"):
