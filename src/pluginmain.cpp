@@ -20,6 +20,11 @@ public:
 
 CPP_PLUGIN_DEFINITION("Daz Script Server")
 
+// Our Windows wrapper replaces DZ_PLUGIN_DEFINITION, including its SDK tag.
+#if defined(Q_OS_WIN32) && DAZ_SDK_MAJOR_VERSION >= 6 && defined(DZ_PLUGIN_SDK_VERSION_TAG)
+DZ_PLUGIN_SDK_VERSION_TAG()
+#endif
+
 DZ_PLUGIN_AUTHOR("DazScriptServer Contributors");
 
 DZ_PLUGIN_VERSION(DZSRV_MAJOR, DZSRV_MINOR, DZSRV_REV, DZSRV_BUILD);

@@ -42,9 +42,9 @@ Triggers on version tags (e.g., `v1.3.0`):
   - `DazScriptServer-ds4-windows.dll`
   - `DazScriptServer-ds4-macos-Intel.dylib`
   - `DazScriptServer-ds4-macos-AppleSilicon.dylib`
-  - `dsp_DazScriptServer-ds6-windows.dll`
-  - `dsp_DazScriptServer-ds6-macos-Intel.dylib`
-  - `dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib`
+  - `dsp_DazScriptServer-ds6.26-windows.dll`
+  - `dsp_DazScriptServer-ds6.26-macos-Intel.dylib`
+  - `dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib`
   - dazpy wheel
   - Source archives (auto-generated)
 
@@ -165,11 +165,11 @@ gh run view <run-id> --log
 | Platform | Architecture | SDK | Runner | Build Tool | Release Asset |
 |----------|--------------|-----|--------|------------|---------------|
 | Windows | x64 | DS4 | windows-2022 | MSBuild | `DazScriptServer-ds4-windows.dll` |
-| Windows | x64 | DS6 | windows-2022 | MSBuild | `dsp_DazScriptServer-ds6-windows.dll` |
+| Windows | x64 | DS6 | windows-2022 | MSBuild | `dsp_DazScriptServer-ds6.26-windows.dll` |
 | macOS | x86_64 | DS4 | self-hosted X64 | CMake | `DazScriptServer-ds4-macos-Intel.dylib` |
-| macOS | x86_64 | DS6 | self-hosted X64 | CMake | `dsp_DazScriptServer-ds6-macos-Intel.dylib` |
+| macOS | x86_64 | DS6 | self-hosted X64 | CMake | `dsp_DazScriptServer-ds6.26-macos-Intel.dylib` |
 | macOS | arm64 | DS4 | macos-14 | CMake | `DazScriptServer-ds4-macos-AppleSilicon.dylib` |
-| macOS | arm64 | DS6 | macos-14 | CMake | `dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib` |
+| macOS | arm64 | DS6 | macos-14 | CMake | `dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib` |
 | Python | N/A | N/A | ubuntu-latest | pip | `dazpy-*.whl` |
 
 ## Dependencies

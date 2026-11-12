@@ -2,6 +2,31 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [2.10.0] - 2026-11-12
+
+**Daz Studio 6 builds now require Studio 6.26.** Studio 6.25 users: stay on
+v2.9.3 and `pip install dazpy==2.9.3`. No HTTP API or dazpy API changes.
+
+### Fixed
+
+- Emit the SDK-provided version tag for Windows Studio 6 plugins when the
+  SDK supports it. Rebuilding with SDK 6.26.2026.27900 or newer resolves the
+  "it has no SDK version tag" loader rejection in Studio 6.26
+  ([bluemoonfoundry/daz-script-server#45](https://github.com/bluemoonfoundry/daz-script-server/issues/45)).
+
+### Changed
+
+- **Daz Studio 6 builds now target Studio 6.26 only.** Studio 6.26 loads only
+  plugins built against SDK 6.26.2026.27900, and Studio 6.25 rejects plugins
+  built against newer SDKs, so no single DS6 binary can serve both. Release
+  assets are renamed `dsp_DazScriptServer-ds6.26-*`. **Studio 6.25 users should
+  stay on v2.9.3**, the last 6.25-compatible release, and pin the client with
+  `pip install dazpy==2.9.3` (dazpy does not yet check the server version).
+- CI fails DS6 builds whose plugin lacks a `DzPluginSDKVersionTag` matching the
+  SDK it was compiled against (`scripts/check_sdk_tag.py`).
+- macOS DS6 release builds are paused until the 6.26 macOS SDK is available
+  (re-enable with the `DS6_MACOS_ENABLED` repository variable).
+
 ## [2.9.3] - 2026-10-21
 
 ### Structured async job observation
