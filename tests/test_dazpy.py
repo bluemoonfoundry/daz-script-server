@@ -97,6 +97,48 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
         )
 
 
+class TestDazClientRegisteredScripts(unittest.TestCase):
+    def _client(self, response_json):
+        client = DazClient(token="")
+        client._session = MagicMock()
+        response = MagicMock(status_code=200, headers={})
+        response.json.return_value = response_json
+        client._session.post.return_value = response
+        return client
+
+    def test_register_script_owns_registry_payload(self):
+        client = self._client({"success": True, "id": "scene-info"})
+        result = client.register_script("scene-info", "1;", "Scene info")
+        self.assertEqual(result["id"], "scene-info")
+        client._session.post.assert_called_once_with(
+            "http://127.0.0.1:18811/scripts/register",
+            json={"name": "scene-info", "description": "Scene info", "script": "1;"},
+            headers={}, timeout=30.0,
+        )
+
+    def test_execute_registered_maps_execution_result(self):
+        client = self._client({"success": True, "result": 42, "output": [], "request_id": "r1"})
+        result = client.execute_registered("scene-info", {"detail": True})
+        self.assertEqual(result.value, 42)
+
+    def test_submit_registered_async_owns_report_payload(self):
+        client = self._client({"request_id": "script-1", "status": "queued"})
+        request_id = client.execute_registered_async_submit(
+            "scene-info", {"detail": True}, report_file="C:/run/job.jsonl"
+        )
+        self.assertEqual(request_id, "script-1")
+        self.assertEqual(
+            client._session.post.call_args.kwargs["json"],
+            {"args": {"detail": True}, "reportFile": "C:/run/job.jsonl"},
+        )
+
+    def test_cancel_render_does_not_cancel_script_request(self):
+        client = self._client({})
+        self.assertFalse(client.cancel_render("script-1"))
+        client._session.post.assert_not_called()
+        client._session.delete.assert_not_called()
+
+
 def _make_client(return_value=None, output=None):
     client = MagicMock(spec=DazClient)
     client.execute.return_value = ExecutionResult(
@@ -1113,6 +1155,13 @@ class TestErrorMapping(unittest.TestCase):
         import requests as req
         client, mock_session = self._client_with_mock_session()
         mock_session.post.side_effect = req.exceptions.ConnectionError("refused")
+        with self.assertRaises(exceptions.ConnectionError):
+            client.execute("1;")
+
+    def test_other_transport_error_is_typed(self):
+        import requests as req
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = req.exceptions.ChunkedEncodingError("broken response")
         with self.assertRaises(exceptions.ConnectionError):
             client.execute("1;")
 
@@ -7633,6 +7682,20 @@ class TestServerVersionCheck(unittest.TestCase):
             with patch("dazpy._version.client_version", return_value="2.10.0"):
                 self.assertEqual(self._run(client), [], kwargs)
             session.post.assert_called_once()  # real request still sent
+
+    def test_delete_as_first_request_checks_version(self):
+        import warnings
+
+        client, session = self._client({"version": "2.9.3"})
+        session.delete.return_value = MagicMock(status_code=200)
+        session.delete.return_value.json.return_value = {"status": "cancelled"}
+        with patch("dazpy._version.client_version", return_value="2.10.0"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                client.cancel_request_detail("abcd1234")
+        caught = [w for w in caught if issubclass(w.category, exceptions.ServerVersionWarning)]
+        self.assertEqual(len(caught), 1)
+        session.get.assert_called_once()
 
     def test_check_version_false_skips_status_call(self):
         client, session = self._client({"version": "1.0.0"}, check_version=False)

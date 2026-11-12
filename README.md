@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.10.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.10.1** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -256,6 +256,13 @@ async def main():
 ```
 
 Requires the optional `httpx` dependency: `pip install dazpy[aio]`.
+
+Both clients also own the complete automation protocol used by integrations:
+registered-script registration/execution, request status/result/list/cancel,
+render cancellation, health checks, exports, and SSE event streams. Non-2xx
+server responses surface as typed `dazpy.exceptions` errors (including
+`ServerResponseError` for ordinary protocol rejections), so callers do not
+need to construct endpoint URLs or inspect raw HTTP responses.
 
 ### `DazClient` connection pooling + `close()`
 

@@ -2,7 +2,7 @@
 
 All notable changes to DazScript Server are documented here.
 
-## [Unreleased]
+## [2.10.1] - 2026-11-12
 
 ### Added
 
@@ -11,6 +11,26 @@ All notable changes to DazScript Server are documented here.
   is older than dazpy's (e.g. a Studio 6.25 user on plugin v2.9.3 with a newer
   dazpy). Best-effort and non-blocking; opt out with `check_version=False`.
   New `DazClient.server_version` / `AsyncDazClient.get_server_version()`.
+
+- dazpy: `DazClient` and `AsyncDazClient` now own registered-script
+  registration and execution (`register_script`, `execute_registered`,
+  `execute_registered_async_submit`), detailed script/render cancellation
+  (`cancel_request_detail`), long-poll timeout policy, and generic server-error
+  mapping through the new `ServerResponseError`. Status, health, metrics,
+  request management, exports, and async SSE streams all use the same typed
+  authentication, connection, timeout, busy, and server-response errors, so
+  integrations can depend on dazpy instead of duplicating endpoint URLs, wire
+  payloads, and error handling. Contributed by @abrady
+  ([#38](https://github.com/bluemoonfoundry/daz-script-server/pull/38)).
+
+### Changed
+
+- dazpy: `status()`, `health()`, `metrics()`, `list_requests()`, the request
+  status/result calls, and the USD export calls now raise
+  `ServerResponseError` (a `DazError`) for any unhandled 4xx/5xx response.
+  Previously only 401/403 raised and other error responses were returned as
+  plain dicts. 404 on request status/result and USD export status still returns
+  `{"status": "not_found"}`.
 
 ## [2.10.0] - 2026-11-12
 
