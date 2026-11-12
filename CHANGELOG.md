@@ -17,7 +17,8 @@ All notable changes to DazScript Server are documented here.
   plugins built against SDK 6.26.2026.27900, and Studio 6.25 rejects plugins
   built against newer SDKs, so no single DS6 binary can serve both. Release
   assets are renamed `dsp_DazScriptServer-ds6.26-*`. **Studio 6.25 users should
-  stay on v2.9.3**, the last 6.25-compatible release.
+  stay on v2.9.3**, the last 6.25-compatible release, and pin the client with
+  `pip install dazpy==2.9.3` (dazpy does not yet check the server version).
 - CI fails DS6 builds whose plugin lacks a `DzPluginSDKVersionTag` matching the
   SDK it was compiled against (`scripts/check_sdk_tag.py`).
 - macOS DS6 release builds are paused until the 6.26 macOS SDK is available

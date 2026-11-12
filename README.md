@@ -1319,7 +1319,7 @@ There are two options for getting the plugin. For most users, Option A, download
 | Daz Studio | Plugin to use |
 |---|---|
 | 6.26 | `dsp_DazScriptServer-ds6.26-*` from the latest release |
-| 6.25 | `dsp_DazScriptServer-ds6-*` from **v2.9.3** (last 6.25-compatible release) |
+| 6.25 | `dsp_DazScriptServer-ds6-*` from **v2.9.3** (last 6.25-compatible release); pin the client with `pip install dazpy==2.9.3` |
 
 Each Studio 6 release only loads plugins built against an SDK in its own
 supported range, and the 6.25 and 6.26 ranges do not overlap, so new releases
