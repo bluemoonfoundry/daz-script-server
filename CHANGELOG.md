@@ -2,7 +2,10 @@
 
 All notable changes to DazScript Server are documented here.
 
-## [Unreleased]
+## [2.10.0] - 2026-11-12
+
+**Daz Studio 6 builds now require Studio 6.26.** Studio 6.25 users: stay on
+v2.9.3 and `pip install dazpy==2.9.3`. No HTTP API or dazpy API changes.
 
 ### Fixed
 
