@@ -83,7 +83,10 @@ jobs:
         id: sdk-paths
         run: |
           if [ "${{ inputs.sdk-version }}" = "6" ]; then
-            echo "cache-key=daz-sdk-6-macos-private-v1" >> $GITHUB_OUTPUT
+            # See build-windows.yml: bump whenever daz-studio-6-sdk-macos changes.
+            # NOTE: the 6.26 macOS SDK is not in daz-studio-sdks yet, so DS6
+            # macOS builds fail at checkout until it is added.
+            echo "cache-key=daz-sdk-6.26-macos-private-v2" >> $GITHUB_OUTPUT
             echo "sparse-path=daz-studio-6-sdk-macos" >> $GITHUB_OUTPUT
             echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
             echo "dylib-name=dsp_DazScriptServer.dylib" >> $GITHUB_OUTPUT
@@ -114,6 +117,11 @@ jobs:
       - name: Move SDK to expected location
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
+          if [ ! -d "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" ]; then
+            echo "Error: ${{ steps.sdk-paths.outputs.sparse-path }} not found in daz-studio-sdks."
+            echo "For DS6 this means the current (6.26+) macOS SDK has not been added yet."
+            exit 1
+          fi
           mv "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" "${{ steps.sdk-paths.outputs.sdk-dir }}"
           rm -rf temp-sdk
 
@@ -191,6 +199,11 @@ jobs:
           ls -lh "$DYLIB_PATH"
           file "$DYLIB_PATH"
           lipo -info "$DYLIB_PATH"
+
+      - name: Verify DS6 SDK version tag
+        if: inputs.sdk-version == '6'
+        run: |
+          python3 scripts/check_sdk_tag.py             "build/plugin/${{ steps.sdk-paths.outputs.dylib-name }}"             "Daz Studio 6 SDK/include"
 
       - name: Upload macOS dylib artifact
         id: upload

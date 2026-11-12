@@ -11,6 +11,18 @@ All notable changes to DazScript Server are documented here.
   "it has no SDK version tag" loader rejection in Studio 6.26
   ([bluemoonfoundry/daz-script-server#45](https://github.com/bluemoonfoundry/daz-script-server/issues/45)).
 
+### Changed
+
+- **Daz Studio 6 builds now target Studio 6.26 only.** Studio 6.26 loads only
+  plugins built against SDK 6.26.2026.27900, and Studio 6.25 rejects plugins
+  built against newer SDKs, so no single DS6 binary can serve both. Release
+  assets are renamed `dsp_DazScriptServer-ds6.26-*`. **Studio 6.25 users should
+  stay on v2.9.3**, the last 6.25-compatible release.
+- CI fails DS6 builds whose plugin lacks a `DzPluginSDKVersionTag` matching the
+  SDK it was compiled against (`scripts/check_sdk_tag.py`).
+- macOS DS6 release builds are paused until the 6.26 macOS SDK is available
+  (re-enable with the `DS6_MACOS_ENABLED` repository variable).
+
 ## [2.9.3] - 2026-10-21
 
 ### Structured async job observation

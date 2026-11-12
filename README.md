@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.9.3** | DAZ Studio 4.5+ | DAZ Studio 6.25+ | Windows & macOS
+**Version 2.9.3** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -1315,6 +1315,15 @@ There are two options for getting the plugin. For most users, Option A, download
    Output: `build/plugin/Release/DazScriptServer.dll` (Windows) or `build/plugin/DazScriptServer.dylib` (macOS)
 
 #### Daz Studio 6.26 compatibility
+
+| Daz Studio | Plugin to use |
+|---|---|
+| 6.26 | `dsp_DazScriptServer-ds6.26-*` from the latest release |
+| 6.25 | `dsp_DazScriptServer-ds6-*` from **v2.9.3** (last 6.25-compatible release) |
+
+Each Studio 6 release only loads plugins built against an SDK in its own
+supported range, and the 6.25 and 6.26 ranges do not overlap, so new releases
+target the current Studio 6 only.
 
 Daz Studio 6.26 checks an SDK version tag in the plugin file before loading it.
 Build with the [Daz Studio 6.x SDK](https://www.daz3d.com/daz-studio-6-sdk),

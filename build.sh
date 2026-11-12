@@ -40,7 +40,7 @@ Examples:
 
 Required environment variables (loaded from .env if present):
   DAZ_SDK_DIR          Path to the DAZStudio4.5+ SDK (--sdk-version 4, default)
-  DAZ_SDK_DIR_V6       Path to the Daz Studio 6.25+ SDK (--sdk-version 6)
+  DAZ_SDK_DIR_V6       Path to the current Daz Studio 6 SDK, 6.26+ (--sdk-version 6)
   QT6_DIR              Path to the Qt6 cmake dir, e.g. <qt-install>/6.10.3/msvc2022_64/lib/cmake/Qt6
                        (--sdk-version 6 only; see CLAUDE.md for the aqtinstall command)
 

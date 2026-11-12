@@ -37,7 +37,10 @@ jobs:
         shell: bash
         run: |
           if [ "${{ inputs.sdk-version }}" = "6" ]; then
-            echo "cache-key=daz-sdk-6-windows-private-v1" >> $GITHUB_OUTPUT
+            # daz-studio-6-sdk-* always holds the CURRENT DS6 SDK (6.26.2026.27900).
+            # Bump this key whenever that folder is replaced, or CI keeps restoring
+            # the stale cached SDK and builds plugins newer Studio refuses to load.
+            echo "cache-key=daz-sdk-6.26-windows-private-v2" >> $GITHUB_OUTPUT
             echo "sparse-path=daz-studio-6-sdk-win32" >> $GITHUB_OUTPUT
             echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
             echo "dll-name=dsp_DazScriptServer.dll" >> $GITHUB_OUTPUT
@@ -171,6 +174,14 @@ jobs:
           fi
           echo "Build successful: $DLL_PATH"
           ls -lh "$DLL_PATH"
+
+      - name: Verify DS6 SDK version tag
+        if: inputs.sdk-version == '6'
+        shell: bash
+        run: |
+          # Daz Studio 6.26+ rejects plugins without a DzPluginSDKVersionTag
+          # matching its SDK range (issue #45).
+          python scripts/check_sdk_tag.py             "build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}"             "Daz Studio 6 SDK/include"
 
       - name: Upload Windows DLL artifact
         id: upload

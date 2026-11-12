@@ -8,7 +8,7 @@ DazScriptServer is a DAZ Studio plugin (`.dll`/`.dylib`) that embeds an HTTP ser
 
 ## Build Commands
 
-Requires DAZ Studio 4.5+ SDK (or the Daz Studio 6.25+ SDK) and CMake.
+Requires DAZ Studio 4.5+ SDK (or the current Daz Studio 6 SDK — 6.26.2026.27900; Studio 6.25 support ended at v2.9.3) and CMake.
 
 ```bash
 # Basic build (DAZ Studio 4.x, default)

@@ -76,9 +76,9 @@ User pushes tag (v1.3.0)
          • DazScriptServer-ds4-windows.dll
          • DazScriptServer-ds4-macos-Intel.dylib
          • DazScriptServer-ds4-macos-AppleSilicon.dylib
-         • dsp_DazScriptServer-ds6-windows.dll
-         • dsp_DazScriptServer-ds6-macos-Intel.dylib
-         • dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
+         • dsp_DazScriptServer-ds6.26-windows.dll
+         • dsp_DazScriptServer-ds6.26-macos-Intel.dylib
+         • dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
          • dazpy-*.whl
          • Source.zip (auto)
          • Source.tar.gz (auto)
@@ -371,9 +371,9 @@ GitHub Release: v1.3.0
 ├── DazScriptServer-ds4-windows.dll          ← DAZ Studio 4.5+
 ├── DazScriptServer-ds4-macos-Intel.dylib
 ├── DazScriptServer-ds4-macos-AppleSilicon.dylib
-├── dsp_DazScriptServer-ds6-windows.dll      ← DAZ Studio 6.25+
-├── dsp_DazScriptServer-ds6-macos-Intel.dylib
-├── dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
+├── dsp_DazScriptServer-ds6.26-windows.dll   ← Daz Studio 6.26
+├── dsp_DazScriptServer-ds6.26-macos-Intel.dylib
+├── dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
 ├── dazpy-2.6.0-py3-none-any.whl
 ├── Source code (zip)           ← Auto-generated
 └── Source code (tar.gz)        ← Auto-generated
@@ -386,9 +386,9 @@ GitHub Release: nightly-123
 ├── DazScriptServer-ds4-windows.dll
 ├── DazScriptServer-ds4-macos-Intel.dylib
 ├── DazScriptServer-ds4-macos-AppleSilicon.dylib
-├── dsp_DazScriptServer-ds6-windows.dll
-├── dsp_DazScriptServer-ds6-macos-Intel.dylib
-├── dsp_DazScriptServer-ds6-macos-AppleSilicon.dylib
+├── dsp_DazScriptServer-ds6.26-windows.dll
+├── dsp_DazScriptServer-ds6.26-macos-Intel.dylib
+├── dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
 ├── dazpy-2.6.0-py3-none-any.whl
 ├── Source code (zip)           ← Auto-generated
 └── Source code (tar.gz)        ← Auto-generated
