@@ -89,6 +89,8 @@ tags:
     description: Deformed-mesh export for animation frames
   - name: Render
     description: Render job submission, progress streaming, and cancellation (v2.6.0+)
+  - name: Artifacts
+    description: Authenticated downloads of the files a job declared
 
 paths:
   /status:
@@ -546,6 +548,108 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /artifacts/{id}:
+    get:
+      tags: [Artifacts]
+      summary: List the files an async job declared
+      description: |
+        A job's artifacts are its output manifest: outputs declared in its
+        `reportFile` (`output` / `manifest` events) and, for render jobs, the
+        `output_path` / `output_paths` the render wrote (failed renders declare
+        nothing). Each entry gets file metadata read at request time.
+        Records expire with the job (1 hour TTL).
+      operationId: listArtifacts
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ArtifactJobId'
+      responses:
+        '200':
+          description: The job's artifacts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /artifacts/{id}/{artifact_id}:
+    get:
+      tags: [Artifacts]
+      summary: Download one declared artifact
+      description: |
+        Streams a file the job declared, so clients don't need to share a
+        filesystem with DAZ Studio. URL segments are IDs looked up in the job's
+        output manifest, never paths: an undeclared file can't be requested.
+        The declared path must be absolute and a regular file at download time.
+
+        Supports single and multiple byte ranges (`Range: bytes=0-1023`,
+        `bytes=-512`, `bytes=1024-`), answered with 206 + `Content-Range`, and
+        `HEAD` for size/type without the body. Uses the read middleware chain
+        (IP whitelist, then auth), so it is not rate limited.
+      operationId: downloadArtifact
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ArtifactJobId'
+        - name: artifact_id
+          in: path
+          required: true
+          description: The manifest entry's `artifact_id`
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,64}$'
+        - name: Range
+          in: header
+          required: false
+          description: RFC 9110 byte range(s)
+          schema:
+            type: string
+            example: bytes=0-1023
+      responses:
+        '200':
+          description: Full file content
+          headers:
+            Content-Length: {schema: {type: integer}}
+            Accept-Ranges: {schema: {type: string, enum: [bytes]}}
+            Content-Disposition:
+              description: '`inline; filename="..."; filename*=UTF-8''''...`'
+              schema: {type: string}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '206':
+          description: Requested byte range(s)
+          headers:
+            Content-Range: {schema: {type: string, example: bytes 0-1023/52344}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Unknown job (`REQUEST_NOT_FOUND`) or undeclared artifact (`ARTIFACT_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          $ref: '#/components/responses/ArtifactUnavailable'
+        '416':
+          description: Range outside the file
+
   /scene/events:
     get:
       tags: [SceneEvents]
@@ -859,6 +963,15 @@ components:
       schema:
         type: string
         pattern: '^[A-Za-z0-9_-]{1,64}$'
+    ArtifactJobId:
+      name: id
+      in: path
+      required: true
+      description: Async request ID whose artifacts to access
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,64}$'
+
     RequestId:
       name: id
       in: path
@@ -1309,17 +1422,61 @@ components:
 
     JobOutput:
       type: object
-      required: [path]
+      required: [path, artifact_id, url]
       properties:
         path:
           type: string
+          description: Host filesystem path as declared by the job
+        artifact_id:
+          type: string
+          description: Stable ID (position in the manifest); re-declaring a path keeps it
+        url:
+          type: string
+          description: Download path, `/artifacts/{id}/{artifact_id}`
         kind:
           type: string
+          description: Declared kind; render jobs use `render` (/render) and `frame` (/render/animation)
         label:
           type: string
         metadata:
           type: object
           additionalProperties: true
+
+    ArtifactEntry:
+      allOf:
+        - $ref: '#/components/schemas/JobOutput'
+        - type: object
+          required: [available, size, content_type, filename]
+          properties:
+            available:
+              type: boolean
+              description: The declared path is an absolute, existing regular file
+            size:
+              type: integer
+              nullable: true
+              description: Size in bytes, or null when unavailable
+            content_type:
+              type: string
+              description: MIME type by extension (application/octet-stream if unknown)
+            filename:
+              type: string
+
+    ArtifactListResponse:
+      type: object
+      required: [success, request_id, status, count, artifacts]
+      properties:
+        success:
+          type: boolean
+        request_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        count:
+          type: integer
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactEntry'
 
     CancelResponse:
       type: object
@@ -1515,6 +1672,9 @@ components:
             server_instance_id: {type: boolean}
             scene_revision: {type: boolean}
             error_envelope: {type: boolean}
+            artifacts:
+              type: boolean
+              description: GET /artifacts/{id} and /artifacts/{id}/{artifact_id}
         limits:
           type: object
           description: Current settings (not compiled defaults)
@@ -1614,6 +1774,8 @@ components:
             - SCRIPT_NOT_FOUND
             - REQUEST_NOT_FOUND
             - ROUTE_NOT_FOUND
+            - ARTIFACT_NOT_FOUND
+            - ARTIFACT_UNAVAILABLE
             - IDEMPOTENCY_KEY_IN_FLIGHT
             - IDEMPOTENCY_KEY_REUSED
             - BODY_TOO_LARGE
@@ -1692,6 +1854,18 @@ components:
             error_code: SCRIPT_NOT_FOUND
             error: "Script not found in registry"
             retryable: false
+    ArtifactUnavailable:
+      description: Declared artifact whose file is missing, not a regular file, or not an absolute path
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: ARTIFACT_UNAVAILABLE
+            error: "Artifact was declared but its file is missing, not a regular file, or not an absolute path"
+            retryable: false
+            detail: "declared file does not exist or cannot be read"
     TooLarge:
       description: Request body exceeds configured maximum
       content:

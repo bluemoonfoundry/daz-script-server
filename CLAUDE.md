@@ -103,10 +103,11 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 
 **Sync:** `/status`, `/health`, `/metrics`, `/execute`, `/scripts/*`
 **Async:** `/execute/async`, `/scripts/:id/async`, `/requests/*`
+**Artifacts:** `/artifacts/:id`, `/artifacts/:id/:artifact_id` (read chain; serves only files in the job's output manifest, Range/HEAD via httplib content provider)
 
 Default: `127.0.0.1:18811`
 
-**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 404 (Unknown script/request/route), 409 (Idempotency key in flight), 413 (Body too large), 422 (Idempotency key reused), 429 (Rate limit/concurrent limit), 503 (Studio busy/queue full)
+**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 404 (Unknown script/request/route/artifact), 409 (Idempotency key in flight), 413 (Body too large), 410 (Declared artifact file gone), 422 (Idempotency key reused), 429 (Rate limit/concurrent limit), 503 (Studio busy/queue full)
 
 **Errors:** every failure body is `ErrorResponse` (`include/ErrorResponse.h`):
 `{success:false, error_code, error, retryable, detail?}`. Never hand-build an

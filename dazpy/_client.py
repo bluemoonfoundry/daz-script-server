@@ -60,6 +60,12 @@ def _job_headers(idempotency_key: str | None, correlation_id: str | None) -> dic
     return headers
 
 
+def _safe_artifact_filename(name: str) -> str:
+    """Base name safe to join under a download directory (no separators, no '..')."""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", os.path.basename(name.replace("\\", "/")))
+    return name if name.strip(". ") else "artifact"
+
+
 def _raise_for_error(resp: _requests.Response) -> None:
     """Raise a typed exception for authentication or server-busy responses.
 
@@ -590,6 +596,118 @@ class DazClient:
             return True
         except DazError:
             return False
+
+    # ── Artifacts ─────────────────────────────────────────────────────────────
+
+    def list_artifacts(self, request_id: str) -> dict:
+        """List the files an async job declared (GET /artifacts/{request_id}).
+
+        A job's artifacts are its output manifest: outputs declared in its
+        ``reportFile`` (``output``/``manifest`` events), plus the image(s) a
+        render job wrote. Use them to fetch results from a DAZ Studio host
+        whose filesystem the client can't see.
+
+        Returns:
+            A dict with ``request_id``, ``status``, ``count`` and an
+            ``artifacts`` list. Each entry has ``artifact_id``, ``url``,
+            ``path``, ``filename``, ``content_type``, ``size`` (``None`` when
+            unavailable), ``available`` and any ``kind``/``label``/``metadata``
+            the job declared.
+
+        Raises:
+            ServerResponseError: ``REQUEST_NOT_FOUND`` for an unknown or
+                expired job.
+        """
+        resp = self._get(f"/artifacts/{request_id}")
+        _raise_for_error(resp)
+        return resp.json()
+
+    def download_artifact(
+        self,
+        request_id: str,
+        artifact_id: str | int,
+        dest: "str | os.PathLike[str] | None" = None,
+        *,
+        byte_range: "tuple[int, int | None] | None" = None,
+        chunk_size: int = 1 << 20,
+        timeout: float | None = None,
+    ) -> "bytes | str":
+        """Download one declared artifact (GET /artifacts/{request_id}/{artifact_id}).
+
+        Args:
+            request_id: The async job's id.
+            artifact_id: The manifest entry's ``artifact_id``.
+            dest: Local file to stream the content into. When omitted the
+                content is returned as ``bytes``.
+            byte_range: ``(start, end)`` inclusive byte offsets, or
+                ``(start, None)`` for "from *start* to the end". Sent as an
+                HTTP ``Range`` header; the server answers 206.
+            chunk_size: Streaming chunk size when writing to *dest*.
+            timeout: Socket timeout; defaults to the client's timeout.
+
+        Returns:
+            The content as ``bytes``, or the path written when *dest* is given.
+
+        Raises:
+            ServerResponseError: ``ARTIFACT_NOT_FOUND`` (404) when the job
+                declared no such artifact, ``ARTIFACT_UNAVAILABLE`` (410) when
+                the declared file is gone, ``REQUEST_NOT_FOUND`` for an unknown
+                job, or HTTP 416 for a range outside the file.
+        """
+        headers = dict(self._headers)
+        if byte_range is not None:
+            start, end = byte_range
+            if start < 0 or (end is not None and end < start):
+                raise ValueError(f"invalid byte_range {byte_range!r}")
+            headers["Range"] = f"bytes={start}-{'' if end is None else end}"
+
+        self._check_server_version()
+        try:
+            resp = self._session.get(
+                f"{self._base}/artifacts/{request_id}/{artifact_id}",
+                headers=headers,
+                stream=True,
+                timeout=self._timeout if timeout is None else timeout,
+            )
+        except _requests.exceptions.ConnectionError as e:
+            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
+        except _requests.exceptions.Timeout as e:
+            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
+
+        try:
+            _raise_for_error(resp)
+            if dest is None:
+                return resp.content
+            path = os.fspath(dest)
+            with open(path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+            return path
+        finally:
+            resp.close()
+
+    def download_artifacts(
+        self, request_id: str, dest_dir: "str | os.PathLike[str]"
+    ) -> "list[str]":
+        """Download every available artifact of a job into *dest_dir*.
+
+        Files are named ``<artifact_id>_<filename>`` so two outputs with the
+        same base name can't overwrite each other. Unavailable entries are
+        skipped. Returns the paths written, in manifest order.
+        """
+        os.makedirs(dest_dir, exist_ok=True)
+        written: list[str] = []
+        for entry in self.list_artifacts(request_id).get("artifacts", []):
+            if not entry.get("available"):
+                continue
+            aid = str(entry["artifact_id"])
+            name = _safe_artifact_filename(entry.get("filename") or "artifact")
+            written.append(self.download_artifact(
+                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}")))
+        return written
 
     # ── Render ────────────────────────────────────────────────────────────────
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 try:
     import httpx
@@ -21,6 +22,7 @@ from ._result import ExecutionResult
 from ._version import server_version_from_status, warn_if_server_older
 from ._client import (
     _DEFAULT_HOST, _DEFAULT_PORT, _job_headers, _load_token, _raise_for_error, _map_response,
+    _safe_artifact_filename,
 )
 
 
@@ -323,6 +325,71 @@ class AsyncDazClient:
             return True
         except DazError:
             return False
+
+    # ── Artifacts ─────────────────────────────────────────────────────────────
+
+    async def list_artifacts(self, request_id: str) -> dict:
+        """See :meth:`dazpy.DazClient.list_artifacts`."""
+        resp = await self._get(f"/artifacts/{request_id}")
+        _raise_for_error(resp)
+        return resp.json()
+
+    async def download_artifact(
+        self,
+        request_id: str,
+        artifact_id: str | int,
+        dest: "str | os.PathLike[str] | None" = None,
+        *,
+        byte_range: "tuple[int, int | None] | None" = None,
+        chunk_size: int = 1 << 20,
+        timeout: float | None = None,
+    ) -> "bytes | str":
+        """See :meth:`dazpy.DazClient.download_artifact`."""
+        headers = dict(self._headers)
+        if byte_range is not None:
+            start, end = byte_range
+            if start < 0 or (end is not None and end < start):
+                raise ValueError(f"invalid byte_range {byte_range!r}")
+            headers["Range"] = f"bytes={start}-{'' if end is None else end}"
+
+        await self._check_server_version()
+        url = f"{self._base}/artifacts/{request_id}/{artifact_id}"
+        try:
+            async with self._http.stream(
+                "GET", url, headers=headers,
+                timeout=self._timeout if timeout is None else timeout,
+            ) as resp:
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    _raise_for_error(resp)
+                if dest is None:
+                    return await resp.aread()
+                path = os.fspath(dest)
+                with open(path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size):
+                        f.write(chunk)
+                return path
+        except httpx.ConnectError as e:
+            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
+        except httpx.TimeoutException as e:
+            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except httpx.HTTPError as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
+
+    async def download_artifacts(
+        self, request_id: str, dest_dir: "str | os.PathLike[str]"
+    ) -> "list[str]":
+        """See :meth:`dazpy.DazClient.download_artifacts`."""
+        os.makedirs(dest_dir, exist_ok=True)
+        written: list[str] = []
+        for entry in (await self.list_artifacts(request_id)).get("artifacts", []):
+            if not entry.get("available"):
+                continue
+            aid = str(entry["artifact_id"])
+            name = _safe_artifact_filename(entry.get("filename") or "artifact")
+            written.append(await self.download_artifact(
+                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}")))
+        return written
 
     # ── Render ────────────────────────────────────────────────────────────────
 

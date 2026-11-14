@@ -17,6 +17,10 @@ enum class ErrorCode {
     SCRIPT_NOT_FOUND,
     REQUEST_NOT_FOUND,
     ROUTE_NOT_FOUND,
+    ARTIFACT_NOT_FOUND,
+
+    // 410 Gone
+    ARTIFACT_UNAVAILABLE,
 
     // 409 Conflict / 422 Unprocessable
     IDEMPOTENCY_KEY_IN_FLIGHT,

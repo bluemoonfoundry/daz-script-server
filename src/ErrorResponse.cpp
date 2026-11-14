@@ -10,6 +10,8 @@ const char* ErrorResponse::codeString(ErrorCode code)
     case ErrorCode::SCRIPT_NOT_FOUND:          return "SCRIPT_NOT_FOUND";
     case ErrorCode::REQUEST_NOT_FOUND:         return "REQUEST_NOT_FOUND";
     case ErrorCode::ROUTE_NOT_FOUND:           return "ROUTE_NOT_FOUND";
+    case ErrorCode::ARTIFACT_NOT_FOUND:        return "ARTIFACT_NOT_FOUND";
+    case ErrorCode::ARTIFACT_UNAVAILABLE:      return "ARTIFACT_UNAVAILABLE";
     case ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT: return "IDEMPOTENCY_KEY_IN_FLIGHT";
     case ErrorCode::IDEMPOTENCY_KEY_REUSED:    return "IDEMPOTENCY_KEY_REUSED";
     case ErrorCode::BODY_TOO_LARGE:            return "BODY_TOO_LARGE";
@@ -51,6 +53,10 @@ const char* ErrorResponse::defaultMessage(ErrorCode code)
         return "Request not found (unknown ID, expired after its TTL, or submitted to a previous server instance)";
     case ErrorCode::ROUTE_NOT_FOUND:
         return "No route matches this method and path";
+    case ErrorCode::ARTIFACT_NOT_FOUND:
+        return "Artifact not found: the job declared no output with this artifact ID";
+    case ErrorCode::ARTIFACT_UNAVAILABLE:
+        return "Artifact was declared but its file is missing, not a regular file, or not an absolute path";
     case ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT:
         return "A request with this Idempotency-Key is still being processed; retry shortly";
     case ErrorCode::IDEMPOTENCY_KEY_REUSED:
@@ -111,7 +117,10 @@ int ErrorResponse::httpStatus(ErrorCode code)
     case ErrorCode::SCRIPT_NOT_FOUND:
     case ErrorCode::REQUEST_NOT_FOUND:
     case ErrorCode::ROUTE_NOT_FOUND:
+    case ErrorCode::ARTIFACT_NOT_FOUND:
         return 404;
+    case ErrorCode::ARTIFACT_UNAVAILABLE:
+        return 410;
     case ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT:
         return 409;
     case ErrorCode::IDEMPOTENCY_KEY_REUSED:

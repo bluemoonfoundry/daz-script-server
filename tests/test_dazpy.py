@@ -151,6 +151,88 @@ class TestDazClientRequestIdentity(unittest.TestCase):
         self.assertFalse(cm.exception.retryable)
 
 
+class TestDazClientArtifacts(unittest.TestCase):
+    """GET /artifacts/{id}[/{artifact_id}] helpers (5d6f.7)."""
+
+    def _client(self, status_code=200, json_data=None, content=b""):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.json.return_value = json_data or {}
+        response.text = json.dumps(json_data or {})
+        response.content = content
+        response.iter_content.return_value = [content[:3], content[3:]]
+        client._session.get.return_value = response
+        return client, response
+
+    def test_list_artifacts(self):
+        body = {"success": True, "request_id": "rnd-1", "count": 1,
+                "artifacts": [{"artifact_id": "0", "available": True, "filename": "a.png"}]}
+        client, _ = self._client(json_data=body)
+        self.assertEqual(client.list_artifacts("rnd-1"), body)
+        self.assertEqual(client._session.get.call_args.args[0],
+                         "http://127.0.0.1:18811/artifacts/rnd-1")
+
+    def test_download_returns_bytes_and_closes(self):
+        client, resp = self._client(content=b"PNGDATA")
+        self.assertEqual(client.download_artifact("rnd-1", 0), b"PNGDATA")
+        call = client._session.get.call_args
+        self.assertEqual(call.args[0], "http://127.0.0.1:18811/artifacts/rnd-1/0")
+        self.assertTrue(call.kwargs["stream"])
+        self.assertNotIn("Range", call.kwargs["headers"])
+        resp.close.assert_called_once()
+
+    def test_download_range_header(self):
+        for byte_range, header in (((0, 99), "bytes=0-99"), ((100, None), "bytes=100-")):
+            with self.subTest(byte_range=byte_range):
+                client, _ = self._client(status_code=206, content=b"x")
+                client.download_artifact("rnd-1", "0", byte_range=byte_range)
+                self.assertEqual(client._session.get.call_args.kwargs["headers"]["Range"], header)
+
+    def test_download_rejects_bad_range(self):
+        client, _ = self._client()
+        for bad in ((-1, 5), (10, 2)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                client.download_artifact("rnd-1", "0", byte_range=bad)
+        client._session.get.assert_not_called()
+
+    def test_download_to_file(self):
+        import tempfile
+        client, _ = self._client(content=b"PNGDATA")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "out.png")
+            self.assertEqual(client.download_artifact("rnd-1", "0", dest), dest)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), b"PNGDATA")
+
+    def test_undeclared_artifact_raises_typed_error(self):
+        client, resp = self._client(status_code=404, json_data={
+            "success": False, "error_code": "ARTIFACT_NOT_FOUND",
+            "error": "Artifact not found", "retryable": False})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.download_artifact("rnd-1", "7")
+        self.assertEqual(cm.exception.error_code, "ARTIFACT_NOT_FOUND")
+        self.assertEqual(cm.exception.status_code, 404)
+        resp.close.assert_called_once()
+
+    def test_download_artifacts_skips_unavailable_and_sanitizes_names(self):
+        import tempfile
+        client = DazClient(token="")
+        manifest = {"artifacts": [
+            {"artifact_id": "0", "available": True, "filename": "../../evil.png"},
+            {"artifact_id": "1", "available": False, "filename": "gone.png"},
+            {"artifact_id": "2", "available": True, "filename": "frame.png"},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(client, "list_artifacts", return_value=manifest), \
+                patch.object(client, "download_artifact", side_effect=lambda r, a, d: d) as dl:
+            paths = client.download_artifacts("rnd-1", tmp)
+        self.assertEqual([os.path.basename(p) for p in paths], ["0_evil.png", "2_frame.png"])
+        self.assertTrue(all(os.path.dirname(p) == tmp for p in paths))
+        self.assertEqual([c.args[1] for c in dl.call_args_list], ["0", "2"])
+
+
 class TestDazClientRegisteredScripts(unittest.TestCase):
     def _client(self, response_json):
         client = DazClient(token="")

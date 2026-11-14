@@ -86,6 +86,20 @@ public:
     std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP);
     std::string                 listJson(const std::string& statusFilter);
 
+    // ── Artifacts (GET /artifacts/...) — HTTP threads ─────────────────────
+    //
+    // A job's artifacts are exactly its output manifest: outputs declared in
+    // its report file ("output"/"manifest" events) plus, for render jobs, the
+    // output_path/output_paths its result returned. Each manifest entry has a
+    // stable "artifact_id" (its position) and a "url". Nothing outside the
+    // manifest can be looked up, so no client-supplied path is ever opened.
+    enum ArtifactLookup { ARTIFACT_FOUND, ARTIFACT_JOB_NOT_FOUND, ARTIFACT_NOT_DECLARED };
+    ArtifactLookup findArtifact(const std::string& requestId, const std::string& artifactId,
+                                QString& outPath);
+    // Copy of the job's manifest entries and status; false if the job is unknown.
+    bool artifactManifest(const std::string& requestId, QVariantList& outEntries,
+                          QString& outStatus);
+
     // Live counters — acquire mutex.
     int getQueueDepth()   const;
     int getTotalTracked() const;
@@ -211,6 +225,7 @@ private:
     void ingestReportFromWorkerLocked(AsyncRequest& req);
     void ingestReportLocked(AsyncRequest& req, bool final = false);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);
+    void declareRenderOutputsLocked(AsyncRequest& req, const QVariant& result);
     void appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry);
     std::string observationJson(const AsyncRequest& req) const;
 

@@ -2123,7 +2123,8 @@ duplicate it inside `args`:
 Progress events require either `value` (0–1) or `current` plus `total`. Log
 events require `message`. Output events require `path`; repeating a path updates
 that manifest entry. A `manifest` event may provide an `outputs` array. Use a
-unique report file for every job.
+unique report file for every job. Declared outputs can be downloaded over HTTP;
+see [Artifacts](#-artifacts-job-output-downloads).
 `reportFile` may not be the submitted `scriptFile`, because the server owns and
 truncates the former before the job is queued.
 
@@ -2285,6 +2286,85 @@ A queued request answers with `"status": "cancelled"` and also includes `cancell
 ```
 
 **Note:** Completed, failed, and cancelled requests are automatically purged after 1 hour.
+
+---
+
+## 📦 Artifacts (job output downloads)
+
+Clients that don't share a filesystem with DAZ Studio (an MCP sidecar, a
+container, another machine) can download a job's outputs over HTTP. Only files
+the job **declared** can be fetched:
+
+- outputs declared in its `reportFile` (`output` / `manifest` events), and
+- for render jobs, the `output_path` (`/render`, `kind: "render"`) or
+  `output_paths` (`/render/animation`, `kind: "frame"`) it wrote. A render that
+  reports `success: false` declares nothing.
+
+Each `observation.output_manifest.outputs[]` entry carries an `artifact_id`
+(its position in the manifest; re-declaring a path keeps the ID) and a `url`.
+The URL takes IDs only, never paths, so a client can't name an undeclared file.
+Both routes use the read middleware chain (IP whitelist, then auth) and are not
+rate limited. Artifact records expire with the job (1 hour).
+
+### `GET /artifacts/:id`
+
+Lists the job's artifacts with file metadata read at request time:
+
+```json
+{
+  "success": true,
+  "request_id": "rnd-3f2a91c0",
+  "status": "completed",
+  "count": 1,
+  "artifacts": [
+    {
+      "artifact_id": "0",
+      "url": "/artifacts/rnd-3f2a91c0/0",
+      "path": "C:/renders/shot-01.png",
+      "kind": "render",
+      "filename": "shot-01.png",
+      "content_type": "image/png",
+      "size": 482113,
+      "available": true
+    }
+  ]
+}
+```
+
+`available` is false (and `size` null) when the declared path is missing, is a
+directory, or is not absolute.
+
+### `GET /artifacts/:id/:artifact_id`
+
+Streams the file with `Content-Type` (by extension), `Content-Length`,
+`Accept-Ranges: bytes` and `Content-Disposition: inline; filename=...`.
+
+- `Range: bytes=0-1023`, `bytes=1024-` and `bytes=-512` return `206` with
+  `Content-Range`. A range outside the file returns `416`.
+- `HEAD` returns the headers without the body.
+
+| Situation | Response |
+|---|---|
+| Unknown or expired job | `404 REQUEST_NOT_FOUND` |
+| Job declared no such artifact | `404 ARTIFACT_NOT_FOUND` |
+| ID isn't 1-64 chars of `A-Z a-z 0-9 - _` (e.g. `..`, `a.png`) | `400 INVALID_FIELD` |
+| Declared file is missing, a directory, or a relative path | `410 ARTIFACT_UNAVAILABLE` |
+
+```python
+from dazpy import DazClient
+
+client = DazClient()
+rid = client.render_submit("C:/renders/shot-01.png", engine="iray")["request_id"]
+client.get_request_result(rid, wait=True, wait_timeout=600)
+
+client.list_artifacts(rid)                         # metadata
+png = client.download_artifact(rid, 0)             # bytes
+client.download_artifact(rid, 0, "local.png")      # stream to a file
+head = client.download_artifact(rid, 0, byte_range=(0, 1023))
+client.download_artifacts(rid, "out/")             # every available artifact
+```
+
+`AsyncDazClient` has the same methods as coroutines.
 
 ---
 

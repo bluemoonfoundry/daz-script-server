@@ -208,13 +208,22 @@ void AsyncRequestManager::applyReportEventLocked(AsyncRequest& req, const QVaria
         if (event.contains("label"))    output.insert("label", event.value("label"));
         if (event.contains("metadata")) output.insert("metadata", event.value("metadata"));
 
+        // Re-declaring a path updates its entry in place, so an artifact_id
+        // (the entry's position) never changes once a client has seen it.
+        int index = req.outputManifest.size();
         for (int i = 0; i < req.outputManifest.size(); ++i) {
             if (req.outputManifest[i].toMap().value("path").toString() == path) {
-                req.outputManifest[i] = output;
-                return;
+                index = i;
+                break;
             }
         }
-        req.outputManifest.append(output);
+        const QString artifactId = QString::number(index);
+        output.insert("artifact_id", artifactId);
+        output.insert("url", QString("/artifacts/%1/%2").arg(req.id, artifactId));
+        if (index < req.outputManifest.size())
+            req.outputManifest[index] = output;
+        else
+            req.outputManifest.append(output);
         return;
     }
 
@@ -317,6 +326,71 @@ void AsyncRequestManager::ingestReportFromWorkerLocked(AsyncRequest& req)
     // ingestion on Daz's main thread after script execution returns.
     (void)req;
 #endif
+}
+
+// Render jobs don't write a report file; the paths their generated script
+// returns (output_path for /render, output_paths for /render/animation) are
+// the job's declared outputs, so they become downloadable artifacts too.
+void AsyncRequestManager::declareRenderOutputsLocked(AsyncRequest& req, const QVariant& result)
+{
+    if (result.type() != QVariant::Map) return;
+    const QVariantMap map = result.toMap();
+    // A failed or aborted render may have left no file (or a partial one).
+    if (map.contains("success") && !map.value("success").toBool()) return;
+
+    const QString single = map.value("output_path").toString();
+    if (!single.isEmpty()) {
+        QVariantMap event;
+        event.insert("type", "output");
+        event.insert("path", single);
+        event.insert("kind", "render");
+        applyReportEventLocked(req, event);
+    }
+    const QVariantList frames = map.value("output_paths").toList();
+    for (int i = 0; i < frames.size(); ++i) {
+        const QString path = frames[i].toString();
+        if (path.isEmpty()) continue;
+        QVariantMap event;
+        event.insert("type", "output");
+        event.insert("path", path);
+        event.insert("kind", "frame");
+        QVariantMap metadata;
+        metadata.insert("index", i);
+        event.insert("metadata", metadata);
+        applyReportEventLocked(req, event);
+    }
+}
+
+AsyncRequestManager::ArtifactLookup AsyncRequestManager::findArtifact(
+    const std::string& requestId, const std::string& artifactId, QString& outPath)
+{
+    const QString qid = QString::fromStdString(requestId);
+    const QString aid = QString::fromStdString(artifactId);
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(qid)) return ARTIFACT_JOB_NOT_FOUND;
+    AsyncRequest& req = m_requests[qid];
+    ingestReportFromWorkerLocked(req);
+    for (int i = 0; i < req.outputManifest.size(); ++i) {
+        const QVariantMap entry = req.outputManifest[i].toMap();
+        if (entry.value("artifact_id").toString() == aid) {
+            outPath = entry.value("path").toString();
+            return ARTIFACT_FOUND;
+        }
+    }
+    return ARTIFACT_NOT_DECLARED;
+}
+
+bool AsyncRequestManager::artifactManifest(const std::string& requestId,
+                                           QVariantList& outEntries, QString& outStatus)
+{
+    const QString qid = QString::fromStdString(requestId);
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(qid)) return false;
+    AsyncRequest& req = m_requests[qid];
+    ingestReportFromWorkerLocked(req);
+    outEntries = req.outputManifest;
+    outStatus  = QString::fromStdString(statusToString(req.status));
+    return true;
 }
 
 std::string AsyncRequestManager::observationJson(const AsyncRequest& req) const
@@ -709,6 +783,8 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
     if (executed) {
         req.scriptResult   = result;
         req.scriptExecuted = true;
+        if (req.requestType == REQUEST_TYPE_RENDER)
+            declareRenderOutputsLocked(req, result);
     }
 
     // A render whose script reports success:false after a cancel request was

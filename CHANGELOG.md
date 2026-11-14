@@ -6,6 +6,16 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **Artifact downloads: `GET /artifacts/{id}` and
+  `GET /artifacts/{id}/{artifact_id}`.** Clients no longer need to share a
+  filesystem with DAZ Studio to fetch job outputs. Only files the job declared
+  can be downloaded: `reportFile` outputs, plus the image(s) a render job wrote,
+  which now also appear in its output manifest. Manifest entries gain a stable
+  `artifact_id` and a `url`. Downloads support byte ranges (206 / 416) and
+  `HEAD`, and go through the IP whitelist and auth. New error codes:
+  `404 ARTIFACT_NOT_FOUND` and `410 ARTIFACT_UNAVAILABLE`. dazpy adds
+  `list_artifacts()`, `download_artifact()` and `download_artifacts()` to
+  `DazClient` and `AsyncDazClient`.
 - **`GET /capabilities` discovery endpoint.** Returns the plugin, DAZ Studio,
   SDK and Qt versions, every route (including companion-plugin routes), feature
   flags, the current body/script/batch/animation/queue limits, rate limit and

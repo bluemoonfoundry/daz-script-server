@@ -18,6 +18,7 @@ add_library(DazScriptServer SHARED
 	RequestHandlers.cpp
 	ErrorResponse.cpp
 	IdempotencyCache.cpp
+	ArtifactFile.cpp
 	RequestValidator.cpp
 	SettingsService.cpp
 	SceneEventBroker.cpp
@@ -47,6 +48,7 @@ add_library(DazScriptServer SHARED
 	../include/RequestHandler.h
 	../include/ErrorResponse.h
 	../include/IdempotencyCache.h
+	../include/ArtifactFile.h
 	../include/RequestValidator.h
 	../include/common_version.h
 	../include/dzscriptserver.h

@@ -546,3 +546,65 @@ class TestAsyncDazClientCapabilities:
         with pytest.raises(exceptions.ServerResponseError) as ei:
             await client.capabilities()
         assert ei.value.status_code == 404
+
+
+class TestAsyncDazClientArtifacts:
+    """GET /artifacts/{id}[/{artifact_id}] over a real httpx transport (5d6f.7)."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_list_artifacts(self):
+        body = {"success": True, "request_id": "rnd-1", "count": 0, "artifacts": []}
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1").mock(
+            return_value=httpx.Response(200, json=body))
+        async with AsyncDazClient() as client:
+            assert await client.list_artifacts("rnd-1") == body
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_download_bytes_with_range(self):
+        route = respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(206, content=b"PNG",
+                                        headers={"Content-Range": "bytes 0-2/10"}))
+        async with AsyncDazClient() as client:
+            data = await client.download_artifact("rnd-1", 0, byte_range=(0, 2))
+        assert data == b"PNG"
+        assert route.calls.last.request.headers["Range"] == "bytes=0-2"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_download_to_file(self, tmp_path):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(200, content=b"PNGDATA"))
+        dest = tmp_path / "out.png"
+        async with AsyncDazClient() as client:
+            assert await client.download_artifact("rnd-1", "0", dest) == str(dest)
+        assert dest.read_bytes() == b"PNGDATA"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unavailable_artifact_raises_typed_error(self):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(410, json={
+                "success": False, "error_code": "ARTIFACT_UNAVAILABLE",
+                "error": "gone", "retryable": False}))
+        async with AsyncDazClient() as client:
+            with pytest.raises(exceptions.ServerResponseError) as ei:
+                await client.download_artifact("rnd-1", "0")
+        assert ei.value.status_code == 410
+        assert ei.value.error_code == "ARTIFACT_UNAVAILABLE"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_download_artifacts(self, tmp_path):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1").mock(
+            return_value=httpx.Response(200, json={"artifacts": [
+                {"artifact_id": "0", "available": True, "filename": "a.png"},
+                {"artifact_id": "1", "available": False, "filename": "b.png"},
+            ]}))
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(200, content=b"A"))
+        async with AsyncDazClient() as client:
+            paths = await client.download_artifacts("rnd-1", tmp_path)
+        assert [os.path.basename(p) for p in paths] == ["0_a.png"]
+        assert (tmp_path / "0_a.png").read_bytes() == b"A"

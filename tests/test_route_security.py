@@ -159,7 +159,10 @@ class TestRouteSecurity(unittest.TestCase):
         entries = re.findall(
             r'\{\s*"(\w+)",\s*"([^"]+)",\s*(true|false),\s*"(\w+)"\s*\}',
             self.src[start:end])
-        table = {(m, p): auth == "true" for m, p, auth, _ in entries}
+        # The table may name placeholders ({id}, {artifact_id}); compare each
+        # ([^/]+) capture against any {name}.
+        table = {(m, re.sub(r"\{\w+\}", "{id}", p)): auth == "true"
+                 for m, p, auth, _ in entries}
         self.assertEqual(len(table), len(entries), "duplicate capability route")
 
         registered = {(m, p.replace("([^/]+)", "{id}")) for m, p, _ in self.routes}
@@ -167,6 +170,22 @@ class TestRouteSecurity(unittest.TestCase):
         for key, auth in table.items():
             with self.subTest(route=key):
                 self.assertEqual(auth, key not in PUBLIC_ROUTES)
+
+    def test_artifact_routes_use_read_chain_and_validate_ids(self):
+        """Artifact downloads are authenticated reads whose URL segments are
+        IDs looked up in the job's manifest, never filesystem paths."""
+        found = {(m, p): h for m, p, h in self.routes}
+        for path in ("/artifacts/([^/]+)", "/artifacts/([^/]+)/([^/]+)"):
+            with self.subTest(route=path):
+                self.assertIn("m_pReadChain->run(ctx)", found[("GET", path)])
+        serve = self.src[self.src.index("static void serveArtifact("):]
+        serve = serve[:serve.index("\n}\n")]
+        self.assertLess(serve.index("artifactIdsValid(req, res)"), serve.index("findArtifact("))
+        self.assertLess(serve.index("findArtifact("), serve.index("ArtifactFile::openForRead("))
+        # httplib only answers Range with 206 when the handler leaves status unset.
+        tail = serve[serve.index("ArtifactFile::openForRead("):]
+        tail = tail[tail.index("case ArtifactFile::OPEN_OK:"):]
+        self.assertNotIn("res.status", tail[tail.index("const QByteArray disposition"):])
 
     def test_capabilities_route_uses_read_chain(self):
         found = {(m, p): h for m, p, h in self.routes}

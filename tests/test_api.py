@@ -790,6 +790,176 @@ class TestRenderIraySamples(unittest.TestCase):
         self.assertEqual(execute(read_max).json()["result"], before)
 
 
+class TestArtifacts(unittest.TestCase):
+    """GET /artifacts/{job_id}[/{artifact_id}] (5d6f.7): authenticated, Range
+    capable downloads of exactly the files a job declared."""
+
+    PAYLOAD = bytes(range(256)) * 4  # 1024 bytes, every offset distinct mod 256
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="dss-artifacts-")
+        cls.image = os.path.join(cls.tmp, "plate.png")
+        with open(cls.image, "wb") as f:
+            f.write(cls.PAYLOAD)
+        # Same directory, never declared: must not be reachable.
+        with open(os.path.join(cls.tmp, "secret.txt"), "w") as f:
+            f.write("not an artifact")
+        cls.report = os.path.join(cls.tmp, "report.jsonl")
+        outputs = [
+            {"path": cls.image, "kind": "image", "label": "plate"},     # 0
+            {"path": os.path.join(cls.tmp, "missing.png")},             # 1
+            {"path": cls.tmp},                                          # 2 directory
+            {"path": "relative/plate.png"},                             # 3
+            {"path": cls.image, "kind": "image", "label": "re-declared"},  # updates 0
+        ]
+        script = iife(
+            "var cfg = getArguments()[0]; "
+            "var f = new DzFile(cfg.__dssReportFile); "
+            "if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+            "f.write(JSON.stringify({type:'manifest', outputs:cfg.outputs}) + '\\n'); "
+            "f.close(); return 'declared';"
+        )
+        r = async_execute(script=script, args={"outputs": outputs}, report_file=cls.report)
+        assert r.status_code == 200, r.text
+        cls.rid = r.json()["request_id"]
+        body = get_result(cls.rid, wait=True, timeout=30).json()
+        assert body.get("status") == "completed", body
+        cls.manifest = body["observation"]["output_manifest"]
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _get(self, path, headers=None, method="GET"):
+        h = auth_headers()
+        h.update(headers or {})
+        return requests.request(method, f"{BASE_URL}{path}", headers=h, timeout=10)
+
+    def assertError(self, r, status, code):
+        self.assertEqual(r.status_code, status, r.text)
+        self.assertFalse(r.json()["success"])
+        self.assertEqual(r.json()["error_code"], code)
+
+    # ── manifest ────────────────────────────────────────────────────────────
+
+    def test_manifest_entries_carry_ids_and_urls(self):
+        outputs = self.manifest["outputs"]
+        self.assertEqual(self.manifest["count"], 4)  # re-declaration updated entry 0
+        self.assertEqual([o["artifact_id"] for o in outputs], ["0", "1", "2", "3"])
+        self.assertEqual(outputs[0]["url"], f"/artifacts/{self.rid}/0")
+        self.assertEqual(outputs[0]["label"], "re-declared")
+
+    def test_list_reports_metadata(self):
+        r = self._get(f"/artifacts/{self.rid}")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["request_id"], self.rid)
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["count"], 4)
+        first, missing, directory, relative = body["artifacts"]
+        self.assertTrue(first["available"])
+        self.assertEqual(first["size"], len(self.PAYLOAD))
+        self.assertEqual(first["content_type"], "image/png")
+        self.assertEqual(first["filename"], "plate.png")
+        for entry in (missing, directory, relative):
+            self.assertFalse(entry["available"], entry)
+            self.assertIsNone(entry["size"])
+
+    # ── downloads ───────────────────────────────────────────────────────────
+
+    def test_full_download(self):
+        r = self._get(f"/artifacts/{self.rid}/0")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content, self.PAYLOAD)
+        self.assertEqual(r.headers["Content-Type"], "image/png")
+        self.assertEqual(r.headers["Content-Length"], str(len(self.PAYLOAD)))
+        self.assertEqual(r.headers["Accept-Ranges"], "bytes")
+        self.assertIn('filename="plate.png"', r.headers["Content-Disposition"])
+
+    def test_range_requests(self):
+        n = len(self.PAYLOAD)
+        cases = [
+            ("bytes=10-19", self.PAYLOAD[10:20], f"bytes 10-19/{n}"),
+            ("bytes=1000-", self.PAYLOAD[1000:], f"bytes 1000-{n - 1}/{n}"),
+            ("bytes=-5", self.PAYLOAD[-5:], f"bytes {n - 5}-{n - 1}/{n}"),
+            ("bytes=0-99999", self.PAYLOAD, f"bytes 0-{n - 1}/{n}"),
+        ]
+        for rng, expected, content_range in cases:
+            with self.subTest(range=rng):
+                r = self._get(f"/artifacts/{self.rid}/0", {"Range": rng})
+                self.assertEqual(r.status_code, 206, r.text)
+                self.assertEqual(r.content, expected)
+                self.assertEqual(r.headers["Content-Range"], content_range)
+
+    def test_unsatisfiable_range(self):
+        r = self._get(f"/artifacts/{self.rid}/0", {"Range": "bytes=5000-6000"})
+        self.assertEqual(r.status_code, 416)
+
+    def test_head_returns_metadata_without_body(self):
+        r = self._get(f"/artifacts/{self.rid}/0", method="HEAD")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Content-Length"], str(len(self.PAYLOAD)))
+        self.assertEqual(r.content, b"")
+
+    # ── rejection ───────────────────────────────────────────────────────────
+
+    def test_declared_but_unusable_paths_are_gone(self):
+        for aid in ("1", "2", "3"):  # missing file, directory, relative path
+            with self.subTest(artifact_id=aid):
+                self.assertError(self._get(f"/artifacts/{self.rid}/{aid}"),
+                                 410, "ARTIFACT_UNAVAILABLE")
+
+    def test_undeclared_artifact(self):
+        self.assertError(self._get(f"/artifacts/{self.rid}/99"), 404, "ARTIFACT_NOT_FOUND")
+
+    def test_unknown_job(self):
+        for path in ("/artifacts/no-such-job", "/artifacts/no-such-job/0"):
+            with self.subTest(path=path):
+                self.assertError(self._get(path), 404, "REQUEST_NOT_FOUND")
+
+    def test_path_like_ids_are_rejected(self):
+        for aid in ("0.png", "secret.txt", "%2e%2e", "..%5csecret.txt"):
+            with self.subTest(artifact_id=aid):
+                self.assertError(self._get(f"/artifacts/{self.rid}/{aid}"),
+                                 400, "INVALID_FIELD")
+        # An encoded slash decodes to a different path, which matches no route.
+        for path in (f"/artifacts/{self.rid}/..%2Fsecret.txt",
+                     f"/artifacts/{self.rid}/0%2F..%2F..%2Fsecret.txt"):
+            with self.subTest(path=path):
+                r = self._get(path)
+                self.assertIn(r.status_code, (400, 404), r.text)
+                self.assertNotIn(b"not an artifact", r.content)
+
+    @unittest.skipUnless(AUTH_ENABLED, "authentication disabled in plugin")
+    def test_requires_token(self):
+        for path in (f"/artifacts/{self.rid}", f"/artifacts/{self.rid}/0"):
+            for headers in ({}, {"X-API-Token": "wrong-token"}):
+                with self.subTest(path=path, headers=headers):
+                    r = requests.get(f"{BASE_URL}{path}", headers=headers, timeout=5)
+                    self.assertEqual(r.status_code, 401)
+                    self.assertNotEqual(r.content, self.PAYLOAD)
+
+    @unittest.skipUnless(os.environ.get("DSS_LIVE_RENDER"),
+                         "set DSS_LIVE_RENDER=1 to run a real viewport render")
+    def test_render_output_is_an_artifact(self):
+        out = os.path.join(self.tmp, "render.png").replace("\\", "/")
+        r = requests.post(f"{BASE_URL}/render", headers=auth_headers(), json={
+            "output_path": out, "engine": "viewport", "width": 64, "height": 64,
+        }, timeout=10)
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["request_id"]
+        body = get_result(rid, wait=True, timeout=120).json()
+        self.assertEqual(body.get("status"), "completed", body)
+        entry = body["observation"]["output_manifest"]["outputs"][0]
+        self.assertEqual(entry["kind"], "render")
+        dl = self._get(entry["url"])
+        self.assertEqual(dl.status_code, 200)
+        with open(out, "rb") as f:
+            self.assertEqual(dl.content, f.read())
+
+
 class TestResponseShape(unittest.TestCase):
 
     def test_success_response_has_all_fields(self):

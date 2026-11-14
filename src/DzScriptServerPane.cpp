@@ -9,6 +9,7 @@
 #include "JsonStd.h"
 #include "ErrorResponse.h"
 #include "IdempotencyCache.h"
+#include "ArtifactFile.h"
 #include "SecureRandom.h"
 #include "RequestValidator.h"
 #include "common_version.h"
@@ -1112,6 +1113,132 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 	applyContext(ctx, res);
 }
 
+// ─── Artifacts (GET /artifacts/...) ──────────────────────────────────────────
+//
+// Run on httplib worker threads: they read a mutex-protected copy of the job's
+// output manifest and use C stdio for file access (ArtifactFile), never DAZ or
+// GUI objects. URL segments are IDs, never paths: the only file that can be
+// opened is one the job itself declared.
+
+static void respondError(httplib::Response& res, ErrorCode code, const std::string& detail = "")
+{
+	res.status = ErrorResponse::httpStatus(code);
+	res.set_content(ErrorResponse::build(code, detail), "application/json");
+}
+
+static bool artifactIdsValid(const httplib::Request& req, httplib::Response& res)
+{
+	static const char* const kNames[] = { "", "job_id", "artifact_id" };
+	for (size_t i = 1; i < req.matches.size() && i < 3; ++i) {
+		const std::string v = req.matches[i].str();
+		if (!ArtifactFile::isValidId(v.c_str(), v.size())) {
+			respondError(res, ErrorCode::INVALID_FIELD,
+				std::string(kNames[i]) + " must be 1-64 characters of A-Z, a-z, 0-9, '-' or '_'");
+			return false;
+		}
+	}
+	return true;
+}
+
+// GET /artifacts/:job_id — the job's declared outputs plus file metadata.
+static void listArtifacts(AsyncRequestManager& mgr, const httplib::Request& req,
+                          httplib::Response& res)
+{
+	if (!artifactIdsValid(req, res)) return;
+	const std::string jobId = req.matches[1].str();
+
+	QVariantList entries;
+	QString      status;
+	if (!mgr.artifactManifest(jobId, entries, status)) {
+		respondError(res, ErrorCode::REQUEST_NOT_FOUND, jobId);
+		return;
+	}
+
+	QVariantList artifacts;
+	for (int i = 0; i < entries.size(); ++i) {
+		QVariantMap entry = entries[i].toMap();
+		const QString path = entry.value("path").toString();
+		const qint64  size = ArtifactFile::sizeOf(path);
+		entry.insert("available", size >= 0);
+		entry.insert("size", size >= 0 ? QVariant(size) : QVariant());
+		entry.insert("content_type", QString::fromLatin1(ArtifactFile::contentTypeFor(path)));
+		entry.insert("filename", ArtifactFile::baseName(path));
+		artifacts.append(entry);
+	}
+
+	QVariantMap body;
+	body.insert("success", true);
+	body.insert("request_id", QString::fromStdString(jobId));
+	body.insert("status", status);
+	body.insert("count", artifacts.size());
+	body.insert("artifacts", artifacts);
+	res.status = 200;
+	res.set_content(JsonStd::variantToJson(QVariant(body)), "application/json");
+}
+
+// GET /artifacts/:job_id/:artifact_id — stream one declared output. httplib
+// answers Range requests (206 / 416) and HEAD from the sized content provider.
+static void serveArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
+                          httplib::Response& res)
+{
+	if (!artifactIdsValid(req, res)) return;
+	const std::string jobId      = req.matches[1].str();
+	const std::string artifactId = req.matches[2].str();
+
+	QString path;
+	switch (mgr.findArtifact(jobId, artifactId, path)) {
+	case AsyncRequestManager::ARTIFACT_JOB_NOT_FOUND:
+		respondError(res, ErrorCode::REQUEST_NOT_FOUND, jobId);
+		return;
+	case AsyncRequestManager::ARTIFACT_NOT_DECLARED:
+		respondError(res, ErrorCode::ARTIFACT_NOT_FOUND, jobId + "/" + artifactId);
+		return;
+	case AsyncRequestManager::ARTIFACT_FOUND:
+		break;
+	}
+
+	FILE*  file = 0;
+	qint64 size = 0;
+	switch (ArtifactFile::openForRead(path, &file, &size)) {
+	case ArtifactFile::OPEN_OK:
+		break;
+	case ArtifactFile::OPEN_PATH_REJECTED:
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not an absolute file path");
+		return;
+	case ArtifactFile::OPEN_NOT_REGULAR:
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not a regular file");
+		return;
+	case ArtifactFile::OPEN_MISSING:
+	default:
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared file does not exist or cannot be read");
+		return;
+	}
+
+	// Leave res.status unset: httplib then picks 200, or 206 for a Range
+	// request (and 416 for an unsatisfiable one). An explicit 200 would make
+	// it ignore the Range header and send the whole file.
+	const QByteArray disposition = ArtifactFile::contentDisposition(path);
+	res.set_header("Accept-Ranges", "bytes");
+	res.set_header("Content-Disposition", disposition.constData());
+	res.set_header("Cache-Control", "private, no-store");
+	res.set_header("X-Content-Type-Options", "nosniff");
+	res.set_content_provider(
+		static_cast<size_t>(size), ArtifactFile::contentTypeFor(path),
+		[file](size_t offset, size_t length, httplib::DataSink& sink) {
+			if (!ArtifactFile::seek(file, static_cast<qint64>(offset))) return false;
+			char buf[64 * 1024];
+			while (length > 0) {
+				const size_t want = length < sizeof(buf) ? length : sizeof(buf);
+				const size_t got  = std::fread(buf, 1, want, file);
+				if (got == 0) return false;   // file shrank or read error
+				if (!sink.write(buf, got)) return false;
+				length -= got;
+			}
+			return true;
+		},
+		[file](bool) { std::fclose(file); });
+}
+
 // ─── Route setup ──────────────────────────────────────────────────────────────
 //
 // THREADING RULE: httplib invokes these handlers on raw std::threads (not QThreads).
@@ -1274,6 +1401,24 @@ void DzScriptServerPane::setupRoutes()
 		auto ctx = toContext(req);
 		if (m_pReadChain->run(ctx)) m_pAsyncListHandler->handle(ctx);
 		applyContext(ctx, res);
+	});
+
+	// GET /artifacts/:job_id and GET /artifacts/:job_id/:artifact_id
+	//
+	// Read chain (IP whitelist -> auth), like the other polling GETs: a client
+	// fetching a large file in Range chunks must not trip the rate limiter.
+	// Downloads only serve files in the job's output manifest; see
+	// listArtifacts()/serveArtifact() above.
+	m_pServer->Get("/artifacts/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (!m_pReadChain->run(ctx)) { applyContext(ctx, res); return; }
+		listArtifacts(*m_pAsyncMgr, req, res);
+	});
+
+	m_pServer->Get("/artifacts/([^/]+)/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (!m_pReadChain->run(ctx)) { applyContext(ctx, res); return; }
+		serveArtifact(*m_pAsyncMgr, req, res);
 	});
 
 	// ── Render endpoints ──────────────────────────────────────────────────────
@@ -3336,6 +3481,8 @@ const CapabilityRoute kCapabilityRoutes[] = {
 	{ "GET",    "/requests/{id}/result",   true,  "json"   },
 	{ "DELETE", "/requests/{id}",          true,  "json"   },
 	{ "GET",    "/requests",               true,  "json"   },
+	{ "GET",    "/artifacts/{id}",         true,  "json"   },
+	{ "GET",    "/artifacts/{id}/{artifact_id}", true, "binary" },
 	{ "POST",   "/render",                 true,  "json"   },
 	{ "POST",   "/render/batch",           true,  "json"   },
 	{ "POST",   "/render/animation",       true,  "json"   },
@@ -3435,6 +3582,7 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	features["server_instance_id"]  = true;   // per-run identity (X-Server-Instance-Id)
 	features["scene_revision"]      = true;   // change counter on /status and job responses
 	features["error_envelope"]      = true;   // error_code/error/retryable on every failure
+	features["artifacts"]           = true;   // GET /artifacts/{id}[/{artifact_id}] downloads
 	caps["features"] = features;
 	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
 		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));
