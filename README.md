@@ -653,7 +653,9 @@ client.cancel_render(job.request_id)
 ```
 
 Returns 400 if the `request_id` belongs to a non-render job, so you get a clear
-error rather than silently cancelling the wrong request.
+error rather than silently cancelling the wrong request. A running render
+answers `cancel_requested`; the job becomes `cancelled` once the render has
+actually been aborted.
 
 ### 🎥 Scene Camera and Light Discovery
 
@@ -883,14 +885,16 @@ Long-running operations (renders, exports, batch jobs) no longer need to block t
 
 - **`POST /execute/async`** — Submit inline `script` or host-side `scriptFile` work asynchronously; returns a `request_id` immediately
 - **`POST /scripts/:id/async`** — Submit a registered script asynchronously
-- **`GET /requests/:id/status`** — Poll for progress (`queued`, `running`, `completed`, `failed`, `cancelled`)
+- **`GET /requests/:id/status`** — Poll for progress (see status values below)
 - **`GET /requests/:id/result`** — Fetch the final result; supports `?wait=true` to long-poll until complete
 - **`DELETE /requests/:id`** — Cancel a queued or running request
 - **`GET /requests`** — List all active and recently completed requests
 
-**Cancellation:** Queued requests are cancelled immediately. Running requests set a cancel flag and call `killRender()` — DAZ Studio honours the flag when the script returns.
+**Cancellation:** Queued requests are cancelled immediately. A running script can't be interrupted: cancelling it sets the status to `cancel_requested`, and render jobs also get a `killRender()` call to abort the render. When the script returns, the status changes to what really happened: `cancelled` (the render was aborted), `completed_after_cancel_request` (the script finished anyway and its result is kept) or `failed`.
 
-**TTL:** Completed, failed, and cancelled requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
+**Stale requests:** a request still running after 30 minutes (usually DAZ Studio is blocked behind a dialog) becomes `stale`. It answers with `success: false` and ends long-polls. If the script returns later, the status changes to `completed_after_stale` (or `failed`).
+
+**TTL:** Finished and stale requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
 
 **Stale running requests:** If a request has been `running` for more than 30 minutes without completing — e.g. a render blocked behind a DAZ Studio modal dialog — it's automatically marked `failed` so polling clients aren't left waiting forever. The underlying DAZ Studio operation may still be stuck; check the DAZ Studio window directly if this happens.
 
@@ -1990,7 +1994,21 @@ is still running.
 }
 ```
 
-**Status values:** `queued`, `running`, `completed`, `failed`, `cancelled`
+**Status values:**
+
+| Status | Final? | Meaning |
+|---|---|---|
+| `queued` | no | Waiting for the main thread |
+| `running` | no | Executing |
+| `cancel_requested` | no | Cancel asked while running; waiting for the script to return |
+| `stale` | no | Running past the stale timeout; `success: false`, but can still change to its real outcome |
+| `completed` | yes | Finished successfully |
+| `failed` | yes | Script error |
+| `cancelled` | yes | Work really stopped: cancelled while queued, or a render aborted after a cancel |
+| `completed_after_cancel_request` | yes | Cancel was asked but the script finished; result kept |
+| `completed_after_stale` | yes | Finished after being marked stale; result kept |
+
+Once set, `cancel_requested_at` and `stale_at` stay in status and result responses.
 
 `queue_position` is only meaningful when `status` is `queued`.
 
@@ -2037,17 +2055,24 @@ Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 **Authentication:** Required (if enabled)
 
 **Cancellation behaviour:**
-- `queued` → removed from queue immediately
-- `running` → cancel flag set + `killRender()` called; DAZ Studio honours the flag when the script returns
+- `queued` → removed from the queue; status `cancelled`
+- `running` → status `cancel_requested`; render jobs also get `killRender()`.
+  A running script can't be interrupted, so poll the request for its real
+  outcome (`cancelled`, `completed_after_cancel_request` or `failed`).
+  Cancelling again while `cancel_requested` is a no-op that returns 200.
+- finished → 400
 
-**Response:**
+**Response (running request):**
 ```json
 {
   "request_id": "a3f2b891",
-  "status": "cancelled",
-  "cancelled_at": "2026-04-09T10:15:05"
+  "status": "cancel_requested",
+  "message": "Cancellation requested; a running script cannot be interrupted and will finish on its own. Poll the request for the final outcome.",
+  "cancel_requested_at": "2026-04-09T10:15:05"
 }
 ```
+
+A queued request answers with `"status": "cancelled"` and also includes `cancelled_at`.
 
 ---
 

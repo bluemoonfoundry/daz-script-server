@@ -296,6 +296,12 @@ def async_execute(script=None, script_file=None, args=None, report_file=None, he
     return requests.post(f"{BASE_URL}/execute/async", headers=h, json=payload, timeout=10)
 
 
+TERMINAL_STATUSES = (
+    "completed", "failed", "cancelled",
+    "completed_after_cancel_request", "completed_after_stale",
+)
+
+
 def poll_status(request_id, timeout=15):
     """Poll /requests/:id/status until terminal or timeout. Returns final body dict."""
     deadline = __import__("time").time() + timeout
@@ -303,7 +309,7 @@ def poll_status(request_id, timeout=15):
         r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
                          headers=auth_headers(), timeout=5)
         body = r.json()
-        if body.get("status") in ("completed", "failed", "cancelled"):
+        if body.get("status") in TERMINAL_STATUSES:
             return body
         __import__("time").sleep(0.2)
     return body
@@ -552,18 +558,13 @@ class TestAsyncExecution(unittest.TestCase):
         if cancel_r.status_code == 200:
             self.assertEqual(cancel_r.json().get("status"), "cancelled")
 
-    def test_async_cancel_running_request_reaches_terminal_status(self):
+    def test_async_cancel_running_script_reports_real_outcome(self):
         # A busy-loop script long enough to still be RUNNING when we cancel it.
-        # killRender()/killRenderOnMainThread() has nothing to kill for a plain
-        # script (not a render), so this exercises the case where the cancel
-        # response says "cancelled" but the underlying call can't actually be
-        # interrupted -- the tracker must still report a terminal status
-        # instead of leaving GET /requests/:id stuck at "running" (GH #34).
-        # ~8s on a live DAZ Studio 4 instance -- long enough to reliably catch
-        # "running" below, short enough not to starve the main thread for
-        # other tests once cancelled (the loop itself can't be interrupted,
-        # only the tracker's reported status can).
-        script = iife("var x = 0; for (var i = 0; i < 500000000; i++) { x += i; } return x;")
+        # A plain script can't be interrupted (killRender() only stops renders),
+        # so the cancel must report cancel_requested -- not a "cancelled" that
+        # isn't true -- and the script's real result must be kept once it
+        # returns (ASSESSMENT #2, GH #34). ~8s on a live DAZ Studio 4 instance.
+        script = iife("var x = 0; for (var i = 0; i < 500000000; i++) { x += i; } return 'done';")
         r = async_execute(script=script)
         request_id = r.json()["request_id"]
 
@@ -582,13 +583,24 @@ class TestAsyncExecution(unittest.TestCase):
         cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
                                    headers=auth_headers(), timeout=5)
         self.assertEqual(cancel_r.status_code, 200)
-        self.assertEqual(cancel_r.json().get("status"), "cancelled")
+        self.assertEqual(cancel_r.json().get("status"), "cancel_requested")
+        self.assertIn("cancel_requested_at", cancel_r.json())
 
-        # GET status must not stay "running" forever -- it should already
-        # reflect the terminal status the cancel response promised.
         status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
                                 headers=auth_headers(), timeout=5)
-        self.assertEqual(status_r.json().get("status"), "cancelled")
+        self.assertEqual(status_r.json().get("status"), "cancel_requested")
+
+        # Cancelling again is idempotent while the script is still running.
+        again = requests.delete(f"{BASE_URL}/requests/{request_id}",
+                                headers=auth_headers(), timeout=5)
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json().get("status"), "cancel_requested")
+
+        body = get_result(request_id, wait=True, timeout=60).json()
+        self.assertEqual(body.get("status"), "completed_after_cancel_request")
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body.get("result"), "done")
+        self.assertIn("cancel_requested_at", body)
 
     def test_async_cancel_already_finished_returns_400(self):
         r = async_execute(script=iife("return 1;"))
@@ -681,9 +693,8 @@ class TestAsyncExecution(unittest.TestCase):
             request_id = r.json()["request_id"]
 
             saw_live_progress = False
-            # A prior cancellation test deliberately leaves a non-render
-            # script finishing on Daz's main thread after its tracker is
-            # already terminal, so this job may remain queued for ~8 seconds.
+            # A prior cancellation test leaves a non-render script finishing
+            # on Daz's main thread, so this job may remain queued for ~8 seconds.
             deadline = time.time() + 20
             while time.time() < deadline:
                 status = requests.get(
@@ -722,6 +733,61 @@ class TestAsyncExecution(unittest.TestCase):
 
 
 # ─── Response shape ───────────────────────────────────────────────────────────
+
+class TestRenderIraySamples(unittest.TestCase):
+    """iray_samples must be applied (and read back) or rejected -- never ignored."""
+
+    def _render(self, payload):
+        return requests.post(f"{BASE_URL}/render", headers=auth_headers(),
+                             json=payload, timeout=10)
+
+    def _out(self, name):
+        return os.path.join(tempfile.gettempdir(), name).replace("\\", "/")
+
+    def test_rejects_non_integer(self):
+        for bad in ("100", 1.5, True, None):
+            r = self._render({"output_path": self._out("x.png"), "iray_samples": bad})
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn("iray_samples", r.text)
+
+    def test_rejects_negative(self):
+        r = self._render({"output_path": self._out("x.png"), "iray_samples": -1})
+        self.assertEqual(r.status_code, 400)
+
+    def test_rejects_non_iray_engine(self):
+        for engine in ("viewport", "filament"):
+            r = self._render({"output_path": self._out("x.png"),
+                              "engine": engine, "iray_samples": 50})
+            self.assertEqual(r.status_code, 400, engine)
+
+    def test_batch_rejects_bad_variant(self):
+        r = requests.post(f"{BASE_URL}/render/batch", headers=auth_headers(), json={
+            "base": {"iray_samples": 10},
+            "variants": [{"output_path": self._out("a.png")},
+                         {"output_path": self._out("b.png"), "iray_samples": "lots"}],
+        }, timeout=10)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("variants[1]", r.text)
+
+    @unittest.skipUnless(os.environ.get("DSS_LIVE_RENDER"),
+                         "set DSS_LIVE_RENDER=1 to run a real Iray render")
+    def test_live_iray_render_applies_and_restores_samples(self):
+        read_max = iife("return Number(App.getRenderMgr().getActiveRenderer()"
+                        ".getPropertyHolder().findProperty('Max Samples').getValue());")
+        before = execute(read_max).json()["result"]
+        out = self._out("dss_iray_samples_test.png")
+        r = self._render({"output_path": out, "engine": "iray",
+                          "width": 64, "height": 64, "iray_samples": 7})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = get_result(r.json()["request_id"], wait=True, timeout=300).json()
+        self.assertEqual(body.get("status"), "completed", body)
+        readback = body["result"]["iray_samples"]
+        self.assertEqual(readback["requested"], 7)
+        self.assertEqual(readback["applied"], 7)
+        self.assertEqual(readback["previous"], before)
+        self.assertTrue(readback["restored"])
+        self.assertEqual(execute(read_max).json()["result"], before)
+
 
 class TestResponseShape(unittest.TestCase):
 

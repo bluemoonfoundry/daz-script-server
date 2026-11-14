@@ -97,8 +97,11 @@ public:
     // request isn't currently RUNNING (e.g. late call after cancel/timeout).
     void updateProgress(const QString& id, double progress);
 
-    // Mark the running request terminal after script execution.
-    // outWasCancelled is true if cancelRequested was set mid-run.
+    // Record the real outcome after script execution returns. Accepts a
+    // request that is RUNNING, CANCEL_REQUESTED or STALE; a cancel request or
+    // stale timeout that happened mid-run selects the *_after_* variants (or
+    // CANCELLED when a render was actually aborted) instead of discarding the
+    // outcome. outWasCancelled is true only when the final status is CANCELLED.
     void markCompleted(const QString& id, bool executed, const QVariant& result,
                        const QStringList& output, const QString& error,
                        bool& outWasCancelled);
@@ -117,14 +120,14 @@ public:
     // Called from cleanup timer on the main thread. Returns count removed.
     int cleanupExpired(qint64 ttlMs = 60LL * 60LL * 1000LL);
 
-    // Mark any request stuck in RUNNING for longer than staleMs as FAILED.
-    // Covers the case where the underlying DazScript call (e.g. a render
-    // that ends up blocked behind a DAZ Studio modal dialog) never returns:
-    // without this, GET /requests/:id would report "running" forever. This
-    // only updates the client-visible status -- it cannot un-block the main
-    // thread, so if the blocked call eventually does return, markCompleted()
-    // is a no-op for a request already in this terminal state (see markCompleted).
-    // Called from cleanup timer on the main thread. Returns count marked failed.
+    // Mark any request stuck in RUNNING/CANCEL_REQUESTED for longer than
+    // staleMs as STALE. Covers the case where the underlying DazScript call
+    // (e.g. a render blocked behind a DAZ Studio modal dialog) never returns:
+    // without this, GET /requests/:id would report "running" forever. STALE
+    // ends long-poll waits and reports success:false, but it is not final --
+    // it cannot un-block the main thread, and if the blocked call eventually
+    // returns, markCompleted() records completed_after_stale (or failed).
+    // Called from cleanup timer on the main thread. Returns count marked stale.
     int failStaleRunning(qint64 staleMs);
 
     // Mark all QUEUED and RUNNING requests as CANCELLED. Call on server stop
@@ -132,20 +135,37 @@ public:
     void cancelAllPending(const QString& reason = "Server stopped");
 
 private:
+    // QUEUED -> RUNNING -> COMPLETED | FAILED
+    // QUEUED -> CANCELLED                       (cancelled before it started)
+    // RUNNING -> CANCEL_REQUESTED -> CANCELLED  (render actually aborted)
+    //                            -> COMPLETED_AFTER_CANCEL_REQUEST | FAILED
+    // RUNNING|CANCEL_REQUESTED -> STALE -> COMPLETED_AFTER_STALE | FAILED
+    //                                      (or the cancel variants above)
+    // A running script can't be interrupted, so cancel only *requests* a stop;
+    // the status reports what really happened once the script returns.
     enum RequestStatus {
         REQUEST_QUEUED,
         REQUEST_RUNNING,
+        REQUEST_CANCEL_REQUESTED,
+        REQUEST_STALE,
         REQUEST_COMPLETED,
         REQUEST_FAILED,
-        REQUEST_CANCELLED
+        REQUEST_CANCELLED,
+        REQUEST_COMPLETED_AFTER_CANCEL_REQUEST,
+        REQUEST_COMPLETED_AFTER_STALE
     };
+
+    static bool isTerminal(RequestStatus s);
+    // Main thread still owns the work (markCompleted() will be called).
+    static bool isActive(RequestStatus s)
+    { return s == REQUEST_RUNNING || s == REQUEST_CANCEL_REQUESTED || s == REQUEST_STALE; }
 
     struct AsyncRequest {
         AsyncRequest()
             : status(REQUEST_QUEUED), requestType(REQUEST_TYPE_SCRIPT)
             , scriptExecuted(false), progress(0.0)
             , submittedAt(0), startedAt(0), completedAt(0), reportOffset(0)
-            , logTotal(0), cancelRequested(0)
+            , logTotal(0), cancelRequested(0), cancelRequestedAt(0), staleAt(0)
         {}
 
         QString       id;
@@ -171,9 +191,13 @@ private:
         int           logTotal;
         // Always read/written while holding m_mutex.
         int           cancelRequested;
+        qint64        cancelRequestedAt;
+        qint64        staleAt;
     };
 
     std::string statusToString(RequestStatus s) const;
+    std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly);
+    static std::string lifecycleTimesJson(const AsyncRequest& req);
     void ingestReportFromWorkerLocked(AsyncRequest& req);
     void ingestReportLocked(AsyncRequest& req, bool final = false);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);

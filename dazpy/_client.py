@@ -472,8 +472,14 @@ class DazClient:
             A dict with at least ``"status"`` and ``"observation"`` keys.
             Observation contains structured progress, the bounded log tail,
             and the output manifest. Possible status values:
-            ``"queued"``, ``"running"``, ``"completed"``, ``"failed"``,
-            ``"cancelled"``, or ``"not_found"``.
+            ``"queued"``, ``"running"``, ``"cancel_requested"``,
+            ``"stale"``, ``"completed"``, ``"failed"``, ``"cancelled"``,
+            ``"completed_after_cancel_request"``,
+            ``"completed_after_stale"``, or ``"not_found"``.
+            ``cancel_requested`` and ``stale`` are not final: a running
+            script can't be interrupted, so once it returns the status
+            changes to its real outcome. ``cancelled`` means the work
+            really stopped (it never started, or a render was aborted).
         """
         resp = self._get(f"/requests/{request_id}/status")
         if resp.status_code == 404:
@@ -514,8 +520,9 @@ class DazClient:
         """List all tracked async requests (script and render) with their status.
 
         Args:
-            status: Optional filter, one of ``"queued"``, ``"running"``,
-                ``"completed"``, ``"failed"``, ``"cancelled"``. Omit to list
+            status: Optional filter: any status value listed in
+                :meth:`get_request_status` (e.g. ``"running"``,
+                ``"cancel_requested"``, ``"completed"``). Omit to list
                 requests in every status.
 
         Returns:
@@ -544,7 +551,10 @@ class DazClient:
             request_id: The ID returned by :meth:`execute_async_submit`.
 
         Returns:
-            ``True`` if the server confirmed cancellation, ``False`` otherwise.
+            ``True`` if the server accepted the cancel, ``False`` otherwise.
+            A queued request is cancelled at once; a running one only
+            becomes ``cancel_requested`` (scripts can't be interrupted), so
+            poll the request for its real outcome.
         """
         try:
             self.cancel_request_detail(request_id)
@@ -746,8 +756,9 @@ class DazClient:
                 :class:`~dazpy._render_api.RenderResult` with ``wait=False``.
 
         Returns:
-            ``True`` if the server confirmed cancellation, ``False`` otherwise
-            (already finished, not found, or connection error).
+            ``True`` if the server accepted the cancel, ``False`` otherwise
+            (already finished, not found, or connection error). A running
+            render is aborted via ``killRender()``; poll for the final status.
         """
         if not request_id.startswith("rnd-"):
             return False

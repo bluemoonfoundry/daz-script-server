@@ -7613,8 +7613,23 @@ class TestObservationThreadingContract(unittest.TestCase):
 
         self.assertLess(
             completion.index("ingestReportLocked(req, true);"),
-            completion.index("if (req.status != REQUEST_RUNNING) return;"),
+            completion.index("if (!isActive(req.status)) return;"),
         )
+
+    def test_late_completion_keeps_real_outcome(self):
+        # ASSESSMENT #2: a cancel request or stale timeout must not discard
+        # the outcome of a script that returns afterwards.
+        start = self.source.index("void AsyncRequestManager::markCompleted")
+        end = self.source.index("void AsyncRequestManager::markCancelled", start)
+        completion = self.source[start:end]
+        self.assertIn("REQUEST_COMPLETED_AFTER_CANCEL_REQUEST", completion)
+        self.assertIn("REQUEST_COMPLETED_AFTER_STALE", completion)
+
+        cancel = self.source[self.source.index("AsyncRequestManager::cancelImpl("):]
+        cancel = cancel[:cancel.index("std::string AsyncRequestManager::listJson")]
+        self.assertIn("req.status = REQUEST_CANCEL_REQUESTED;", cancel)
+        # Only a still-queued request may be marked CANCELLED synchronously.
+        self.assertEqual(cancel.count("req.status      = REQUEST_CANCELLED;"), 1)
 
 
 if __name__ == "__main__":

@@ -426,9 +426,13 @@ paths:
       tags: [Async]
       summary: Cancel a queued or running async request
       description: |
-        - `queued` requests are removed from the queue immediately.
-        - `running` requests have a cancel flag set and `killRender()` called;
-          DAZ Studio honours the flag when the script returns.
+        - `queued` requests are removed from the queue and become `cancelled`.
+        - `running` requests become `cancel_requested`. A running script can't
+          be interrupted; render jobs get a best-effort `killRender()`. Once the
+          script returns, the status changes to its real outcome: `cancelled`
+          (render aborted), `completed_after_cancel_request` (result kept) or
+          `failed`. Repeating the cancel while `cancel_requested` is a no-op.
+        - Finished requests return 400.
       operationId: cancelRequest
       security:
         - apiToken: []
@@ -437,7 +441,7 @@ paths:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Request cancelled
+          description: Request cancelled (queued) or cancel requested (running)
           content:
             application/json:
               schema:
@@ -610,7 +614,7 @@ paths:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Render job cancelled
+          description: Render cancelled (queued) or abort requested (running)
           content:
             application/json:
               schema:
@@ -766,6 +770,22 @@ components:
           type: string
           description: Scene-panel label of the camera to use
           example: "Camera 1"
+        engine:
+          type: string
+          enum: [iray, viewport, filament]
+          description: Render engine; omitted keeps the scene's current selection
+        iray_samples:
+          type: integer
+          minimum: 0
+          description: |
+            Per-render Iray "Max Samples" override (0 or omitted = scene setting).
+            Applied through the Iray renderer's property holder, read back, and
+            restored after the render; the job result's `iray_samples` object
+            reports `requested`, `applied`, `previous` and `restored`. Rejected
+            with 400 when `engine` is `viewport`/`filament`, and the job fails if
+            the effective render is not Iray or the value is outside the
+            property's range (1..25000 on DS 6.26).
+          example: 500
         figure_morphs:
           type: array
           items:
@@ -1111,20 +1131,47 @@ components:
 
     CancelResponse:
       type: object
-      required: [request_id, status, cancelled_at]
+      required: [request_id, status, cancel_requested_at, message]
       properties:
         request_id:
           type: string
         status:
           type: string
-          enum: [cancelled]
+          enum: [cancelled, cancel_requested, stale]
+          description: |
+            `cancelled` only when the request was still queued. Otherwise the
+            request's current status; poll it for the real outcome.
+        message:
+          type: string
+        cancel_requested_at:
+          type: string
+          format: date-time
         cancelled_at:
           type: string
           format: date-time
+          description: Present only when `status` is `cancelled`
 
     RequestStatus:
       type: string
-      enum: [queued, running, completed, failed, cancelled]
+      enum:
+        - queued
+        - running
+        - cancel_requested
+        - stale
+        - completed
+        - failed
+        - cancelled
+        - completed_after_cancel_request
+        - completed_after_stale
+      description: |
+        Final: `completed`, `failed`, `cancelled`,
+        `completed_after_cancel_request`, `completed_after_stale`.
+        Not final: `cancel_requested` (cancel asked while the script was
+        running) and `stale` (running past the stale timeout, default 30 min;
+        reported with `success: false` and ends long-polls, but changes to the
+        real outcome if the script returns). `cancelled` means the work
+        really stopped: it never started, or a render was aborted. Results
+        keep `cancel_requested_at` / `stale_at` once set.
 
     StatusResponse:
       type: object

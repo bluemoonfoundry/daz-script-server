@@ -1943,6 +1943,30 @@ static const char* unbindRenderFinishedJs =
     "    if (_finishedBound && _finishedSig && typeof _finishedSig.disconnect === \"function\")\n"
     "      _finishedSig.disconnect(_onRenderFinished);\n";
 
+// Reads an optional "iray_samples" field from a request object. Absent → keeps
+// *out (the caller's default); 0 means "use the scene's Iray setting". Rejects
+// non-integers and negatives so a typo can't silently become "scene default".
+// The upper bound is the live property's clamp, checked in the render script.
+static bool readIraySamples(const QVariantMap& m, int* out, std::string* err)
+{
+    if (!m.contains("iray_samples")) return true;
+    const QVariant v = m.value("iray_samples");
+    bool numeric = false;
+    switch (v.type()) {
+    case QVariant::Int: case QVariant::LongLong:
+    case QVariant::UInt: case QVariant::ULongLong: case QVariant::Double:
+        numeric = true; break;
+    default: break;
+    }
+    const double d = numeric ? v.toDouble() : -1.0;
+    if (!numeric || d != (double)(long long)d || d < 0 || d > 2147483647.0) {
+        *err = "iray_samples must be a non-negative integer (0 = scene default)";
+        return false;
+    }
+    *out = (int)d;
+    return true;
+}
+
 // Builds the DazScript that applies morphs and triggers the render.
 // The script runs on the main thread via processNextAsyncRequest().
 //
@@ -2052,8 +2076,8 @@ static QString buildRenderScript(
     //   Engine switching: renderMgr.setActiveRenderer(DzRenderer*) — requires
     //     renderer lookup by class name; names are runtime-registered so not in
     //     the SDK headers. Left as a TODO until tested against a live instance.
-    //   iray_samples: not a DzRenderOptions property — it lives in iray's own
-    //     render settings, accessible via the iray renderer object. TODO.
+    //   iray_samples: not a DzRenderOptions property — applied below through
+    //     the Iray renderer's property holder ("Max Samples").
     script +=
         "  var renderMgr = App.getRenderMgr();\n"
         "  var opts = renderMgr.getRenderOptions();\n"
@@ -2116,11 +2140,45 @@ static QString buildRenderScript(
         "    };\n"
         "  }\n";
 
-    // iray_samples: not exposed on DzRenderOptions or the DzIrayRenderer object
-    // in DazScript. DAZ stores iray-specific settings outside the standard render
-    // options API; the access path is not yet determined. Field is accepted but
-    // silently ignored until resolved.
-    script += "\n";
+    // iray_samples: Iray's sample cap is the "Max Samples" DzIntProperty on
+    // renderMgr.getActiveRenderer().getPropertyHolder() (confirmed live on
+    // DS 6.26: clamped -1..25000; same path dazpy/_render.py uses for
+    // max_samples). It's a per-render override: the previous value is
+    // restored after doRender() so the request doesn't leak into the user's
+    // persistent render settings. The request fails (rather than silently
+    // rendering with the scene default) if the effective render isn't an
+    // Iray software render, the property can't be found, the value is out
+    // of the property's range, or the readback doesn't match.
+    script +=
+        "  var irayReadback = null;\n"
+        "  var _maxSamplesProp = null;\n"
+        "  var _prevMaxSamples = null;\n"
+        "  if (iraySamples > 0) {\n"
+        "    var _iRenderer = renderMgr.getActiveRenderer();\n"
+        "    var _iClass = _iRenderer ? String(_iRenderer.className()) : null;\n"
+        "    if (_iClass !== \"DzIrayRenderer\" || Number(opts.renderType) !== Number(opts.Software))\n"
+        "      throw new Error(\"iray_samples requires an Iray render; effective renderer is \" + _iClass"
+        " + \" with renderType \" + Number(opts.renderType));\n"
+        "    var _iHolder = _iRenderer.getPropertyHolder();\n"
+        "    var _iProp = _iHolder ? _iHolder.findProperty(\"Max Samples\") : null;\n"
+        "    if (!_iProp) throw new Error(\"iray_samples: Iray 'Max Samples' property not found\");\n"
+        "    if (_iProp.isClamped && _iProp.isClamped()\n"
+        "        && (iraySamples < _iProp.getMin() || iraySamples > _iProp.getMax()))\n"
+        "      throw new Error(\"iray_samples \" + iraySamples + \" is outside the supported range \"\n"
+        "        + _iProp.getMin() + \"..\" + _iProp.getMax());\n"
+        "    _prevMaxSamples = Number(_iProp.getValue());\n"
+        "    _maxSamplesProp = _iProp;\n"
+        "    _iProp.setValue(iraySamples);\n"
+        "    var _applied = Number(_iProp.getValue());\n"
+        "    if (_applied !== iraySamples) {\n"
+        "      _iProp.setValue(_prevMaxSamples);\n"
+        "      throw new Error(\"iray_samples readback mismatch: requested \" + iraySamples + \", got \" + _applied);\n"
+        "    }\n"
+        "    irayReadback = {\n"
+        "      requested: iraySamples, applied: _applied, previous: _prevMaxSamples, restored: false,\n"
+        "      provenance: {kind: \"live_readback\", source: \"DzIrayRenderer.getPropertyHolder().findProperty('Max Samples')\"}\n"
+        "    };\n"
+        "  }\n\n";
 
     // ── Render ────────────────────────────────────────────────────────────
     // doRender()'s own return value is undocumented in the SDK (no
@@ -2141,8 +2199,13 @@ static QString buildRenderScript(
         "  } finally {\n";
     script += unbindRenderFinishedJs;
     script +=
+        "    if (_maxSamplesProp) {\n"
+        "      _maxSamplesProp.setValue(_prevMaxSamples);\n"
+        "      irayReadback.restored = Number(_maxSamplesProp.getValue()) === _prevMaxSamples;\n"
+        "    }\n"
         "  }\n"
-        "  return {success: renderSucceeded === true, output_path: outputPath, engine: engineReadback};\n"
+        "  return {success: renderSucceeded === true, output_path: outputPath, engine: engineReadback,"
+        " iray_samples: irayReadback};\n"
         "})();\n";
 
     return script;
@@ -2304,10 +2367,19 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
     // ── Optional fields ───────────────────────────────────────────────────
     int  width       = body.contains("width")        ? body.value("width").toInt()        : 0;
     int  height      = body.contains("height")       ? body.value("height").toInt()       : 0;
-    int  iraySamples = body.contains("iray_samples") ? body.value("iray_samples").toInt() : 0;
+    int  iraySamples = 0;
     bool resetMorphs = body.value("reset_morphs").toBool();
     QString camera   = body.value("camera").toString().trimmed();
     QString engine   = body.value("engine").toString().trimmed().toLower();
+
+    {
+        std::string err;
+        if (!readIraySamples(body, &iraySamples, &err))
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD, err)));
+    }
+    if (iraySamples > 0 && (engine == "viewport" || engine == "filament"))
+        return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+            "iray_samples requires the iray engine")));
 
     if ((width > 0) != (height > 0))
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -2416,7 +2488,12 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
 
     int     baseWidth       = base.contains("width")        ? base.value("width").toInt()        : 0;
     int     baseHeight      = base.contains("height")       ? base.value("height").toInt()       : 0;
-    int     baseIraySamples = base.contains("iray_samples") ? base.value("iray_samples").toInt() : 0;
+    int     baseIraySamples = 0;
+    {
+        std::string err;
+        if (!readIraySamples(base, &baseIraySamples, &err))
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD, "base." + err)));
+    }
     bool    baseResetMorphs = base.value("reset_morphs").toBool();
     QString baseCamera      = base.value("camera").toString().trimmed();
     QString baseEngine      = base.value("engine").toString().trimmed().toLower();
@@ -2488,7 +2565,13 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
         // Merge scalar fields: variant overrides base
         int     width       = v.contains("width")        ? v.value("width").toInt()        : baseWidth;
         int     height      = v.contains("height")       ? v.value("height").toInt()       : baseHeight;
-        int     iraySamples = v.contains("iray_samples") ? v.value("iray_samples").toInt() : baseIraySamples;
+        int     iraySamples = baseIraySamples;
+        {
+            std::string err;
+            if (!readIraySamples(v, &iraySamples, &err))
+                return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                    viStr + "." + err)));
+        }
         bool    resetMorphs = v.contains("reset_morphs") ? v.value("reset_morphs").toBool(): baseResetMorphs;
         QString camera      = v.contains("camera")       ? v.value("camera").toString().trimmed() : baseCamera;
         QString engine      = v.contains("engine")       ? v.value("engine").toString().trimmed().toLower() : baseEngine;
@@ -2503,6 +2586,9 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
                 && engine != "iray" && engine != "viewport" && engine != "filament")
             return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
                 viStr + ".engine must be one of: iray, viewport, filament")));
+        if (iraySamples > 0 && (engine == "viewport" || engine == "filament"))
+            return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
+                viStr + ": iray_samples requires the iray engine")));
 
         // Merge figures: variant wins if it specifies figures/figure;
         // if variant only has morphs and base has one figure, override its morphs.
@@ -3122,8 +3208,8 @@ void DzScriptServerPane::processNextAsyncRequest()
 	QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
 }
 
-// Removes completed/failed/cancelled requests older than 1 hour, and fails
-// out any request that has been RUNNING for longer than
+// Removes finished (and stale) requests older than 1 hour, and marks stale
+// any request that has been running for longer than
 // ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN (see failStaleRunning()).
 // Fired by m_pCleanupTimer every 5 minutes on the main thread.
 void DzScriptServerPane::cleanupExpiredRequests()
@@ -3133,11 +3219,11 @@ void DzScriptServerPane::cleanupExpiredRequests()
 		appendLog(QString("[INFO] Async cleanup: removed %1 expired request(s)").arg(removed));
 	}
 
-	int failed = m_pAsyncMgr->failStaleRunning(
+	int stale = m_pAsyncMgr->failStaleRunning(
 		(qint64)ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN * 60 * 1000);
-	if (failed > 0) {
-		appendLog(QString("[WARN] Async cleanup: %1 request(s) stuck running past %2 min, marked failed")
-			.arg(failed).arg(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN));
+	if (stale > 0) {
+		appendLog(QString("[WARN] Async cleanup: %1 request(s) stuck running past %2 min, marked stale")
+			.arg(stale).arg(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN));
 	}
 }
 
