@@ -25,6 +25,11 @@ All notable changes to DazScript Server are documented here.
   `/geometry/frames` and `/scene/events` only checked the token. They now run
   the IP whitelist too, and the POST/DELETE routes are rate limited. Polling and
   streaming GETs are not rate limited.
+- **Companion-plugin routes now require authentication.** Routes registered via
+  `registerPluginRoute()` used to run no checks at all, so they were reachable
+  without a token. They now go through the same IP whitelist, token check and
+  (for non-GET methods) rate limit and body limit as built-in routes.
+  Unregistered paths still return 404.
 
 ### Removed
 

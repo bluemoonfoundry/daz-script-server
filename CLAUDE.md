@@ -139,8 +139,9 @@ Default: `127.0.0.1:18811`
 **Middleware chains:** every authenticated route runs exactly one of two chains
 (`setupRoutes()`): `m_pWriteChain` (IP whitelist → rate limit → body size → auth)
 for all POST/DELETE routes, `m_pReadChain` (IP whitelist → auth) for polling GETs
-and SSE streams. `tests/test_route_security.py` (unit suite) enforces this. New
-routes must use one of them.
+and SSE streams. Companion-plugin routes (`applyPluginRoutes()` catch-alls) pick
+the chain by method after route matching. `tests/test_route_security.py` (unit
+suite) enforces this. New routes must use one of them.
 
 **Rate Limiting:** Per-IP sliding window (default: 60 req/60s). QMutex-protected. Periodic cleanup (every 100 requests).
 

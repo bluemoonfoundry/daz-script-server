@@ -23,7 +23,7 @@ PANE_CPP = os.path.join(ROOT, "src", "DzScriptServerPane.cpp")
 # Routes that are public on purpose (no auth, no whitelist).
 PUBLIC_ROUTES = {("GET", "/status"), ("GET", "/health"), ("GET", "/metrics")}
 
-# Companion-plugin catch-alls dispatch to plugin slots. Tracked separately.
+# Companion-plugin catch-alls (applyPluginRoutes) are checked separately below.
 CATCH_ALL = "/(.*)"
 
 ROUTE_RE = re.compile(r'm_pServer->(Get|Post|Put|Delete|Patch)\s*\(\s*"([^"]+)"')
@@ -104,6 +104,21 @@ class TestRouteSecurity(unittest.TestCase):
             with self.subTest(route=key):
                 self.assertIn(key, found)
                 self.assertIn("m_pWriteChain->run(ctx)", found[key])
+
+    def test_plugin_catch_all_runs_chains(self):
+        start = self.src.index("void DzScriptServerPane::applyPluginRoutes()")
+        end = self.src.index('m_pServer->Get   ("/(.*)"', start)
+        dispatch = self.src[start:end]
+        self.assertRegex(
+            dispatch,
+            r'\(method == "GET"\)\s*\?\s*\*m_pReadChain\s*:\s*\*m_pWriteChain')
+        # The chain must run after route matching (unknown paths stay 404)
+        # and before the plugin slot is invoked.
+        not_found = dispatch.index('"{\\"error\\":\\"not found\\"}"')
+        chain_run = dispatch.index("chain.run(ctx)")
+        invoke = dispatch.index("QMetaObject::invokeMethod(receiver.data()")
+        self.assertLess(not_found, chain_run)
+        self.assertLess(chain_run, invoke)
 
     def test_httplib_payload_limit_set_from_config(self):
         self.assertRegex(

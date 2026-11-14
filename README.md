@@ -695,6 +695,11 @@ Server. Routes are resolved via a `DzScriptServerPane` pointer published on
 `qApp`, so companion plugins discovered at DAZ Studio startup are automatically
 wired in. Registered routes support path parameters (e.g. `/export/:id/status`).
 
+Plugin routes get the same security checks as built-in routes: GET routes
+require the API token and honour the IP whitelist; POST/PUT/DELETE/PATCH routes
+are also rate limited and body-size limited. Requests to unregistered paths
+return 404.
+
 ### 🐛 Bug Fixes
 
 - Fixed CRT heap mismatch crash when a catch-all dispatcher routed to a

@@ -1386,6 +1386,21 @@ void DzScriptServerPane::applyPluginRoutes()
 				res.set_content("{\"error\":\"not found\"}", "application/json");
 				return;
 			}
+
+			// Plugin routes get the same checks as built-in ones: GET uses the
+			// read chain (IP whitelist + auth), every other method the write
+			// chain (IP whitelist + rate limit + body size + auth). Runs after
+			// matching so unknown paths still return 404 rather than 401.
+			{
+				auto ctx = toContext(req);
+				const MiddlewareChain& chain =
+					(method == "GET") ? *m_pReadChain : *m_pWriteChain;
+				if (!chain.run(ctx)) {
+					applyContext(ctx, res);
+					return;
+				}
+			}
+
 			if (!receiver) {
 				res.status = 503;
 				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
