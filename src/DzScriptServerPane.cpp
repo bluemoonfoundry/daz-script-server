@@ -614,6 +614,29 @@ void DzScriptServerPane::startServer()
 	// default but we set it explicitly so the intent is clear.
 	m_pServer->set_write_timeout(5, 0);
 
+	// Cap request bodies while httplib is still reading them. Without this,
+	// httplib buffers up to its 100 MB compile-time default on every route before
+	// any middleware runs. The spin box is disabled while the server is running,
+	// so the value can't change under the worker threads.
+	const size_t maxBodyBytes = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
+	m_pServer->set_payload_max_length(maxBodyBytes);
+
+	// httplib returns 413 with an empty body when it hits the payload cap; give
+	// it the same JSON shape BodySizeMiddleware produces. Leave every other
+	// error response alone (handlers have already filled in their bodies).
+	const int maxBodyMB = m_nMaxBodySizeMB;
+	m_pServer->set_error_handler(
+		[maxBodyMB, maxBodyBytes](const httplib::Request&, httplib::Response& res) {
+			if (res.status != 413 || !res.body.empty())
+				return httplib::Server::HandlerResponse::Unhandled;
+			const std::string detail =
+				"Body exceeds the maximum of " + std::to_string(maxBodyMB) +
+				" MB (" + std::to_string(maxBodyBytes) + " bytes)";
+			res.set_content(ErrorResponse::build(ErrorCode::BODY_TOO_LARGE, detail),
+			                "application/json");
+			return httplib::Server::HandlerResponse::Handled;
+		});
+
 	// Limit concurrent connections to prevent resource exhaustion
 	// cpp-httplib spawns a thread per request; limit keep-alive to reduce thread buildup
 	m_pServer->set_keep_alive_max_count(ServerConfig::HTTP_KEEP_ALIVE_MAX_COUNT);
@@ -910,19 +933,26 @@ static void applyContext(const HttpContext& ctx, httplib::Response& res)
 void DzScriptServerPane::setupRoutes()
 {
 	// ── Middleware chains ─────────────────────────────────────────────────────
-	m_pAuthChain.reset(new MiddlewareChain());
-	m_pAuthChain->add(new AuthMiddleware(m_auth, m_metrics, this));
+	//
+	// Every authenticated route runs one of these two chains, so the IP whitelist
+	// always runs before auth. tests/test_route_security.py enforces this.
+	//
+	// Write chain: every POST/DELETE route (anything that executes, mutates or
+	// writes to disk). BodySizeMiddleware is defence in depth: httplib's
+	// set_payload_max_length (startServer) already stops oversized bodies while
+	// they are being read.
+	m_pWriteChain.reset(new MiddlewareChain());
+	m_pWriteChain->add(new IPWhitelistMiddleware(m_ipWhitelist, this));
+	m_pWriteChain->add(new RateLimitMiddleware(m_rateLimiter, this));
+	m_pWriteChain->add(new BodySizeMiddleware(m_nMaxBodySizeMB));
+	m_pWriteChain->add(new AuthMiddleware(m_auth, m_metrics, this));
 
-	m_pExecuteSyncChain.reset(new MiddlewareChain());
-	m_pExecuteSyncChain->add(new IPWhitelistMiddleware(m_ipWhitelist, this));
-	m_pExecuteSyncChain->add(new RateLimitMiddleware(m_rateLimiter, this));
-	m_pExecuteSyncChain->add(new BodySizeMiddleware(m_nMaxBodySizeMB));
-	m_pExecuteSyncChain->add(new AuthMiddleware(m_auth, m_metrics, this));
-
-	m_pBaseExecuteChain.reset(new MiddlewareChain());
-	m_pBaseExecuteChain->add(new IPWhitelistMiddleware(m_ipWhitelist, this));
-	m_pBaseExecuteChain->add(new RateLimitMiddleware(m_rateLimiter, this));
-	m_pBaseExecuteChain->add(new AuthMiddleware(m_auth, m_metrics, this));
+	// Read chain: GET polling and SSE routes. Not rate limited, because clients
+	// poll /requests/:id/status in a loop and a 60 req/60s window would throttle
+	// a single well-behaved job watcher.
+	m_pReadChain.reset(new MiddlewareChain());
+	m_pReadChain->add(new IPWhitelistMiddleware(m_ipWhitelist, this));
+	m_pReadChain->add(new AuthMiddleware(m_auth, m_metrics, this));
 
 	// ── Request handlers ──────────────────────────────────────────────────────
 	m_pStatusHandler.reset(new StatusHandler(DZSRV_VERSION_STR));
@@ -978,26 +1008,26 @@ void DzScriptServerPane::setupRoutes()
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
 		auto ctx = toContext(req);
-		if (m_pExecuteSyncChain->run(ctx)) m_pExecuteHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pExecuteHandler->handle(ctx);
 		applyContext(ctx, res);
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 	});
 
 	m_pServer->Post("/scripts/register", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pRegisterHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pRegisterHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Get("/scripts", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pScriptListHandler->handle(ctx);
+		if (m_pReadChain->run(ctx)) m_pScriptListHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Delete("/scripts/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pScriptDeleteHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pScriptDeleteHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1010,7 +1040,7 @@ void DzScriptServerPane::setupRoutes()
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 		auto ctx = toContext(req);
-		if (m_pBaseExecuteChain->run(ctx)) m_pScriptExecHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pScriptExecHandler->handle(ctx);
 		applyContext(ctx, res);
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 	});
@@ -1019,37 +1049,37 @@ void DzScriptServerPane::setupRoutes()
 
 	m_pServer->Post("/execute/async", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pBaseExecuteChain->run(ctx)) m_pAsyncExecHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pAsyncExecHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Post("/scripts/([^/]+)/async", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pBaseExecuteChain->run(ctx)) m_pAsyncScriptHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pAsyncScriptHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Get("/requests/([^/]+)/status", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pAsyncStatusHandler->handle(ctx);
+		if (m_pReadChain->run(ctx)) m_pAsyncStatusHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Get("/requests/([^/]+)/result", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pAsyncResultHandler->handle(ctx);
+		if (m_pReadChain->run(ctx)) m_pAsyncResultHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Delete("/requests/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pAsyncCancelHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pAsyncCancelHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Get("/requests", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pAsyncListHandler->handle(ctx);
+		if (m_pReadChain->run(ctx)) m_pAsyncListHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1057,25 +1087,25 @@ void DzScriptServerPane::setupRoutes()
 
 	m_pServer->Post("/render", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pBaseExecuteChain->run(ctx)) m_pRenderHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pRenderHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Post("/render/batch", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pBaseExecuteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Post("/render/animation", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pBaseExecuteChain->run(ctx)) m_pRenderAnimationHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pRenderAnimationHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	m_pServer->Post("/render/([^/]+)/cancel", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pRenderCancelHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pRenderCancelHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1083,14 +1113,14 @@ void DzScriptServerPane::setupRoutes()
 
 	m_pServer->Post("/scene/save-copy", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pSaveCopyHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pSaveCopyHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
 	// Fork: deformed figure vertices for a frame list as binary (GeometryExport.h)
 	m_pServer->Post("/geometry/frames", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
-		if (m_pAuthChain->run(ctx)) m_pGeometryFramesHandler->handle(ctx);
+		if (m_pWriteChain->run(ctx)) m_pGeometryFramesHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -1111,7 +1141,7 @@ void DzScriptServerPane::setupRoutes()
 		// so on failure we set status/content directly.
 		{
 			auto ctx = toContext(req);
-			if (!m_pAuthChain->run(ctx)) {
+			if (!m_pReadChain->run(ctx)) {
 				res.status = ctx.responseStatus;
 				res.set_content(ctx.responseBody, "application/json");
 				return;
@@ -1197,7 +1227,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Get("/render/([^/]+)/progress", [this](const httplib::Request& req, httplib::Response& res) {
 		{
 			auto ctx = toContext(req);
-			if (!m_pAuthChain->run(ctx)) {
+			if (!m_pReadChain->run(ctx)) {
 				res.status = ctx.responseStatus;
 				res.set_content(ctx.responseBody, "application/json");
 				return;

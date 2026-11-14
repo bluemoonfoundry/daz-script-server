@@ -24,6 +24,8 @@ import requests
 
 BASE_URL = "http://127.0.0.1:18811"
 TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+# Must match "Max Body Size (MB)" in the DAZ Studio pane (default 5).
+MAX_BODY_SIZE_MB = int(os.environ.get("DAZ_MAX_BODY_SIZE_MB", "5"))
 
 
 def load_token():
@@ -962,15 +964,38 @@ class TestConcurrency(unittest.TestCase):
 
 class TestStress(unittest.TestCase):
 
-    def test_oversized_body_returns_413(self):
-        padding = "x" * (6 * 1024 * 1024)
-        r = requests.post(
-            f"{BASE_URL}/execute",
-            headers={**auth_headers(), "Content-Type": "application/json"},
-            data=f'{{"script": "{padding}"}}',
-            timeout=30,
-        )
-        self.assertEqual(r.status_code, 413)
+    # Every POST route family must reject bodies over the configured limit
+    # (daz-script-server-5d6f.1). The body is only slightly over the limit:
+    # httplib stops reading once it passes the cap, and a large unread tail
+    # makes the server's close send a TCP RST that can hide the 413 from
+    # the client.
+    OVERSIZE_ROUTES = (
+        "/execute",
+        "/execute/async",
+        "/scripts/register",
+        "/scripts/size-limit-probe/execute",
+        "/scripts/size-limit-probe/async",
+        "/render",
+        "/render/batch",
+        "/render/animation",
+        "/scene/save-copy",
+        "/geometry/frames",
+    )
+
+    def test_oversized_body_returns_413_on_every_post_route(self):
+        limit = MAX_BODY_SIZE_MB * 1024 * 1024
+        padding = "x" * (limit + 1024)
+        body = f'{{"script": "{padding}"}}'.encode("ascii")
+        for path in self.OVERSIZE_ROUTES:
+            with self.subTest(path=path):
+                r = requests.post(
+                    f"{BASE_URL}{path}",
+                    headers={**auth_headers(), "Content-Type": "application/json"},
+                    data=body,
+                    timeout=30,
+                )
+                self.assertEqual(r.status_code, 413)
+                self.assertEqual(r.json().get("error_code"), "BODY_TOO_LARGE")
 
     def test_unknown_endpoint_returns_404(self):
         r = requests.get(f"{BASE_URL}/completely/unknown/path", timeout=5)

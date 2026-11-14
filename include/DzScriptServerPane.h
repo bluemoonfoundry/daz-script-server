@@ -293,9 +293,10 @@ private:
 	RenderProgressBroker* m_pRenderProgress;  // SSE render progress notification broker
 
 	// ── Middleware chains (created in setupRoutes) ────────────────────────────
-	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only
-	std::unique_ptr<MiddlewareChain> m_pExecuteSyncChain;  // IP + rate + body_size + auth
-	std::unique_ptr<MiddlewareChain> m_pBaseExecuteChain;  // IP + rate + auth
+	// Every authenticated route uses exactly one of these two chains, so the IP
+	// whitelist always runs before auth (tests/test_route_security.py checks this).
+	std::unique_ptr<MiddlewareChain> m_pWriteChain;  // IP + rate + body_size + auth (POST/DELETE)
+	std::unique_ptr<MiddlewareChain> m_pReadChain;   // IP + auth (GET polling / SSE streams)
 
 	// ── Request handlers (created in setupRoutes) ─────────────────────────────
 	std::unique_ptr<StatusHandler>        m_pStatusHandler;

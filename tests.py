@@ -55,6 +55,8 @@ def main():
         suite.addTests(loader.loadTestsFromModule(_unit))
         from tests import test_math3 as _math3
         suite.addTests(loader.loadTestsFromModule(_math3))
+        from tests import test_route_security as _routes
+        suite.addTests(loader.loadTestsFromModule(_routes))
 
     if "api" in args.suites:
         from tests import test_api as _api

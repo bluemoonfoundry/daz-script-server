@@ -1551,7 +1551,9 @@ All settings are persisted via QSettings and restored between DAZ Studio session
 
 - Exact match only (wildcards not supported in v1.2.0)
 - Blocked IPs receive HTTP 403 Forbidden
-- Checked before authentication (efficient)
+- Checked before authentication on every authenticated route (execute, script
+  registry, async requests, render, scene I/O, SSE streams). `/status`,
+  `/health` and `/metrics` are public and skip it
 - Essential for network-exposed deployments
 
 ### ⏱️ Rate Limiting
@@ -1566,13 +1568,16 @@ All settings are persisted via QSettings and restored between DAZ Studio session
 - Separate tracking per IP address
 - Exceeded IPs receive HTTP 429 Too Many Requests
 - Logs violations with timestamp and client IP
+- Applies to every POST/DELETE route. Polling and streaming GETs
+  (`/requests/*`, `GET /scripts`, `/render/:id/progress`, `/scene/events`)
+  aren't rate limited, so a client watching a job isn't throttled
 
 ### 🎛️ Advanced Limits
 
 | Setting | Default | Range | Description |
 |---------|---------|-------|-------------|
 | **Max Concurrent Requests** | `10` | 5-50 | Maximum simultaneous requests |
-| **Max Request Body Size** | `5` MB | 1-50 | Maximum request body size |
+| **Max Request Body Size** | `5` MB | 1-50 | Maximum request body size, enforced on every route while the body is read (HTTP 413, `BODY_TOO_LARGE`) |
 | **Max Script Text Length** | `1024` KB (1 MB) | 100-10240 | Maximum inline script size |
 
 **Protection:**

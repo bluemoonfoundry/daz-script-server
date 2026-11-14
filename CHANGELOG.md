@@ -13,6 +13,19 @@ All notable changes to DazScript Server are documented here.
   prefix (`libdsp_DazScriptServer.dylib`), matching the SDK samples
   ([#51](https://github.com/bluemoonfoundry/daz-script-server/issues/51)).
 
+### Fixed
+
+- **Request body limit on every route.** The configured Max Request Body Size
+  was only checked on `POST /execute`, after httplib had already buffered up to
+  100 MB. The server now passes the limit to httplib, which stops reading at the
+  cap and returns 413 `BODY_TOO_LARGE` on every route.
+- **IP whitelist and rate limiter on every authenticated route.**
+  `/scripts/register`, `DELETE /scripts/:id`, `/requests/*`,
+  `/render/:id/cancel`, `/render/:id/progress`, `/scene/save-copy`,
+  `/geometry/frames` and `/scene/events` only checked the token. They now run
+  the IP whitelist too, and the POST/DELETE routes are rate limited. Polling and
+  streaming GETs are not rate limited.
+
 ### Removed
 
 - The `DS6_MACOS_ENABLED` repository variable gate on macOS DS6 release builds.

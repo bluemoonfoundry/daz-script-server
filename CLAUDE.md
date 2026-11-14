@@ -134,12 +134,20 @@ Default: `127.0.0.1:18811`
 
 **Authentication:** 32-byte hex tokens (128-bit) via `SecureRandom` (OS crypto APIs). Stored in `~/.daz3d/dazscriptserver_token.txt` (chmod 600). Thread-safe (loaded once, read-only).
 
-**IP Whitelist:** Exact match, comma-separated list. Default disabled. Checked after concurrent limit, before rate limiting/auth.
+**IP Whitelist:** Exact match, comma-separated list. Default disabled. Checked after concurrent limit, before rate limiting/auth, on every authenticated route.
+
+**Middleware chains:** every authenticated route runs exactly one of two chains
+(`setupRoutes()`): `m_pWriteChain` (IP whitelist → rate limit → body size → auth)
+for all POST/DELETE routes, `m_pReadChain` (IP whitelist → auth) for polling GETs
+and SSE streams. `tests/test_route_security.py` (unit suite) enforces this. New
+routes must use one of them.
 
 **Rate Limiting:** Per-IP sliding window (default: 60 req/60s). QMutex-protected. Periodic cleanup (every 100 requests).
 
 **Input Validation:**
-- Body size: 1-50 MB (default 5MB) → HTTP 413
+- Body size: 1-50 MB (default 5MB) → HTTP 413. Enforced on every route by
+  httplib `set_payload_max_length` while the body is read (JSON body via
+  `set_error_handler`), plus `BodySizeMiddleware` in the write chain
 - Script length: 100-10240 KB (default 1MB) → HTTP 400
 - JSON parsing with line numbers
 - Script file: absolute path, exists, is file
