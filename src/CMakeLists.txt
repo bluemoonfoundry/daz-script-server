@@ -103,9 +103,18 @@ else()
 	set(DAZSCRIPTSERVER_OUTPUT_NAME "DazScriptServer")
 endif()
 
+# On macOS the SDK6 samples keep CMake's default "lib" prefix, producing
+# libdsp_<name>.dylib — the name DAZ Studio 6 on macOS is known to load
+# (#51). Everywhere else the file name carries no prefix.
+if(APPLE AND DAZ_SDK_VERSION STREQUAL "6")
+	set(DAZSCRIPTSERVER_PREFIX "lib")
+else()
+	set(DAZSCRIPTSERVER_PREFIX "")
+endif()
+
 set_target_properties(DazScriptServer PROPERTIES
 	OUTPUT_NAME "${DAZSCRIPTSERVER_OUTPUT_NAME}"
-	PREFIX ""
+	PREFIX "${DAZSCRIPTSERVER_PREFIX}"
 	FOLDER ""
 	PROJECT_LABEL "DazScriptServer"
 )

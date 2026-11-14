@@ -1424,7 +1424,7 @@ There are two options for getting the plugin. For most users, Option A, download
 
 | Daz Studio | Plugin to use |
 |---|---|
-| 6.26 | `dsp_DazScriptServer-ds6.26-*` from the latest release |
+| 6.26 | `dsp_DazScriptServer-ds6.26-windows.dll` or `libdsp_DazScriptServer-ds6.26-macos.dylib` from the latest release |
 | 6.25 | `dsp_DazScriptServer-ds6-*` from **v2.9.3** (last 6.25-compatible release); pin the client with `pip install dazpy==2.9.3` |
 
 Each Studio 6 release only loads plugins built against an SDK in its own
@@ -1441,8 +1441,12 @@ Install a separate Qt 6.10 development kit matching Studio's bundled Qt version,
 including the `qt5compat` module. Set `DAZ_SDK_DIR_V6` to the SDK root and
 `QT6_DIR` to the development kit's `lib/cmake/Qt6` directory, then run
 `./build.sh build --sdk-version 6`. The Windows output is
-`build-sdk6/plugin/Release/dsp_DazScriptServer.dll`. Close Studio before replacing
-the installed plugin, then restart Studio to load the rebuilt DLL.
+`build-sdk6/plugin/Release/dsp_DazScriptServer.dll`; the macOS output is
+`build-sdk6/plugin/libdsp_DazScriptServer.dylib` (always x86_64, since the SDK's
+`libdzcore.dylib` has no arm64 slice; Studio 6 runs under Rosetta 2 on Apple
+Silicon). On macOS, copy it to `DAZStudio6 64-bit/plugins/` and keep the
+`libdsp_` prefix. Close Studio before replacing the installed plugin, then
+restart Studio to load the rebuilt plugin.
 
 ### build.sh convenience script
 

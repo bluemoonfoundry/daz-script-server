@@ -58,12 +58,12 @@ cmake -B build -S . \
   -DCMAKE_OSX_ARCHITECTURES="x86_64"
 cmake --build build --config Release
 
-# macOS Apple Silicon DS6
+# macOS DS6 (always x86_64: the SDK's libdzcore.dylib has no arm64 slice)
 cmake -B build-sdk6 -S . \
   -DDAZ_SDK_DIR="/path/to/Daz Studio 6 SDK" \
   -DDAZ_SDK_VERSION=6 \
   -DQt6_DIR="/path/to/qt6/6.10.3/macos/lib/cmake/Qt6" \
-  -DCMAKE_OSX_ARCHITECTURES="arm64"
+  -DCMAKE_OSX_ARCHITECTURES="x86_64"
 cmake --build build-sdk6 --config Release
 ```
 
@@ -115,7 +115,7 @@ If a DAZ SDK is updated, invalidate the relevant cache:
    key: daz-sdk-4.5-windows-private-v1  →  daz-sdk-4.5-windows-private-v2
 
    # DS6 macOS — old → new
-   key: daz-sdk-6-macos-private-v1  →  daz-sdk-6-macos-private-v2
+   key: daz-sdk-6.26-macos-private-v2  →  daz-sdk-6.26-macos-private-v3
    ```
 3. Commit and push
 
@@ -193,7 +193,7 @@ gh run download
 gh run download --name DazScriptServer-windows-ds4-Release
 gh run download --name DazScriptServer-windows-ds6-Release
 gh run download --name DazScriptServer-macos-Intel-ds4-Release
-gh run download --name DazScriptServer-macos-AppleSilicon-ds6-Release
+gh run download --name DazScriptServer-macos-Intel-ds6-Release
 
 # Download from specific run
 gh run download <run-id>
@@ -247,8 +247,8 @@ ls -lh build/plugin/DazScriptServer.dylib
 lipo -info build/plugin/DazScriptServer.dylib
 
 # macOS DS6
-ls -lh build-sdk6/plugin/dsp_DazScriptServer.dylib
-lipo -info build-sdk6/plugin/dsp_DazScriptServer.dylib
+ls -lh build-sdk6/plugin/libdsp_DazScriptServer.dylib
+lipo -info build-sdk6/plugin/libdsp_DazScriptServer.dylib
 ```
 
 ## Advanced Usage
