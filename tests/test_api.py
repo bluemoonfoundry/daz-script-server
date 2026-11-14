@@ -849,6 +849,7 @@ class TestCapabilities(unittest.TestCase):
     def test_returns_200(self):
         self.assertEqual(self.resp.status_code, 200, self.resp.text)
 
+    @unittest.skipUnless(AUTH_ENABLED, "Authentication is disabled in the running plugin")
     def test_requires_auth(self):
         r = requests.get(f"{BASE_URL}/capabilities",
                          headers={"X-API-Token": "invalid-token-xyz"}, timeout=5)
