@@ -5,6 +5,9 @@ export type {
   RenderSubmitOptions,
   ExportUsdOptions,
   CapabilityRoute,
+  Artifact,
+  ArtifactList,
+  DownloadArtifactOptions,
   ServerCapabilities,
 } from "./client.js";
 export { parseSseStream } from "./client.js";
@@ -23,6 +26,7 @@ export {
   MaterialError,
   NodeNotFoundError,
   RenderError,
+  ArtifactError,
   ScriptError,
   ScriptRuntimeError,
   ScriptSyntaxError,

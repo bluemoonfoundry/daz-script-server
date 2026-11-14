@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
+  ArtifactError,
   AuthenticationError,
   ConnectionError,
   ConcurrencyLimitError,
@@ -57,6 +60,26 @@ async function raiseForError(resp: Response): Promise<Record<string, unknown> | 
     throw new ConcurrencyLimitError(errorMsg, errorMsg, retryAfter);
   }
   return data;
+}
+
+/** Throw ArtifactError (or AuthenticationError/busy errors) for a rejected artifact request. */
+async function throwArtifactError(resp: Response): Promise<void> {
+  if (resp.status < 400) return;
+  if (resp.status === 416) {
+    throw new ArtifactError("Requested range is outside the artifact (HTTP 416)", 416);
+  }
+  const data = await raiseForError(resp);
+  const code = (data?.error_code as string) ?? "";
+  const msg = (data?.error as string) ?? `HTTP ${resp.status}`;
+  throw new ArtifactError(msg, resp.status, code);
+}
+
+/** Base name safe to join under a download directory (no separators, no `..`). */
+export function safeArtifactFilename(name: string): string {
+  const base = name.replace(/\\/g, "/").split("/").pop() ?? "";
+  // eslint-disable-next-line no-control-regex
+  const cleaned = base.replace(/[:*?"<>|\x00-\x1f]/g, "_");
+  return cleaned.replace(/[. ]/g, "") === "" ? "artifact" : cleaned;
 }
 
 async function mapResponse(resp: Response, script = ""): Promise<ExecutionResult> {
@@ -216,6 +239,45 @@ export interface ServerCapabilities {
     source: "live" | "snapshot";
     read_at: string;
   };
+}
+
+/**
+ * An output a job declared, as listed by `GET /artifacts/{id}`. The same
+ * fields minus the file metadata appear in the job's
+ * `observation.output_manifest.outputs`.
+ */
+export interface Artifact {
+  /** Stable ID (position in the manifest). */
+  artifact_id: string;
+  /** Download path, `/artifacts/{requestId}/{artifact_id}`. */
+  url: string;
+  /** Host filesystem path as declared by the job. */
+  path: string;
+  /** Declared kind; render jobs use `"render"` and `"frame"`. */
+  kind?: string;
+  label?: string;
+  metadata?: Record<string, unknown>;
+  /** The declared path is an absolute, existing regular file. */
+  available: boolean;
+  /** Size in bytes, or `null` when unavailable. */
+  size: number | null;
+  content_type: string;
+  filename: string;
+}
+
+/** Response of `GET /artifacts/{id}`. */
+export interface ArtifactList {
+  success: boolean;
+  request_id: string;
+  status: string;
+  count: number;
+  artifacts: Artifact[];
+}
+
+/** Options accepted by {@link DazClient.downloadArtifact}. */
+export interface DownloadArtifactOptions {
+  /** Inclusive byte range `[start, end]`; omit `end` for "to the end of the file". */
+  range?: [number, number?];
 }
 
 export interface ExportUsdOptions {
@@ -694,6 +756,79 @@ export class DazClient {
    * throws a `DazError`; 401/403 throw `AuthenticationError`, and 503 before
    * the server has a snapshot throws `StudioBusyError`.
    */
+  /**
+   * List the files an async job declared (`GET /artifacts/{id}`): outputs
+   * from its `reportFile` plus the image(s) a render job wrote, each with
+   * size, content type and availability. Use with {@link downloadArtifact}
+   * when the client can't see DAZ Studio's filesystem.
+   */
+  async listArtifacts(requestId: string): Promise<ArtifactList> {
+    const resp = await this.get(`/artifacts/${encodeURIComponent(requestId)}`);
+    await throwArtifactError(resp);
+    return (await resp.json()) as ArtifactList;
+  }
+
+  /**
+   * Download one declared artifact (`GET /artifacts/{id}/{artifact_id}`).
+   * Returns the bytes, or, when `dest` is given, streams them into that file
+   * and returns its path. `range` sends an HTTP `Range` header (206 reply).
+   * Rejections throw {@link ArtifactError}; 401/403 throw `AuthenticationError`.
+   */
+  async downloadArtifact(requestId: string, artifactId: string | number, opts?: DownloadArtifactOptions): Promise<Buffer>;
+  async downloadArtifact(
+    requestId: string,
+    artifactId: string | number,
+    dest: string,
+    opts?: DownloadArtifactOptions,
+  ): Promise<string>;
+  async downloadArtifact(
+    requestId: string,
+    artifactId: string | number,
+    destOrOpts?: string | DownloadArtifactOptions,
+    maybeOpts?: DownloadArtifactOptions,
+  ): Promise<Buffer | string> {
+    const dest = typeof destOrOpts === "string" ? destOrOpts : undefined;
+    const opts = (typeof destOrOpts === "string" ? maybeOpts : destOrOpts) ?? {};
+    const headers: Record<string, string> = { ...this.headers };
+    if (opts.range) {
+      const [start, end] = opts.range;
+      if (!Number.isInteger(start) || start < 0 || (end !== undefined && (!Number.isInteger(end) || end < start))) {
+        throw new RangeError(`invalid range [${start}, ${end}]`);
+      }
+      headers.Range = `bytes=${start}-${end ?? ""}`;
+    }
+    const url = `${this.baseUrl}/artifacts/${encodeURIComponent(requestId)}/${encodeURIComponent(String(artifactId))}`;
+    const resp = await this.fetchWithTimeout(url, { method: "GET", headers });
+    await throwArtifactError(resp);
+    if (dest === undefined) {
+      return Buffer.from(await resp.arrayBuffer());
+    }
+    if (!resp.body) {
+      await fs.promises.writeFile(dest, Buffer.alloc(0));
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await pipeline(Readable.fromWeb(resp.body as any), fs.createWriteStream(dest));
+    }
+    return dest;
+  }
+
+  /**
+   * Download every available artifact of a job into `destDir`, named
+   * `<artifact_id>_<filename>` so equal base names can't collide. Returns the
+   * written paths in manifest order.
+   */
+  async downloadArtifacts(requestId: string, destDir: string): Promise<string[]> {
+    await fs.promises.mkdir(destDir, { recursive: true });
+    const written: string[] = [];
+    for (const entry of (await this.listArtifacts(requestId)).artifacts ?? []) {
+      if (!entry.available) continue;
+      const aid = String(entry.artifact_id);
+      const name = safeArtifactFilename(entry.filename || "artifact");
+      written.push(await this.downloadArtifact(requestId, aid, path.join(destDir, `${aid}_${name}`)));
+    }
+    return written;
+  }
+
   async capabilities(): Promise<ServerCapabilities> {
     const resp = await this.get("/capabilities");
     const errData = await raiseForError(resp);

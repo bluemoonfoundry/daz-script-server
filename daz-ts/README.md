@@ -154,6 +154,28 @@ caps.compatibility_hash;        // changes only when routes/features change
 `render_engines.source` is `"snapshot"` when Studio was busy and the server
 answered from its last cached document.
 
+### Artifacts: downloading job outputs
+
+Fetch the files a job declared without sharing DAZ Studio's filesystem
+(requires a DazScriptServer with `GET /artifacts`). A job's artifacts are its
+`reportFile` outputs plus the image(s) a render wrote:
+
+```ts
+const sub = await client.renderSubmit("C:/renders/shot.png", { engine: "iray" });
+const request_id = sub.request_id as string;
+await client.getRequestResult(request_id, true, 600);
+
+const list = await client.listArtifacts(request_id);   // size, content_type, available
+const png = await client.downloadArtifact(request_id, 0);               // Buffer
+await client.downloadArtifact(request_id, 0, "./shot.png");             // stream to file
+const head = await client.downloadArtifact(request_id, 0, { range: [0, 1023] });
+await client.downloadArtifacts(request_id, "./out");                    // all available
+```
+
+Rejections throw `ArtifactError` with `statusCode` and `errorCode`
+(`ARTIFACT_NOT_FOUND` 404, `ARTIFACT_UNAVAILABLE` 410, `REQUEST_NOT_FOUND`
+404, or 416 for a range outside the file).
+
 ## What else is here
 
 - `math3.ts` — dependency-free `Vec3`, `Quat`, `BoundingBox`, `AxisRemap`

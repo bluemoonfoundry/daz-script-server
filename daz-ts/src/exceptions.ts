@@ -144,3 +144,23 @@ export class MaterialError extends DazError {
     this.requestId = requestId;
   }
 }
+
+/**
+ * Raised by the artifact download helpers when the server rejects the
+ * request: `ARTIFACT_NOT_FOUND` (404, the job declared no such artifact),
+ * `ARTIFACT_UNAVAILABLE` (410, the declared file is gone), `REQUEST_NOT_FOUND`
+ * (404, unknown or expired job), `INVALID_FIELD` (400) or HTTP 416 for a byte
+ * range outside the file.
+ */
+export class ArtifactError extends DazError {
+  /** HTTP status code of the rejection. */
+  readonly statusCode: number;
+  /** The server's `error_code`, or `""` when the body had none (e.g. 416). */
+  readonly errorCode: string;
+
+  constructor(message: string, statusCode: number, errorCode = "") {
+    super(message);
+    this.statusCode = statusCode;
+    this.errorCode = errorCode;
+  }
+}
