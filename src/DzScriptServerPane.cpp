@@ -2091,9 +2091,11 @@ static QString buildRenderScript(
     //     and produces a black render. Must set both (see dazpy/_render.py, and
     //     vangard_daz_mcp/_registry.py's camera-preset/render scripts).
     //   renderMgr.doRender(opts)  confirmed in dzrendermgr.h
-    //   Engine switching: renderMgr.setActiveRenderer(DzRenderer*) — requires
-    //     renderer lookup by class name; names are runtime-registered so not in
-    //     the SDK headers. Left as a TODO until tested against a live instance.
+    //   Engine switching: "viewport" sets opts.renderType = ScreenShot; "iray"/
+    //     "filament" look the renderer up by class name via
+    //     renderMgr.findRenderer() (runtime-registered, so not in the SDK
+    //     headers), activate it with setActiveRenderer(), set renderType =
+    //     Software, then read both back and throw on any mismatch (below).
     //   iray_samples: not a DzRenderOptions property — applied below through
     //     the Iray renderer's property holder ("Max Samples").
     script +=
