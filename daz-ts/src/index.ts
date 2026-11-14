@@ -1,5 +1,12 @@
 export { DazClient } from "./client.js";
-export type { DazClientOptions, RetryOptions, RenderSubmitOptions, ExportUsdOptions } from "./client.js";
+export type {
+  DazClientOptions,
+  RetryOptions,
+  RenderSubmitOptions,
+  ExportUsdOptions,
+  CapabilityRoute,
+  ServerCapabilities,
+} from "./client.js";
 export { parseSseStream } from "./client.js";
 
 export type { ExecutionResult } from "./result.js";

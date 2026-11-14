@@ -136,6 +136,24 @@ It submits the script with `executeAsyncSubmit`, then long-polls
 `timeoutMs` elapses (throwing `AsyncExecutionError` or `DazTimeoutError`
 respectively).
 
+### `DazClient.capabilities()`
+
+Ask the server what it supports instead of hard-coding versions (requires a
+DazScriptServer with `GET /capabilities`; older servers throw `DazError` on
+404):
+
+```ts
+const caps = await client.capabilities();
+if (caps.render_engines.selectable.includes("iray")) {
+  await client.renderSubmit("C:\\out.png", { engine: "iray" });
+}
+caps.limits.max_batch_variants; // current server limit
+caps.compatibility_hash;        // changes only when routes/features change
+```
+
+`render_engines.source` is `"snapshot"` when Studio was busy and the server
+answered from its last cached document.
+
 ## What else is here
 
 - `math3.ts` — dependency-free `Vec3`, `Quat`, `BoundingBox`, `AxisRemap`

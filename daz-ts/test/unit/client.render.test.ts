@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
-import { AuthenticationError } from "../../src/exceptions.js";
+import { AuthenticationError, DazError, StudioBusyError } from "../../src/exceptions.js";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -149,5 +149,35 @@ describe("DazClient server health methods", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:18811/status");
     expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:18811/health");
     expect(fetchMock.mock.calls[2][0]).toBe("http://127.0.0.1:18811/metrics");
+  });
+});
+
+describe("DazClient.capabilities", () => {
+  it("GETs /capabilities and returns the document", async () => {
+    const doc = { schema_version: 1, compatibility_hash: "0123456789abcdef", render_engines: { selectable: ["viewport"] } };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, doc));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new DazClient({ token: "" });
+    await expect(client.capabilities()).resolves.toEqual(doc);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:18811/capabilities");
+  });
+
+  it("throws DazError on 404 from an older server", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, { error: "not found" })));
+    const err = await new DazClient({ token: "" }).capabilities().catch((e) => e);
+    expect(err).toBeInstanceOf(DazError);
+    expect(String(err.message)).toContain("404");
+  });
+
+  it("throws AuthenticationError on 401 and StudioBusyError on 503", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("bad token", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse(503, { error: "busy", error_code: "STUDIO_BUSY" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new DazClient({ token: "" });
+    await expect(client.capabilities()).rejects.toBeInstanceOf(AuthenticationError);
+    await expect(client.capabilities()).rejects.toBeInstanceOf(StudioBusyError);
   });
 });

@@ -181,6 +181,43 @@ export interface RenderSubmitOptions extends RetryOptions {
 }
 
 /** Options accepted by {@link DazClient.exportUsdSubmit}. */
+/** A route listed by `GET /capabilities`. Paths use `{id}` placeholders. */
+export interface CapabilityRoute {
+  method: string;
+  path: string;
+  auth: boolean;
+  kind?: "json" | "sse" | "binary";
+  /** Companion-plugin routes only: class name of the registering QObject. */
+  owner?: string;
+}
+
+/**
+ * Document returned by `GET /capabilities` (schema_version 1). Clients must
+ * ignore unknown keys; feature flags and limits may gain entries over time.
+ */
+export interface ServerCapabilities {
+  schema_version: number;
+  /** Changes only when the schema, route table or feature flags change. */
+  compatibility_hash: string;
+  server: { name: string; version: string };
+  studio: { version: string; sdk_version: string; sdk_major: number; qt_version: string; qt_build_version: string };
+  routes: CapabilityRoute[];
+  plugin_routes: CapabilityRoute[];
+  features: Record<string, boolean>;
+  limits: Record<string, number>;
+  rate_limit: { enabled: boolean; max_requests: number; window_seconds: number; applies_to: string };
+  security: { auth_enabled: boolean; auth_headers: string[]; ip_whitelist_enabled: boolean };
+  render_engines: {
+    registered: { class_name: string; name: string; active: boolean }[];
+    /** Values `renderSubmit({ engine })` accepts right now. */
+    selectable: string[];
+    active_class: string | null;
+    /** "snapshot" when the server answered from its cache because Studio was busy. */
+    source: "live" | "snapshot";
+    read_at: string;
+  };
+}
+
 export interface ExportUsdOptions {
   includeGeometry?: boolean;
   includeMaterials?: boolean;
@@ -648,6 +685,23 @@ export class DazClient {
       throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
     }
     return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * Return the server's capabilities document from `GET /capabilities`:
+   * versions, routes, feature flags, current limits and the render engines
+   * registered right now. Servers that predate the endpoint answer 404, which
+   * throws a `DazError`; 401/403 throw `AuthenticationError`, and 503 before
+   * the server has a snapshot throws `StudioBusyError`.
+   */
+  async capabilities(): Promise<ServerCapabilities> {
+    const resp = await this.get("/capabilities");
+    const errData = await raiseForError(resp);
+    if (errData) {
+      const msg = (errData.error as string) ?? `HTTP ${resp.status}`;
+      throw new DazError(`capabilities failed (${resp.status}): ${msg}`);
+    }
+    return (await resp.json()) as ServerCapabilities;
   }
 
   /**
