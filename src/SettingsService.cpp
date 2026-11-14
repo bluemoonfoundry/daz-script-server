@@ -61,6 +61,10 @@ SettingsValidationResult SettingsService::validate(const ServerSettings& s) cons
         vr.addError(QString("maxScriptLengthKB %1 out of range [100, 10240]")
                         .arg(s.maxScriptLengthKB));
 
+    if (s.staleJobTimeoutMin < 5 || s.staleJobTimeoutMin > 1440)
+        vr.addError(QString("staleJobTimeoutMin %1 out of range [5, 1440]")
+                        .arg(s.staleJobTimeoutMin));
+
     if (s.rateLimitMax < 1 || s.rateLimitMax > 10000)
         vr.addError(QString("rateLimitMax %1 out of range [1, 10000]").arg(s.rateLimitMax));
 
@@ -168,6 +172,7 @@ ServerSettings SettingsService::readFrom(QSettings& qs) const
     s.maxConcurrentRequests = qs.value("maxConcurrentRequests", def.maxConcurrentRequests).toInt();
     s.maxBodySizeMB         = qs.value("maxBodySizeMB",         def.maxBodySizeMB).toInt();
     s.maxScriptLengthKB     = qs.value("maxScriptLengthKB",     def.maxScriptLengthKB).toInt();
+    s.staleJobTimeoutMin    = qs.value("staleJobTimeoutMin",    def.staleJobTimeoutMin).toInt();
     s.authEnabled           = qs.value("authEnabled",           def.authEnabled).toBool();
     s.ipWhitelistEnabled    = qs.value("ipWhitelistEnabled",    def.ipWhitelistEnabled).toBool();
     s.ipWhitelist           = qs.value("ipWhitelist",           def.ipWhitelist).toString();
@@ -186,6 +191,7 @@ void SettingsService::writeTo(QSettings& qs, const ServerSettings& s) const
     qs.setValue("maxConcurrentRequests", s.maxConcurrentRequests);
     qs.setValue("maxBodySizeMB",         s.maxBodySizeMB);
     qs.setValue("maxScriptLengthKB",     s.maxScriptLengthKB);
+    qs.setValue("staleJobTimeoutMin",    s.staleJobTimeoutMin);
     qs.setValue("authEnabled",           s.authEnabled);
     qs.setValue("ipWhitelistEnabled",    s.ipWhitelistEnabled);
     qs.setValue("ipWhitelist",           s.ipWhitelist);
@@ -209,6 +215,8 @@ ServerSettings SettingsService::clampToValid(const ServerSettings& s) const
                                                 out.maxBodySizeMB         = def.maxBodySizeMB;
     if (out.maxScriptLengthKB < 100 || out.maxScriptLengthKB > 10240)
                                                 out.maxScriptLengthKB     = def.maxScriptLengthKB;
+    if (out.staleJobTimeoutMin < 5 || out.staleJobTimeoutMin > 1440)
+                                                out.staleJobTimeoutMin    = def.staleJobTimeoutMin;
     if (out.rateLimitMax < 1 || out.rateLimitMax > 10000)
                                                 out.rateLimitMax          = def.rateLimitMax;
     if (out.rateLimitWindow < 1 || out.rateLimitWindow > 3600)

@@ -239,6 +239,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_nMaxConcurrentRequests(ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS)
 	, m_nMaxBodySizeMB(ServerConfig::DEFAULT_MAX_BODY_SIZE_MB)
 	, m_nMaxScriptLengthKB(ServerConfig::DEFAULT_MAX_SCRIPT_LENGTH_KB)
+	, m_nStaleJobTimeoutMin(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN)
 	, m_rateLimiter(ServerConfig::DEFAULT_RATE_LIMIT_MAX, ServerConfig::DEFAULT_RATE_LIMIT_WINDOW)
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
@@ -419,6 +420,22 @@ DzScriptServerPane::DzScriptServerPane()
 	limitsHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
 	limitsFormLayout->addRow(limitsHint);
 
+	m_pStaleTimeoutSpin = new QSpinBox(this);
+	m_pStaleTimeoutSpin->setRange(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN_MIN,
+	                              ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MAX_MIN);
+	m_pStaleTimeoutSpin->setValue(m_nStaleJobTimeoutMin);
+	m_pStaleTimeoutSpin->setSuffix(tr(" min"));
+	m_pStaleTimeoutSpin->setToolTip(tr(
+		"An async job still running after this long is reported as \"stale\" "
+		"(usually DAZ Studio is blocked behind a dialog). Raise it for long "
+		"renders. Checked every %1 minutes.").arg(ServerConfig::ASYNC_CLEANUP_INTERVAL_MIN));
+	limitsFormLayout->addRow(tr("Stuck Job Timeout:"), m_pStaleTimeoutSpin);
+
+	QLabel* staleHint = new QLabel(
+		tr("Applies immediately; raise it if long renders get marked stale"), this);
+	staleHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	limitsFormLayout->addRow(staleHint);
+
 	m_pStatusLabel = new QLabel(tr("Stopped"), this);
 
 	m_pActiveRequestsLabel = new QLabel(tr("Active Requests: 0"), this);
@@ -490,6 +507,7 @@ DzScriptServerPane::DzScriptServerPane()
 	connect(m_pIpWhitelistCheck, SIGNAL(stateChanged(int)), this, SLOT(onIpWhitelistEnabledChanged(int)));
 	connect(m_pRateLimitCheck, SIGNAL(stateChanged(int)), this, SLOT(onRateLimitEnabledChanged(int)));
 	connect(m_pAutoStartCheck, SIGNAL(stateChanged(int)), this, SLOT(onAutoStartChanged(int)));
+	connect(m_pStaleTimeoutSpin, SIGNAL(valueChanged(int)), this, SLOT(onStaleTimeoutChanged(int)));
 
 	updateUI();
 
@@ -2903,6 +2921,7 @@ void DzScriptServerPane::applySettings(const ServerSettings& s)
 	m_nMaxConcurrentRequests = s.maxConcurrentRequests;
 	m_nMaxBodySizeMB         = s.maxBodySizeMB;
 	m_nMaxScriptLengthKB     = s.maxScriptLengthKB;
+	m_nStaleJobTimeoutMin    = s.staleJobTimeoutMin;
 
 	m_auth.setEnabled(s.authEnabled);
 
@@ -2923,6 +2942,7 @@ void DzScriptServerPane::saveSettings()
 	s.maxConcurrentRequests = m_nMaxConcurrentRequests;
 	s.maxBodySizeMB         = m_nMaxBodySizeMB;
 	s.maxScriptLengthKB     = m_nMaxScriptLengthKB;
+	s.staleJobTimeoutMin    = m_nStaleJobTimeoutMin;
 	s.authEnabled           = m_auth.isEnabled();
 	s.ipWhitelistEnabled    = m_ipWhitelist.isEnabled();
 	s.ipWhitelist           = m_ipWhitelist.getWhitelist();
@@ -3009,6 +3029,14 @@ void DzScriptServerPane::onRateLimitEnabledChanged(int state)
 void DzScriptServerPane::onAutoStartChanged(int state)
 {
 	m_bAutoStart = (state == Qt::Checked);
+	saveSettings();
+}
+
+// Only cleanupExpiredRequests() (main thread) reads the timeout, so it can be
+// changed while the server is running without a restart.
+void DzScriptServerPane::onStaleTimeoutChanged(int minutes)
+{
+	m_nStaleJobTimeoutMin = minutes;
 	saveSettings();
 }
 
@@ -3210,7 +3238,7 @@ void DzScriptServerPane::processNextAsyncRequest()
 
 // Removes finished (and stale) requests older than 1 hour, and marks stale
 // any request that has been running for longer than
-// ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN (see failStaleRunning()).
+// the "Stuck Job Timeout" setting (see failStaleRunning()).
 // Fired by m_pCleanupTimer every 5 minutes on the main thread.
 void DzScriptServerPane::cleanupExpiredRequests()
 {
@@ -3219,11 +3247,10 @@ void DzScriptServerPane::cleanupExpiredRequests()
 		appendLog(QString("[INFO] Async cleanup: removed %1 expired request(s)").arg(removed));
 	}
 
-	int stale = m_pAsyncMgr->failStaleRunning(
-		(qint64)ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN * 60 * 1000);
+	int stale = m_pAsyncMgr->failStaleRunning((qint64)m_nStaleJobTimeoutMin * 60 * 1000);
 	if (stale > 0) {
 		appendLog(QString("[WARN] Async cleanup: %1 request(s) stuck running past %2 min, marked stale")
-			.arg(stale).arg(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN));
+			.arg(stale).arg(m_nStaleJobTimeoutMin));
 	}
 }
 

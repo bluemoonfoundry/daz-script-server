@@ -892,7 +892,7 @@ Long-running operations (renders, exports, batch jobs) no longer need to block t
 
 **Cancellation:** Queued requests are cancelled immediately. A running script can't be interrupted: cancelling it sets the status to `cancel_requested`, and render jobs also get a `killRender()` call to abort the render. When the script returns, the status changes to what really happened: `cancelled` (the render was aborted), `completed_after_cancel_request` (the script finished anyway and its result is kept) or `failed`.
 
-**Stale requests:** a request still running after 30 minutes (usually DAZ Studio is blocked behind a dialog) becomes `stale`. It answers with `success: false` and ends long-polls. If the script returns later, the status changes to `completed_after_stale` (or `failed`).
+**Stale requests:** a request still running after the **Stuck Job Timeout** (Advanced Limits in the pane; default 30 minutes, 5–1440, applies immediately) becomes `stale`. This usually means DAZ Studio is blocked behind a dialog; raise the timeout if long renders get flagged. It answers with `success: false` and ends long-polls. If the script returns later, the status changes to `completed_after_stale` (or `failed`).
 
 **TTL:** Finished and stale requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
 

@@ -12,6 +12,7 @@ struct ServerSettings {
     int     maxConcurrentRequests = 10;
     int     maxBodySizeMB         = 5;
     int     maxScriptLengthKB     = 1024;
+    int     staleJobTimeoutMin    = 30;   // async job running longer than this → "stale"
 
     bool    authEnabled           = true;
 

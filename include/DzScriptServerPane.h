@@ -74,10 +74,14 @@ namespace ServerConfig {
 
     // Async request management
     const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
-    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;  // A RUNNING request older than this is presumed
-                                                      // blocked (e.g. behind a DAZ Studio modal) and
-                                                      // reported as FAILED so it doesn't poll as
-                                                      // "running" forever. See failStaleRunning().
+    // Default for the "Stuck job timeout" setting (ServerSettings::staleJobTimeoutMin):
+    // a running request older than this is presumed blocked (e.g. behind a DAZ
+    // Studio modal) and reported as "stale" so it doesn't poll as "running"
+    // forever. See failStaleRunning(). Checked every ASYNC_CLEANUP_INTERVAL_MIN,
+    // so the UI minimum matches that interval.
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN_MIN = 5;
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MAX_MIN = 1440;
 }
 
 class DzScript;
@@ -182,6 +186,7 @@ private slots:
 	void onIpWhitelistEnabledChanged(int state);
 	void onRateLimitEnabledChanged(int state);
 	void onAutoStartChanged(int state);
+	void onStaleTimeoutChanged(int minutes);
 
 	// Async execution (runs on main thread via Qt event loop)
 	void processNextAsyncRequest();
@@ -217,6 +222,7 @@ private:
 	int              m_nMaxConcurrentRequests;
 	int              m_nMaxBodySizeMB;
 	int              m_nMaxScriptLengthKB;
+	int              m_nStaleJobTimeoutMin;   // main thread only; applied live
 
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
@@ -352,4 +358,5 @@ private:
 	QSpinBox*    m_pMaxConcurrentSpin;
 	QSpinBox*    m_pMaxBodySizeSpin;
 	QSpinBox*    m_pMaxScriptLengthSpin;
+	QSpinBox*    m_pStaleTimeoutSpin;
 };

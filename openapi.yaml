@@ -1167,7 +1167,7 @@ components:
         Final: `completed`, `failed`, `cancelled`,
         `completed_after_cancel_request`, `completed_after_stale`.
         Not final: `cancel_requested` (cancel asked while the script was
-        running) and `stale` (running past the stale timeout, default 30 min;
+        running) and `stale` (running past the pane's Stuck Job Timeout, default 30 min;
         reported with `success: false` and ends long-polls, but changes to the
         real outcome if the script returns). `cancelled` means the work
         really stopped: it never started, or a render was aborted. Results

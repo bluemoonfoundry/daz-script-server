@@ -165,6 +165,7 @@ suite) enforces this. New routes must use one of them.
 
 **Limits:** 10 concurrent requests, 5MB body, 1MB script, 60 req/60s rate limit
 **Constants:** 1000 log lines, 10000 captured lines, cleanup every 100 requests
+**Stuck job timeout:** 30 min (UI-configurable 5–1440, applied live) → async job reported `stale`
 **Auth:** Enabled by default, token auto-generated
 **Whitelist/Rate limit:** Disabled by default
 
