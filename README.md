@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.10.1** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.11.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.11.0](#whats-new-in-v2110)
 - [What's New in v2.10.1](#whats-new-in-v2101)
 - [What's New in v2.10.0](#whats-new-in-v2100)
 - [What's New in v2.9.1 – v2.9.3](#whats-new-in-v291--v293)
@@ -173,6 +174,41 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - CI/CD pipelines for 3D content validation
 
 ---
+
+## What's New in v2.11.0
+
+### 🛑 Cancellation reports what really happened
+
+A running script can't be interrupted, so cancelling one now answers
+`cancel_requested` instead of `cancelled`. Render jobs also get `killRender()`.
+When the script returns, the status becomes its real outcome: `cancelled` (the
+render was aborted), `completed_after_cancel_request` (the script finished and
+its result is kept) or `failed`. Jobs stuck past the timeout become `stale`
+and change to `completed_after_stale` if they finish later. See the status
+table under [`GET /requests/:id/status`](#get-requestsidstatus).
+
+**If you upgrade:** code that treated the cancel response's `"cancelled"` as
+final should poll the request for its outcome. dazpy's polling helpers already
+handle the new statuses.
+
+### ⏱️ Configurable stuck job timeout
+
+**Stuck Job Timeout** under Advanced Limits (5–1440 minutes, default 30) sets
+how long a job can run before it is reported as `stale`. Raise it if long
+renders get flagged. It applies immediately, without restarting the server.
+
+### 🎯 `iray_samples` now works
+
+`/render` and `/render/batch` used to accept `iray_samples` and ignore it. It
+now sets Iray's Max Samples for that render only and restores the previous
+value afterwards. The job result shows what was applied:
+
+```json
+"iray_samples": {"requested": 500, "applied": 500, "previous": 5000, "restored": true}
+```
+
+Invalid values, or `iray_samples` with the viewport or Filament engine, return
+400.
 
 ## What's New in v2.10.1
 

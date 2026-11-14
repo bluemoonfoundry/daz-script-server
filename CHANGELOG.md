@@ -4,8 +4,14 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-14
+
 ### Added
 
+- **Configurable stuck job timeout.** A new **Stuck Job Timeout** setting under
+  Advanced Limits (5–1440 minutes, default 30) sets how long an async job can
+  run before it is reported as `stale`. It applies immediately, without
+  restarting the server.
 - **Daz Studio 6.26 on macOS.** Releases ship
   `libdsp_DazScriptServer-ds6.26-macos.dylib`, built against the 6.26 macOS SDK.
   The single x86_64 build serves both Intel and Apple Silicon Macs, since
@@ -30,6 +36,25 @@ All notable changes to DazScript Server are documented here.
   without a token. They now go through the same IP whitelist, token check and
   (for non-GET methods) rate limit and body limit as built-in routes.
   Unregistered paths still return 404.
+- **`iray_samples` is applied instead of ignored.** `/render` and
+  `/render/batch` accepted `iray_samples` but never used it. It now sets Iray's
+  Max Samples for that render only (the previous value is restored afterwards),
+  and the job result reports `requested`, `applied`, `previous` and
+  `restored`. Invalid values, or `iray_samples` with a viewport or Filament
+  engine, return 400; a job whose render isn't actually Iray fails instead of
+  rendering at the scene default.
+
+### Changed
+
+- **Cancelling a running job no longer claims it was cancelled.** A running
+  script can't be interrupted, so cancelling it now returns
+  `cancel_requested` (render jobs also get `killRender()`). When the script
+  returns, the status becomes what really happened: `cancelled` (render
+  aborted), `completed_after_cancel_request` (result kept) or `failed`. Jobs
+  that run past the stuck job timeout become `stale` instead of a permanent
+  `failed`, and change to `completed_after_stale` if they finish later.
+  `cancel_requested_at` and `stale_at` stay in responses. Clients that treated
+  the cancel response's `"cancelled"` as final should poll for the outcome.
 
 ### Removed
 

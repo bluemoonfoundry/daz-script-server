@@ -22,7 +22,7 @@ info:
     queue behind each other. The `/execute/async` family lets callers submit
     work without blocking their HTTP connection.
 
-  version: 2.10.1
+  version: 2.11.0
   contact:
     name: Blue Moon Foundry
     url: https://github.com/bluemoonfoundry/daz-script-server/issues
