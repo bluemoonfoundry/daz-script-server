@@ -166,6 +166,8 @@ fi
 # plugin DLL at all (see src/CMakeLists.txt) — SDK4 keeps the plain name.
 ARTIFACT_NAME="DazScriptServer"
 [ "$OPT_SDK_VERSION" = "6" ] && ARTIFACT_NAME="dsp_DazScriptServer"
+# macOS DS6 keeps CMake's default "lib" prefix, like the SDK6 samples.
+[ "$OPT_SDK_VERSION" = "6" ] && [ "$PLATFORM" != "win" ] && ARTIFACT_NAME="libdsp_DazScriptServer"
 
 if [ "$PLATFORM" = "win" ]; then
     BUILD_CONFIG="Release"

@@ -84,12 +84,10 @@ jobs:
         run: |
           if [ "${{ inputs.sdk-version }}" = "6" ]; then
             # See build-windows.yml: bump whenever daz-studio-6-sdk-macos changes.
-            # NOTE: the 6.26 macOS SDK is not in daz-studio-sdks yet, so DS6
-            # macOS builds fail at checkout until it is added.
             echo "cache-key=daz-sdk-6.26-macos-private-v2" >> $GITHUB_OUTPUT
             echo "sparse-path=daz-studio-6-sdk-macos" >> $GITHUB_OUTPUT
             echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
-            echo "dylib-name=dsp_DazScriptServer.dylib" >> $GITHUB_OUTPUT
+            echo "dylib-name=libdsp_DazScriptServer.dylib" >> $GITHUB_OUTPUT
           else
             echo "cache-key=daz-sdk-4.5-macos-private-v1" >> $GITHUB_OUTPUT
             echo "sparse-path=daz-studio-45-sdk-macos" >> $GITHUB_OUTPUT
@@ -119,7 +117,6 @@ jobs:
         run: |
           if [ ! -d "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" ]; then
             echo "Error: ${{ steps.sdk-paths.outputs.sparse-path }} not found in daz-studio-sdks."
-            echo "For DS6 this means the current (6.26+) macOS SDK has not been added yet."
             exit 1
           fi
           mv "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" "${{ steps.sdk-paths.outputs.sdk-dir }}"

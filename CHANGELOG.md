@@ -2,6 +2,21 @@
 
 All notable changes to DazScript Server are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Daz Studio 6.26 on macOS.** Releases ship
+  `libdsp_DazScriptServer-ds6.26-macos.dylib`, built against the 6.26 macOS SDK.
+  The single x86_64 build serves both Intel and Apple Silicon Macs, since
+  Studio 6 runs under Rosetta 2. The macOS DS6 output now keeps the `lib`
+  prefix (`libdsp_DazScriptServer.dylib`), matching the SDK samples
+  ([#51](https://github.com/bluemoonfoundry/daz-script-server/issues/51)).
+
+### Removed
+
+- The `DS6_MACOS_ENABLED` repository variable gate on macOS DS6 release builds.
+
 ## [2.10.1] - 2026-11-12
 
 ### Added

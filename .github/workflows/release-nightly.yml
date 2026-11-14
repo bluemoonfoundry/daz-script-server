@@ -49,27 +49,14 @@ jobs:
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
 
-  build-macos-intel-ds6:
-    name: Build macOS Intel Plugin (DS6)
-    # Disabled until the current (6.26+) macOS SDK is in daz-studio-sdks.
-    # Set repo variable DS6_MACOS_ENABLED=true to turn back on.
-    if: vars.DS6_MACOS_ENABLED == 'true'
+  build-macos-ds6:
+    name: Build macOS Plugin (DS6)
+    # One x86_64 build serves Intel and Apple Silicon alike: the 6.26 macOS
+    # SDK's libdzcore.dylib is x86_64-only and DAZ Studio 6 runs under
+    # Rosetta 2 on Apple Silicon (see build-macos.yml).
     uses: ./.github/workflows/build-macos.yml
     with:
       architecture: x86_64
-      configuration: Release
-      sdk-version: '6'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-arm-ds6:
-    name: Build macOS Apple Silicon Plugin (DS6)
-    # Disabled until the current (6.26+) macOS SDK is in daz-studio-sdks.
-    # Set repo variable DS6_MACOS_ENABLED=true to turn back on.
-    if: vars.DS6_MACOS_ENABLED == 'true'
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: arm64
       configuration: Release
       sdk-version: '6'
     secrets:
@@ -80,16 +67,13 @@ jobs:
     uses: ./.github/workflows/build-dazpy.yml
 
   create-nightly-release:
-    # Run when the gated macOS DS6 jobs are skipped, but never after a failure.
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     name: Create Nightly Release
     needs:
       - build-windows-ds4
       - build-windows-ds6
       - build-macos-intel-ds4
       - build-macos-arm-ds4
-      - build-macos-intel-ds6
-      - build-macos-arm-ds6
+      - build-macos-ds6
       - build-dazpy
     runs-on: ubuntu-latest
 
@@ -180,12 +164,7 @@ jobs:
             echo ""
             echo "### Daz Studio 6.26"
             echo "- **Windows:** \`dsp_DazScriptServer-ds6.26-windows.dll\`"
-            if [ "${{ vars.DS6_MACOS_ENABLED }}" = "true" ]; then
-              echo "- **macOS Intel:** \`dsp_DazScriptServer-ds6.26-macos-Intel.dylib\`"
-              echo "- **macOS Apple Silicon:** \`dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib\`"
-            else
-              echo "- **macOS:** not yet available (waiting on the Daz Studio 6.26 macOS SDK)"
-            fi
+            echo "- **macOS (Intel & Apple Silicon):** \`libdsp_DazScriptServer-ds6.26-macos.dylib\`"
             echo ""
             echo "> Daz Studio 6.26 only loads plugins built against its own SDK. **Daz Studio 6.25 users:**"
             echo "> use [v2.9.3](https://github.com/bluemoonfoundry/daz-script-server/releases/tag/v2.9.3), the last 6.25-compatible release,"
@@ -217,12 +196,8 @@ jobs:
              release-assets/DazScriptServer-ds4-macos-Intel.dylib
           cp artifacts/DazScriptServer-macos-AppleSilicon-ds4-Release/DazScriptServer.dylib \
              release-assets/DazScriptServer-ds4-macos-AppleSilicon.dylib
-          if [ "${{ vars.DS6_MACOS_ENABLED }}" = "true" ]; then
-            cp artifacts/DazScriptServer-macos-Intel-ds6-Release/dsp_DazScriptServer.dylib \
-               release-assets/dsp_DazScriptServer-ds6.26-macos-Intel.dylib
-            cp artifacts/DazScriptServer-macos-AppleSilicon-ds6-Release/dsp_DazScriptServer.dylib \
-               release-assets/dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
-          fi
+          cp artifacts/DazScriptServer-macos-Intel-ds6-Release/libdsp_DazScriptServer.dylib \
+             release-assets/libdsp_DazScriptServer-ds6.26-macos.dylib
 
           # dazpy wheel
           cp artifacts/dazpy-dist/*.whl release-assets/

@@ -30,11 +30,11 @@ This document provides a visual overview of how the GitHub Actions workflows are
 ┌──────────────┐   ┌──────────────────┐   ┌──────────────┐  ┌──────────────┐
 │ build-       │   │ build-macos.yml  │   │ build-       │  │ ci.yml       │
 │ windows.yml  │   │                  │   │ dazpy.yml    │  │              │
-│              │   │ Called 4x:       │   │              │  │ Trigger:     │
+│              │   │ Called 3x:       │   │              │  │ Trigger:     │
 │ Called 2x:   │   │ • Intel DS4      │   │ (Reusable)   │  │ • Push       │
-│ • DS4        │   │ • Intel DS6      │   │              │  │ • PR         │
+│ • DS4        │   │ • x86_64 DS6     │   │              │  │ • PR         │
 │ • DS6        │   │ • ARM64 DS4      │   │              │  │              │
-│              │   │ • ARM64 DS6      │   │              │  │              │
+│              │   │                  │   │              │  │              │
 └──────────────┘   └──────────────────┘   └──────────────┘  └──────────────┘
 ```
 
@@ -54,11 +54,9 @@ User pushes tag (v1.3.0)
          │                                  │
          ├──► build-macos.yml (Intel DS4) ──┤
          │                                  │
-         ├──► build-macos.yml (Intel DS6) ──┼──► Artifacts uploaded
+         ├──► build-macos.yml (x86_64 DS6) ─┼──► Artifacts uploaded
          │                                  │    to GitHub
          ├──► build-macos.yml (ARM DS4) ────┤
-         │                                  │
-         ├──► build-macos.yml (ARM DS6) ────┤
          │                                  │
          └──► build-dazpy.yml ──────────────┘
                      │
@@ -77,8 +75,7 @@ User pushes tag (v1.3.0)
          • DazScriptServer-ds4-macos-Intel.dylib
          • DazScriptServer-ds4-macos-AppleSilicon.dylib
          • dsp_DazScriptServer-ds6.26-windows.dll
-         • dsp_DazScriptServer-ds6.26-macos-Intel.dylib
-         • dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
+         • libdsp_DazScriptServer-ds6.26-macos.dylib
          • dazpy-*.whl
          • Source.zip (auto)
          • Source.tar.gz (auto)
@@ -163,7 +160,7 @@ Select runner:
    ▼
 Set SDK paths and dylib name:
  • DS4 ──► DazScriptServer.dylib
- • DS6 ──► dsp_DazScriptServer.dylib
+ • DS6 ──► libdsp_DazScriptServer.dylib (always x86_64)
    │
    ▼
 Download DAZ SDK ──► Cache (version-specific) for next run
@@ -245,11 +242,9 @@ Time →
       │                                 │
       ├─ build-macos Intel (DS4) ───────┤
       │                                 │
-      ├─ build-macos Intel (DS6) ───────┤  ← All 7 jobs run in parallel
+      ├─ build-macos x86_64 (DS6) ──────┤  ← All 6 jobs run in parallel
       │                                 │
       ├─ build-macos ARM (DS4) ─────────┤
-      │                                 │
-      ├─ build-macos ARM (DS6) ─────────┤
       │                                 │
       └─ build-dazpy ──────────────────┘
 
@@ -372,8 +367,7 @@ GitHub Release: v1.3.0
 ├── DazScriptServer-ds4-macos-Intel.dylib
 ├── DazScriptServer-ds4-macos-AppleSilicon.dylib
 ├── dsp_DazScriptServer-ds6.26-windows.dll   ← Daz Studio 6.26
-├── dsp_DazScriptServer-ds6.26-macos-Intel.dylib
-├── dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
+├── libdsp_DazScriptServer-ds6.26-macos.dylib
 ├── dazpy-2.6.0-py3-none-any.whl
 ├── Source code (zip)           ← Auto-generated
 └── Source code (tar.gz)        ← Auto-generated
@@ -387,8 +381,7 @@ GitHub Release: nightly-123
 ├── DazScriptServer-ds4-macos-Intel.dylib
 ├── DazScriptServer-ds4-macos-AppleSilicon.dylib
 ├── dsp_DazScriptServer-ds6.26-windows.dll
-├── dsp_DazScriptServer-ds6.26-macos-Intel.dylib
-├── dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib
+├── libdsp_DazScriptServer-ds6.26-macos.dylib
 ├── dazpy-2.6.0-py3-none-any.whl
 ├── Source code (zip)           ← Auto-generated
 └── Source code (tar.gz)        ← Auto-generated

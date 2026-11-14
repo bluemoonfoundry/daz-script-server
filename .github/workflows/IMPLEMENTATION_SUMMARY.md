@@ -25,7 +25,7 @@ Three core build workflows that can be called by other workflows:
 - Uses CMake with Xcode/Clang
 - Downloads and caches DAZ Studio SDK from private repo
 - Installs Qt6 via aqtinstall (DS6 builds only, also cached)
-- Outputs: `DazScriptServer.dylib` (DS4) or `dsp_DazScriptServer.dylib` (DS6)
+- Outputs: `DazScriptServer.dylib` (DS4) or `libdsp_DazScriptServer.dylib` (DS6, always x86_64)
 
 #### `build-dazpy.yml`
 - Builds the Python wheel package
@@ -36,15 +36,14 @@ Three core build workflows that can be called by other workflows:
 
 #### `release-tagged.yml`
 Triggers on version tags (e.g., `v1.3.0`):
-- Runs 6 plugin build jobs in parallel (DS4 + DS6 × Windows + macOS Intel + macOS ARM) plus dazpy
+- Runs 5 plugin build jobs in parallel (DS4: Windows, macOS Intel, macOS ARM; DS6: Windows, macOS x86_64) plus dazpy
 - Generates commit summary since last release
 - Creates GitHub release with:
   - `DazScriptServer-ds4-windows.dll`
   - `DazScriptServer-ds4-macos-Intel.dylib`
   - `DazScriptServer-ds4-macos-AppleSilicon.dylib`
   - `dsp_DazScriptServer-ds6.26-windows.dll`
-  - `dsp_DazScriptServer-ds6.26-macos-Intel.dylib`
-  - `dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib`
+  - `libdsp_DazScriptServer-ds6.26-macos.dylib`
   - dazpy wheel
   - Source archives (auto-generated)
 
@@ -80,13 +79,12 @@ Created comprehensive documentation:
 - Easy invalidation by incrementing version number
 
 ### Parallel Builds
-All platform builds run simultaneously (7 jobs):
+All platform builds run simultaneously (6 jobs):
 - Windows DS4 DLL
 - Windows DS6 DLL
 - macOS Intel DS4 dylib
-- macOS Intel DS6 dylib
+- macOS DS6 dylib (x86_64, Intel & Apple Silicon)
 - macOS Apple Silicon DS4 dylib
-- macOS Apple Silicon DS6 dylib
 - dazpy wheel
 
 Total build time: ~20-25 minutes for all platforms
@@ -167,9 +165,8 @@ gh run view <run-id> --log
 | Windows | x64 | DS4 | windows-2022 | MSBuild | `DazScriptServer-ds4-windows.dll` |
 | Windows | x64 | DS6 | windows-2022 | MSBuild | `dsp_DazScriptServer-ds6.26-windows.dll` |
 | macOS | x86_64 | DS4 | self-hosted X64 | CMake | `DazScriptServer-ds4-macos-Intel.dylib` |
-| macOS | x86_64 | DS6 | self-hosted X64 | CMake | `dsp_DazScriptServer-ds6.26-macos-Intel.dylib` |
+| macOS | x86_64 (Intel & Apple Silicon via Rosetta 2) | DS6 | macos-15-intel | CMake | `libdsp_DazScriptServer-ds6.26-macos.dylib` |
 | macOS | arm64 | DS4 | macos-14 | CMake | `DazScriptServer-ds4-macos-AppleSilicon.dylib` |
-| macOS | arm64 | DS6 | macos-14 | CMake | `dsp_DazScriptServer-ds6.26-macos-AppleSilicon.dylib` |
 | Python | N/A | N/A | ubuntu-latest | pip | `dazpy-*.whl` |
 
 ## Dependencies
@@ -295,7 +292,6 @@ These workflows have NOT been run yet and may require adjustments:
 2. No notarization for macOS dylib
 3. No artifact attestation (supply chain security)
 4. Nightly time fixed at 1 AM EST (no DST adjustment)
-5. macOS DS6 CI leg (self-hosted Intel runner ORION) needs Xcode upgrade and verification
 
 ### Future Enhancements
 1. **Security**
