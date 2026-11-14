@@ -1730,6 +1730,58 @@ All endpoints except `/status`, `/health`, and `/metrics` require authentication
 
 ---
 
+### `GET /capabilities`
+
+**Purpose:** Machine-readable discovery of versions, routes, feature flags,
+limits and render engines, so clients can adapt instead of hard-coding them
+**Authentication:** Required (if enabled). Uses the read chain (IP whitelist +
+auth, not rate limited)
+
+**Response** (abridged):
+```json
+{
+  "schema_version": 1,
+  "compatibility_hash": "3f9a1c0b7d2e4a55",
+  "server": { "name": "DazScriptServer", "version": "2.11.0" },
+  "studio": { "version": "4.24.0.3", "sdk_version": "4.5.0.100", "sdk_major": 4,
+              "qt_version": "4.8.7", "qt_build_version": "4.8.7" },
+  "routes": [ { "method": "POST", "path": "/execute", "auth": true, "kind": "json" } ],
+  "plugin_routes": [],
+  "features": { "async": true, "report_file": true, "sse_scene_events": true,
+                "render_animation": true, "companion_plugins": false },
+  "limits": { "max_body_size_mb": 5, "max_script_length_kb": 1024,
+              "max_concurrent_requests": 10, "max_batch_variants": 100,
+              "max_animation_frames": 1000, "async_max_queue_depth": 100,
+              "async_result_ttl_seconds": 3600, "stale_job_timeout_minutes": 30 },
+  "rate_limit": { "enabled": false, "max_requests": 60, "window_seconds": 60,
+                  "applies_to": "write" },
+  "security": { "auth_enabled": true, "ip_whitelist_enabled": false,
+                "auth_headers": ["X-API-Token", "Authorization: Bearer"] },
+  "render_engines": {
+    "registered": [ { "class_name": "DzIrayRenderer", "name": "NVIDIA Iray", "active": true } ],
+    "selectable": ["viewport", "iray"],
+    "active_class": "DzIrayRenderer",
+    "source": "live",
+    "read_at": "2026-11-14T18:02:11Z"
+  }
+}
+```
+
+- `limits` reports the current settings, not the compiled defaults.
+- `render_engines` is read from `DzRenderMgr` on the main thread.
+  `selectable` lists the values `POST /render` accepts for `engine` right now.
+  While DAZ Studio is busy (rendering, loading a scene), the server returns the
+  last document it built instead of blocking, with `"source": "snapshot"`.
+- `compatibility_hash` fingerprints the schema version, the route table
+  (including companion-plugin routes) and the feature flags. It doesn't change
+  with limits, settings or render engines, so clients can cache their
+  route/feature decisions by it.
+- Clients must ignore unknown keys. `schema_version` goes up only on breaking
+  changes to the document's shape.
+- dazpy: `DazClient.capabilities()` / `AsyncDazClient.capabilities()`.
+
+---
+
 ### `POST /execute`
 
 **Purpose:** Execute a DazScript and return the result

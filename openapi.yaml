@@ -111,6 +111,43 @@ paths:
                 uptime_seconds: 86400
                 success_rate_percent: 97.77
 
+  /capabilities:
+    get:
+      tags: [Server]
+      summary: Machine-readable feature, route and limit discovery
+      description: |
+        Lets clients (MCP servers, SDKs) adapt to the running server instead of
+        hard-coding versions. Built on the DAZ Studio main thread so
+        `render_engines` is read live from DzRenderMgr. While the main thread
+        is busy (render, scene load) the server returns the last document it
+        built instead, with `render_engines.source: snapshot`.
+
+        `compatibility_hash` fingerprints the schema version, route table
+        (including companion-plugin routes) and feature flags. It does not
+        change with limits, settings or render engines, so clients can cache
+        route/feature decisions by it.
+      operationId: getCapabilities
+      security:
+        - apiToken: []
+        - bearerToken: []
+      responses:
+        '200':
+          description: Capabilities document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilitiesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: Main thread busy and no snapshot built yet (Retry-After header set)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /execute:
     post:
       tags: [Execute]
@@ -1219,6 +1256,169 @@ components:
         success_rate_percent:
           type: number
           format: float
+
+    CapabilitiesResponse:
+      type: object
+      required: [schema_version, compatibility_hash, server, studio, routes, plugin_routes,
+                 features, limits, rate_limit, security, render_engines]
+      properties:
+        schema_version:
+          type: integer
+          description: Bumped on breaking changes to this document's shape
+          example: 1
+        compatibility_hash:
+          type: string
+          description: 16-hex-char fingerprint of schema + routes + feature flags
+          example: "3f9a1c0b7d2e4a55"
+        server:
+          type: object
+          required: [name, version]
+          properties:
+            name:
+              type: string
+              example: DazScriptServer
+            version:
+              type: string
+              example: "2.11.0"
+        studio:
+          type: object
+          required: [version, sdk_version, sdk_major, qt_version, qt_build_version]
+          properties:
+            version:
+              type: string
+              description: Running DAZ Studio version
+              example: "4.24.0.3"
+            sdk_version:
+              type: string
+              description: DAZ SDK the plugin was built against
+              example: "4.5.0.100"
+            sdk_major:
+              type: integer
+              enum: [4, 6]
+            qt_version:
+              type: string
+              description: Qt runtime version
+            qt_build_version:
+              type: string
+              description: Qt version the plugin was compiled against
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CapabilityRoute'
+        plugin_routes:
+          type: array
+          description: Routes registered by companion plugins
+          items:
+            type: object
+            required: [method, path, auth]
+            properties:
+              method:
+                type: string
+              path:
+                type: string
+              auth:
+                type: boolean
+              owner:
+                type: string
+                description: Class name of the registering QObject
+        features:
+          type: object
+          description: Feature flags. Unknown keys must be ignored by clients.
+          additionalProperties:
+            type: boolean
+          properties:
+            async: {type: boolean}
+            async_cancel: {type: boolean}
+            async_long_poll: {type: boolean}
+            report_file: {type: boolean}
+            script_registry: {type: boolean}
+            sse_scene_events: {type: boolean}
+            sse_render_progress: {type: boolean}
+            render: {type: boolean}
+            render_batch: {type: boolean}
+            render_animation: {type: boolean}
+            render_cancel: {type: boolean}
+            scene_save_copy: {type: boolean}
+            geometry_frames: {type: boolean}
+            companion_plugins:
+              type: boolean
+              description: True when at least one companion-plugin route is registered
+        limits:
+          type: object
+          description: Current settings (not compiled defaults)
+          properties:
+            max_body_size_mb: {type: integer}
+            max_script_length_kb: {type: integer}
+            max_concurrent_requests: {type: integer}
+            max_batch_variants: {type: integer}
+            max_animation_frames: {type: integer}
+            async_max_queue_depth: {type: integer}
+            async_result_ttl_seconds: {type: integer}
+            stale_job_timeout_minutes: {type: integer}
+        rate_limit:
+          type: object
+          properties:
+            enabled: {type: boolean}
+            max_requests: {type: integer}
+            window_seconds: {type: integer}
+            applies_to:
+              type: string
+              enum: [write]
+              description: Only POST/DELETE routes are rate limited
+        security:
+          type: object
+          properties:
+            auth_enabled: {type: boolean}
+            auth_headers:
+              type: array
+              items: {type: string}
+            ip_whitelist_enabled: {type: boolean}
+        render_engines:
+          type: object
+          required: [registered, selectable, active_class, source, read_at]
+          properties:
+            registered:
+              type: array
+              items:
+                type: object
+                required: [class_name, name, active]
+                properties:
+                  class_name: {type: string, example: DzIrayRenderer}
+                  name: {type: string, example: NVIDIA Iray}
+                  active: {type: boolean}
+            selectable:
+              type: array
+              description: Values POST /render currently accepts for "engine"
+              items:
+                type: string
+                enum: [viewport, iray, filament]
+            active_class:
+              type: string
+              nullable: true
+            source:
+              type: string
+              enum: [live, snapshot]
+            read_at:
+              type: string
+              format: date-time
+              description: When render engines were read (UTC)
+
+    CapabilityRoute:
+      type: object
+      required: [method, path, auth, kind]
+      properties:
+        method:
+          type: string
+          enum: [GET, POST, DELETE]
+        path:
+          type: string
+          description: Path with {id} placeholders
+          example: /requests/{id}/status
+        auth:
+          type: boolean
+        kind:
+          type: string
+          enum: [json, sse, binary]
 
     ErrorResponse:
       type: object

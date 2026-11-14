@@ -837,6 +837,64 @@ class TestHealthAndMetrics(unittest.TestCase):
         self.assertGreaterEqual(r.json().get("total_requests", -1), 0)
 
 
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+
+class TestCapabilities(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.resp = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10)
+        cls.doc = cls.resp.json() if cls.resp.status_code == 200 else {}
+
+    def test_returns_200(self):
+        self.assertEqual(self.resp.status_code, 200, self.resp.text)
+
+    def test_requires_auth(self):
+        r = requests.get(f"{BASE_URL}/capabilities",
+                         headers={"X-API-Token": "invalid-token-xyz"}, timeout=5)
+        self.assertEqual(r.status_code, 401)
+
+    def test_top_level_shape(self):
+        for key in ("schema_version", "compatibility_hash", "server", "studio", "routes",
+                    "plugin_routes", "features", "limits", "rate_limit", "security",
+                    "render_engines"):
+            self.assertIn(key, self.doc)
+        self.assertEqual(self.doc["schema_version"], 1)
+        self.assertRegex(self.doc["compatibility_hash"], r"^[0-9a-f]{16}$")
+
+    def test_versions_match_status(self):
+        status = requests.get(f"{BASE_URL}/status", timeout=5).json()
+        self.assertEqual(self.doc["server"]["version"], status["version"])
+        self.assertIn(self.doc["studio"]["sdk_major"], (4, 6))
+        self.assertTrue(self.doc["studio"]["version"])
+
+    def test_routes_include_core_endpoints(self):
+        routes = {(r["method"], r["path"]) for r in self.doc["routes"]}
+        for key in (("POST", "/execute"), ("GET", "/capabilities"),
+                    ("GET", "/requests/{id}/status"), ("GET", "/scene/events")):
+            self.assertIn(key, routes)
+        public = {(r["method"], r["path"]) for r in self.doc["routes"] if not r["auth"]}
+        self.assertEqual(public, {("GET", "/status"), ("GET", "/health"), ("GET", "/metrics")})
+
+    def test_limits_are_positive(self):
+        for key in ("max_body_size_mb", "max_script_length_kb", "max_concurrent_requests",
+                    "max_batch_variants", "max_animation_frames"):
+            self.assertGreater(self.doc["limits"][key], 0, key)
+
+    def test_render_engines_read_live(self):
+        engines = self.doc["render_engines"]
+        self.assertIn(engines["source"], ("live", "snapshot"))
+        self.assertIn("viewport", engines["selectable"])
+        self.assertTrue(engines["registered"], "DzRenderMgr reported no renderers")
+        active = [e for e in engines["registered"] if e["active"]]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["class_name"], engines["active_class"])
+
+    def test_hash_is_stable_across_calls(self):
+        again = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        self.assertEqual(again["compatibility_hash"], self.doc["compatibility_hash"])
+
+
 # ─── Script registry ──────────────────────────────────────────────────────────
 
 class TestScriptRegistry(unittest.TestCase):

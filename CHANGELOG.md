@@ -4,6 +4,17 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /capabilities` discovery endpoint.** Returns the plugin, DAZ Studio,
+  SDK and Qt versions, every route (including companion-plugin routes), feature
+  flags, the current body/script/batch/animation/queue limits, rate limit and
+  security settings, and the render engines read live from `DzRenderMgr`.
+  `compatibility_hash` changes only when routes, feature flags or the schema
+  change. While DAZ Studio is busy the server returns its last snapshot instead
+  of 503. dazpy adds `DazClient.capabilities()` and
+  `AsyncDazClient.capabilities()`.
+
 ## [2.11.0] - 2026-11-14
 
 ### Added

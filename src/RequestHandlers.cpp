@@ -148,6 +148,29 @@ void MetricsHandler::handle(HttpContext& ctx)
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+CapabilitiesHandler::CapabilitiesHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
+
+void CapabilitiesHandler::handle(HttpContext& ctx)
+{
+    if (m_pPane->isMainThreadBusy()) {
+        // Discovery should not fail just because a render is running: serve the
+        // last document built on the main thread (render_engines.source = "snapshot").
+        QByteArray snapshot = m_pPane->capabilitiesSnapshot();
+        if (!snapshot.isEmpty()) {
+            ctx.respond(200, std::string(snapshot.constData(), snapshot.size()));
+            return;
+        }
+        if (respondIfMainThreadBusy(m_pPane, ctx)) return;
+    }
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleCapabilitiesRequest",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result));
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 ExecuteScriptHandler::ExecuteScriptHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void ExecuteScriptHandler::handle(HttpContext& ctx)

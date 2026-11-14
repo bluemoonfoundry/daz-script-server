@@ -120,6 +120,27 @@ class TestRouteSecurity(unittest.TestCase):
         self.assertLess(not_found, chain_run)
         self.assertLess(chain_run, invoke)
 
+    def test_capabilities_route_table_matches_setup_routes(self):
+        """GET /capabilities reports kCapabilityRoutes; it must list exactly the
+        routes setupRoutes() registers, with auth matching PUBLIC_ROUTES."""
+        start = self.src.index("const CapabilityRoute kCapabilityRoutes[]")
+        end = self.src.index("};", start)
+        entries = re.findall(
+            r'\{\s*"(\w+)",\s*"([^"]+)",\s*(true|false),\s*"(\w+)"\s*\}',
+            self.src[start:end])
+        table = {(m, p): auth == "true" for m, p, auth, _ in entries}
+        self.assertEqual(len(table), len(entries), "duplicate capability route")
+
+        registered = {(m, p.replace("([^/]+)", "{id}")) for m, p, _ in self.routes}
+        self.assertEqual(set(table), registered)
+        for key, auth in table.items():
+            with self.subTest(route=key):
+                self.assertEqual(auth, key not in PUBLIC_ROUTES)
+
+    def test_capabilities_route_uses_read_chain(self):
+        found = {(m, p): h for m, p, h in self.routes}
+        self.assertIn("m_pReadChain->run(ctx)", found[("GET", "/capabilities")])
+
     def test_httplib_payload_limit_set_from_config(self):
         self.assertRegex(
             self.src,

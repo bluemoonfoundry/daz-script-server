@@ -912,3 +912,26 @@ class DazClient:
         resp = self._get("/metrics")
         _raise_for_error(resp)
         return resp.json()
+
+    def capabilities(self) -> dict:
+        """Return the server's capabilities document from ``GET /capabilities``.
+
+        Describes the server/DAZ Studio/SDK versions, routes (including
+        companion-plugin routes), feature flags, current limits, and the
+        render engines registered right now (``render_engines.selectable``
+        lists the values ``render(engine=...)`` accepts). While DAZ Studio is
+        busy the server returns its last snapshot, marked
+        ``render_engines.source == "snapshot"``. ``compatibility_hash`` changes
+        only when routes, feature flags or the schema change.
+
+        Servers that predate this endpoint answer 404.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+            ServerResponseError: On HTTP 404 from a server without
+                ``/capabilities`` (``status_code == 404``).
+            StudioBusyError: On HTTP 503 before the server has a snapshot.
+        """
+        resp = self._get("/capabilities")
+        _raise_for_error(resp)
+        return resp.json()

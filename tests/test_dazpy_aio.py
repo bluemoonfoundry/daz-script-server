@@ -514,3 +514,21 @@ class TestAsyncServerVersionCheck:
         async with AsyncDazClient(token="", check_version=False) as client:
             await client.execute("1;")
         assert status.call_count == 0
+
+
+class TestAsyncDazClientCapabilities:
+    @pytest.mark.asyncio
+    async def test_capabilities_gets_endpoint(self):
+        client, mock_http = _client_with_mock_http()
+        doc = {"schema_version": 1, "features": {"async": True}}
+        mock_http.get.return_value = _mock_resp(json_data=doc)
+        assert await client.capabilities() == doc
+        assert mock_http.get.call_args[0][0].endswith("/capabilities")
+
+    @pytest.mark.asyncio
+    async def test_capabilities_404_on_old_server(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.get.return_value = _mock_resp(status_code=404, json_data={"error": "not found"})
+        with pytest.raises(exceptions.ServerResponseError) as ei:
+            await client.capabilities()
+        assert ei.value.status_code == 404

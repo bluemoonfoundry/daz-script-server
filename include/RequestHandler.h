@@ -139,6 +139,16 @@ private:
     DzScriptServerPane* m_pPane;
 };
 
+// GET /capabilities. Builds the document on the main thread (render engines are
+// read live); while the main thread is busy, serves the last snapshot instead.
+class CapabilitiesHandler : public IRequestHandler {
+public:
+    explicit CapabilitiesHandler(DzScriptServerPane* pane);
+    void handle(HttpContext& ctx) override;
+private:
+    DzScriptServerPane* m_pPane;
+};
+
 class ExecuteScriptHandler : public IRequestHandler {
 public:
     explicit ExecuteScriptHandler(DzScriptServerPane* pane);

@@ -27,6 +27,7 @@
 #endif
 
 #include <QtCore/qmetaobject.h>
+#include <QtCore/qcryptographichash.h>
 #include <QtCore/qsettings.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qfile.h>
@@ -716,6 +717,9 @@ void DzScriptServerPane::startServer()
 
 	m_pRenderProgress = new RenderProgressBroker();
 
+	// Prime the snapshot GET /capabilities serves while the main thread is busy.
+	refreshCapabilitiesSnapshot(buildCapabilities());
+
 	updateUI();
 	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -976,6 +980,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pStatusHandler.reset(new StatusHandler(DZSRV_VERSION_STR));
 	m_pHealthHandler.reset(new HealthHandler(this));
 	m_pMetricsHandler.reset(new MetricsHandler(this));
+	m_pCapabilitiesHandler.reset(new CapabilitiesHandler(this));
 	m_pExecuteHandler.reset(new ExecuteScriptHandler(this));
 	m_pRegisterHandler.reset(new ScriptRegisterHandler(this));
 	m_pScriptListHandler.reset(new ScriptListHandler(this));
@@ -1013,6 +1018,12 @@ void DzScriptServerPane::setupRoutes()
 	m_pServer->Get("/metrics", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		m_pMetricsHandler->handle(ctx);
+		applyContext(ctx, res);
+	});
+
+	m_pServer->Get("/capabilities", [this](const httplib::Request& req, httplib::Response& res) {
+		auto ctx = toContext(req);
+		if (m_pReadChain->run(ctx)) m_pCapabilitiesHandler->handle(ctx);
 		applyContext(ctx, res);
 	});
 
@@ -2552,7 +2563,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
             "variants must be a non-empty array")));
 
-    static const int MAX_BATCH_VARIANTS = 100;
+    const int MAX_BATCH_VARIANTS = ServerConfig::MAX_BATCH_VARIANTS;
     if (variants.size() > MAX_BATCH_VARIANTS)
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
             "variants exceeds maximum of " + std::to_string(MAX_BATCH_VARIANTS))));
@@ -2757,7 +2768,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
             "end_frame must be >= start_frame")));
 
-    static const int MAX_ANIMATION_FRAMES = 1000;
+    const int MAX_ANIMATION_FRAMES = ServerConfig::MAX_ANIMATION_FRAMES;
     int frameCount = endFrame - startFrame + 1;
     if (frameCount > MAX_ANIMATION_FRAMES)
         return HttpResult(400, stdToQBA(ErrorResponse::build(ErrorCode::INVALID_FIELD,
@@ -3112,6 +3123,240 @@ std::string DzScriptServerPane::getMetricsJson() const
 	s += std::to_string((long long)m_metrics.getMaxMainThreadWaitMs());
 	s += "}";
 	return s;
+}
+
+// ─── Capabilities (GET /capabilities) ─────────────────────────────────────────
+
+namespace {
+
+// Core route table reported by GET /capabilities. Paths use OpenAPI-style
+// {id} placeholders for the ([^/]+) captures in setupRoutes().
+// tests/test_route_security.py fails if this table and setupRoutes() drift apart.
+struct CapabilityRoute {
+	const char* method;
+	const char* path;
+	bool        auth;     // false only for the deliberately public routes
+	const char* kind;     // "json" | "sse" | "binary"
+};
+
+const CapabilityRoute kCapabilityRoutes[] = {
+	{ "GET",    "/status",                 false, "json"   },
+	{ "GET",    "/health",                 false, "json"   },
+	{ "GET",    "/metrics",                false, "json"   },
+	{ "GET",    "/capabilities",           true,  "json"   },
+	{ "POST",   "/execute",                true,  "json"   },
+	{ "POST",   "/scripts/register",       true,  "json"   },
+	{ "GET",    "/scripts",                true,  "json"   },
+	{ "DELETE", "/scripts/{id}",           true,  "json"   },
+	{ "POST",   "/scripts/{id}/execute",   true,  "json"   },
+	{ "POST",   "/execute/async",          true,  "json"   },
+	{ "POST",   "/scripts/{id}/async",     true,  "json"   },
+	{ "GET",    "/requests/{id}/status",   true,  "json"   },
+	{ "GET",    "/requests/{id}/result",   true,  "json"   },
+	{ "DELETE", "/requests/{id}",          true,  "json"   },
+	{ "GET",    "/requests",               true,  "json"   },
+	{ "POST",   "/render",                 true,  "json"   },
+	{ "POST",   "/render/batch",           true,  "json"   },
+	{ "POST",   "/render/animation",       true,  "json"   },
+	{ "POST",   "/render/{id}/cancel",     true,  "json"   },
+	{ "POST",   "/scene/save-copy",        true,  "json"   },
+	{ "POST",   "/geometry/frames",        true,  "binary" },
+	{ "GET",    "/scene/events",           true,  "sse"    },
+	{ "GET",    "/render/{id}/progress",   true,  "sse"    },
+};
+
+// Engines POST /render accepts in its "engine" field, and the renderer class
+// each one needs (null = no renderer lookup; viewport uses a ScreenShot render).
+struct SelectableEngine {
+	const char* engine;
+	const char* rendererClass;
+};
+
+const SelectableEngine kSelectableEngines[] = {
+	{ "viewport", nullptr },
+	{ "iray",     "DzIrayRenderer" },
+	{ "filament", "DzFilamentRenderer" },
+};
+
+} // namespace
+
+QVariantMap DzScriptServerPane::buildCapabilities() const
+{
+	// Main thread only: reads GUI-owned settings and DzRenderMgr.
+	QVariantMap caps;
+	caps["schema_version"] = ServerConfig::CAPABILITIES_SCHEMA_VERSION;
+
+	QVariantMap server;
+	server["name"]    = QString("DazScriptServer");
+	server["version"] = QString(DZSRV_VERSION_STR);
+	caps["server"] = server;
+
+	QVariantMap studio;
+	studio["version"]          = dzApp ? dzApp->getVersionString() : QString();
+	studio["sdk_version"]      = QString("%1.%2.%3.%4")
+		.arg(DZ_SDK_VERSION_MAJOR).arg(DZ_SDK_VERSION_MINOR)
+		.arg(DZ_SDK_VERSION_REV).arg(DZ_SDK_VERSION_BUILD);
+	studio["sdk_major"]        = DZ_SDK_VERSION_MAJOR;
+	studio["qt_version"]       = QString(qVersion());
+	studio["qt_build_version"] = QString(QT_VERSION_STR);
+	caps["studio"] = studio;
+
+	// ── Routes ───────────────────────────────────────────────────────────────
+	QStringList hashLines;
+	QVariantList routes;
+	for (size_t i = 0; i < sizeof(kCapabilityRoutes) / sizeof(kCapabilityRoutes[0]); ++i) {
+		const CapabilityRoute& r = kCapabilityRoutes[i];
+		QVariantMap m;
+		m["method"] = QString(r.method);
+		m["path"]   = QString(r.path);
+		m["auth"]   = r.auth;
+		m["kind"]   = QString(r.kind);
+		routes.append(m);
+		hashLines << QString("route %1 %2").arg(QString(r.method), QString(r.path));
+	}
+	caps["routes"] = routes;
+
+	QVariantList pluginRoutes;
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+			const PluginRoute& r = m_pluginRoutes.at(i);
+			QVariantMap m;
+			m["method"] = r.method;
+			m["path"]   = r.path;
+			m["auth"]   = true;
+			m["owner"]  = r.receiver ? QString(r.receiver->metaObject()->className()) : QString();
+			pluginRoutes.append(m);
+			hashLines << QString("plugin %1 %2").arg(r.method, r.path);
+		}
+	}
+	caps["plugin_routes"] = pluginRoutes;
+
+	// ── Feature flags ────────────────────────────────────────────────────────
+	QVariantMap features;
+	features["async"]               = true;   // /execute/async, /requests/*
+	features["async_cancel"]        = true;   // DELETE /requests/{id}
+	features["async_long_poll"]     = true;   // /requests/{id}/result?wait=true
+	features["report_file"]         = true;   // async "reportFile" JSONL job reports
+	features["script_registry"]     = true;   // /scripts/*
+	features["sse_scene_events"]    = true;   // /scene/events
+	features["sse_render_progress"] = true;   // /render/{id}/progress
+	features["render"]              = true;
+	features["render_batch"]        = true;
+	features["render_animation"]    = true;
+	features["render_cancel"]       = true;
+	features["scene_save_copy"]     = true;
+	features["geometry_frames"]     = true;
+	features["companion_plugins"]   = !pluginRoutes.isEmpty();
+	caps["features"] = features;
+	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
+		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));
+
+	// ── Limits (current settings, not just defaults) ─────────────────────────
+	QVariantMap limits;
+	limits["max_body_size_mb"]        = m_nMaxBodySizeMB;
+	limits["max_script_length_kb"]    = m_nMaxScriptLengthKB;
+	limits["max_concurrent_requests"] = m_nMaxConcurrentRequests;
+	limits["max_batch_variants"]      = ServerConfig::MAX_BATCH_VARIANTS;
+	limits["max_animation_frames"]    = ServerConfig::MAX_ANIMATION_FRAMES;
+	limits["async_max_queue_depth"]   = m_pAsyncMgr ? m_pAsyncMgr->maxQueueDepth()
+	                                                : AsyncRequestManager::DEFAULT_MAX_QUEUE_DEPTH;
+	limits["async_result_ttl_seconds"] = ServerConfig::ASYNC_RESULT_TTL_SEC;
+	limits["stale_job_timeout_minutes"] = m_nStaleJobTimeoutMin;
+	caps["limits"] = limits;
+
+	QVariantMap rateLimit;
+	rateLimit["enabled"]        = m_rateLimiter.isEnabled();
+	rateLimit["max_requests"]   = m_pRateLimitMaxSpin ? m_pRateLimitMaxSpin->value()
+	                                                  : ServerConfig::DEFAULT_RATE_LIMIT_MAX;
+	rateLimit["window_seconds"] = m_pRateLimitWindowSpin ? m_pRateLimitWindowSpin->value()
+	                                                     : ServerConfig::DEFAULT_RATE_LIMIT_WINDOW;
+	rateLimit["applies_to"]     = QString("write");  // POST/DELETE routes only
+	caps["rate_limit"] = rateLimit;
+
+	QVariantMap security;
+	security["auth_enabled"]         = m_auth.isEnabled();
+	security["auth_headers"]         = QStringList() << "X-API-Token" << "Authorization: Bearer";
+	security["ip_whitelist_enabled"] = m_ipWhitelist.isEnabled();
+	caps["security"] = security;
+
+	// ── Render engines, read live from DzRenderMgr ───────────────────────────
+	QVariantMap engines;
+	QVariantList registered;
+	QVariantList selectable;
+	QString activeClass;
+	DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
+	if (renderMgr) {
+		DzRenderer* active = renderMgr->getActiveRenderer();
+		if (active) activeClass = QString(active->metaObject()->className());
+		for (int i = 0; i < renderMgr->getNumRenderers(); ++i) {
+			DzRenderer* r = renderMgr->getRenderer(i);
+			if (!r) continue;
+			QVariantMap m;
+			const QString cls = QString(r->metaObject()->className());
+			m["class_name"] = cls;
+			m["name"]       = r->getName();
+			m["active"]     = (r == active);
+			registered.append(m);
+		}
+		for (size_t i = 0; i < sizeof(kSelectableEngines) / sizeof(kSelectableEngines[0]); ++i) {
+			const SelectableEngine& e = kSelectableEngines[i];
+			if (!e.rendererClass || renderMgr->findRenderer(QString(e.rendererClass)))
+				selectable.append(QString(e.engine));
+		}
+	}
+	engines["registered"]   = registered;
+	engines["selectable"]   = selectable;   // values POST /render accepts for "engine"
+	engines["active_class"] = activeClass.isEmpty() ? QVariant() : QVariant(activeClass);
+	engines["source"]       = QString("live");
+	engines["read_at"]      = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+	caps["render_engines"] = engines;
+
+	// Stable fingerprint of the API surface: schema, routes (incl. companion
+	// routes) and feature flags. Changes in limits, settings or render engines
+	// don't change it, so clients can cache their route/feature decisions by it.
+	hashLines.prepend(QString("schema %1").arg(ServerConfig::CAPABILITIES_SCHEMA_VERSION));
+	hashLines.sort();
+	QByteArray digest = QCryptographicHash::hash(hashLines.join("\n").toUtf8(),
+	                                             QCryptographicHash::Sha1).toHex();
+	caps["compatibility_hash"] = QString::fromLatin1(digest.left(16));
+
+	return caps;
+}
+
+static QByteArray capabilitiesToJson(const QVariantMap& caps)
+{
+	JsonBuilder json;
+	json.startObject();
+	for (QVariantMap::const_iterator it = caps.begin(); it != caps.end(); ++it)
+		json.addMember(it.key(), it.value());
+	json.finishObject();
+	return json.toString().toUtf8();
+}
+
+void DzScriptServerPane::refreshCapabilitiesSnapshot(const QVariantMap& caps)
+{
+	QVariantMap snap = caps;
+	QVariantMap engines = snap.value("render_engines").toMap();
+	engines["source"] = QString("snapshot");
+	snap["render_engines"] = engines;
+	QByteArray body = capabilitiesToJson(snap);
+
+	QMutexLocker lock(&m_capabilitiesMutex);
+	m_capabilitiesSnapshot = body;
+}
+
+QByteArray DzScriptServerPane::capabilitiesSnapshot() const
+{
+	QMutexLocker lock(&m_capabilitiesMutex);
+	return m_capabilitiesSnapshot;
+}
+
+HttpResult DzScriptServerPane::handleCapabilitiesRequest()
+{
+	QVariantMap caps = buildCapabilities();
+	refreshCapabilitiesSnapshot(caps);
+	return HttpResult(200, capabilitiesToJson(caps));
 }
 
 bool DzScriptServerPane::isMainThreadBusy() const

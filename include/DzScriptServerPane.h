@@ -82,6 +82,15 @@ namespace ServerConfig {
     const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;
     const int ASYNC_STALE_RUNNING_TIMEOUT_MIN_MIN = 5;
     const int ASYNC_STALE_RUNNING_TIMEOUT_MAX_MIN = 1440;
+    // Finished async requests are kept this long (AsyncRequestManager::cleanupExpired()).
+    const int ASYNC_RESULT_TTL_SEC = 3600;
+
+    // Per-request limits on the render endpoints (also reported by GET /capabilities)
+    const int MAX_BATCH_VARIANTS = 100;     // POST /render/batch "variants"
+    const int MAX_ANIMATION_FRAMES = 1000;  // POST /render/animation frame range
+
+    // GET /capabilities document schema. Bump on any breaking change to its shape.
+    const int CAPABILITIES_SCHEMA_VERSION = 1;
 }
 
 class DzScript;
@@ -141,6 +150,10 @@ public slots:
 	// Scene I/O helpers — called on main thread via BlockingQueuedConnection.
 	Q_INVOKABLE HttpResult handleSaveCopy(const QByteArray& jsonBody);
 
+	// GET /capabilities — main thread (reads render engines live from DzRenderMgr).
+	// Also refreshes the snapshot served while the main thread is busy.
+	Q_INVOKABLE HttpResult handleCapabilitiesRequest();
+
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
 	// not ::free, so it is safe to construct/destroy on httplib worker threads).
@@ -156,6 +169,11 @@ public:
 	// Main-thread busy state — called from HTTP threads (lock-free atomic read via SceneEventBroker)
 	bool        isMainThreadBusy() const;
 	std::string mainThreadBusyMessage() const;
+
+	// Last capabilities document built on the main thread, with render engines
+	// marked source "snapshot". Served by GET /capabilities while the main thread
+	// is busy. Mutex-protected; empty until the server has started.
+	QByteArray  capabilitiesSnapshot() const;
 
 	// Script Registry operations — called from HTTP threads (mutex-protected, no Qt string ops)
 	std::string                 listScriptsJson() const;
@@ -207,6 +225,8 @@ private:
 	void    loadSettings();
 	void    saveSettings();
 	void    applySettings(const ServerSettings& s);
+	QVariantMap buildCapabilities() const;   // main thread only
+	void        refreshCapabilitiesSnapshot(const QVariantMap& caps);
 
 	// Server state
 	httplib::Server* m_pServer;
@@ -293,6 +313,9 @@ private:
 	QList<PluginRoute> m_pluginRoutes;
 	mutable QMutex     m_pluginRoutesMutex;
 
+	QByteArray         m_capabilitiesSnapshot;   // see capabilitiesSnapshot()
+	mutable QMutex     m_capabilitiesMutex;
+
 	AsyncRequestManager*  m_pAsyncMgr;
 	QTimer*               m_pCleanupTimer;    // Fires every 5 min to purge TTL-expired requests
 	SceneEventBroker*     m_pEventBroker;     // SSE scene-change notification broker
@@ -308,6 +331,7 @@ private:
 	std::unique_ptr<StatusHandler>        m_pStatusHandler;
 	std::unique_ptr<HealthHandler>        m_pHealthHandler;
 	std::unique_ptr<MetricsHandler>       m_pMetricsHandler;
+	std::unique_ptr<CapabilitiesHandler>  m_pCapabilitiesHandler;
 	std::unique_ptr<ExecuteScriptHandler> m_pExecuteHandler;
 	std::unique_ptr<ScriptRegisterHandler> m_pRegisterHandler;
 	std::unique_ptr<ScriptListHandler>    m_pScriptListHandler;

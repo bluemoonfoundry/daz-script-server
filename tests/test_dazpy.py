@@ -7636,6 +7636,42 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class TestCapabilities(unittest.TestCase):
+    """DazClient.capabilities() wraps GET /capabilities."""
+
+    def _client(self, status_code=200, json_data=None):
+        import requests as req
+
+        client = DazClient(token="", check_version=False)
+        client._session.close()
+        session = MagicMock()
+        resp = MagicMock(spec=req.Response)
+        resp.status_code = status_code
+        resp.json.return_value = json_data or {}
+        resp.text = str(json_data)
+        resp.headers = {}
+        session.get.return_value = resp
+        client._session = session
+        return client, session
+
+    def test_returns_document(self):
+        doc = {"schema_version": 1, "render_engines": {"selectable": ["viewport", "iray"]}}
+        client, session = self._client(json_data=doc)
+        self.assertEqual(client.capabilities(), doc)
+        self.assertTrue(session.get.call_args[0][0].endswith("/capabilities"))
+
+    def test_old_server_404_raises(self):
+        client, _ = self._client(status_code=404, json_data={"error": "not found"})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.capabilities()
+        self.assertEqual(cm.exception.status_code, 404)
+
+    def test_auth_failure_raises(self):
+        client, _ = self._client(status_code=401, json_data={"error": "bad token"})
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.capabilities()
+
+
 class TestServerVersionCheck(unittest.TestCase):
     """DazClient warns once when the server's major.minor is older than dazpy's."""
 

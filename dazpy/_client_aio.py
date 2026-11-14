@@ -530,6 +530,12 @@ class AsyncDazClient:
         _raise_for_error(resp)
         return resp.json()
 
+    async def capabilities(self) -> dict:
+        """See :meth:`dazpy.DazClient.capabilities`."""
+        resp = await self._get("/capabilities")
+        _raise_for_error(resp)
+        return resp.json()
+
 
 async def _aiter_sse_events(resp: "httpx.Response"):
     """Yield ``(event_type, data_dict)`` pairs from a streaming httpx SSE response."""
