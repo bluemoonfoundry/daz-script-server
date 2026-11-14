@@ -22,6 +22,46 @@ info:
     queue behind each other. The `/execute/async` family lets callers submit
     work without blocking their HTTP connection.
 
+    ## Request identity and retry safety
+
+    - Every response carries `X-Server-Instance-Id`, a random ID generated each
+      time the server starts. `/status`, `/health`, `/capabilities` and every
+      job response report it too. A changed value means the server restarted:
+      in-memory jobs, registered scripts and idempotency records are gone.
+    - Job routes (`/execute`, `/scripts/{id}/execute`, `/execute/async`,
+      `/scripts/{id}/async`, `/render`, `/render/batch`, `/render/animation`)
+      accept `X-Correlation-Id` (generated as `cor-...` when absent), echo it in
+      the response header and body, and store it on async job records.
+    - The async submission routes accept `Idempotency-Key`. Resubmitting the
+      same body to the same route with the same key, within
+      `limits.idempotency_ttl_seconds` (1 h), returns the original response
+      (`idempotent_replay: true`, header `Idempotent-Replayed: true`) without
+      queueing a second job. Only 2xx responses are remembered. Reusing a key
+      with a different body returns 422 `IDEMPOTENCY_KEY_REUSED`; retrying while
+      the first request is still being handled returns 409
+      `IDEMPOTENCY_KEY_IN_FLIGHT` (retryable).
+    - `scene_revision` is a counter (reset on restart) that advances on every
+      structural scene change and after every executed script or job. Equal
+      values within one `server_instance_id` mean no change was observed.
+
+    | Operation | Retry safe? |
+    |---|---|
+    | GET routes, `DELETE /requests/{id}`, `POST /render/{id}/cancel` | Yes |
+    | `/execute/async`, `/scripts/{id}/async`, `/render`, `/render/batch`, `/render/animation` | Yes with `Idempotency-Key`; otherwise a retry queues a second job |
+    | `/execute`, `/scripts/{id}/execute` | No: a retry runs the script again. Use the async route + key |
+    | `/scripts/register`, `DELETE /scripts/{id}` | Yes (overwrite / delete by name) |
+    | `/scene/save-copy` | Yes (same output path is overwritten) |
+    | `/geometry/frames` | Yes (read-only scene evaluation) |
+
+    ## Errors
+
+    Every failure uses one envelope (`ErrorResponse`):
+    `{"success": false, "error_code": "...", "error": "...", "retryable": bool, "detail"?: "..."}`.
+    HTTP-level failures use 4xx/5xx statuses. Script and job failures keep
+    HTTP 200 (the exchange succeeded) and put the same fields in the execute or
+    job-result body with `error_code` `SCRIPT_ERROR`, `JOB_CANCELLED` or
+    `JOB_STALE`. Branch on `error_code`, not on the message text.
+
   version: 2.11.0
   contact:
     name: Blue Moon Foundry
@@ -156,6 +196,8 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -255,6 +297,7 @@ paths:
         - apiToken: []
         - bearerToken: []
       parameters:
+        - $ref: '#/components/parameters/CorrelationId'
         - $ref: '#/components/parameters/ScriptId'
       requestBody:
         required: false
@@ -315,6 +358,9 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -336,6 +382,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '413':
           $ref: '#/components/responses/TooLarge'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -348,6 +398,8 @@ paths:
         - apiToken: []
         - bearerToken: []
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
         - $ref: '#/components/parameters/ScriptId'
       requestBody:
         required: false
@@ -368,6 +420,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -542,6 +598,9 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -561,6 +620,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -575,6 +638,9 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -587,20 +653,30 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [request_ids]
-                properties:
-                  request_ids:
-                    type: array
-                    items:
-                      type: string
-                    description: One `request_id` per variant, in submission order
+                allOf:
+                  - $ref: '#/components/schemas/JobIdentity'
+                  - type: object
+                    required: [request_ids]
+                    properties:
+                      batch_id:
+                        type: string
+                      request_ids:
+                        type: array
+                        items:
+                          type: string
+                        description: One `request_id` per variant, in submission order
+                      total:
+                        type: integer
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -752,6 +828,29 @@ components:
       scheme: bearer
 
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Client-chosen key (1-255 printable ASCII, no spaces). A repeat of the
+        same route + body + key within the TTL returns the original response
+        instead of submitting a second job.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[!-~]{1,255}$'
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Client trace ID (1-255 printable ASCII, no spaces). Generated when absent.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[!-~]{1,255}$'
     ScriptId:
       name: id
       in: path
@@ -909,6 +1008,38 @@ components:
           type: string
           description: 8-character ID for log correlation
           example: "a3f2b891"
+        error_code:
+          type: string
+          enum: [SCRIPT_ERROR]
+          description: Present only when `success` is false
+        retryable:
+          type: boolean
+          description: Present only when `success` is false
+        server_instance_id:
+          type: string
+        correlation_id:
+          type: string
+        scene_revision:
+          type: integer
+
+    JobIdentity:
+      type: object
+      description: Identity fields stamped on job route responses (success and error).
+      properties:
+        server_instance_id:
+          type: string
+          description: Random per-run server ID; changes on every server start
+          example: "srv-3f9a1c0b7d2e4a55"
+        correlation_id:
+          type: string
+          description: Client `X-Correlation-Id`, or a generated `cor-...` ID
+          example: "cor-1b2c3d4e"
+        scene_revision:
+          type: integer
+          description: Scene change counter at response time (reset on restart)
+        idempotent_replay:
+          type: boolean
+          description: Present (true) only when this is a replay of an earlier response
 
     RegisterRequest:
       type: object
@@ -1006,18 +1137,20 @@ components:
           type: string
 
     AsyncSubmitResponse:
-      type: object
-      required: [request_id, status, submitted_at]
-      properties:
-        request_id:
-          type: string
-          example: "a3f2b891"
-        status:
-          type: string
-          enum: [queued]
-        submitted_at:
-          type: string
-          format: date-time
+      allOf:
+        - $ref: '#/components/schemas/JobIdentity'
+        - type: object
+          required: [request_id, status, submitted_at]
+          properties:
+            request_id:
+              type: string
+              example: "execute-a3f2b891"
+            status:
+              type: string
+              enum: [queued]
+            submitted_at:
+              type: string
+              format: date-time
 
     RequestListResponse:
       type: object
@@ -1044,6 +1177,12 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/RequestStatus'
+        correlation_id:
+          type: string
+          description: Correlation ID the job was submitted with
+        server_instance_id:
+          type: string
+          description: Server run that accepted the job
         submitted_at:
           type: string
           format: date-time
@@ -1058,6 +1197,12 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/RequestStatus'
+        correlation_id:
+          type: string
+          description: Correlation ID the job was submitted with
+        server_instance_id:
+          type: string
+          description: Server run that accepted the job
         progress:
           type: number
           format: float
@@ -1086,6 +1231,16 @@ components:
               $ref: '#/components/schemas/RequestStatus'
             observation:
               $ref: '#/components/schemas/JobObservation'
+            error_code:
+              type: string
+              enum: [SCRIPT_ERROR, JOB_CANCELLED, JOB_STALE]
+              description: Present when `success` is false
+            retryable:
+              type: boolean
+            correlation_id:
+              type: string
+            server_instance_id:
+              type: string
 
     JobObservation:
       type: object
@@ -1212,12 +1367,17 @@ components:
 
     StatusResponse:
       type: object
-      required: [running, version]
+      required: [running, version, server_instance_id, scene_revision]
       properties:
         running:
           type: boolean
         version:
           type: string
+        server_instance_id:
+          type: string
+          example: "srv-3f9a1c0b7d2e4a55"
+        scene_revision:
+          type: integer
 
     HealthResponse:
       type: object
@@ -1235,6 +1395,10 @@ components:
         active_requests:
           type: integer
         uptime_seconds:
+          type: integer
+        server_instance_id:
+          type: string
+        scene_revision:
           type: integer
 
     MetricsResponse:
@@ -1280,6 +1444,9 @@ components:
             version:
               type: string
               example: "2.11.0"
+            instance_id:
+              type: string
+              description: Same value as `server_instance_id` on `/status`
         studio:
           type: object
           required: [version, sdk_version, sdk_major, qt_version, qt_build_version]
@@ -1343,6 +1510,11 @@ components:
             companion_plugins:
               type: boolean
               description: True when at least one companion-plugin route is registered
+            idempotency_key: {type: boolean}
+            correlation_id: {type: boolean}
+            server_instance_id: {type: boolean}
+            scene_revision: {type: boolean}
+            error_envelope: {type: boolean}
         limits:
           type: object
           description: Current settings (not compiled defaults)
@@ -1354,6 +1526,7 @@ components:
             max_animation_frames: {type: integer}
             async_max_queue_depth: {type: integer}
             async_result_ttl_seconds: {type: integer}
+            idempotency_ttl_seconds: {type: integer}
             stale_job_timeout_minutes: {type: integer}
         rate_limit:
           type: object
@@ -1422,12 +1595,56 @@ components:
 
     ErrorResponse:
       type: object
-      required: [success, error]
+      description: |
+        The one error envelope used by every failure. Job routes also stamp
+        `JobIdentity` fields into it. Unknown `error_code` values must be
+        treated as non-retryable failures.
+      required: [success, error_code, error, retryable]
       properties:
         success:
           type: boolean
           enum: [false]
+        error_code:
+          type: string
+          description: Stable, machine-readable code
+          enum:
+            - AUTH_MISSING_TOKEN
+            - AUTH_INVALID_TOKEN
+            - IP_NOT_WHITELISTED
+            - SCRIPT_NOT_FOUND
+            - REQUEST_NOT_FOUND
+            - ROUTE_NOT_FOUND
+            - IDEMPOTENCY_KEY_IN_FLIGHT
+            - IDEMPOTENCY_KEY_REUSED
+            - BODY_TOO_LARGE
+            - RATE_LIMIT_EXCEEDED
+            - CONCURRENT_LIMIT_EXCEEDED
+            - BAD_REQUEST
+            - INVALID_JSON
+            - MISSING_FIELD
+            - INVALID_FIELD
+            - SCRIPT_TOO_LARGE
+            - SCRIPT_FILE_NOT_FOUND
+            - SCRIPT_FILE_NOT_FILE
+            - SCRIPT_FILE_NOT_ABSOLUTE
+            - SCRIPT_FILE_LOAD_FAILED
+            - NOT_A_RENDER_REQUEST
+            - REQUEST_ALREADY_FINISHED
+            - SERVER_UNAVAILABLE
+            - STUDIO_BUSY
+            - INTERNAL_ERROR
         error:
+          type: string
+          description: Human-readable message (may change between versions)
+        retryable:
+          type: boolean
+          description: True when an identical retry may succeed (busy, rate limited, queue full, key in flight)
+        detail:
+          type: string
+          description: Optional context, e.g. the offending field or ID
+        server_instance_id:
+          type: string
+        correlation_id:
           type: string
 
   responses:
@@ -1439,7 +1656,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "JSON parse error at line 3: unexpected token"
+            error_code: INVALID_JSON
+            error: "Invalid JSON in request body"
+            retryable: false
     Unauthorized:
       description: Missing or invalid API token
       content:
@@ -1448,7 +1667,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Invalid or missing authentication token"
+            error_code: AUTH_INVALID_TOKEN
+            error: "Authentication failed: invalid or missing API token"
+            retryable: false
     Forbidden:
       description: IP address not in whitelist
       content:
@@ -1457,7 +1678,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "IP not whitelisted: 192.168.1.50"
+            error_code: IP_NOT_WHITELISTED
+            error: "Access denied: IP address is not in the whitelist"
+            retryable: false
     NotFound:
       description: Script or request ID not found
       content:
@@ -1466,7 +1689,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Script not found: 'scene-info'"
+            error_code: SCRIPT_NOT_FOUND
+            error: "Script not found in registry"
+            retryable: false
     TooLarge:
       description: Request body exceeds configured maximum
       content:
@@ -1475,7 +1700,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Request body too large (max 5 MB)"
+            error_code: BODY_TOO_LARGE
+            error: "Request body exceeds maximum allowed size"
+            retryable: false
     TooManyRequests:
       description: Concurrent request limit or per-IP rate limit exceeded
       content:
@@ -1484,4 +1711,28 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Maximum concurrent requests limit reached"
+            error_code: CONCURRENT_LIMIT_EXCEEDED
+            error: "Server busy: maximum concurrent requests reached, please retry"
+            retryable: true
+    IdempotencyInFlight:
+      description: A request with this Idempotency-Key is still being processed (retry after `Retry-After`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: IDEMPOTENCY_KEY_IN_FLIGHT
+            error: "A request with this Idempotency-Key is still being processed; retry shortly"
+            retryable: true
+    IdempotencyKeyReused:
+      description: The Idempotency-Key was already used on this route with a different body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: IDEMPOTENCY_KEY_REUSED
+            error: "This Idempotency-Key was already used on this route with a different request body"
+            retryable: false

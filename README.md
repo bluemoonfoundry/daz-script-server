@@ -1782,6 +1782,103 @@ auth, not rate limited)
 
 ---
 
+### Request identity, idempotency and errors
+
+MCP servers and other automated clients retry after timeouts and DAZ Studio
+restarts. These headers and fields make those retries safe and let you tell a
+slow server from a restarted one.
+
+**`server_instance_id`**: a random `srv-…` ID generated each time the server
+starts. It's sent as the `X-Server-Instance-Id` header on every response
+(errors included) and in the body of `/status`, `/health`, `/capabilities`
+(`server.instance_id`) and every job response. If it changes, the server has
+restarted, and its in-memory jobs, registered scripts and idempotency records
+are gone. Async job records keep the ID of the run that accepted them.
+
+**`X-Correlation-Id`**: send any 1–255 printable-ASCII trace ID (no spaces)
+to a job route: `/execute`, `/scripts/{id}/execute`, `/execute/async`,
+`/scripts/{id}/async`, `/render`, `/render/batch` or `/render/animation`. The
+server echoes it in the response header and as `correlation_id` in the body,
+and stores it on the async job, so `GET /requests/{id}/status`, `…/result` and
+`GET /requests` return it too. If you don't send one, the server generates a
+`cor-…` ID.
+
+**`Idempotency-Key`**: accepted on the async submission routes
+(`/execute/async`, `/scripts/{id}/async`, `/render`, `/render/batch`,
+`/render/animation`). The rules:
+
+| Situation | Response |
+|---|---|
+| First request with this key | Handled normally; a 2xx response is remembered for `limits.idempotency_ttl_seconds` (1 h) |
+| Same route + same body + same key | The original response, with `"idempotent_replay": true` and header `Idempotent-Replayed: true`. No second job is queued |
+| Same key, first request still being handled | `409 IDEMPOTENCY_KEY_IN_FLIGHT` (`retryable: true`, `Retry-After: 1`) |
+| Same route + same key, different body | `422 IDEMPOTENCY_KEY_REUSED` |
+| Same key on a different route | Independent: keys are scoped per route, so it is a new submission |
+| First request failed (4xx/5xx) | Nothing remembered, so a retry runs normally |
+
+The records live in memory only: after a
+restart (new `server_instance_id`) the same key submits a new job.
+
+```bash
+curl -s -X POST http://127.0.0.1:18811/execute/async \
+  -H "X-API-Token: $TOKEN" -H "Idempotency-Key: render-shot-12" \
+  -H "X-Correlation-Id: mcp-call-8841" \
+  -d '{"script":"Scene.getNumNodes()"}'
+# {"request_id":"execute-1b2c3d4e","status":"queued","submitted_at":"…",
+#  "server_instance_id":"srv-3f9a1c0b7d2e4a55","correlation_id":"mcp-call-8841",
+#  "scene_revision":17}
+```
+
+```python
+rid = client.execute_async_submit(script, idempotency_key="render-shot-12",
+                                  correlation_id="mcp-call-8841")
+```
+
+**`scene_revision`**: a counter that starts at 0 on each server start and goes
+up on every structural scene change (scene load/clear, node, skeleton, light or
+camera added or removed) and after every executed script or job, since a script
+can change anything. It's reported on `/status`, `/health` and job responses.
+Within one `server_instance_id`, an unchanged value means no change was
+observed. Property edits made by hand in the DAZ UI are not counted.
+
+**Retry safety by operation:**
+
+| Operation | Safe to retry? |
+|---|---|
+| `GET` routes, `DELETE /requests/{id}`, `POST /render/{id}/cancel` | Yes |
+| `/execute/async`, `/scripts/{id}/async`, `/render`, `/render/batch`, `/render/animation` | Yes, with `Idempotency-Key`. Without one, a retry queues a second job |
+| `/execute`, `/scripts/{id}/execute` | **No.** A retry runs the script again. Use the async route with a key |
+| `POST /scripts/register`, `DELETE /scripts/{id}` | Yes (overwrite or delete by name) |
+| `POST /scene/save-copy` | Yes (overwrites the same output path) |
+| `POST /geometry/frames` | Yes (read-only evaluation) |
+
+**One error format.** Every failure has the same envelope:
+
+```json
+{ "success": false, "error_code": "REQUEST_NOT_FOUND",
+  "error": "Request not found (unknown ID, expired after its TTL, or submitted to a previous server instance)",
+  "retryable": false, "detail": "execute-1b2c3d4e" }
+```
+
+- HTTP-level failures (auth, validation, limits, unknown IDs or routes) use
+  4xx/5xx statuses. Job routes add `server_instance_id` and `correlation_id` to
+  the error body.
+- Script and job failures keep HTTP 200, because the HTTP exchange succeeded,
+  and put the same fields in the body: `error_code` is `SCRIPT_ERROR` (the
+  script threw), `JOB_CANCELLED` or `JOB_STALE` (stuck-job timeout), and
+  `error` holds the script's own message.
+- `retryable` is `true` only when an identical retry may succeed:
+  `STUDIO_BUSY`, `CONCURRENT_LIMIT_EXCEEDED`, `RATE_LIMIT_EXCEEDED`,
+  `SERVER_UNAVAILABLE` (e.g. queue full) and `IDEMPOTENCY_KEY_IN_FLIGHT`.
+- Branch on `error_code`, never on `error`, which may be reworded. The full code
+  list is in `openapi.yaml` (`ErrorResponse`). dazpy raises
+  `ServerResponseError` with `.error_code`, `.detail` and `.retryable`.
+- Companion-plugin routes return whatever body their plugin writes. The server
+  uses the envelope only for its own errors on those paths (unknown route,
+  auth, plugin unloaded).
+
+---
+
 ### `POST /execute`
 
 **Purpose:** Execute a DazScript and return the result

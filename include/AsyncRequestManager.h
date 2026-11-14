@@ -48,6 +48,10 @@ public:
     int  maxQueueDepth() const        { return m_maxQueueDepth; }
     int  maxTrackedRequests() const   { return m_maxTrackedRequests; }
 
+    // Identity of the current server run, stamped onto every job submitted
+    // from now on (jobs from an earlier run keep theirs). Call on server start.
+    void setServerInstanceId(const QString& id);
+
     // ── HTTP-thread API ────────────────────────────────────────────────────
 
     struct SubmitResult {
@@ -61,13 +65,16 @@ public:
 
     // Enqueue a new async request. Returns SubmitResult::accepted=false when
     // the queue is at capacity or too many requests are tracked.
+    // correlationId is the client's X-Correlation-Id (or a generated one);
+    // it is echoed in every status/result/list record for this job.
     SubmitResult        submit(const QString& scriptText, const QString& scriptFile,
                                const QString& reportFile, const QVariantMap& args,
-                               const QString& idPrefix);
+                               const QString& idPrefix, const QString& correlationId);
 
     // Enqueue a render job. Same as submit() but tags the request as
     // REQUEST_TYPE_RENDER so cancel dispatch calls killRender() correctly.
-    SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix);
+    SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix,
+                                     const QString& correlationId);
 
     // All five methods below are safe to call from HTTP threads. Studio 6 may
     // ingest report JSON here because QJsonDocument is reentrant. Studio 4
@@ -169,6 +176,8 @@ private:
         {}
 
         QString       id;
+        QString       correlationId;
+        QString       serverInstanceId;
         RequestStatus status;
         RequestType   requestType;
         QString       scriptText;
@@ -198,6 +207,7 @@ private:
     std::string statusToString(RequestStatus s) const;
     std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly);
     static std::string lifecycleTimesJson(const AsyncRequest& req);
+    static std::string identityJson(const AsyncRequest& req);
     void ingestReportFromWorkerLocked(AsyncRequest& req);
     void ingestReportLocked(AsyncRequest& req, bool final = false);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);
@@ -209,6 +219,7 @@ private:
     QMap<QString, AsyncRequest> m_requests;
     QQueue<QString>             m_queue;
     QString                     m_currentId;
+    QString                     m_serverInstanceId;
     mutable QMutex              m_mutex;
 
     int m_maxQueueDepth;

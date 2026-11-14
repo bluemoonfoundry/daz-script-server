@@ -1,6 +1,7 @@
 #include "AsyncRequestManager.h"
 #include "JsonStd.h"
 #include "MetricsCollector.h"
+#include "ErrorResponse.h"
 #include <QtCore/qdir.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
@@ -28,11 +29,18 @@ AsyncRequestManager::AsyncRequestManager(QObject* notifyTarget)
     , m_maxTrackedRequests(DEFAULT_MAX_TRACKED_REQUESTS)
 {}
 
+void AsyncRequestManager::setServerInstanceId(const QString& id)
+{
+    QMutexLocker locker(&m_mutex);
+    m_serverInstanceId = id;
+}
+
 // ─── HTTP-thread API ──────────────────────────────────────────────────────────
 
 AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
     const QString& scriptText, const QString& scriptFile,
-    const QString& reportFile, const QVariantMap& args, const QString& idPrefix)
+    const QString& reportFile, const QVariantMap& args, const QString& idPrefix,
+    const QString& correlationId)
 {
     SubmitResult r;
     r.accepted    = false;
@@ -73,6 +81,8 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
 
         AsyncRequest req;
         req.id          = MetricsCollector::generateAsyncId(idPrefix);
+        req.correlationId    = correlationId;
+        req.serverInstanceId = m_serverInstanceId;
         req.scriptText  = scriptText;
         req.scriptFile  = scriptFile;
         req.reportFile  = reportFile;
@@ -96,7 +106,7 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
 }
 
 AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
-    const QString& scriptText, const QString& idPrefix)
+    const QString& scriptText, const QString& idPrefix, const QString& correlationId)
 {
     SubmitResult r;
     r.accepted    = false;
@@ -119,6 +129,8 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
         AsyncRequest req;
         req.id          = MetricsCollector::generateAsyncId(idPrefix);
         req.requestType = REQUEST_TYPE_RENDER;
+        req.correlationId    = correlationId;
+        req.serverInstanceId = m_serverInstanceId;
         req.scriptText  = scriptText;
         req.submittedAt = QDateTime::currentMSecsSinceEpoch();
 
@@ -336,7 +348,7 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
     QString qid = QString::fromStdString(requestId);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid))
-        return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+        return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
     AsyncRequest& req = m_requests[qid];
     ingestReportFromWorkerLocked(req);
@@ -348,6 +360,7 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
     std::string s = "{\"request_id\":\"";
     s += JsonStd::escape(JsonStd::qstrToStd(req.id));
     s += "\",\"status\":\"" + status + "\"";
+    s += identityJson(req);
     s += ",\"progress\":" + std::string(progBuf);
     s += ",\"observation\":" + observationJson(req);
 
@@ -382,7 +395,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
             {
                 QMutexLocker locker(&m_mutex);
                 if (!m_requests.contains(qid))
-                    return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+                    return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
                 s = m_requests.value(qid).status;
             }
             // STALE isn't final, but the server has given up waiting on it,
@@ -395,7 +408,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
 
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid))
-        return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+        return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
     AsyncRequest& mutableReq = m_requests[qid];
     ingestReportFromWorkerLocked(mutableReq);
@@ -405,6 +418,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
     std::string s = "{\"request_id\":\"";
     s += JsonStd::escape(JsonStd::qstrToStd(observedReq.id));
     s += "\",\"status\":\"" + status + "\"";
+    s += identityJson(observedReq);
 
     if (observedReq.status == REQUEST_COMPLETED ||
         observedReq.status == REQUEST_COMPLETED_AFTER_CANCEL_REQUEST ||
@@ -418,15 +432,17 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
         }
         s += "],\"error\":null";
     } else if (observedReq.status == REQUEST_FAILED || observedReq.status == REQUEST_STALE) {
-        s += ",\"success\":false,\"result\":null,\"output\":[]";
-        s += ",\"error\":\"" + JsonStd::escape(JsonStd::qstrToStd(observedReq.error)) + "\"";
+        s += ",\"success\":false,\"result\":null,\"output\":[],";
+        s += ErrorResponse::fields(
+            observedReq.status == REQUEST_STALE ? ErrorCode::JOB_STALE : ErrorCode::SCRIPT_ERROR,
+            JsonStd::qstrToStd(observedReq.error));
     } else if (observedReq.status == REQUEST_CANCELLED) {
         // A render aborted by killRender() still returns a result object;
         // keep it so the history shows what actually happened.
         s += ",\"success\":false,\"result\":";
         s += observedReq.scriptExecuted ? JsonStd::variantToJson(observedReq.scriptResult) : "null";
-        s += ",\"output\":[]";
-        s += ",\"error\":\"Cancelled\"";
+        s += ",\"output\":[],";
+        s += ErrorResponse::fields(ErrorCode::JOB_CANCELLED);
     } else {
         char progBuf[32];
         std::snprintf(progBuf, sizeof(progBuf), "%.15g", observedReq.progress);
@@ -478,15 +494,15 @@ std::pair<int, std::string> AsyncRequestManager::cancelImpl(
     {
         QMutexLocker locker(&m_mutex);
         if (!m_requests.contains(qid))
-            return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+            return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
         AsyncRequest& req = m_requests[qid];
 
         if (renderOnly && req.requestType != REQUEST_TYPE_RENDER)
-            return {400, "{\"success\":false,\"error\":\"Not a render request\"}"};
+            return {400, ErrorResponse::build(ErrorCode::NOT_A_RENDER_REQUEST, requestId)};
 
         if (isTerminal(req.status))
-            return {400, "{\"success\":false,\"error\":\"Request already finished\"}"};
+            return {400, ErrorResponse::build(ErrorCode::REQUEST_ALREADY_FINISHED, requestId)};
 
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (!req.cancelRequested) {
@@ -559,6 +575,7 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
         if (!items.empty()) items += ",";
         items += "{\"request_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.id)) + "\"";
         items += ",\"status\":\"" + statusStr + "\"";
+        items += identityJson(req);
         items += ",\"progress\":" + std::string(progBuf);
         items += ",\"observation_summary\":{";
         items += "\"log_total\":" + std::to_string(req.logTotal);
@@ -829,6 +846,17 @@ bool AsyncRequestManager::isTerminal(RequestStatus s)
 
 // History fields kept even after the real outcome lands, so a client can see
 // that a cancel was requested or the job went stale before it finished.
+// ,"correlation_id":"..","server_instance_id":".." -- empty fields omitted.
+std::string AsyncRequestManager::identityJson(const AsyncRequest& req)
+{
+    std::string s;
+    if (!req.correlationId.isEmpty())
+        s += ",\"correlation_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.correlationId)) + "\"";
+    if (!req.serverInstanceId.isEmpty())
+        s += ",\"server_instance_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.serverInstanceId)) + "\"";
+    return s;
+}
+
 std::string AsyncRequestManager::lifecycleTimesJson(const AsyncRequest& req)
 {
     std::string s;

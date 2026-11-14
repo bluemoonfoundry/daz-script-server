@@ -42,6 +42,24 @@ def _parse_retry_after(resp: _requests.Response) -> float:
         return 2.0
 
 
+def _job_headers(idempotency_key: str | None, correlation_id: str | None) -> dict:
+    """Optional request-identity headers for job submission routes.
+
+    ``Idempotency-Key`` makes a retried submission (same route, same body)
+    return the original ``request_id`` instead of queueing a second job, for
+    as long as the server keeps the record (``limits.idempotency_ttl_seconds``
+    in :meth:`DazClient.capabilities`; lost on a server restart, which shows
+    as a changed ``server_instance_id``). ``X-Correlation-Id`` is echoed in
+    the response and stored on the job record.
+    """
+    headers = {}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    if correlation_id:
+        headers["X-Correlation-Id"] = correlation_id
+    return headers
+
+
 def _raise_for_error(resp: _requests.Response) -> None:
     """Raise a typed exception for authentication or server-busy responses.
 
@@ -70,6 +88,7 @@ def _raise_for_error(resp: _requests.Response) -> None:
         status_code=status,
         error_code=error_code,
         detail=str(data.get("detail", "")),
+        retryable=bool(data.get("retryable", False)),
     )
 
 
@@ -186,13 +205,13 @@ class DazClient:
                 return None
         return self._server_version
 
-    def _post(self, path: str, payload: dict) -> _requests.Response:
+    def _post(self, path: str, payload: dict, headers: dict | None = None) -> _requests.Response:
         self._check_server_version()
         try:
             return self._session.post(
                 f"{self._base}{path}",
                 json=payload,
-                headers=self._headers,
+                headers={**self._headers, **headers} if headers else self._headers,
                 timeout=self._timeout,
             )
         except _requests.exceptions.ConnectionError as e:
@@ -332,7 +351,8 @@ class DazClient:
 
     def execute_async_submit(
         self, script: str, args: object = None, *, report_file: str | None = None,
-        retry_on_busy: bool = False, max_wait: float = 30.0
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a script for asynchronous execution and return immediately.
 
@@ -346,6 +366,13 @@ class DazClient:
                 instead of raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
+            idempotency_key: Optional ``Idempotency-Key``. Resubmitting the
+                same body with the same key returns the original
+                ``request_id`` instead of queueing a second job, which makes
+                retries after a timeout safe. Accepted by every ``*_submit``
+                method.
+            correlation_id: Optional ``X-Correlation-Id`` stored on the job
+                and echoed in its status/result records.
 
         Returns:
             The server-assigned ``request_id`` string.  Use it with
@@ -368,7 +395,7 @@ class DazClient:
             payload["reportFile"] = report_file
 
         def _do():
-            resp = self._post("/execute/async", payload)
+            resp = self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -376,7 +403,8 @@ class DazClient:
 
     def execute_file_async_submit(
         self, script_file: str, args: object = None, *, report_file: str | None = None,
-        retry_on_busy: bool = False, max_wait: float = 30.0
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a host-side ``.dsa`` file for asynchronous execution.
 
@@ -392,7 +420,7 @@ class DazClient:
             payload["reportFile"] = report_file
 
         def _do():
-            resp = self._post("/execute/async", payload)
+            resp = self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -447,6 +475,7 @@ class DazClient:
     def execute_registered_async_submit(
         self, name: str, args: object = None, *, report_file: str | None = None,
         retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a registered script and return its async request id."""
         payload: dict = {}
@@ -456,7 +485,7 @@ class DazClient:
             payload["reportFile"] = report_file
 
         def _do():
-            resp = self._post(f"/scripts/{name}/async", payload)
+            resp = self._post(f"/scripts/{name}/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -579,6 +608,7 @@ class DazClient:
         reset_morphs: bool = False,
         retry_on_busy: bool = False,
         max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit a render job and return immediately.
 
@@ -632,14 +662,15 @@ class DazClient:
                 payload["morphs"] = morphs
 
         def _do():
-            resp = self._post("/render", payload)
+            resp = self._post("/render", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def render_batch_submit(
-        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit a batch render job and return immediately.
 
@@ -670,7 +701,7 @@ class DazClient:
             payload["base"] = base
 
         def _do():
-            resp = self._post("/render/batch", payload)
+            resp = self._post("/render/batch", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
@@ -689,6 +720,7 @@ class DazClient:
         engine: str = "",
         retry_on_busy: bool = False,
         max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit an animation render job spanning a frame range and return immediately.
 
@@ -742,7 +774,7 @@ class DazClient:
             payload["engine"] = engine
 
         def _do():
-            resp = self._post("/render/animation", payload)
+            resp = self._post("/render/animation", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 

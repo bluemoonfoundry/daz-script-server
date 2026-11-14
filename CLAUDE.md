@@ -87,7 +87,7 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 10. Capture output via `onMessagePosted()`
 11. Execute via `DzScript`, measure duration
 12. Update metrics, log request
-13. Return `{ success, result, output[], error, request_id }`
+13. Return `{ success, result, output[], error, request_id }` (+ `error_code`/`retryable` on failure; `runJobRoute()` stamps `server_instance_id`, `correlation_id`, `scene_revision`)
 
 ### Key Classes
 
@@ -106,7 +106,16 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 
 Default: `127.0.0.1:18811`
 
-**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 413 (Body too large), 429 (Rate limit/concurrent limit)
+**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 404 (Unknown script/request/route), 409 (Idempotency key in flight), 413 (Body too large), 422 (Idempotency key reused), 429 (Rate limit/concurrent limit), 503 (Studio busy/queue full)
+
+**Errors:** every failure body is `ErrorResponse` (`include/ErrorResponse.h`):
+`{success:false, error_code, error, retryable, detail?}`. Never hand-build an
+error body; add an `ErrorCode` instead. Script/job failures stay HTTP 200 with
+`error_code` `SCRIPT_ERROR` / `JOB_CANCELLED` / `JOB_STALE`.
+
+**Job routes** (`/execute`, `/scripts/:id/execute`, async + render submission)
+go through `runJobRoute()`: write chain → `X-Correlation-Id` → `Idempotency-Key`
+(`IdempotencyCache`, async/render submission only) → handler → identity stamp.
 
 **Authentication:** Token via `X-API-Token` header or `Authorization: Bearer <token>`. Auto-generated securely, stored in `~/.daz3d/dazscriptserver_token.txt` (chmod 600).
 

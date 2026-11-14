@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 import requests
 
 BASE_URL = "http://127.0.0.1:18811"
@@ -894,6 +895,184 @@ class TestCapabilities(unittest.TestCase):
     def test_hash_is_stable_across_calls(self):
         again = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
         self.assertEqual(again["compatibility_hash"], self.doc["compatibility_hash"])
+
+
+# ─── Request identity, idempotency and the error envelope (5d6f.8) ────────────
+
+ERROR_ENVELOPE_KEYS = ("success", "error_code", "error", "retryable")
+
+
+def unique_key(prefix="idem"):
+    return f"{prefix}-{uuid.uuid4().hex}"
+
+
+class TestServerIdentity(unittest.TestCase):
+
+    def test_status_reports_instance_and_revision(self):
+        r = requests.get(f"{BASE_URL}/status", timeout=5)
+        body = r.json()
+        self.assertRegex(body["server_instance_id"], r"^srv-[0-9a-f]{16}$")
+        self.assertIsInstance(body["scene_revision"], int)
+        self.assertEqual(r.headers.get("X-Server-Instance-Id"), body["server_instance_id"])
+
+    def test_instance_id_is_stable_within_a_run(self):
+        a = requests.get(f"{BASE_URL}/status", timeout=5).json()["server_instance_id"]
+        b = requests.get(f"{BASE_URL}/health", timeout=5).json()["server_instance_id"]
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        self.assertEqual(a, b)
+        self.assertEqual(caps["server"]["instance_id"], a)
+        self.assertTrue(caps["features"]["idempotency_key"])
+        self.assertGreater(caps["limits"]["idempotency_ttl_seconds"], 0)
+
+    def test_instance_header_on_error_responses(self):
+        r = requests.get(f"{BASE_URL}/requests/does-not-exist/status",
+                         headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(r.headers.get("X-Server-Instance-Id", "").startswith("srv-"))
+
+    def test_scene_revision_advances_after_execute(self):
+        before = requests.get(f"{BASE_URL}/status", timeout=5).json()["scene_revision"]
+        r = execute(script="1 + 1;")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreater(r.json()["scene_revision"], before)
+
+
+class TestCorrelationId(unittest.TestCase):
+
+    def test_generated_when_absent(self):
+        r = async_execute(script="1;")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["correlation_id"].startswith("cor-"))
+        self.assertEqual(r.headers.get("X-Correlation-Id"), body["correlation_id"])
+        self.assertTrue(body["server_instance_id"].startswith("srv-"))
+
+    def test_client_value_echoed_and_stored_on_job(self):
+        corr = unique_key("trace")
+        r = async_execute(script="1;", headers={**auth_headers(), "X-Correlation-Id": corr})
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["request_id"]
+        self.assertEqual(r.json()["correlation_id"], corr)
+        status = poll_status(rid)
+        self.assertEqual(status["correlation_id"], corr)
+        self.assertEqual(status["server_instance_id"], r.json()["server_instance_id"])
+        result = get_result(rid).json()
+        self.assertEqual(result["correlation_id"], corr)
+        listed = requests.get(f"{BASE_URL}/requests", headers=auth_headers(), timeout=5).json()
+        match = [x for x in listed["requests"] if x["request_id"] == rid]
+        self.assertEqual(match[0]["correlation_id"], corr)
+
+    def test_sync_execute_echoes_correlation_id(self):
+        corr = unique_key("trace")
+        r = execute(script="1;", headers={**auth_headers(), "X-Correlation-Id": corr})
+        self.assertEqual(r.json()["correlation_id"], corr)
+        self.assertEqual(r.headers.get("X-Correlation-Id"), corr)
+
+    def test_invalid_correlation_id_rejected(self):
+        r = async_execute(script="1;", headers={**auth_headers(), "X-Correlation-Id": "has space"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error_code"], "INVALID_FIELD")
+
+
+class TestIdempotencyKey(unittest.TestCase):
+
+    def _submit(self, key, script="1;"):
+        return async_execute(script=script, headers={**auth_headers(), "Idempotency-Key": key})
+
+    def test_repeat_returns_original_request_id(self):
+        key = unique_key()
+        first = self._submit(key)
+        self.assertEqual(first.status_code, 200, first.text)
+        second = self._submit(key)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["request_id"], first.json()["request_id"])
+        self.assertTrue(second.json()["idempotent_replay"])
+        self.assertEqual(second.headers.get("Idempotent-Replayed"), "true")
+        self.assertNotIn("idempotent_replay", first.json())
+        # The replay reports the ORIGINAL correlation id, not a new one.
+        self.assertEqual(second.json()["correlation_id"], first.json()["correlation_id"])
+
+    def test_different_keys_create_different_jobs(self):
+        a = self._submit(unique_key()).json()["request_id"]
+        b = self._submit(unique_key()).json()["request_id"]
+        self.assertNotEqual(a, b)
+
+    def test_same_key_different_body_is_rejected(self):
+        key = unique_key()
+        self.assertEqual(self._submit(key, "1;").status_code, 200)
+        r = self._submit(key, "2;")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.json()["error_code"], "IDEMPOTENCY_KEY_REUSED")
+        self.assertFalse(r.json()["retryable"])
+
+    def test_key_is_scoped_by_route(self):
+        key = unique_key()
+        reg = requests.post(f"{BASE_URL}/scripts/register", headers=auth_headers(),
+                            json={"name": "idem-scope-probe", "script": "1;"}, timeout=5)
+        self.assertEqual(reg.status_code, 200)
+        a = self._submit(key)
+        b = requests.post(f"{BASE_URL}/scripts/idem-scope-probe/async",
+                          headers={**auth_headers(), "Idempotency-Key": key}, json={}, timeout=10)
+        self.assertEqual(b.status_code, 200, b.text)
+        self.assertNotEqual(a.json()["request_id"], b.json()["request_id"])
+
+    def test_failed_submission_is_not_cached(self):
+        key = unique_key()
+        bad = requests.post(f"{BASE_URL}/execute/async",
+                            headers={**auth_headers(), "Idempotency-Key": key},
+                            data="{not json", timeout=5)
+        self.assertEqual(bad.status_code, 400)
+        again = requests.post(f"{BASE_URL}/execute/async",
+                              headers={**auth_headers(), "Idempotency-Key": key},
+                              data="{not json", timeout=5)
+        self.assertEqual(again.status_code, 400)
+        self.assertNotIn("idempotent_replay", again.json())
+
+    def test_invalid_key_rejected(self):
+        r = self._submit("x" * 300)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error_code"], "INVALID_FIELD")
+
+
+class TestErrorEnvelope(unittest.TestCase):
+
+    def assertEnvelope(self, body, code):
+        for key in ERROR_ENVELOPE_KEYS:
+            self.assertIn(key, body)
+        self.assertFalse(body["success"])
+        self.assertEqual(body["error_code"], code)
+        self.assertIsInstance(body["retryable"], bool)
+
+    def test_unknown_request(self):
+        for method, path in (("GET", "/requests/nope/status"), ("GET", "/requests/nope/result"),
+                             ("DELETE", "/requests/nope")):
+            with self.subTest(path=path):
+                r = requests.request(method, f"{BASE_URL}{path}", headers=auth_headers(), timeout=5)
+                self.assertEqual(r.status_code, 404)
+                self.assertEnvelope(r.json(), "REQUEST_NOT_FOUND")
+
+    def test_unknown_route(self):
+        r = requests.get(f"{BASE_URL}/definitely/not/a/route", headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+        self.assertEnvelope(r.json(), "ROUTE_NOT_FOUND")
+
+    def test_unknown_registered_script_delete(self):
+        r = requests.delete(f"{BASE_URL}/scripts/no-such-script-xyz", headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+        self.assertEnvelope(r.json(), "SCRIPT_NOT_FOUND")
+
+    def test_sync_script_failure(self):
+        r = execute(script="throw new Error('boom');")
+        self.assertEqual(r.status_code, 200)
+        self.assertEnvelope(r.json(), "SCRIPT_ERROR")
+        self.assertIn("boom", r.json()["error"])
+
+    def test_async_script_failure(self):
+        rid = async_execute(script="throw new Error('boom');").json()["request_id"]
+        poll_status(rid)
+        body = get_result(rid).json()
+        self.assertEqual(body["status"], "failed")
+        self.assertEnvelope(body, "SCRIPT_ERROR")
 
 
 # ─── Script registry ──────────────────────────────────────────────────────────

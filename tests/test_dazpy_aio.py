@@ -356,6 +356,20 @@ class TestAsyncDazClientRealHttpxWiring:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_submit_sends_identity_headers(self):
+        route = respx.post("http://127.0.0.1:18811/execute/async").mock(
+            return_value=httpx.Response(200, json={"request_id": "execute-1", "status": "queued"})
+        )
+        async with AsyncDazClient() as client:
+            rid = await client.execute_async_submit(
+                "1;", idempotency_key="job-42", correlation_id="trace-7")
+        assert rid == "execute-1"
+        sent = route.calls.last.request.headers
+        assert sent["Idempotency-Key"] == "job-42"
+        assert sent["X-Correlation-Id"] == "trace-7"
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_generic_server_rejection_is_typed(self):
         respx.get("http://127.0.0.1:18811/status").mock(
             return_value=httpx.Response(409, json={"error": "request conflict"})

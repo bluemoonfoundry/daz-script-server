@@ -14,6 +14,41 @@ All notable changes to DazScript Server are documented here.
   change. While DAZ Studio is busy the server returns its last snapshot instead
   of 503. dazpy adds `DazClient.capabilities()` and
   `AsyncDazClient.capabilities()`.
+- **`Idempotency-Key` on job submission.** `/execute/async`,
+  `/scripts/{id}/async`, `/render`, `/render/batch` and `/render/animation`
+  accept the header. A retry with the same route, body and key within an hour
+  returns the original response (`idempotent_replay: true`) instead of queueing
+  a second job. Reusing a key with a different body returns
+  `422 IDEMPOTENCY_KEY_REUSED`. A retry while the first request is still being
+  handled returns `409 IDEMPOTENCY_KEY_IN_FLIGHT`.
+- **Server identity and correlation IDs.** Every response carries an
+  `X-Server-Instance-Id` header, a new random ID on each server start. It is
+  also reported on `/status`, `/health`, `/capabilities` and every job
+  response, so clients can detect a restart. Job routes accept
+  `X-Correlation-Id` (or generate one) and echo it, and async job records store
+  it. `/status`, `/health` and job responses also report `scene_revision`, a
+  counter of observed scene changes and executed scripts.
+- **Retry safety documented per operation** in the README and `openapi.yaml`.
+- dazpy: every `*_submit` method takes `idempotency_key=` and
+  `correlation_id=`, and `ServerResponseError` gains `.retryable`.
+
+### Changed
+
+- **One error format everywhere.** Every failure now returns
+  `{"success": false, "error_code", "error", "retryable", "detail"?}`. This
+  replaces the bare `{"success": false, "error": "…"}` bodies from unknown
+  request IDs, render-cancel misuse, registry deletes and companion-plugin
+  404/503 responses. httplib's own empty-body errors (404, 400, 500) get the
+  same JSON. Sync and async script failures keep HTTP 200 and now include
+  `error_code: "SCRIPT_ERROR"` (or `JOB_CANCELLED` / `JOB_STALE` for jobs).
+  New codes: `REQUEST_NOT_FOUND`, `ROUTE_NOT_FOUND`, `NOT_A_RENDER_REQUEST`,
+  `REQUEST_ALREADY_FINISHED`, `BAD_REQUEST`, `IDEMPOTENCY_KEY_IN_FLIGHT`,
+  `IDEMPOTENCY_KEY_REUSED`, `SCRIPT_ERROR`, `JOB_CANCELLED`, `JOB_STALE`. The
+  `error` text for unknown request IDs changed, so clients should branch on
+  `error_code` instead.
+- `/capabilities` `compatibility_hash` changes, because new feature flags
+  were added (`idempotency_key`, `correlation_id`, `server_instance_id`,
+  `scene_revision`, `error_envelope`).
 
 ## [2.11.0] - 2026-11-14
 

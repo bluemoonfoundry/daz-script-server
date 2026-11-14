@@ -49,6 +49,15 @@ def _routes(body):
         yield m.group(1).upper(), m.group(2), body[m.end():end]
 
 
+# Job routes delegate to runJobRoute(), which runs the write chain itself
+# (test_run_job_route_runs_write_chain_first checks that).
+JOB_ROUTE_RE = re.compile(r"runJobRoute\(req, res, \w+\.get\(\), (true|false)\)")
+
+
+def _runs_write_chain(handler):
+    return "m_pWriteChain->run(ctx)" in handler or bool(JOB_ROUTE_RE.search(handler))
+
+
 def _chain_middleware(body, chain):
     pattern = re.compile(re.escape(chain) + r"->add\(new (\w+)\(")
     return pattern.findall(body)
@@ -86,8 +95,8 @@ class TestRouteSecurity(unittest.TestCase):
             if (method, path) in PUBLIC_ROUTES:
                 continue
             with self.subTest(route=f"{method} {path}"):
-                self.assertRegex(
-                    handler, r"m_p(Write|Read)Chain->run\(ctx\)",
+                self.assertTrue(
+                    _runs_write_chain(handler) or "m_pReadChain->run(ctx)" in handler,
                     "route must run m_pWriteChain or m_pReadChain")
 
     def test_every_post_and_delete_route_uses_write_chain(self):
@@ -95,8 +104,30 @@ class TestRouteSecurity(unittest.TestCase):
             if method not in ("POST", "DELETE", "PUT", "PATCH"):
                 continue
             with self.subTest(route=f"{method} {path}"):
-                self.assertIn("m_pWriteChain->run(ctx)", handler)
+                self.assertTrue(_runs_write_chain(handler), "route must run m_pWriteChain")
                 self.assertNotIn("m_pReadChain->run(ctx)", handler)
+
+    def test_run_job_route_runs_write_chain_first(self):
+        start = self.src.index("void DzScriptServerPane::runJobRoute(")
+        end = self.src.index("void DzScriptServerPane::setupRoutes()", start)
+        body = self.src[start:end]
+        chain = body.index("m_pWriteChain->run(ctx)")
+        self.assertNotIn("m_pReadChain", body)
+        # Nothing request-specific (headers, idempotency replay, handler) may
+        # happen before the chain has authenticated the caller.
+        for later in ("x-correlation-id", "m_idempotency.begin(", "handler->handle(ctx)"):
+            with self.subTest(step=later):
+                self.assertLess(chain, body.index(later))
+
+    def test_job_submission_routes_are_idempotent(self):
+        found = {(m, p): h for m, p, h in self.routes}
+        for key in (("POST", "/execute/async"), ("POST", "/scripts/([^/]+)/async"),
+                    ("POST", "/render"), ("POST", "/render/batch"),
+                    ("POST", "/render/animation")):
+            with self.subTest(route=key):
+                m = JOB_ROUTE_RE.search(found[key])
+                self.assertIsNotNone(m)
+                self.assertEqual(m.group(1), "true")
 
     def test_save_copy_and_register_use_write_chain(self):
         found = {(m, p): h for m, p, h in self.routes}
@@ -114,7 +145,7 @@ class TestRouteSecurity(unittest.TestCase):
             r'\(method == "GET"\)\s*\?\s*\*m_pReadChain\s*:\s*\*m_pWriteChain')
         # The chain must run after route matching (unknown paths stay 404)
         # and before the plugin slot is invoked.
-        not_found = dispatch.index('"{\\"error\\":\\"not found\\"}"')
+        not_found = dispatch.index("ErrorCode::ROUTE_NOT_FOUND")
         chain_run = dispatch.index("chain.run(ctx)")
         invoke = dispatch.index("QMetaObject::invokeMethod(receiver.data()")
         self.assertLess(not_found, chain_run)

@@ -39,6 +39,7 @@
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
+#include "IdempotencyCache.h"
 #include "SettingsService.h"
 #include "ServerSettings.h"
 #include "SceneEventBroker.h"
@@ -49,7 +50,7 @@ typedef QPair<int, QByteArray> HttpResult;
 Q_DECLARE_METATYPE(HttpResult)
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
-namespace httplib { class Server; }
+namespace httplib { class Server; struct Request; struct Response; }
 
 // ─── Configuration Constants ──────────────────────────────────────────────────
 
@@ -135,17 +136,23 @@ public slots:
 	// through BlockingQueuedConnection because its JSON parser uses QScriptEngine.
 	// Neither path touches GUI, DzScript, or DAZ SDK state off the main thread.
 	// The script limit is an immutable snapshot captured before server start.
+	// correlationId is the job route's resolved X-Correlation-Id, stored on the job.
 	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody,
 	                                                const QByteArray& clientIP,
-	                                                int maxScriptLengthKB);
+	                                                int maxScriptLengthKB,
+	                                                const QByteArray& correlationId);
 	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
 	                                                const QByteArray& scriptIdBytes,
-	                                                const QByteArray& bodyBytes);
+	                                                const QByteArray& bodyBytes,
+	                                                const QByteArray& correlationId);
 
 	// Render enqueue still builds Daz/Qt render work on the main thread.
-	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
-	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
-	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody);
+	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody,
+	                                               const QByteArray& correlationId);
+	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody,
+	                                                    const QByteArray& correlationId);
+	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody,
+	                                                        const QByteArray& correlationId);
 
 	// Scene I/O helpers — called on main thread via BlockingQueuedConnection.
 	Q_INVOKABLE HttpResult handleSaveCopy(const QByteArray& jsonBody);
@@ -175,6 +182,17 @@ public:
 	// is busy. Mutex-protected; empty until the server has started.
 	QByteArray  capabilitiesSnapshot() const;
 
+	// Identity of this server run: a fresh random ID on every startServer(),
+	// so clients can tell a restart (and the loss of in-memory jobs and
+	// idempotency records) from a slow response. Written on the main thread
+	// before the listen thread starts; read-only while the server runs.
+	QByteArray  serverInstanceId() const { return m_serverInstanceId; }
+
+	// Monotonic counter, reset on each server start, bumped on every structural
+	// scene change (SceneEventBroker) and after every executed script or job
+	// (scripts may mutate anything). Equal values => no observed change.
+	int         sceneRevision() const { return m_sceneRevision.fetchAndAddOrdered(0); }
+
 	// Script Registry operations — called from HTTP threads (mutex-protected, no Qt string ops)
 	std::string                 listScriptsJson() const;
 	std::pair<int, std::string> deleteRegistryScriptJson(const std::string& id, const std::string& clientIP);
@@ -185,8 +203,8 @@ public:
 	// only called directly from documented reentrant Studio 6 worker paths.
 	QString              enqueueAsyncRequest(const QString& scriptText, const QString& scriptFile,
 	                                         const QString& reportFile, const QVariantMap& args,
-	                                         const QString& idPrefix, qint64& outSubmittedAt,
-	                                         QString& outError);
+	                                         const QString& idPrefix, const QString& correlationId,
+	                                         qint64& outSubmittedAt, QString& outError);
 	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId);
 	std::pair<int, std::string> getAsyncResultJson(const std::string& requestId, bool doWait, int timeoutSec);
 	std::pair<int, std::string> cancelAsyncRequestJson(const std::string& requestId, const std::string& clientIP);
@@ -213,6 +231,11 @@ private slots:
 
 private:
 	void   setupRoutes();
+	// Job routes (execute, async submit, render submit): write chain, then
+	// X-Correlation-Id / Idempotency-Key handling, then the handler, then the
+	// identity stamp (server_instance_id, correlation_id, scene_revision).
+	void   runJobRoute(const httplib::Request& req, httplib::Response& res,
+	                   IRequestHandler* handler, bool idempotent);
 	void   applyPluginRoutes();
 	void   updateUI();
 	DzScript* ensurePersistentScript();
@@ -312,6 +335,10 @@ private:
 	};
 	QList<PluginRoute> m_pluginRoutes;
 	mutable QMutex     m_pluginRoutesMutex;
+
+	QByteArray         m_serverInstanceId;       // see serverInstanceId()
+	mutable QAtomicInt m_sceneRevision;          // see sceneRevision()
+	IdempotencyCache   m_idempotency;            // Idempotency-Key replay records (cleared per run)
 
 	QByteArray         m_capabilitiesSnapshot;   // see capabilitiesSnapshot()
 	mutable QMutex     m_capabilitiesMutex;

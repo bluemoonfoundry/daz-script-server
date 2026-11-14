@@ -97,6 +97,60 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
         )
 
 
+class TestDazClientRequestIdentity(unittest.TestCase):
+    """Idempotency-Key / X-Correlation-Id headers and the error envelope (5d6f.8)."""
+
+    def _client(self, status_code=200, response_json=None):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.json.return_value = response_json or {"request_id": "execute-1"}
+        response.text = ""
+        client._session.post.return_value = response
+        return client
+
+    def test_no_identity_headers_by_default(self):
+        client = self._client()
+        client.execute_async_submit("1;")
+        self.assertEqual(client._session.post.call_args.kwargs["headers"], {})
+
+    def test_submit_methods_send_identity_headers(self):
+        calls = [
+            ("/execute/async", lambda c, kw: c.execute_async_submit("1;", **kw)),
+            ("/execute/async", lambda c, kw: c.execute_file_async_submit("C:/a.dsa", **kw)),
+            ("/scripts/s/async", lambda c, kw: c.execute_registered_async_submit("s", **kw)),
+            ("/render", lambda c, kw: c.render_submit("C:/o.png", **kw)),
+            ("/render/batch", lambda c, kw: c.render_batch_submit([{"output_path": "C:/o.png"}], **kw)),
+            ("/render/animation", lambda c, kw: c.render_animation_submit("C:/o.png", 1, 2, **kw)),
+        ]
+        for path, call in calls:
+            with self.subTest(path=path):
+                client = self._client()
+                call(client, {"idempotency_key": "job-42", "correlation_id": "trace-7"})
+                args, kwargs = client._session.post.call_args
+                self.assertTrue(args[0].endswith(path))
+                self.assertEqual(kwargs["headers"],
+                                 {"Idempotency-Key": "job-42", "X-Correlation-Id": "trace-7"})
+
+    def test_error_envelope_retryable_is_exposed(self):
+        client = self._client(409, {
+            "success": False, "error_code": "IDEMPOTENCY_KEY_IN_FLIGHT",
+            "error": "still processing", "retryable": True,
+        })
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.execute_async_submit("1;", idempotency_key="k")
+        self.assertEqual(cm.exception.error_code, "IDEMPOTENCY_KEY_IN_FLIGHT")
+        self.assertTrue(cm.exception.retryable)
+
+    def test_error_envelope_retryable_defaults_false(self):
+        client = self._client(422, {"success": False, "error_code": "IDEMPOTENCY_KEY_REUSED",
+                                    "error": "different body"})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.execute_async_submit("1;", idempotency_key="k")
+        self.assertFalse(cm.exception.retryable)
+
+
 class TestDazClientRegisteredScripts(unittest.TestCase):
     def _client(self, response_json):
         client = DazClient(token="")

@@ -8,10 +8,13 @@
 #include "JsonBuilder.h"
 #include "JsonStd.h"
 #include "ErrorResponse.h"
+#include "IdempotencyCache.h"
+#include "SecureRandom.h"
 #include "RequestValidator.h"
 #include "common_version.h"
 #include "GeometryExport.h"
 
+#include <QtCore/quuid.h>
 #include <dzapp.h>
 #include <dzscript.h>
 #include <dzscene.h>
@@ -640,20 +643,59 @@ void DzScriptServerPane::startServer()
 	const size_t maxBodyBytes = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
 	m_pServer->set_payload_max_length(maxBodyBytes);
 
-	// httplib returns 413 with an empty body when it hits the payload cap; give
-	// it the same JSON shape BodySizeMiddleware produces. Leave every other
-	// error response alone (handlers have already filled in their bodies).
+	// New identity for this run. Jobs and idempotency records from an earlier
+	// run are not resumable, and the changed ID is how clients find that out.
+	{
+		QString hex = SecureRandom::generateHexToken(8);
+		if (hex.isEmpty())
+			hex = QUuid::createUuid().toString().mid(1, 8) + QUuid::createUuid().toString().mid(1, 8);
+		m_serverInstanceId = ("srv-" + hex).toLatin1();
+	}
+	m_sceneRevision.fetchAndStoreOrdered(0);
+	m_idempotency.clear();
+	m_pAsyncMgr->setServerInstanceId(QString::fromLatin1(m_serverInstanceId));
+
+	// Every error response carries the JSON error envelope. httplib produces
+	// some errors itself with an empty body (413 at the payload cap, 400 for a
+	// malformed request, 500 for an exception escaping a handler); fill those
+	// in. Bodies a handler already wrote are left alone.
 	const int maxBodyMB = m_nMaxBodySizeMB;
 	m_pServer->set_error_handler(
 		[maxBodyMB, maxBodyBytes](const httplib::Request&, httplib::Response& res) {
-			if (res.status != 413 || !res.body.empty())
+			if (!res.body.empty())
 				return httplib::Server::HandlerResponse::Unhandled;
-			const std::string detail =
-				"Body exceeds the maximum of " + std::to_string(maxBodyMB) +
-				" MB (" + std::to_string(maxBodyBytes) + " bytes)";
-			res.set_content(ErrorResponse::build(ErrorCode::BODY_TOO_LARGE, detail),
-			                "application/json");
+			std::string body;
+			if (res.status == 413) {
+				const std::string detail =
+					"Body exceeds the maximum of " + std::to_string(maxBodyMB) +
+					" MB (" + std::to_string(maxBodyBytes) + " bytes)";
+				body = ErrorResponse::build(ErrorCode::BODY_TOO_LARGE, detail);
+			} else if (res.status == 404) {
+				body = ErrorResponse::build(ErrorCode::ROUTE_NOT_FOUND);
+			} else if (res.status == 503) {
+				body = ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE);
+			} else if (res.status >= 500) {
+				body = ErrorResponse::build(ErrorCode::INTERNAL_ERROR);
+			} else {
+				body = ErrorResponse::build(ErrorCode::BAD_REQUEST,
+					"HTTP " + std::to_string(res.status));
+			}
+			res.set_content(body, "application/json");
 			return httplib::Server::HandlerResponse::Handled;
+		});
+
+	// Identity headers on every response, including errors from middleware.
+	// X-Correlation-Id is echoed when the client sent a valid one; job routes
+	// set it themselves (with a generated ID when the client sent none).
+	const std::string instanceIdHeader(m_serverInstanceId.constData(), m_serverInstanceId.size());
+	m_pServer->set_post_routing_handler(
+		[instanceIdHeader](const httplib::Request& req, httplib::Response& res) {
+			res.set_header("X-Server-Instance-Id", instanceIdHeader);
+			if (!res.has_header("X-Correlation-Id")) {
+				const std::string corr = req.get_header_value("X-Correlation-Id");
+				if (IdempotencyCache::isValidKey(QByteArray(corr.c_str(), (int)corr.size())))
+					res.set_header("X-Correlation-Id", corr);
+			}
 		});
 
 	// Limit concurrent connections to prevent resource exhaustion
@@ -713,6 +755,7 @@ void DzScriptServerPane::startServer()
 	m_bRunning = true;
 
 	m_pEventBroker = new SceneEventBroker(this);
+	m_pEventBroker->setRevisionCounter(&m_sceneRevision);
 	m_pEventBroker->start();
 
 	m_pRenderProgress = new RenderProgressBroker();
@@ -926,6 +969,8 @@ static HttpContext toContext(const httplib::Request& req)
 		ctx.urlMatch = req.matches[1].str();
 	ctx.headers["x-api-token"]  = req.get_header_value("X-API-Token");
 	ctx.headers["authorization"] = req.get_header_value("Authorization");
+	ctx.headers["idempotency-key"]  = req.get_header_value("Idempotency-Key");
+	ctx.headers["x-correlation-id"] = req.get_header_value("X-Correlation-Id");
 	for (httplib::Params::const_iterator it = req.params.begin();
 	     it != req.params.end(); ++it)
 		ctx.queryParams[it->first] = it->second;
@@ -940,6 +985,131 @@ static void applyContext(const HttpContext& ctx, httplib::Response& res)
 	for (std::map<std::string, std::string>::const_iterator it = ctx.responseHeaders.begin();
 	     it != ctx.responseHeaders.end(); ++it)
 		res.set_header(it->first.c_str(), it->second.c_str());
+}
+
+// Insert extra members (",\"k\":v,...", leading comma included) before the
+// closing brace of a JSON object body. Non-object bodies are returned as is.
+static std::string stampJsonObject(const std::string& body, const std::string& members)
+{
+	if (members.empty() || body.empty() || body[0] != '{') return body;
+	const size_t close = body.find_last_of('}');
+	if (close == std::string::npos) return body;
+	const bool emptyObject = body.find_first_not_of(" \t\r\n", 1) == close;
+	return body.substr(0, close) + (emptyObject ? members.substr(1) : members) + body.substr(close);
+}
+
+// Releases an in-flight idempotency record if the handler exits abnormally
+// (exception), so the key isn't wedged as IN_FLIGHT until the TTL expires.
+struct IdempotencyGuard {
+	IdempotencyCache& cache;
+	const QByteArray& key;
+	bool              done;
+	IdempotencyGuard(IdempotencyCache& c, const QByteArray& k) : cache(c), key(k), done(false) {}
+	~IdempotencyGuard() { if (!done && !key.isEmpty()) cache.complete(key, 500, QByteArray()); }
+private:
+	IdempotencyGuard(const IdempotencyGuard&);
+	IdempotencyGuard& operator=(const IdempotencyGuard&);
+};
+
+void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Response& res,
+                                     IRequestHandler* handler, bool idempotent)
+{
+	HttpContext ctx = toContext(req);
+	if (!m_pWriteChain->run(ctx)) {
+		applyContext(ctx, res);
+		return;
+	}
+
+	// ── X-Correlation-Id: client-supplied, or generated so every job has one.
+	const std::string corrHeader = ctx.getHeader("x-correlation-id");
+	if (!corrHeader.empty()) {
+		if (!IdempotencyCache::isValidKey(QByteArray(corrHeader.c_str(), (int)corrHeader.size()))) {
+			ctx.respond(400, ErrorResponse::build(ErrorCode::INVALID_FIELD,
+				"X-Correlation-Id must be 1-255 printable ASCII characters without spaces"));
+			applyContext(ctx, res);
+			return;
+		}
+		ctx.correlationId = corrHeader;
+	} else {
+		const QByteArray gen = ("cor-" + MetricsCollector::generateRequestId()).toLatin1();
+		ctx.correlationId.assign(gen.constData(), gen.size());
+	}
+	ctx.setHeader("X-Correlation-Id", ctx.correlationId);
+
+	// From here on every response (success or error) carries the identity
+	// fields. Requests rejected above, before a correlation ID exists, get only
+	// the X-Server-Instance-Id header from the post-routing hook.
+	const QByteArray instanceId = m_serverInstanceId;
+	auto stampIdentity = [&]() {
+		std::string members = ",\"server_instance_id\":\"";
+		members.append(instanceId.constData(), instanceId.size());
+		members += "\",\"correlation_id\":\"" + JsonStd::escape(ctx.correlationId) + "\"";
+		members += ",\"scene_revision\":" + std::to_string(sceneRevision());
+		ctx.responseBody = stampJsonObject(ctx.responseBody, members);
+	};
+
+	// ── Idempotency-Key: replay the first response instead of running twice.
+	QByteArray scoped;
+	const std::string keyHeader = idempotent ? ctx.getHeader("idempotency-key") : std::string();
+	if (!keyHeader.empty()) {
+		const QByteArray key(keyHeader.c_str(), (int)keyHeader.size());
+		if (!IdempotencyCache::isValidKey(key)) {
+			ctx.respond(400, ErrorResponse::build(ErrorCode::INVALID_FIELD,
+				"Idempotency-Key must be 1-255 printable ASCII characters without spaces"));
+			stampIdentity();
+			applyContext(ctx, res);
+			return;
+		}
+		scoped = IdempotencyCache::scopedKey(
+			QByteArray(req.method.c_str(), (int)req.method.size()),
+			QByteArray(req.path.c_str(), (int)req.path.size()), key);
+		const QByteArray fp = IdempotencyCache::fingerprint(
+			scoped, QByteArray(ctx.body.c_str(), (int)ctx.body.size()));
+
+		int        replayStatus = 0;
+		QByteArray replayBody;
+		switch (m_idempotency.begin(scoped, fp, replayStatus, replayBody)) {
+		case IdempotencyCache::REPLAY: {
+			// The stored body is returned as is: it already carries the
+			// ORIGINAL correlation_id and identity. Drop this request's
+			// generated header ID so it can't contradict the body (the
+			// post-routing hook still echoes a client-supplied value).
+			ctx.respond(replayStatus, stampJsonObject(
+				std::string(replayBody.constData(), replayBody.size()),
+				",\"idempotent_replay\":true"));
+			ctx.setHeader("Idempotent-Replayed", "true");
+			ctx.responseHeaders.erase("X-Correlation-Id");
+			applyContext(ctx, res);
+			return;
+		}
+		case IdempotencyCache::IN_FLIGHT:
+			ctx.respond(409, ErrorResponse::build(ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT));
+			ctx.setHeader("Retry-After", "1");
+			stampIdentity();
+			applyContext(ctx, res);
+			return;
+		case IdempotencyCache::MISMATCH:
+			ctx.respond(422, ErrorResponse::build(ErrorCode::IDEMPOTENCY_KEY_REUSED));
+			stampIdentity();
+			applyContext(ctx, res);
+			return;
+		case IdempotencyCache::PROCEED:
+			break;
+		}
+	}
+
+	IdempotencyGuard guard(m_idempotency, scoped);
+	handler->handle(ctx);
+
+	stampIdentity();
+
+	if (!scoped.isEmpty()) {
+		m_idempotency.complete(scoped, ctx.responseStatus,
+			QByteArray(ctx.responseBody.c_str(), (int)ctx.responseBody.size()));
+		guard.done = true;
+	}
+
+	applyContext(ctx, res);
 }
 
 // ─── Route setup ──────────────────────────────────────────────────────────────
@@ -977,7 +1147,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pReadChain->add(new AuthMiddleware(m_auth, m_metrics, this));
 
 	// ── Request handlers ──────────────────────────────────────────────────────
-	m_pStatusHandler.reset(new StatusHandler(DZSRV_VERSION_STR));
+	m_pStatusHandler.reset(new StatusHandler(DZSRV_VERSION_STR, this));
 	m_pHealthHandler.reset(new HealthHandler(this));
 	m_pMetricsHandler.reset(new MetricsHandler(this));
 	m_pCapabilitiesHandler.reset(new CapabilitiesHandler(this));
@@ -1036,9 +1206,9 @@ void DzScriptServerPane::setupRoutes()
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pExecuteHandler->handle(ctx);
-		applyContext(ctx, res);
+		// Sync execution is not idempotent: a retry runs the script again.
+		// Clients that need retry safety use /execute/async + Idempotency-Key.
+		runJobRoute(req, res, m_pExecuteHandler.get(), false);
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 	});
 
@@ -1068,24 +1238,18 @@ void DzScriptServerPane::setupRoutes()
 			return;
 		}
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pScriptExecHandler->handle(ctx);
-		applyContext(ctx, res);
+		runJobRoute(req, res, m_pScriptExecHandler.get(), false);
 		QMetaObject::invokeMethod(this, "updateActiveRequestsLabel", Qt::QueuedConnection);
 	});
 
 	// ── Async endpoints ──────────────────────────────────────────────────────
 
 	m_pServer->Post("/execute/async", [this](const httplib::Request& req, httplib::Response& res) {
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pAsyncExecHandler->handle(ctx);
-		applyContext(ctx, res);
+		runJobRoute(req, res, m_pAsyncExecHandler.get(), true);
 	});
 
 	m_pServer->Post("/scripts/([^/]+)/async", [this](const httplib::Request& req, httplib::Response& res) {
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pAsyncScriptHandler->handle(ctx);
-		applyContext(ctx, res);
+		runJobRoute(req, res, m_pAsyncScriptHandler.get(), true);
 	});
 
 	m_pServer->Get("/requests/([^/]+)/status", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1115,21 +1279,15 @@ void DzScriptServerPane::setupRoutes()
 	// ── Render endpoints ──────────────────────────────────────────────────────
 
 	m_pServer->Post("/render", [this](const httplib::Request& req, httplib::Response& res) {
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pRenderHandler->handle(ctx);
-		applyContext(ctx, res);
+		runJobRoute(req, res, m_pRenderHandler.get(), true);
 	});
 
 	m_pServer->Post("/render/batch", [this](const httplib::Request& req, httplib::Response& res) {
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pRenderBatchHandler->handle(ctx);
-		applyContext(ctx, res);
+		runJobRoute(req, res, m_pRenderBatchHandler.get(), true);
 	});
 
 	m_pServer->Post("/render/animation", [this](const httplib::Request& req, httplib::Response& res) {
-		auto ctx = toContext(req);
-		if (m_pWriteChain->run(ctx)) m_pRenderAnimationHandler->handle(ctx);
-		applyContext(ctx, res);
+		runJobRoute(req, res, m_pRenderAnimationHandler.get(), true);
 	});
 
 	m_pServer->Post("/render/([^/]+)/cancel", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1412,7 +1570,8 @@ void DzScriptServerPane::applyPluginRoutes()
 
 			if (!found) {
 				res.status = 404;
-				res.set_content("{\"error\":\"not found\"}", "application/json");
+				res.set_content(ErrorResponse::build(ErrorCode::ROUTE_NOT_FOUND, req.method + " " + req.path),
+				                "application/json");
 				return;
 			}
 
@@ -1432,7 +1591,8 @@ void DzScriptServerPane::applyPluginRoutes()
 
 			if (!receiver) {
 				res.status = 503;
-				res.set_content("{\"error\":\"plugin handler unloaded\"}", "application/json");
+				res.set_content(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE, "plugin handler unloaded"),
+				                "application/json");
 				return;
 			}
 
@@ -1522,9 +1682,7 @@ std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
 	}
 
 	if (!removed) {
-		std::string body = "{\"success\":false,\"error\":\"Script not found: '";
-		body += JsonStd::escape(id) + "'\"}";
-		return {404, body};
+		return {404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id)};
 	}
 
 	std::string logLine = "[" + JsonStd::currentTime() + "] [" + clientIP + "] [REGISTRY] Deleted script: " + id;
@@ -1552,11 +1710,12 @@ QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
                                                 const QString& reportFile,
                                                 const QVariantMap& args,
                                                 const QString& idPrefix,
+                                                const QString& correlationId,
                                                 qint64& outSubmittedAt,
                                                 QString& outError)
 {
 	AsyncRequestManager::SubmitResult r = m_pAsyncMgr->submit(
-		scriptText, scriptFile, reportFile, args, idPrefix);
+		scriptText, scriptFile, reportFile, args, idPrefix, correlationId);
 	outSubmittedAt = r.submittedAt;
 	outError       = r.error;
 	if (!r.accepted) {
@@ -1682,6 +1841,7 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 	// Args are accessible in scripts via getArguments()[0], since
 	// DzScriptContext methods are available as globals in every DzScript.
 	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap, scriptFile);
+	m_sceneRevision.fetchAndAddOrdered(1);  // the script may have changed anything
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
 #endif
@@ -1815,6 +1975,7 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 	m_pPersistentScript->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
 
 	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap, QString());
+	m_sceneRevision.fetchAndAddOrdered(1);  // the script may have changed anything
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
 #endif
@@ -1866,7 +2027,8 @@ static HttpResult buildQueuedResponse(const QString& requestId, qint64 submitted
 HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
 	const QByteArray& jsonBody,
 	const QByteArray& clientIP,
-	int maxScriptLengthKB)
+	int maxScriptLengthKB,
+	const QByteArray& correlationId)
 {
 	QVariantMap body;
 	std::string parseErrDetail;
@@ -1888,6 +2050,7 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
 	QString requestId = enqueueAsyncRequest(
 		scriptText, scriptFile, body.value("reportFile").toString(),
 		body.value("args").toMap(), "execute",
+		QString::fromUtf8(correlationId.constData(), correlationId.size()),
 		submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
@@ -1909,7 +2072,8 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
 HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 	const QByteArray& scriptBytes,
 	const QByteArray& scriptIdBytes,
-	const QByteArray& bodyBytes)
+	const QByteArray& bodyBytes,
+	const QByteArray& correlationId)
 {
 	QString scriptText = QString::fromUtf8(scriptBytes.constData(), scriptBytes.size());
 	QString scriptId   = QString::fromUtf8(scriptIdBytes.constData(), scriptIdBytes.size());
@@ -1928,7 +2092,9 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 	qint64  submittedAt  = 0;
 	QString enqueueError;
 	QString requestId = enqueueAsyncRequest(
-		scriptText, QString(), reportFile, argsMap, "script", submittedAt, enqueueError);
+		scriptText, QString(), reportFile, argsMap, "script",
+		QString::fromUtf8(correlationId.constData(), correlationId.size()),
+		submittedAt, enqueueError);
 
 	if (requestId.isEmpty())
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
@@ -2379,8 +2545,10 @@ static QString buildAnimationRenderScript(
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBody)
+HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBody,
+                                               const QByteArray& correlationId)
 {
+    const QString corr = QString::fromUtf8(correlationId.constData(), correlationId.size());
     // ── Parse body ────────────────────────────────────────────────────────
     QVariantMap body;
     std::string parseErrDetail;
@@ -2492,7 +2660,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
     QString renderScript = buildRenderScript(
         outputPath, width, height, camera, engine, iraySamples, resetMorphs, figureSpecs);
 
-    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd");
+    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd", corr);
     if (!sr.accepted)
         return HttpResult(503, stdToQBA(ErrorResponse::build(
             ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
@@ -2506,8 +2674,10 @@ HttpResult DzScriptServerPane::handleAsyncRenderEnqueue(const QByteArray& jsonBo
     return buildQueuedResponse(sr.id, sr.submittedAt);
 }
 
-HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody)
+HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody,
+                                               const QByteArray& correlationId)
 {
+    const QString corr = QString::fromUtf8(correlationId.constData(), correlationId.size());
     // ── Parse body ────────────────────────────────────────────────────────
     QVariantMap body;
     std::string parseErrDetail;
@@ -2706,7 +2876,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
 
     for (int vi = 0; vi < specs.size(); ++vi) {
         AsyncRequestManager::SubmitResult sr =
-            m_pAsyncMgr->submitRender(specs[vi].renderScript, "rnd");
+            m_pAsyncMgr->submitRender(specs[vi].renderScript, "rnd", corr);
         if (!sr.accepted) {
             // Queue full mid-batch — return 503 with how many were accepted.
             // Already-enqueued variants will still execute.
@@ -2735,8 +2905,10 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
     return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
 }
 
-HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody)
+HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody,
+                                               const QByteArray& correlationId)
 {
+    const QString corr = QString::fromUtf8(correlationId.constData(), correlationId.size());
     // ── Parse body ────────────────────────────────────────────────────────
     QVariantMap body;
     std::string parseErrDetail;
@@ -2815,7 +2987,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
     QString renderScript = buildAnimationRenderScript(
         outputPath, startFrame, endFrame, framePadding, width, height, camera, engine);
 
-    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd");
+    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd", corr);
     if (!sr.accepted)
         return HttpResult(503, stdToQBA(ErrorResponse::build(
             ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
@@ -2901,6 +3073,11 @@ QString DzScriptServerPane::buildResponseJson(bool success,
 	json.addMember("output", QVariant(outputList));
 
 	json.addMember("error", error);
+	if (!success) {
+		// Same error envelope as HTTP-level failures (ErrorResponse).
+		json.addMember("error_code", ErrorResponse::codeString(ErrorCode::SCRIPT_ERROR));
+		json.addMember("retryable", ErrorResponse::retryable(ErrorCode::SCRIPT_ERROR));
+	}
 
 	// Add request ID if provided (for debugging/correlation)
 	if (!requestId.isEmpty()) {
@@ -3085,6 +3262,10 @@ std::string DzScriptServerPane::getHealthJson() const
 	s += std::to_string((int)m_nActiveRequests);
 	s += ",\"uptime_seconds\":";
 	s += std::to_string((long long)m_metrics.getUptimeSeconds());
+	s += ",\"server_instance_id\":\"";
+	s.append(m_serverInstanceId.constData(), m_serverInstanceId.size());
+	s += "\",\"scene_revision\":";
+	s += std::to_string(sceneRevision());
 	s += "}";
 	return s;
 }
@@ -3189,6 +3370,7 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	QVariantMap server;
 	server["name"]    = QString("DazScriptServer");
 	server["version"] = QString(DZSRV_VERSION_STR);
+	server["instance_id"] = QString::fromLatin1(m_serverInstanceId);
 	caps["server"] = server;
 
 	QVariantMap studio;
@@ -3248,6 +3430,11 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	features["scene_save_copy"]     = true;
 	features["geometry_frames"]     = true;
 	features["companion_plugins"]   = !pluginRoutes.isEmpty();
+	features["idempotency_key"]     = true;   // Idempotency-Key on job submission routes
+	features["correlation_id"]      = true;   // X-Correlation-Id echoed on job routes + records
+	features["server_instance_id"]  = true;   // per-run identity (X-Server-Instance-Id)
+	features["scene_revision"]      = true;   // change counter on /status and job responses
+	features["error_envelope"]      = true;   // error_code/error/retryable on every failure
 	caps["features"] = features;
 	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
 		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));
@@ -3262,6 +3449,7 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	limits["async_max_queue_depth"]   = m_pAsyncMgr ? m_pAsyncMgr->maxQueueDepth()
 	                                                : AsyncRequestManager::DEFAULT_MAX_QUEUE_DEPTH;
 	limits["async_result_ttl_seconds"] = ServerConfig::ASYNC_RESULT_TTL_SEC;
+	limits["idempotency_ttl_seconds"]  = m_idempotency.ttlSeconds();
 	limits["stale_job_timeout_minutes"] = m_nStaleJobTimeoutMin;
 	caps["limits"] = limits;
 
@@ -3459,6 +3647,11 @@ void DzScriptServerPane::processNextAsyncRequest()
 	m_sCurrentRenderId.clear();
 
 	int durationMs = wallClock.msecsTo(QTime::currentTime());
+
+	// Bump before markCompleted so a client that sees the job finish also
+	// sees the revision that covers its effects. A failed script may still
+	// have changed the scene before it threw, so bump either way.
+	m_sceneRevision.fetchAndAddOrdered(1);
 
 	bool wasCancelled = false;
 	m_pAsyncMgr->markCompleted(id, executed, scriptResult, capturedOutput, errorMsg, wasCancelled);

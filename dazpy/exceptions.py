@@ -17,13 +17,17 @@ class ServerResponseError(DazError):
         status_code: HTTP response status.
         error_code: Stable server error code when supplied.
         detail: Optional structured detail from the server response.
+        retryable: True when the server says an identical retry may succeed
+            (e.g. queue full, ``IDEMPOTENCY_KEY_IN_FLIGHT``).
     """
 
-    def __init__(self, message: str, status_code: int, error_code: str = "", detail: str = ""):
+    def __init__(self, message: str, status_code: int, error_code: str = "", detail: str = "",
+                 retryable: bool = False):
         super().__init__(message)
         self.status_code = status_code
         self.error_code = error_code
         self.detail = detail
+        self.retryable = retryable
 
 
 class DazBusyError(DazError):

@@ -19,7 +19,9 @@ from .exceptions import (
 )
 from ._result import ExecutionResult
 from ._version import server_version_from_status, warn_if_server_older
-from ._client import _DEFAULT_HOST, _DEFAULT_PORT, _load_token, _raise_for_error, _map_response
+from ._client import (
+    _DEFAULT_HOST, _DEFAULT_PORT, _job_headers, _load_token, _raise_for_error, _map_response,
+)
 
 
 class AsyncDazClient:
@@ -94,10 +96,11 @@ class AsyncDazClient:
                 return None
         return self._server_version
 
-    async def _post(self, path: str, payload: dict) -> "httpx.Response":
+    async def _post(self, path: str, payload: dict, headers: dict | None = None) -> "httpx.Response":
         await self._check_server_version()
+        merged = {**self._headers, **headers} if headers else self._headers
         try:
-            return await self._http.post(f"{self._base}{path}", json=payload, headers=self._headers)
+            return await self._http.post(f"{self._base}{path}", json=payload, headers=merged)
         except httpx.ConnectError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
@@ -179,7 +182,8 @@ class AsyncDazClient:
 
     async def execute_async_submit(
         self, script: str, args: object = None, *, report_file: str | None = None,
-        retry_on_busy: bool = False, max_wait: float = 30.0
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a script for async execution. See :meth:`dazpy.DazClient.execute_async_submit`."""
         payload: dict = {"script": script}
@@ -189,7 +193,7 @@ class AsyncDazClient:
             payload["reportFile"] = report_file
 
         async def _do():
-            resp = await self._post("/execute/async", payload)
+            resp = await self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -197,7 +201,8 @@ class AsyncDazClient:
 
     async def execute_file_async_submit(
         self, script_file: str, args: object = None, *, report_file: str | None = None,
-        retry_on_busy: bool = False, max_wait: float = 30.0
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a host-side ``.dsa`` file asynchronously.
 
@@ -210,7 +215,7 @@ class AsyncDazClient:
             payload["reportFile"] = report_file
 
         async def _do():
-            resp = await self._post("/execute/async", payload)
+            resp = await self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -254,6 +259,7 @@ class AsyncDazClient:
     async def execute_registered_async_submit(
         self, name: str, args: object = None, *, report_file: str | None = None,
         retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a registered script and return its async request id."""
         payload: dict = {}
@@ -263,7 +269,7 @@ class AsyncDazClient:
             payload["reportFile"] = report_file
 
         async def _do():
-            resp = await self._post(f"/scripts/{name}/async", payload)
+            resp = await self._post(f"/scripts/{name}/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -335,6 +341,7 @@ class AsyncDazClient:
         reset_morphs: bool = False,
         retry_on_busy: bool = False,
         max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit a render job. See :meth:`dazpy.DazClient.render_submit`."""
         payload: dict = {"output_path": output_path}
@@ -357,14 +364,15 @@ class AsyncDazClient:
                 payload["morphs"] = morphs
 
         async def _do():
-            resp = await self._post("/render", payload)
+            resp = await self._post("/render", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
         return await self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     async def render_batch_submit(
-        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit a batch render job. See :meth:`dazpy.DazClient.render_batch_submit`."""
         payload: dict = {"variants": variants}
@@ -372,7 +380,7 @@ class AsyncDazClient:
             payload["base"] = base
 
         async def _do():
-            resp = await self._post("/render/batch", payload)
+            resp = await self._post("/render/batch", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
@@ -391,6 +399,7 @@ class AsyncDazClient:
         engine: str = "",
         retry_on_busy: bool = False,
         max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit an animation render job. See :meth:`dazpy.DazClient.render_animation_submit`."""
         payload: dict = {
@@ -408,7 +417,7 @@ class AsyncDazClient:
             payload["engine"] = engine
 
         async def _do():
-            resp = await self._post("/render/animation", payload)
+            resp = await self._post("/render/animation", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
