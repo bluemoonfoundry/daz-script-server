@@ -1,5 +1,17 @@
 # DazScript Server Assessment
 
+> **Re-check on master (2026-11-14):** This assessment was written against the
+> out-of-date `feature/daz-ts-phase1-docs` branch (2.9.x), not `master` (2.10.1,
+> `34101ef`). On master, the version drift in #5 is already fixed (all versions
+> are 2.10.1, guarded by `scripts/check_version_consistency.py`), and so is the
+> server-version warning. `POST /scene/save-copy` and `POST /render/animation`
+> are still missing from `openapi.yaml`. Every other finding still applies.
+> The re-check also found one issue the assessment missed: routes that only use
+> the auth chain (`/scene/save-copy`, `/scripts/register`, `/requests/*`, …)
+> skip the IP whitelist and the rate limiter. Each recommendation is tracked
+> under beads epic `daz-script-server-5d6f`; line numbers below refer to the
+> older branch.
+
 ## Executive assessment
 
 `daz-script-server` is a strong lower-level execution platform for DAZ Studio. Its native plugin handles main-thread execution, authentication, rate limiting, asynchronous jobs, rendering, SSE scene events, and a broad typed Python SDK.
