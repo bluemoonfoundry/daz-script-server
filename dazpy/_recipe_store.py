@@ -154,16 +154,70 @@ _item.getSettings().setStringValue({esc(_MANIFEST_KEY)}, {esc(m.to_json())});
 return true;""")
 
 
+# JS helpers shared by the full readback and the single-node / environment
+# observe scripts, so both report channels with the same conventions.
+_OBSERVE_JS = """
+function _prop(n, label) {
+    var p = n.findPropertyByLabel(label);
+    return p ? p.getValue() : null;
+}
+function _observe(n) {
+    var p = n.getWSPos();
+    var info = {
+        is_camera: n.inherits("DzCamera"), is_light: n.inherits("DzLight"),
+        position: [p.x, p.y, p.z],
+        rotation: [n.getXRotControl().getValue(), n.getYRotControl().getValue(),
+                   n.getZRotControl().getValue()],
+        optics: null, output: null
+    };
+    if (info.is_camera) {
+        info.optics = {focal_length: n.focalLength,
+                       depth_of_field: _prop(n, "Depth of Field"),
+                       focal_distance: n.focalDistance};
+    } else if (info.is_light) {
+        var c = n.getDiffuseColor();
+        info.output = {intensity: _prop(n, "Intensity"), color: [c.red, c.green, c.blue]};
+    }
+    return info;
+}"""
+
+
+def _environment_js(environment_holder: str) -> str:
+    """JS function ``_environment()``: the Iray environment values, or null."""
+    return f"""
+function _environment() {{
+    var _holder = {environment_holder};
+    if (!_holder) return null;
+    var _p = function(name) {{ var q = _holder.findProperty(name); return q ? q.getValue() : null; }};
+    var _map = _p("Environment Map");
+    return {{
+        intensity: _p("Environment Intensity"), rotation_deg: _p("Dome Rotation"),
+        mode: _p("Environment Mode"), draw_dome: _p("Draw Dome"),
+        image_path: (_map && _map.getFilename) ? _map.getFilename() : _map
+    }};
+}}"""
+
+
+def observe_node_script(node_name: str) -> str:
+    """Script returning one node's observable channel values (null if missing)."""
+    return ScriptBuilder.iife(f"""{_OBSERVE_JS}
+var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+return _n ? _observe(_n) : null;""")
+
+
+def observe_environment_script(environment_holder: str) -> str:
+    """Script returning the scene's environment values (null without an Iray holder)."""
+    return ScriptBuilder.iife(f"""{_environment_js(environment_holder)}
+return _environment();""")
+
+
 def _read_script(recipe_id: str, environment_holder: str) -> str:
     esc = ScriptBuilder.escape_string
-    return ScriptBuilder.iife(f"""
+    return ScriptBuilder.iife(f"""{_OBSERVE_JS}
+{_environment_js(environment_holder)}
 function _rec(n) {{
     var it = n.findDataItem({esc(DATA_ITEM_NAME)});
     return it ? it.getSettings().getStringValue({esc(_RECORD_KEY)}) : null;
-}}
-function _prop(n, label) {{
-    var p = n.findPropertyByLabel(label);
-    return p ? p.getValue() : null;
 }}
 function _tree(n) {{
     var kids = n.getNodeChildren(false), out = [];
@@ -172,46 +226,39 @@ function _tree(n) {{
                   bone: kids[k].inherits("DzBone"), children: _tree(kids[k])}});
     return out;
 }}
-var _out = {{manifest: null, environment: null, nodes: []}};
+var _out = {{manifest: null, environment: _environment(), nodes: []}};
 var _mi = Scene.findDataItem({esc(scene_item_name(recipe_id))});
 if (_mi) _out.manifest = _mi.getSettings().getStringValue({esc(_MANIFEST_KEY)});
-var _holder = {environment_holder};
-if (_holder) {{
-    var _p = function(name) {{ var q = _holder.findProperty(name); return q ? q.getValue() : null; }};
-    var _map = _p("Environment Map");
-    _out.environment = {{
-        intensity: _p("Environment Intensity"), rotation_deg: _p("Dome Rotation"),
-        mode: _p("Environment Mode"), draw_dome: _p("Draw Dome"),
-        image_path: (_map && _map.getFilename) ? _map.getFilename() : _map
-    }};
-}}
 var _nodes = Scene.getNodeList();
 for (var _i = 0; _i < _nodes.length; _i++) {{
     var n = _nodes[_i];
     var record = _rec(n);
     if (!record) continue;
-    var p = n.getWSPos();
-    var info = {{
-        name: n.getName(), record: record,
-        element_id: (typeof n.getElementID === "function") ? n.getElementID() : null,
-        is_camera: n.inherits("DzCamera"), is_light: n.inherits("DzLight"),
-        position: [p.x, p.y, p.z],
-        rotation: [n.getXRotControl().getValue(), n.getYRotControl().getValue(),
-                   n.getZRotControl().getValue()],
-        optics: null, output: null, children: []
-    }};
-    if (info.is_camera) {{
-        info.optics = {{focal_length: n.focalLength,
-                        depth_of_field: _prop(n, "Depth of Field"),
-                        focal_distance: n.focalDistance}};
-    }} else if (info.is_light) {{
-        var c = n.getDiffuseColor();
-        info.output = {{intensity: _prop(n, "Intensity"), color: [c.red, c.green, c.blue]}};
-    }}
+    var info = _observe(n);
+    info.name = n.getName();
+    info.record = record;
+    info.element_id = (typeof n.getElementID === "function") ? n.getElementID() : null;
     info.children = _tree(n);
     _out.nodes.push(info);
 }}
 return _out;""")
+
+
+def observed_channels(client: "DazClient", node_name: str, kind: str, info: dict) -> dict[str, dict]:
+    """Observed channels for one node from its ``_observe`` payload (+ pose capture for actors)."""
+    from ._pose import DazPose
+    from ._skeleton import DazSkeleton
+
+    observed: dict[str, dict] = {
+        "transform": {"position": info["position"], "rotation": info["rotation"]}}
+    if info.get("optics") is not None:
+        observed["optics"] = info["optics"]
+    if info.get("output") is not None:
+        observed["output"] = info["output"]
+    if kind == "actor":
+        pose = DazPose.capture(DazSkeleton(client, NodeIdentifier(node_name)))
+        observed["pose"] = {"snapshot": pose.to_dict()}
+    return observed
 
 
 # ── readback ──────────────────────────────────────────────────────────────────
@@ -260,9 +307,6 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
     Plus one ``DazPose.capture`` per actor with a record.  Nodes whose record
     belongs to another recipe, or is unparseable, are ignored.
     """
-    from ._pose import DazPose
-    from ._skeleton import DazSkeleton
-
     holder = DazRenderSettings(client)._environment_holder()
     payload = client.execute(_read_script(recipe_id, holder)).value or {}
 
@@ -281,15 +325,7 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
         kind = _kind_from_path(rec.path)
         if kind is None:
             continue
-        observed: dict[str, dict] = {
-            "transform": {"position": n["position"], "rotation": n["rotation"]}}
-        if n.get("optics") is not None:
-            observed["optics"] = n["optics"]
-        if n.get("output") is not None:
-            observed["output"] = n["output"]
-        if kind == "actor":
-            pose = DazPose.capture(DazSkeleton(client, NodeIdentifier(n["name"])))
-            observed["pose"] = {"snapshot": pose.to_dict()}
+        observed = observed_channels(client, n["name"], kind, n)
         foreign = tuple(_foreign(n.get("children") or [], recipe_id))
         entities[rec.path] = LiveEntity(
             path=rec.path, node_name=n["name"], kind=kind, record=rec,

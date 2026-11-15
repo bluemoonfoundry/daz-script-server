@@ -216,3 +216,104 @@ def live_with_children(D: dict, path: str = "actors.anna", names=("Shirt",),
     ents[path] = LiveEntity(e.path, e.node_name, e.kind, e.record, e.observed, tuple(names),
                             e.element_id)
     return LiveState(live.manifest, ents, live.environment_observed)
+
+
+# ── executor fakes (Task 7) ──────────────────────────────────────────────────
+
+class FakeOps:
+    """A SceneOps that records every call and fails on chosen calls.
+
+    ``fail_on`` is ``(method, n)`` or a list of them: the *n*-th call (1-based,
+    counting calls made during rollback too) of *method* raises *exc*
+    (default ``RuntimeError``).  ``calls`` holds ``(method, first arg)`` (just
+    ``(method,)`` for argument-less calls); ``calls_with_args`` holds every
+    argument, deep-copied.  ``create`` returns ``create_names[path]`` (default
+    ``[entity.label]``); ``observe`` returns ``observed[node]`` (default
+    :data:`FAKE_OBSERVED`); ``observe_environment`` returns *environment*.
+    """
+
+    def __init__(self, fail_on=None, exc: Exception | None = None, *,
+                 create_names: dict | None = None, observed: dict | None = None,
+                 environment: dict | None = None) -> None:
+        if fail_on is None:
+            fail_on = []
+        elif isinstance(fail_on, tuple):
+            fail_on = [fail_on]
+        self.fail_on = list(fail_on)
+        self.exc = exc
+        self.create_names = create_names or {}
+        self.observed = observed or {}
+        self.environment = environment
+        self.calls: list[tuple] = []
+        self.calls_with_args: list[tuple] = []
+        self._counts: dict[str, int] = {}
+
+    def _call(self, method: str, *args):
+        self._counts[method] = self._counts.get(method, 0) + 1
+        self.calls.append((method, args[0]) if args else (method,))
+        self.calls_with_args.append((method, *_copy.deepcopy(args)))
+        if (method, self._counts[method]) in self.fail_on:
+            raise self.exc if self.exc is not None else RuntimeError(f"{method} failed")
+
+    def methods(self) -> list[str]:
+        return [c[0] for c in self.calls]
+
+    def create(self, entity):
+        self._call("create", entity.path)
+        return list(self.create_names.get(entity.path, [entity.label]))
+
+    def set_channels(self, node_name, kind, channels):
+        self._call("set_channels", node_name, kind, channels)
+
+    def observe(self, node_name, kind):
+        self._call("observe", node_name, kind)
+        return _copy.deepcopy(self.observed.get(node_name, FAKE_OBSERVED))
+
+    def set_environment(self, values):
+        self._call("set_environment", values)
+
+    def observe_environment(self):
+        self._call("observe_environment")
+        return _copy.deepcopy(self.environment)
+
+    def unparent(self, child_names):
+        self._call("unparent", child_names)
+
+    def reparent(self, child_names, parent_name):
+        self._call("reparent", child_names, parent_name)
+
+    def delete(self, node_name):
+        self._call("delete", node_name)
+
+    def write_record(self, node_name, record):
+        self._call("write_record", node_name, record)
+
+    def remove_record(self, node_name):
+        self._call("remove_record", node_name)
+
+    def write_manifest(self, manifest):
+        self._call("write_manifest", manifest)
+
+
+FAKE_OBSERVED = {"transform": {"position": [1.0, 2.0, 3.0], "rotation": [0.0, 0.0, 0.0]}}
+
+
+def scripted_client(*responses) -> MagicMock:
+    """A mock DazClient answering scripts by substring.
+
+    *responses* are ``(substring, value)`` pairs; the first whose substring is
+    in the script wins (``value`` may be a callable taking the script).
+    Unmatched scripts return ``None``.  Scripts land in ``client.scripts``.
+    """
+    client = MagicMock()
+    client.scripts = []
+
+    def execute(script, *a, **kw):
+        client.scripts.append(script)
+        for sub, value in responses:
+            if sub in script:
+                return ExecutionResult(value=value(script) if callable(value) else value)
+        return ExecutionResult(value=None)
+
+    client.execute.side_effect = execute
+    return client
