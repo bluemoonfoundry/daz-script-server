@@ -110,10 +110,9 @@ def _pose_preset_script(node_name: str, path: str) -> str:
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
 var _node = Scene.findNode({esc(node_name)});
-if (!_node) return false;
+if (!_node) return "node_not_found";
 Scene.setPrimarySelection(_node);
-App.getContentMgr().openFile({esc(path)}, true);
-return true;""")
+return !!App.getContentMgr().openFile({esc(path)}, true);""")
 
 
 _POSE_PRESET_EXTS = (".duf", ".dsf")
@@ -155,8 +154,8 @@ def _resolve_script(path: str) -> str:
     return ScriptBuilder.iife(f"""
 var _cm = App.getContentMgr();
 var _f = "";
-try {{ _f = _cm.findFile({esc(path)}, DzContentMgr.AllDirs); }}
-catch (e) {{ _f = _cm.findFile({esc(path)}); }}
+try {{ _f = _cm.findFile({esc(path)}, DzContentMgr.AllDirs); }} catch (e) {{ _f = ""; }}
+if (!_f) _f = _cm.findFile({esc(path)});
 return _f ? String(_f) : "";""")
 
 
@@ -190,17 +189,18 @@ class DazSceneOps:
     def create(self, entity: DesiredEntity) -> list[str]:
         if entity.kind in ("actor", "prop"):
             path = self._resolve_asset(entity.create["asset_path"])
-            before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
-            self._scene.load(path)
+            make = lambda: self._scene.load(path)  # noqa: E731
         elif entity.kind == "camera":
-            before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
-            self._scene.create_camera()
+            make = self._scene.create_camera
         elif entity.kind == "light":
-            before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
-            self._scene.create_light(entity.create["light_type"])
+            make = lambda: self._scene.create_light(entity.create["light_type"])  # noqa: E731
         else:
             raise DazError(f"{entity.path}: kind {entity.kind!r} has no node to create")
+        before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
+        # Anything failing after the snapshot (a load that times out after adding
+        # nodes, the label/rename claim) removes whatever was added, then re-raises.
         try:
+            make()
             names = self._client.execute(_claim_script(before, entity.label)).value or []
         except Exception as e:
             self._remove_added(before, entity.path, e)
@@ -226,15 +226,14 @@ class DazSceneOps:
             found = self._client.execute(_resolve_script(path)).value
             if found:
                 return found
-            if os.path.isfile(path):
-                return path
             raise DazError(f"Asset not found in any content directory: {path}")
         if not os.path.isfile(path):
             raise DazError(f"Asset file not found: {path}")
         return path
 
     def delete(self, node_name: str) -> None:
-        DazNode(self._client, NodeIdentifier(node_name)).delete()
+        if not DazNode(self._client, NodeIdentifier(node_name)).delete():
+            raise DazError(f"Could not delete node {node_name!r} (not found or not removed)")
 
     def unparent(self, child_names: list[str]) -> None:
         self._move(child_names, None)
@@ -285,8 +284,11 @@ class DazSceneOps:
             apply_pose(skeleton, path)
         elif ext in _POSE_PRESET_EXTS:
             resolved = self._resolve_asset(path)
-            if self._client.execute(_pose_preset_script(node_name, resolved)).value is False:
+            result = self._client.execute(_pose_preset_script(node_name, resolved)).value
+            if result == "node_not_found":
                 raise NodeNotFoundError(f"Cannot apply pose preset, node not found: {node_name!r}")
+            if result is not True:
+                raise DazError(f"Daz Studio failed to open pose preset {resolved!r} on {node_name!r}")
         else:
             raise DazError(f"Unsupported pose file {path!r}; supported: Daz pose presets "
                            f"({', '.join(_POSE_PRESET_EXTS)}) or dazpy pose JSON "
@@ -323,6 +325,10 @@ class DazSceneOps:
                           ("Environment Mode", "mode"), ("Draw Dome", "draw_dome")):
             if values.get(key) is not None:
                 rs._set_environment_property(prop, values[key])
+        if not values.get("image_path"):
+            # Clearing a map is never attempted: setMap-style calls can raise a
+            # modal dialog and hang Studio.  Report it instead (-> rollback_errors).
+            raise DazError("environment map could not be restored: the scene had no map before")
 
     def observe_environment(self) -> dict | None:
         holder = DazRenderSettings(self._client)._environment_holder()

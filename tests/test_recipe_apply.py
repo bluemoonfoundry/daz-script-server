@@ -21,7 +21,7 @@ from dazpy._recipe_store import (EntityRecord, LiveState, Manifest, remove_recor
                                  write_manifest_script, write_record_script)
 from dazpy._pose import DazPose
 from dazpy._scene import DazScene
-from dazpy.exceptions import DazBusyError, DazError
+from dazpy.exceptions import DazBusyError, DazError, NodeNotFoundError
 from dazpy.lighting import HDRIEnvironment
 from recipe_fakes import (ENV_PATH, FAKE_OBSERVED, RID, FakeOps, d_actor, d_camera,
                           d_environment, d_light, d_prop, ds, live_matching, live_with_children,
@@ -330,6 +330,30 @@ class DazSceneOpsCreateTests(unittest.TestCase):
                 ops.create(d_actor("anna"))
         self.assertFalse(any("loadScene" in s for s in client.scripts))
 
+    def test_content_path_never_falls_back_to_local_file(self):
+        client, ops = self.ops(("findFile", ""))
+        with patch("dazpy._recipe_ops.os.path.isfile", return_value=True):
+            with self.assertRaises(DazError):
+                ops.create(d_actor("anna"))
+        self.assertFalse(any("loadScene" in s for s in client.scripts))
+
+    def test_find_file_retries_one_arg_form_when_two_arg_is_empty(self):
+        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:snapshot", []),
+                               ("recipe:claim", ["Genesis 9"]))
+        ops.create(d_actor("anna"))
+        find = next(s for s in client.scripts if "findFile" in s)
+        self.assertIn('if (!_f) _f = _cm.findFile("/g9.duf");', find)
+
+    def test_load_failure_after_snapshot_removes_added_nodes(self):
+        def load(script):
+            raise DazBusyError("busy mid-load")
+        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:snapshot", ["1"]),
+                               ("loadScene", load), ("recipe:cleanup", 4))
+        with self.assertRaisesRegex(DazBusyError, "busy mid-load"):
+            ops.create(d_actor("anna"))
+        self.assertTrue(any("recipe:cleanup" in s for s in client.scripts))
+        self.assertFalse(any("recipe:claim" in s for s in client.scripts))
+
     def test_missing_absolute_path_raises_without_any_studio_call(self):
         client, ops = self.ops()
         entity = d_prop("ball")
@@ -444,6 +468,17 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertIn('openFile("C:/Lib/Poses/Sit.duf", true)', open_)
         self.assertLess(open_.index("setPrimarySelection"), open_.index("openFile"))
 
+    def test_pose_preset_open_failure_raises_dazerror_distinct_from_missing_node(self):
+        self.client = scripted_client(("findFile", "C:/Lib/Poses/Sit.duf"), ("openFile", False))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaisesRegex(DazError, "failed to open pose preset") as cm:
+            self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "/Poses/Sit.duf"}})
+        self.assertNotIsInstance(cm.exception, NodeNotFoundError)
+        self.client = scripted_client(("findFile", "C:/Lib/Poses/Sit.duf"), ("openFile", "node_not_found"))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaises(NodeNotFoundError):
+            self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "/Poses/Sit.duf"}})
+
     def test_missing_pose_preset_raises_without_opening(self):
         self.client = scripted_client(("findFile", ""))
         self.ops = DazSceneOps(DazScene(self.client))
@@ -475,7 +510,21 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertNotIn("setValueFromString", self.joined())
         self.assertIn('setMap("C:/old.hdr")', self.joined())
 
+    def test_delete_reports_a_node_that_was_not_removed(self):
+        with self.assertRaisesRegex(DazError, "Gone"):
+            self.ops.delete("Gone")  # removeNode answered nothing / false
+
+    def test_environment_rollback_without_prior_map_restores_rest_then_raises(self):
+        with self.assertRaisesRegex(DazError, "environment map could not be restored"):
+            self.ops.set_environment({"intensity": 0.5, "rotation_deg": 90.0, "mode": 2,
+                                      "draw_dome": False, "image_path": None})
+        self.assertNotIn("setMap", self.joined())
+        self.assertIn('"Environment Intensity"', self.joined())
+        self.assertIn("setValue(2)", self.joined())
+
     def test_unparent_reparent_delete_scripts(self):
+        self.client = scripted_client(("Scene.removeNode", True))
+        self.ops = DazSceneOps(DazScene(self.client))
         self.ops.unparent(["Shirt"])
         self.assertIn("removeNodeChild(_n, true)", self.client.scripts[-1])
         self.assertIn(json.dumps(["Shirt"]), self.client.scripts[-1])
