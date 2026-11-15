@@ -11,8 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dazpy
 from dazpy._recipe_desired import compute_desired
 from dazpy._recipe_model import SceneRecipe
-from dazpy.exceptions import RecipeValidationError
-from dazpy.recipe import ObserveReport, apply, observe, plan, recipe_schema, validate
+from unittest.mock import patch
+
+from dazpy._render_api import RenderResult
+from dazpy.exceptions import DazError, RecipeNotAppliedError, RecipeValidationError
+from dazpy.recipe import (ObserveReport, ShotRender, apply, observe, plan, recipe_schema,
+                          render, validate)
 from recipe_fakes import RID, empty_live, fake_scene, live_matching, live_without, patch_facade
 
 G9 = "/People/Genesis 9/Genesis 9.duf"
@@ -146,6 +150,162 @@ class TestObserve(FacadeCase):
         rep = observe(R, fake_scene(live_without(live_matching(D), "cameras.cu")))
         self.assertEqual([(i.path, i.code) for i in rep.drift], [("cameras.cu", "deleted_in_scene")])
         self.assertIn("cameras.cu", rep.pending)
+
+
+def shots_recipe(**extra) -> dict:
+    r = recipe()
+    del r["lighting"]  # an HDRI would forbid the filament shot
+    r["render"] = {"engine": "iray", "resolution": [1080, 1080], "iray_samples": 200}
+    r["shots"] = [
+        {"id": "wide", "camera": "cu", "output": "C:/out/shots/wide.png"},
+        {"id": "tall", "camera": "cu", "output": "C:/out/shots/tall.png",
+         "render": {"resolution": [1080, 1350]}},
+        {"id": "other", "camera": "cu", "output": "D:\\out2\\other.png",
+         "render": {"engine": "filament", "iray_samples": 8}},
+    ]
+    r.update(extra)
+    return r
+
+
+RS = shots_recipe()
+DS = compute_desired(SceneRecipe.from_dict(RS))
+
+
+class TestRender(FacadeCase):
+    def setUp(self):
+        super().setUp()
+        p = patch("dazpy.recipe.render_api.render",
+                  side_effect=lambda client, out, **kw: RenderResult(True, out, 10, 5, "", "r1"))
+        self.mock = p.start()
+        self.addCleanup(p.stop)
+
+    def applied(self):
+        return fake_scene(live_matching(DS))
+
+    def test_refuses_unapplied_recipe(self):
+        with self.assertRaises(RecipeNotAppliedError) as cm:
+            render(RS, fake_scene())
+        self.assertIsInstance(cm.exception, DazError)
+        self.assertFalse(cm.exception.report.applied)
+        self.mock.assert_not_called()
+
+    def test_refuses_conflicts(self):
+        scene = self.applied()
+        scene.tweak("cameras.cu", "transform")
+        with self.assertRaises(RecipeNotAppliedError):
+            render(shots_recipe(cameras={"cu": {"position": [9, 150, 300], "look_at": [0, 100, 0],
+                                                 "focal_length": 50.0}}), scene)
+
+    def test_refuses_pending_changes(self):
+        scene = self.applied()
+        changed = shots_recipe(cameras={"cu": {"position": [9, 150, 300], "look_at": [0, 100, 0],
+                                                "focal_length": 50.0}})
+        with self.assertRaises(RecipeNotAppliedError) as cm:
+            render(changed, scene)
+        self.assertIn("recipe has unapplied changes; call apply first", str(cm.exception))
+
+    def test_refuses_when_shot_camera_drifted(self):
+        scene = self.applied()
+        scene.tweak("cameras.cu", "transform")
+        with self.assertRaises(RecipeNotAppliedError) as cm:
+            render(RS, scene)
+        self.assertEqual([i.path for i in cm.exception.report.drift], ["cameras.cu.transform"])
+
+    def test_refuses_when_shot_camera_deleted(self):
+        with self.assertRaises(RecipeNotAppliedError):
+            render(RS, fake_scene(live_without(live_matching(DS), "cameras.cu")))
+
+    def test_drift_on_unrelated_camera_does_not_block(self):
+        rec = shots_recipe()
+        rec["cameras"]["side"] = {"position": [100, 150, 0], "look_at": [0, 100, 0],
+                                  "focal_length": 50.0}
+        d = compute_desired(SceneRecipe.from_dict(rec))
+        scene = fake_scene(live_matching(d))
+        scene.tweak("cameras.side", "transform")
+        out = render(rec, scene, wait=False)
+        self.assertEqual(len(out), 3)
+
+    def test_force_skips_guard(self):
+        out = render(RS, fake_scene(), force=True)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(self.mock.call_count, 3)
+
+    def test_shot_render_override_merges_over_top_level(self):
+        out = render(RS, self.applied(), wait=False)
+        kw = self.mock.call_args_list[1].kwargs
+        self.assertEqual((kw["width"], kw["height"], kw["engine"], kw["iray_samples"]),
+                         (1080, 1350, "iray", 200))
+        kw3 = self.mock.call_args_list[2].kwargs
+        self.assertEqual((kw3["width"], kw3["height"], kw3["engine"], kw3["iray_samples"]),
+                         (1080, 1080, "filament", 8))
+        self.assertFalse(kw["wait"])
+        self.assertEqual([s.shot_id for s in out], ["wide", "tall", "other"])
+
+    def test_missing_values_pass_scene_defaults(self):
+        rec = recipe()
+        rec.pop("render")
+        del rec["lighting"]
+        rec["shots"] = [{"id": "a", "camera": "cu", "output": "C:/o/a.png"}]
+        scene = fake_scene(live_matching(compute_desired(SceneRecipe.from_dict(rec))))
+        render(rec, scene)
+        kw = self.mock.call_args.kwargs
+        self.assertEqual((kw["width"], kw["height"], kw["engine"], kw["iray_samples"]),
+                         (0, 0, "", 0))
+        self.assertEqual(kw["timeout"], 300.0)
+
+    def test_subset_by_shot_id(self):
+        out = render(RS, self.applied(), shots=["tall"])
+        self.assertEqual([s.shot_id for s in out], ["tall"])
+        self.assertEqual(self.mock.call_count, 1)
+
+    def test_unknown_shot_id_names_unknown_and_valid(self):
+        with self.assertRaises(ValueError) as cm:
+            render(RS, self.applied(), shots=["tall", "nope"])
+        msg = str(cm.exception)
+        self.assertIn("nope", msg)
+        for valid in ("wide", "tall", "other"):
+            self.assertIn(valid, msg)
+        self.mock.assert_not_called()
+
+    def test_camera_label_is_recipe_scoped(self):
+        render(RS, self.applied(), shots=["wide"])
+        self.assertEqual(self.mock.call_args.kwargs["camera"], f"{RID}:cu")
+        self.assertEqual(self.mock.call_args.args[1], "C:/out/shots/wide.png")
+
+    def test_one_mkdir_script_for_unique_parent_dirs(self):
+        scene = self.applied()
+        scene._client.scripts.clear()
+        render(RS, scene)
+        mk = [s for s in scene._client.scripts if "mkpath" in s]
+        self.assertEqual(len(mk), 1)
+        self.assertIn('"C:/out/shots"', mk[0])
+        self.assertIn(ScriptBuilderEsc("D:\\out2"), mk[0])
+        self.assertEqual(mk[0].count("mkpath"), 2)
+
+    def test_shot_render_to_dict(self):
+        out = render(RS, self.applied(), shots=["wide"])
+        d = out[0].to_dict()
+        json.dumps(d)
+        self.assertEqual((d["shot_id"], d["camera_label"], d["output"]),
+                         ("wide", f"{RID}:cu", "C:/out/shots/wide.png"))
+        self.assertTrue(d["result"]["success"])
+        self.assertIsInstance(out[0], ShotRender)
+
+    def test_no_shots_renders_nothing(self):
+        out = render(R, fake_scene(live_matching(D)))
+        self.assertEqual(out, [])
+        self.mock.assert_not_called()
+
+    def test_exports(self):
+        for name in ("ShotRender", "RecipeNotAppliedError"):
+            self.assertIn(name, dazpy.__all__)
+            self.assertTrue(hasattr(dazpy, name))
+        self.assertIsNot(dazpy.render, render)
+
+
+def ScriptBuilderEsc(v):
+    from dazpy._script_builder import ScriptBuilder
+    return ScriptBuilder.escape_string(v)
 
 
 class TestSerialisation(FacadeCase):

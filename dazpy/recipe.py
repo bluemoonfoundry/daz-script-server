@@ -8,7 +8,8 @@ facade over the layers below it:
   pose and HDRI file exists;
 - :func:`plan` - what an apply would do, without touching the scene;
 - :func:`apply` - validate, re-read the live scene, diff, execute with rollback;
-- :func:`observe` - how the scene differs from the recipe now.
+- :func:`observe` - how the scene differs from the recipe now;
+- :func:`render` - render the recipe's shots from an applied scene.
 
 Every result type has a JSON-safe ``to_dict()``.
 """
@@ -18,9 +19,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from importlib import resources
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from ._recipe_apply import ApplyResult, execute
+from . import _render_api as render_api
 from ._recipe_desired import compute_desired
 from ._recipe_diff import Conflict, OnConflict, RecipePlan, Resolution, diff
 from ._recipe_json import to_jsonable
@@ -28,12 +30,15 @@ from ._recipe_model import SceneRecipe
 from ._recipe_ops import DazSceneOps, exists_script
 from ._recipe_store import LiveState, read_live
 from ._recipe_validate import RecipeIssue, ValidationReport, file_not_found, validate_offline
-from .exceptions import RecipeValidationError
+from ._render_api import RenderResult
+from ._script_builder import ScriptBuilder
+from .exceptions import RecipeNotAppliedError, RecipeValidationError
 
 if TYPE_CHECKING:
     from ._scene import DazScene
 
-__all__ = ["ObserveReport", "apply", "observe", "plan", "recipe_schema", "validate"]
+__all__ = ["ObserveReport", "ShotRender", "apply", "observe", "plan", "recipe_schema", "render",
+           "validate"]
 
 _SCHEMA_VERSIONS = (1,)
 
@@ -167,3 +172,94 @@ def observe(recipe: SceneRecipe | dict, scene: "DazScene") -> ObserveReport:
     applied = live.manifest is not None
     return ObserveReport(applied=applied, in_sync=applied and not (pending or drift or p.conflicts),
                          drift=drift, pending=pending, conflicts=p.conflicts)
+
+
+@dataclass(frozen=True)
+class ShotRender:
+    """One rendered shot: its id, the camera label used, the output path, the render result."""
+
+    shot_id: str
+    camera_label: str
+    output: str
+    result: RenderResult
+
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
+
+
+def _parent_dir(path: str) -> str:
+    """The directory part of a Studio-host path (either separator); ``""`` if none."""
+    cut = max(path.rfind("/"), path.rfind("\\"))
+    return path[:cut] if cut > 0 else ""
+
+
+def _mkdir_script(dirs: Sequence[str]) -> str:
+    esc = ScriptBuilder.escape_string
+    lines = [f"new DzDir({esc(d)}).mkpath({esc(d)});" for d in dirs]
+    return ScriptBuilder.iife("\n".join(lines + ["return true;"]))
+
+
+def _covers(entity_path: str, path: str) -> bool:
+    return path == entity_path or path.startswith(entity_path + ".")
+
+
+def _guard(report: ObserveReport, camera_keys: Sequence[str]) -> None:
+    if not report.applied:
+        raise RecipeNotAppliedError("recipe is not applied to this scene; call apply first", report)
+    if report.conflicts:
+        raise RecipeNotAppliedError(
+            "recipe has unresolved conflicts with the scene: "
+            + ", ".join(c.path for c in report.conflicts), report)
+    for key in dict.fromkeys(camera_keys):
+        hit = [i.path for i in report.drift if _covers(f"cameras.{key}", i.path)]
+        if hit:
+            raise RecipeNotAppliedError(
+                f"camera {key!r} was changed in the scene ({', '.join(hit)}); "
+                "apply the recipe or pass force=True", report)
+    if report.pending:
+        raise RecipeNotAppliedError("recipe has unapplied changes; call apply first", report)
+
+
+def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str] | None = None,
+           force: bool = False, wait: bool = True, timeout: float = 300.0) -> list[ShotRender]:
+    """Render the recipe's shots (all, or the ids in *shots*) in recipe order.
+
+    Each shot renders from the recipe-scoped camera ``"<recipe.id>:<camera key>"``
+    with the top-level ``render`` settings overridden by the shot's own; anything
+    unset is passed as ``0`` / ``""`` so Studio uses the scene default. The output
+    folders are created on the Studio host first.
+
+    Unless *force*, raises :class:`RecipeNotAppliedError` when the recipe is not
+    applied, has conflicts or unapplied changes, or a rendered shot's camera was
+    changed or deleted in the scene. Raises ``ValueError`` for unknown shot ids.
+    """
+    model = _checked(recipe, None)
+    known = [s.id for s in model.shots]
+    if shots is not None:
+        unknown = [i for i in dict.fromkeys(shots) if i not in known]
+        if unknown:
+            raise ValueError(f"unknown shot id(s): {', '.join(unknown)}; "
+                             f"valid shot ids: {', '.join(known) or '(none)'}")
+        wanted = set(shots)
+        chosen = [s for s in model.shots if s.id in wanted]
+    else:
+        chosen = list(model.shots)
+    if not force:
+        _guard(observe(model, scene), [s.camera for s in chosen])
+    if not chosen:
+        return []
+    dirs = list(dict.fromkeys(d for d in (_parent_dir(s.output) for s in chosen) if d))
+    if dirs:
+        scene._client.execute(_mkdir_script(dirs))
+    out: list[ShotRender] = []
+    for shot in chosen:
+        top, own = model.render, shot.render
+        pick = lambda name: (getattr(own, name, None) if own is not None else None)             or getattr(top, name)
+        width, height = pick("resolution") or (0, 0)
+        label = f"{model.id}:{shot.camera}"
+        result = render_api.render(
+            scene._client, shot.output, camera=label, engine=pick("engine") or "",
+            width=width, height=height, iray_samples=pick("iray_samples") or 0,
+            wait=wait, timeout=timeout)
+        out.append(ShotRender(shot.id, label, shot.output, result))
+    return out

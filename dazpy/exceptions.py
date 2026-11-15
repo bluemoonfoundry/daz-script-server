@@ -188,3 +188,15 @@ class RecipeValidationError(DazError):
             lines.append(line)
         super().__init__(
             f"scene recipe is invalid ({len(report.errors)} error(s)):\n" + "\n".join(lines))
+
+
+class RecipeNotAppliedError(DazError):
+    """Raised by ``dazpy.recipe.render`` when the scene does not match the recipe.
+
+    Attributes:
+        report: The :class:`dazpy.recipe.ObserveReport` that caused the refusal.
+    """
+
+    def __init__(self, message, report):
+        self.report = report
+        super().__init__(message)
