@@ -59,6 +59,8 @@ def main():
         suite.addTests(loader.loadTestsFromModule(_routes))
         from tests import test_openapi_parity as _openapi
         suite.addTests(loader.loadTestsFromModule(_openapi))
+        from tests import test_smoke_live as _smoke
+        suite.addTests(loader.loadTestsFromModule(_smoke))
 
     if "api" in args.suites:
         from tests import test_api as _api

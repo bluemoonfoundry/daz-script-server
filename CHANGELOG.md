@@ -6,6 +6,14 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **Live smoke-test matrix: `tests/smoke_live.py`.** A scoped check against a
+  running DAZ Studio covering API basics, async jobs, both SSE streams, one
+  64×64 render per engine (Iray / Filament / viewport), and optionally the
+  vangard-daz-mcp tools. Render settings are snapshotted, read back after every
+  change (job readback plus an independent live read), and restored. `--record`
+  writes a per-release × SDK report to `docs/smoke-results/`. A
+  `workflow_dispatch` workflow (`live-smoke.yml`) runs it on a self-hosted
+  runner. See `docs/LIVE_SMOKE.md`.
 - **dazpy covers every documented operation.** `DazClient` and
   `AsyncDazClient` add `list_scripts()` (`GET /scripts`),
   `delete_script(name, missing_ok=False)` (`DELETE /scripts/{id}`) and

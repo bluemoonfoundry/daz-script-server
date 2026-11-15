@@ -49,6 +49,10 @@ reuses a stale CMake cache from the other SDK.
 
 **Test clients:** `test-simple.py`, `tests.py`, `test-client.js`, `test-client.ps1`
 
+**Live smoke matrix:** `python tests/smoke_live.py` (DS4/DS6 × Iray/Filament/viewport,
+engine readback after every change, `--record` per release). Use it instead of
+the full live integration suite. See `docs/LIVE_SMOKE.md`.
+
 ## Architecture
 
 ### Threading Model (CRITICAL)
