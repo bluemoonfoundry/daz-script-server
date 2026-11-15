@@ -6,6 +6,11 @@
 //
 // Adapted from DazBridgeUtils/include/dzbridge.h
 //
+// getSDKVersion() is exported extern "C" (DAZ Studio resolves it by plain
+// name) yet returns the C++ class DzVersion by value. MSVC flags that as
+// C4190; it is harmless because the caller is DAZ Studio's C++ loader, so
+// the warning is suppressed locally around that one definition.
+//
 //////////////////////////////////////////////
 
 #if defined(__APPLE__)
@@ -40,7 +45,10 @@ BOOL WINAPI DllMain( HINSTANCE hinstDLL, ULONG fdwReason, LPVOID lpvReserved )	\
 	return TRUE;				\
 } \
  \
+__pragma(warning(push)) \
+__pragma(warning(disable: 4190)) /* C linkage returning DzVersion: Daz loader ABI, C++ on both sides */ \
 extern "C" __declspec(dllexport) DzVersion getSDKVersion() { return DZ_SDK_VERSION; } \
+__pragma(warning(pop)) \
 extern "C" __declspec(dllexport) DzPlugin *getPluginDefinition() { return getFinalPluginDefinition(); }
 #else
 #define CPP_PLUGIN_DEFINITION( pluginName ) \
@@ -60,7 +68,10 @@ BOOL WINAPI DllMain( HINSTANCE hinstDLL, ULONG fdwReason, LPVOID lpvReserved )	\
 } \
  \
 static DzPlugin s_pluginDef( pluginName ); \
+__pragma(warning(push)) \
+__pragma(warning(disable: 4190)) /* C linkage returning DzVersion: Daz loader ABI, C++ on both sides */ \
 extern "C" __declspec(dllexport) DzVersion getSDKVersion() { return DZ_SDK_VERSION; } \
+__pragma(warning(pop)) \
 extern "C" __declspec(dllexport) DzPlugin *getPluginDefinition() { return &s_pluginDef; }
 #endif
 

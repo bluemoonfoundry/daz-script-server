@@ -711,7 +711,7 @@ void DzScriptServerPane::startServer()
 	m_pServer->set_keep_alive_timeout(ServerConfig::HTTP_KEEP_ALIVE_TIMEOUT_SEC);
 
 	// Set socket flags to improve resource handling
-	m_pServer->set_socket_options([](int sock) {
+	m_pServer->set_socket_options([](socket_t sock) {
 		// Enable address reuse to prevent "address already in use" errors
 		int yes = 1;
 #ifdef _WIN32
