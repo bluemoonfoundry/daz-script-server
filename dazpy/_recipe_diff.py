@@ -47,7 +47,7 @@ from typing import Any, Literal, Mapping
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity
 from ._recipe_json import to_jsonable
-from ._recipe_store import LiveEntity, LiveState
+from ._recipe_store import LiveEntity, LiveState, strip_node_transform
 from ._recipe_validate import RecipeIssue
 from ._scene_state import _DEFAULT_VERIFY_TOLERANCE, _pose_mismatches
 
@@ -125,11 +125,16 @@ def _equal(a: Any, b: Any, tol: float) -> bool:
 
 
 def _pose_drift(base: Any, live: Any, tol: float) -> list[str]:
-    """Drifted pose channels between two observed ``{"snapshot": ...}`` values."""
+    """Drifted pose channels between two observed ``{"snapshot": ...}`` values.
+
+    Node-transform props are ignored on both sides (records written before
+    they were stripped from snapshots still carry them).
+    """
     if not (isinstance(base, dict) and isinstance(live, dict)
             and "snapshot" in base and "snapshot" in live):
         return [] if base == live else ["pose snapshot missing"]
-    return _pose_mismatches(DazPose(**base["snapshot"]), DazPose(**live["snapshot"]), tol)
+    return _pose_mismatches(DazPose(**strip_node_transform(base["snapshot"])),
+                            DazPose(**strip_node_transform(live["snapshot"])), tol)
 
 
 def _observed_differs(channel: str, base: Any, live: Any, tol: float) -> bool:

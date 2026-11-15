@@ -14,7 +14,8 @@ Channel shapes accepted by ``set_channels`` (desired and observed alike):
 - ``pose``: ``{"pose_path": p}`` (``.duf``/``.dsf`` Daz preset: resolved like an
   asset, figure made primary selection, ``ContentMgr.openFile(path, true)``;
   ``.json``: ``poses.apply_pose``; None = no-op; other extensions raise) or
-  ``{"snapshot": DazPose.to_dict()}`` (``DazPose.apply_full``).
+  ``{"snapshot": DazPose.to_dict()}`` (``DazPose.apply_full``, keeping the
+  figure's current node-transform props: snapshots do not carry them).
 
 ``set_environment`` takes the desired environment (``mode`` is a label, applied
 through ``apply_hdri_environment``) or an observed one (``mode`` is the raw enum
@@ -32,9 +33,9 @@ from ._light import DazLight
 from ._node import DazNode, NodeIdentifier
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity, EntityKind
-from ._recipe_store import (EntityRecord, Manifest, observe_environment_script,
-                            observe_node_script, observed_channels, remove_record_script,
-                            write_manifest_script, write_record_script)
+from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest,
+                            observe_environment_script, observe_node_script, observed_channels,
+                            remove_record_script, write_manifest_script, write_record_script)
 from ._render import DazRenderSettings
 from ._script_builder import ScriptBuilder
 from ._skeleton import DazSkeleton
@@ -294,13 +295,25 @@ class DazSceneOps:
             elif name == "pose":
                 skeleton = DazSkeleton(self._client, ident)
                 if "snapshot" in value:
-                    s = value["snapshot"]
-                    DazPose(figure=s["figure"], bones=s["bones"], morphs=s["morphs"],
-                            props=s["props"]).apply_full(skeleton)
+                    self._apply_snapshot(skeleton, value["snapshot"])
                 elif value.get("pose_path") is not None:
                     self._apply_pose_path(node_name, skeleton, value["pose_path"])
             else:
                 raise DazError(f"{node_name}: unknown channel {name!r}")
+
+    @staticmethod
+    def _apply_snapshot(skeleton: DazSkeleton, s: dict) -> None:
+        """``apply_full`` *s*, keeping the figure's current node transform.
+
+        Snapshots exclude the node-transform props (the ``transform`` channel
+        owns them) and ``apply_full`` zeroes every prop it is not given, so the
+        current values are read back and passed through unchanged.
+        """
+        current = DazPose.capture(skeleton)
+        props = {k: v for k, v in s["props"].items() if k not in NODE_TRANSFORM_PROPS}
+        props.update({k: v for k, v in current.props.items() if k in NODE_TRANSFORM_PROPS})
+        DazPose(figure=s["figure"], bones=s["bones"], morphs=s["morphs"],
+                props=props).apply_full(skeleton)
 
     def _apply_pose_path(self, node_name: str, skeleton: DazSkeleton, path: str) -> None:
         ext = os.path.splitext(path)[1].lower()

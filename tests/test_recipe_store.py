@@ -105,6 +105,14 @@ class ReadLiveTests(unittest.TestCase):
         self.assertEqual(e.observed["transform"], {"position": [1, 2, 3], "rotation": [0, 90, 0]})
         self.assertEqual((e.kind, e.element_id), ("actor", 7))
 
+    def test_actor_pose_snapshot_excludes_node_transform_props(self):
+        props = {"XTranslate": 40.0, "YTranslate": 1.0, "ZTranslate": -3.0, "XRotate": 5.0,
+                 "YRotate": 90.0, "ZRotate": 2.0, "Scale": 1.0, "Visibility": 1.0}
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), kind="actor")],
+                             pose={"bones": {}, "morphs": {}, "props": props})
+        snap = read_live(client, "r1").entities["actors.anna"].observed["pose"]["snapshot"]
+        self.assertEqual(snap["props"], {"Visibility": 1.0})
+
     def test_camera_and_light_channels(self):
         client = fake_client(nodes=[
             node("C", rec("r1", "cameras.w"), kind="camera", optics={"focal_length": 50.0}),

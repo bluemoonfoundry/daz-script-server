@@ -275,6 +275,22 @@ class PoseTests(unittest.TestCase):
         self.assertEqual(len(c.live["drifted"]), 1)
         self.assertIn("rForeArm", c.live["drifted"][0])
 
+    def test_node_transform_props_in_pose_snapshots_are_ignored(self):
+        # Records written before C1 still carry the figure's own transform in the
+        # snapshot; a moved actor must not read as a hand pose edit.
+        live = live_matching(D)
+        e = live.entities["actors.anna"]
+        old = {"snapshot": dict(e.record.observed["pose"]["snapshot"],
+                                props={"XTranslate": 0.0, "YRotate": 10.0, "Scale": 1.0})}
+        now = {"snapshot": dict(old["snapshot"], props={"XTranslate": 60.0, "YRotate": 45.0,
+                                                        "Scale": 1.0})}
+        rec = EntityRecord(e.record.recipe_id, e.path, 1, e.record.desired,
+                           dict(e.record.observed, pose=old))
+        ents = dict(live.entities)
+        ents[e.path] = LiveEntity(e.path, e.node_name, e.kind, rec, dict(e.observed, pose=now), ())
+        p = diff(D, LiveState(live.manifest, ents, None))
+        self.assertEqual((p.steps, p.warnings), ((), ()))
+
     def test_pose_change_only_modifies_pose(self):
         D1 = ds(d_actor("anna", pose_path="/poses/sit.duf"), CU, KEY)
         p = diff(D1, live_matching(D))

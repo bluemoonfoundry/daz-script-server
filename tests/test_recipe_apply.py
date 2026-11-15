@@ -443,11 +443,25 @@ class DazSceneOpsChannelTests(unittest.TestCase):
 
     def test_pose_snapshot_uses_apply_full(self):
         snap = {"figure": "Genesis 9", "bones": {"lForeArm": [0.0, 0.0, 10.0]}, "morphs": {}, "props": {}}
-        with patch.object(DazPose, "apply_full", autospec=True) as apply_full:
+        with patch.object(DazPose, "apply_full", autospec=True) as apply_full,                 patch.object(DazPose, "capture", return_value=DazPose("Genesis 9", {}, {}, {})):
             self.ops.set_channels("Genesis 9", "actor", {"pose": {"snapshot": snap}})
         pose, skeleton = apply_full.call_args[0]
         self.assertEqual(pose.to_dict(), snap)
         self.assertEqual(skeleton._identifier.value, "Genesis 9")
+
+    def test_pose_snapshot_keeps_the_figures_current_node_transform(self):
+        # Snapshots carry no node transform (the transform channel owns it), and
+        # apply_full zeroes every prop it is not given: without this the figure
+        # would jump to the origin and collapse to Scale 0 on a pose rollback.
+        snap = {"figure": "G9", "bones": {}, "morphs": {},
+                "props": {"XTranslate": 0.0, "Visibility": 1.0}}
+        current = DazPose("G9", {"hip": [1.0, 0.0, 0.0]}, {},
+                          {"XTranslate": 40.0, "YRotate": 90.0, "Scale": 1.0, "Visibility": 0.0})
+        with patch.object(DazPose, "apply_full", autospec=True) as apply_full,                 patch.object(DazPose, "capture", return_value=current):
+            self.ops.set_channels("G9", "actor", {"pose": {"snapshot": snap}})
+        self.assertEqual(apply_full.call_args[0][0].props,
+                         {"Visibility": 1.0, "XTranslate": 40.0, "YRotate": 90.0, "Scale": 1.0})
+        self.assertEqual(apply_full.call_args[0][0].bones, {})
 
     def test_pose_path_uses_apply_pose_and_none_is_noop(self):
         with patch("dazpy._recipe_ops.apply_pose") as apply_pose:

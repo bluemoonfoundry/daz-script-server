@@ -366,3 +366,203 @@ def patch_facade(test) -> None:
         p = patch(target, side_effect=repl)
         p.start()
         test.addCleanup(p.stop)
+
+
+# ── simulated Studio (final fix wave) ────────────────────────────────────────
+
+_SIM_TRANSFORM_PROPS = ("XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate")
+_SIM_NAMES = {"actor": "Genesis 9", "prop": "Prop", "camera": "Camera", "light": "Light"}
+
+
+def sim_pose_bones(path: str) -> dict:
+    """The bone rotations the simulated pose file *path* 'contains' (deterministic)."""
+    n = float(sum(map(ord, path)) % 40 + 5)
+    return {"lForeArm": [0.0, 0.0, n], "rShin": [n / 2, 0.0, 0.0]}
+
+
+class SimStudio:
+    """A tiny in-memory DAZ Studio for end-to-end facade round trips.
+
+    It is both the ``scene`` passed to the facade (``_client``) and the
+    :class:`SceneOps` the facade writes through (patch ``DazSceneOps`` with
+    :func:`patch_sim`).  Records and manifests are stored as the real JSON
+    strings, and ``_client`` answers the real ``read_live`` script and the real
+    ``DazPose.capture`` script, so a test exercises store -> record JSON ->
+    read_live parse -> diff exactly as against Studio.  A figure's capture
+    reports its node transform as XTranslate/.../Scale props, like Studio.
+    """
+
+    def __init__(self, missing_files=()) -> None:
+        self.nodes: dict[str, dict] = {}
+        self.items: dict[str, str] = {}
+        self.environment: dict | None = None
+        self.missing = set(missing_files)
+        self.fail_on: tuple | None = None
+        self._next_id = 100
+        self._counts: dict[str, int] = {}
+        self._client = MagicMock()
+        self._client.execute.side_effect = self._execute
+
+    # ── helpers for tests ────────────────────────────────────────────────────
+
+    def by_label(self, label: str) -> dict:
+        hits = [n for n in self.nodes.values() if n["label"] == label]
+        assert len(hits) == 1, (label, [n["name"] for n in hits])
+        return hits[0]
+
+    def add_node(self, name: str, *, parent: str | None = None, label: str | None = None,
+                 record: str | None = None, kind: str = "prop") -> dict:
+        self._next_id += 1
+        n = {"name": name, "label": label or name, "kind": kind, "element_id": self._next_id,
+             "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0], "bones": {}, "morphs": {},
+             "props": {}, "optics": None, "output": None, "record": record, "parent": parent}
+        if kind == "camera":
+            n["optics"] = {"focal_length": 50.0, "depth_of_field": False, "focal_distance": 300.0}
+        if kind == "light":
+            n["output"] = {"intensity": 1.0, "color": [255, 255, 255]}
+        self.nodes[name] = n
+        return n
+
+    def _unique(self, base: str) -> str:
+        name, i = base, 2
+        while name in self.nodes:
+            name, i = f"{base} {i}", i + 1
+        return name
+
+    def _maybe_fail(self, method: str) -> None:
+        self._counts[method] = self._counts.get(method, 0) + 1
+        if self.fail_on == (method, self._counts[method]):
+            raise RuntimeError(f"{method} failed")
+
+    def _children(self, name: str) -> list[dict]:
+        return [n for n in self.nodes.values() if n["parent"] == name]
+
+    def _capture_props(self, n: dict) -> dict:
+        raw = dict(zip(_SIM_TRANSFORM_PROPS, list(n["position"]) + list(n["rotation"])))
+        raw["Scale"] = 1.0
+        raw.update(n["props"])
+        return {k: v for k, v in raw.items() if abs(v) > 0.0001}
+
+    def _info(self, n: dict) -> dict:
+        return {"is_camera": n["kind"] == "camera", "is_light": n["kind"] == "light",
+                "position": list(n["position"]), "rotation": list(n["rotation"]),
+                "optics": _copy.deepcopy(n["optics"]), "output": _copy.deepcopy(n["output"])}
+
+    def _tree(self, name: str) -> list[dict]:
+        return [{"name": c["name"], "record": c["record"], "bone": False,
+                 "children": self._tree(c["name"])} for c in self._children(name)]
+
+    # ── the client ───────────────────────────────────────────────────────────
+
+    def _execute(self, script, *a, **kw):
+        import re
+        if "recipe:exists" in script or "recipe:resolve" in script:
+            paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
+            if "recipe:exists" in script:
+                value = {p: p not in self.missing for p in paths}
+            else:
+                value = {p: ("" if p in self.missing else p) for p in paths}
+            return ExecutionResult(value=value)
+        if "getAllBones" in script:
+            name = json.loads(re.search(r'getName\(\) === (".*?")\)', script).group(1))
+            n = self.nodes.get(name)
+            if n is None:
+                return ExecutionResult(value=None)
+            return ExecutionResult(value={"bones": _copy.deepcopy(n["bones"]),
+                                          "morphs": _copy.deepcopy(n["morphs"]),
+                                          "props": self._capture_props(n)})
+        if "_tree(" in script and "Scene.getNodeList()" in script:
+            manifest = next((v for k, v in self.items.items() if json.dumps(k) in script), None)
+            nodes = []
+            for n in self.nodes.values():
+                if not n["record"]:
+                    continue
+                info = self._info(n)
+                info.update(name=n["name"], label=n["label"], record=n["record"],
+                            element_id=n["element_id"], children=self._tree(n["name"]))
+                nodes.append(info)
+            return ExecutionResult(value={"manifest": manifest, "environment": self.environment,
+                                          "nodes": nodes})
+        return ExecutionResult(value=None)
+
+    # ── SceneOps ─────────────────────────────────────────────────────────────
+
+    def create(self, entity):
+        self._maybe_fail("create")
+        n = self.add_node(self._unique(_SIM_NAMES[entity.kind]), label=entity.label,
+                          kind=entity.kind)
+        return [n["name"]]
+
+    def set_channels(self, node_name, kind, channels):
+        self._maybe_fail("set_channels")
+        n = self.nodes[node_name]
+        for name in sorted(channels, key=lambda c: c != "pose"):
+            v = channels[name]
+            if name == "transform":
+                n["position"] = [float(x) for x in v["position"]]
+                if v.get("aim") is not None:
+                    n["rotation"] = [0.0, 0.0, 0.0]
+                elif v.get("rotation") is not None:
+                    n["rotation"] = [float(x) for x in v["rotation"]]
+            elif name == "optics":
+                n["optics"].update({k: x for k, x in v.items() if x is not None})
+            elif name == "output":
+                n["output"].update({k: (list(x) if k == "color" else x) for k, x in v.items()
+                                    if x is not None})
+            elif name == "pose":
+                if "snapshot" in v:
+                    s = v["snapshot"]
+                    n["bones"], n["morphs"] = _copy.deepcopy(s["bones"]), _copy.deepcopy(s["morphs"])
+                    n["props"] = {k: x for k, x in s["props"].items()
+                                  if k not in _SIM_TRANSFORM_PROPS + ("Scale",)}
+                elif v.get("pose_path") is not None:
+                    n["bones"] = sim_pose_bones(v["pose_path"])
+
+    def observe(self, node_name, kind):
+        from dazpy._recipe_store import observed_channels
+        return observed_channels(self._client, node_name, kind, self._info(self.nodes[node_name]))
+
+    def set_environment(self, values):
+        self._maybe_fail("set_environment")
+        self.environment = {"intensity": values["intensity"], "rotation_deg": values["rotation_deg"],
+                            "mode": 0 if isinstance(values["mode"], str) else values["mode"],
+                            "draw_dome": values["draw_dome"], "image_path": values["image_path"]}
+
+    def observe_environment(self):
+        return _copy.deepcopy(self.environment)
+
+    def unparent(self, *args):
+        self._maybe_fail("unparent")
+        for name in args[-1]:
+            self.nodes[name]["parent"] = None
+
+    def reparent(self, child_names, parent_name):
+        for name in child_names:
+            self.nodes[name]["parent"] = parent_name
+
+    def delete(self, node_name, *a, **kw):
+        self._maybe_fail("delete")
+        for c in self._children(node_name):
+            self.delete(c["name"])
+        del self.nodes[node_name]
+
+    def write_record(self, node_name, record):
+        self._maybe_fail("write_record")
+        self.nodes[node_name]["record"] = record.to_json()
+
+    def remove_record(self, node_name):
+        self._maybe_fail("remove_record")
+        self.nodes[node_name]["record"] = None
+
+    def write_manifest(self, manifest):
+        from dazpy._recipe_store import scene_item_name
+        self._maybe_fail("write_manifest")
+        self.items[scene_item_name(manifest.recipe_id)] = manifest.to_json()
+
+
+def patch_sim(test) -> None:
+    """Route ``dazpy.recipe``'s writes through the SimStudio passed as the scene."""
+    from unittest.mock import patch
+    p = patch("dazpy.recipe.DazSceneOps", side_effect=lambda scene: scene)
+    p.start()
+    test.addCleanup(p.stop)

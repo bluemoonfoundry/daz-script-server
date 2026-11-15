@@ -17,6 +17,11 @@ at scene root so the two coincide unless the user re-parents them.  The
 environment ``mode`` is observed as the raw enum int and must be written back
 with ``setValue(int)``.  Entity ``kind`` comes from the record's path prefix,
 not the node class (a rigged prop is still a prop).
+
+The observed ``pose`` snapshot excludes the figure node's own transform
+properties (:data:`NODE_TRANSFORM_PROPS`): the node transform is the
+``transform`` channel, so storing it twice would make every recipe move of an
+actor look like a hand pose edit.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from typing import TYPE_CHECKING
 from ._node import NodeIdentifier
 from ._recipe_desired import EntityKind
 from ._render import DazRenderSettings
+from ._scene_state import _TRANSFORM_KEYS
 from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
@@ -36,6 +42,18 @@ if TYPE_CHECKING:
 DATA_ITEM_NAME = "dazpy.scene_recipe"
 _RECORD_KEY = "record"
 _MANIFEST_KEY = "manifest"
+
+
+# Figure-node properties that are the node transform, not the pose.
+NODE_TRANSFORM_PROPS: tuple[str, ...] = tuple(_TRANSFORM_KEYS)
+
+
+def strip_node_transform(snapshot: dict) -> dict:
+    """*snapshot* (a ``DazPose.to_dict()``) without the node-transform props."""
+    out = dict(snapshot)
+    out["props"] = {k: v for k, v in (snapshot.get("props") or {}).items()
+                    if k not in NODE_TRANSFORM_PROPS}
+    return out
 
 
 def scene_item_name(recipe_id: str) -> str:
@@ -257,7 +275,7 @@ def observed_channels(client: "DazClient", node_name: str, kind: str, info: dict
         observed["output"] = info["output"]
     if kind == "actor":
         pose = DazPose.capture(DazSkeleton(client, NodeIdentifier(node_name)))
-        observed["pose"] = {"snapshot": pose.to_dict()}
+        observed["pose"] = {"snapshot": strip_node_transform(pose.to_dict())}
     return observed
 
 

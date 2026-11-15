@@ -17,7 +17,8 @@ from dazpy._render_api import RenderResult
 from dazpy.exceptions import DazError, RecipeNotAppliedError, RecipeValidationError
 from dazpy.recipe import (ObserveReport, ShotRender, apply, observe, plan, recipe_schema,
                           render, validate)
-from recipe_fakes import RID, empty_live, fake_scene, live_matching, live_without, patch_facade
+from recipe_fakes import (RID, SimStudio, empty_live, fake_scene, live_matching, live_without,
+                          patch_facade, patch_sim)
 
 G9 = "/People/Genesis 9/Genesis 9.duf"
 POSE = "/Poses/Stand.duf"
@@ -337,6 +338,40 @@ class TestSerialisation(FacadeCase):
                      "ApplyResult", "ObserveReport", "RecipeValidationError"):
             self.assertIn(name, dazpy.__all__)
             self.assertTrue(hasattr(dazpy, name))
+
+
+def two_actor_recipe(anna_pos=(0, 0, 0)) -> dict:
+    return {
+        "recipe_version": 1, "id": RID,
+        "assets": {"g9": {"path": G9}},
+        "actors": {"anna": {"asset": "g9", "position": list(anna_pos), "pose": POSE},
+                   "ben": {"asset": "g9", "position": [120, 0, 0], "facing": "anna"}},
+        "cameras": {"cu": {"frame": "anna", "shot_type": "close_up", "focal_length": 85}},
+    }
+
+
+class RoundTripTests(unittest.TestCase):
+    """apply -> record JSON in the (simulated) scene -> read_live -> diff, end to end."""
+
+    def setUp(self):
+        patch_sim(self)
+        self.sim = SimStudio()
+
+    def assert_no_op(self, recipe, **kw):
+        p = plan(recipe, self.sim, **kw)
+        self.assertEqual((p.steps, p.conflicts), ((), ()))
+        return p
+
+    def test_moving_an_actor_in_the_recipe_round_trips_to_a_no_op(self):
+        self.assertTrue(apply(two_actor_recipe(), self.sim).applied)
+        self.assertEqual(plan(two_actor_recipe(), self.sim).warnings, ())
+        moved = two_actor_recipe(anna_pos=(-40, 0, 60))
+        result = apply(moved, self.sim)
+        self.assertTrue(result.applied)
+        self.assertIn(("modify", "actors.anna"), [(s.op, s.path) for s in result.steps])
+        self.assertIn(("modify", "actors.ben"), [(s.op, s.path) for s in result.steps])
+        self.assertEqual(self.assert_no_op(moved).warnings, ())
+        self.assertTrue(observe(moved, self.sim).in_sync)
 
 
 if __name__ == "__main__":
