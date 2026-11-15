@@ -218,6 +218,15 @@ def live_with_children(D: dict, path: str = "actors.anna", names=("Shirt",),
     return LiveState(live.manifest, ents, live.environment_observed)
 
 
+def live_with_duplicate(live: LiveState, path: str, copy_name: str = "copy", copy_id: int = 2
+                        ) -> LiveState:
+    """*live* where a second node (e.g. a Studio duplicate) carries *path*'s record."""
+    from dazpy._recipe_store import DuplicateRecord
+    e = live.entities[path]
+    dup = DuplicateRecord(path, (e.node_name, copy_name), (e.element_id, copy_id))
+    return LiveState(live.manifest, live.entities, live.environment_observed, (dup,))
+
+
 # ── executor fakes (Task 7) ──────────────────────────────────────────────────
 
 class FakeOps:

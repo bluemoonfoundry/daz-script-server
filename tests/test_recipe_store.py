@@ -67,6 +67,18 @@ class ReadLiveTests(unittest.TestCase):
         self.assertEqual(ents["actors.anna"].foreign_children, ())
         self.assertEqual(ents["props.hat"].foreign_children, ("Grand",))
 
+    def test_duplicate_record_keys_on_first_node_and_is_reported(self):
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), kind="actor", element_id=5),
+                                    node("B", rec("r1", "props.ball"), element_id=6),
+                                    node("A copy", rec("r1", "actors.anna"), kind="actor",
+                                         element_id=9)])
+        st = read_live(client, "r1")
+        self.assertEqual(st.entities["actors.anna"].node_name, "A")
+        self.assertEqual(len(st.duplicates), 1)
+        d = st.duplicates[0]
+        self.assertEqual((d.path, d.node_names, d.element_ids), ("actors.anna", ("A", "A copy"), (5, 9)))
+        self.assertEqual(client.execute.call_count, 2)  # one pose capture, not one per copy
+
     def test_rigged_prop_is_prop_without_pose(self):
         client = fake_client(nodes=[node("R", rec("r1", "props.robot"), kind="actor")])
         e = read_live(client, "r1").entities["props.robot"]
@@ -89,6 +101,7 @@ class ReadLiveTests(unittest.TestCase):
         st = read_live(fake_client(), "r1")
         self.assertIsNone(st.manifest)
         self.assertIsNone(st.environment_observed)
+        self.assertEqual(st.duplicates, ())
 
     def test_one_script_call_for_non_actors(self):
         client = fake_client(nodes=[node("A", rec("r1", "props.a")), node("B", rec("r1", "props.b"))])

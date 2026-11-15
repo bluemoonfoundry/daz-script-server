@@ -11,8 +11,8 @@ from dazpy._recipe_desired import DesiredEntity
 from dazpy._recipe_diff import Conflict, RecipePlan, Step, diff
 from dazpy._recipe_store import EntityRecord, LiveEntity, LiveState
 from recipe_fakes import (ENV_PATH, d_actor, d_camera, d_environment, d_light, d_prop, ds,
-                          live_matching, live_tweaked, live_with_children, live_without,
-                          with_observed)
+                          live_matching, live_tweaked, live_with_children, live_with_duplicate,
+                          live_without, with_observed)
 
 ANNA = d_actor("anna", position=(0.0, 0.0, 0.0), pose_path="/poses/stand.duf")
 CU = d_camera("cu")
@@ -351,6 +351,42 @@ class ToleranceTests(unittest.TestCase):
                              {"position": [1.0, 150.0, 300.0], "rotation": [0.0, 0.0, 0.0]})
         self.assertEqual(diff(D, live, tolerance=2.0).warnings, ())
         self.assertEqual(len(diff(D, live).warnings), 1)
+
+
+class DuplicateRecordTests(unittest.TestCase):
+    def test_duplicate_blocks_under_ask_with_conflict_and_warning(self):
+        p = diff(D, live_with_duplicate(live_matching(D), "cameras.cu"))
+        self.assertTrue(p.blocked)
+        c = p.conflicts[0]
+        self.assertEqual((c.path, c.kind), ("cameras.cu", "duplicate_record"))
+        self.assertEqual(c.live, {"nodes": ["r1:cu", "copy"], "element_ids": [None, 2]})
+        w = [x for x in p.warnings if x.code == "duplicate_record"]
+        self.assertEqual([x.path for x in w], ["cameras.cu"])
+        self.assertIn("'copy'", w[0].message)
+        self.assertIn("r1:cu", w[0].message)
+
+    def test_duplicate_is_not_resolvable_by_policy_or_resolution(self):
+        live = live_with_duplicate(live_matching(D), "cameras.cu")
+        self.assertTrue(diff(D_cam_moved, live, resolutions={"cameras.cu": "recipe"}).blocked)
+        for policy in ("recipe_wins", "scene_wins"):
+            p = diff(D_cam_moved_and_light_changed, live, on_conflict=policy)
+            self.assertFalse(p.blocked)
+            self.assertEqual(ops(p), [("modify", "lighting.lights.key")])  # cu untouched
+            self.assertEqual((p.overwritten, p.kept), ((), ()))
+            self.assertEqual([c.kind for c in p.conflicts], ["duplicate_record"])
+
+    def test_duplicated_entity_removed_from_recipe_is_never_deleted(self):
+        live = live_with_duplicate(live_matching(D), "lighting.lights.key")
+        for policy in ("recipe_wins", "scene_wins"):
+            p = diff(ds(ANNA, CU), live, on_conflict=policy)
+            self.assertEqual(p.steps, ())
+            self.assertEqual([(c.path, c.kind) for c in p.conflicts],
+                             [("lighting.lights.key", "duplicate_record")])
+
+    def test_resolution_for_a_duplicate_is_not_unknown(self):
+        p = diff(D, live_with_duplicate(live_matching(D), "cameras.cu"),
+                 resolutions={"cameras.cu": "recipe"})
+        self.assertNotIn("unknown_resolution", [w.code for w in p.warnings])
 
 
 class ShapeTests(unittest.TestCase):

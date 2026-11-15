@@ -224,6 +224,14 @@ unowned node and later applies no longer report it. To bring it back under the
 recipe, delete it and add the entity again. Poses are compared by a full pose capture, so a hand-posed figure is a
 hand tweak, and a pose swap on top of it is a conflict.
 
+If two nodes carry the same recipe record (duplicating a recipe node in Daz
+Studio copies its record), the entity is a ``duplicate_record`` conflict and
+warning naming both nodes and their element ids. Apply never modifies, deletes
+or releases either node, whatever the policy: ``ask`` blocks, and
+``recipe_wins`` / ``scene_wins`` / ``resolutions`` cannot resolve it (the rest
+of the apply proceeds under those policies). Delete the extra node to resolve
+it.
+
 Numeric comparisons use a tolerance of 0.05.
 
 Choosing a policy
@@ -262,7 +270,7 @@ Tombstones and warnings
 Accepting a hand deletion (resolution ``scene`` on ``deleted_in_scene``) records
 a tombstone in the manifest, so later applies do not recreate the node and
 instead warn ``hand_deleted_kept``. Resolve that path with ``recipe`` to bring
-it back. Other warning codes: ``hand_tweak_kept``, ``removed_entity_kept`` (an
+it back. Other warning codes: ``hand_tweak_kept``, ``duplicate_record``, ``removed_entity_kept`` (an
 entity removed or replaced in the recipe whose node was kept and released),
 ``unknown_resolution`` and
 ``deleted_not_restored`` (see below).

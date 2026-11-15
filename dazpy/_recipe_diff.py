@@ -40,6 +40,13 @@ desired channel, and the old node is deleted (``"recipe"`` / no conflict) or
 released (``"scene"``).
 A record without ``"_create"`` is treated as unchanged (no replace).
 
+Duplicate records (``LiveState.duplicates``: several nodes carry one record
+path) are never modified, deleted or released under any policy: the path gets
+a ``duplicate_record`` warning and a ``duplicate_record`` conflict, which
+blocks under ``ask`` and which neither ``on_conflict`` nor ``resolutions`` can
+resolve (only removing the extra node can).  Under ``recipe_wins`` /
+``scene_wins`` the rest of the plan proceeds without that path.
+
 Conflict paths are ``<entity path>.<channel>`` for ``modified`` and the entity
 path for the other kinds; ``resolutions`` are keyed the same way (channel
 paths, never property paths).  Resolution keys that match no conflict (or
@@ -54,13 +61,14 @@ from typing import Any, Literal, Mapping
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity
 from ._recipe_json import to_jsonable
-from ._recipe_store import LiveEntity, LiveState, strip_node_transform
+from ._recipe_store import DuplicateRecord, LiveEntity, LiveState, strip_node_transform
 from ._recipe_validate import RecipeIssue
 from ._scene_state import _DEFAULT_VERIFY_TOLERANCE, _pose_mismatches
 
 OnConflict = Literal["ask", "recipe_wins", "scene_wins"]
 Resolution = Literal["recipe", "scene"]
-ConflictKind = Literal["modified", "removed_from_recipe", "deleted_in_scene", "has_foreign_children"]
+ConflictKind = Literal["modified", "removed_from_recipe", "deleted_in_scene", "has_foreign_children",
+                       "duplicate_record"]
 StepOp = Literal["create", "modify", "set_environment", "adopt", "release", "unparent", "delete"]
 
 ENVIRONMENT_PATH = "lighting.environment"
@@ -303,6 +311,20 @@ class _Planner:
         self.step("delete", path, {}, None, entity.node_name)
         return True
 
+    def duplicate(self, dup: DuplicateRecord, d: DesiredEntity | None, live: LiveState) -> None:
+        """Report a path recorded on several nodes; touch none of them."""
+        path = dup.path
+        self.targets.append(path)
+        nodes = ", ".join(f"{n!r} (element id {i})" for n, i in zip(dup.node_names, dup.element_ids))
+        self.warn(path, "duplicate_record",
+                  f"{path} is recorded on {len(dup.node_names)} nodes: {nodes} (a node duplicated "
+                  "in Daz Studio copies its recipe record). The recipe changes none of them; "
+                  "delete the extra node(s) to resolve this. No policy or resolution can.")
+        self.conflicts.append(Conflict(
+            path, "duplicate_record", d.channels if d is not None else None,
+            live.entities[path].record.desired,
+            {"nodes": list(dup.node_names), "element_ids": list(dup.element_ids)}))
+
     def environment(self, d: DesiredEntity | None, live: LiveState) -> None:
         record = live.manifest.environment if live.manifest else None
         if d is None:
@@ -343,12 +365,15 @@ def diff(desired: dict[str, DesiredEntity], live: LiveState, *, on_conflict: OnC
     owned |= set(live.entities)
     tombstoned = set(manifest.deleted) if manifest else set()
 
+    duplicated = {dup.path for dup in live.duplicates}
     for path, d in desired.items():
-        if path != ENVIRONMENT_PATH:
+        if path != ENVIRONMENT_PATH and path not in duplicated:
             p.present(path, d, live, owned, tombstoned)
     for path, entity in live.entities.items():
-        if path not in desired:
+        if path not in desired and path not in duplicated:
             p.removed(entity)
+    for dup in live.duplicates:
+        p.duplicate(dup, desired.get(dup.path), live)
     p.environment(desired.get(ENVIRONMENT_PATH), live)
 
     conflict_paths = [c.path for c in p.conflicts]
@@ -360,7 +385,8 @@ def diff(desired: dict[str, DesiredEntity], live: LiveState, *, on_conflict: OnC
                    "entity path for removal/deletion conflicts. Conflict paths in this plan: "
                    f"{', '.join(conflict_paths) if conflict_paths else '(none)'}.")
 
-    blocked = on_conflict == "ask" and any(c.path not in p.resolutions for c in p.conflicts)
+    blocked = on_conflict == "ask" and any(
+        c.kind == "duplicate_record" or c.path not in p.resolutions for c in p.conflicts)
     if blocked:
         return RecipePlan((), tuple(p.conflicts), tuple(p.warnings), True, (), (), ())
     steps = tuple(sorted(p.steps, key=lambda s: _STEP_ORDER[s.op]))

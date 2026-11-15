@@ -124,10 +124,24 @@ class LiveEntity:
 
 
 @dataclass(frozen=True)
+class DuplicateRecord:
+    """Several nodes carry the same record path (e.g. a node duplicated in Studio).
+
+    ``node_names`` / ``element_ids`` are in scene order; the first is the node
+    :class:`LiveState` keys the :class:`LiveEntity` on.
+    """
+
+    path: str
+    node_names: tuple[str, ...]
+    element_ids: tuple[int | None, ...]
+
+
+@dataclass(frozen=True)
 class LiveState:
     manifest: Manifest | None
     entities: dict[str, LiveEntity]
     environment_observed: dict | None
+    duplicates: tuple[DuplicateRecord, ...] = ()
 
 
 # ── script builders ───────────────────────────────────────────────────────────
@@ -336,7 +350,9 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
     """Read every node owned by *recipe_id* in one script call.
 
     Plus one ``DazPose.capture`` per actor with a record.  Nodes whose record
-    belongs to another recipe, or is unparseable, are ignored.
+    belongs to another recipe, or is unparseable, are ignored.  When several
+    nodes carry the same record path, the entity is keyed on the first and the
+    path is reported in ``LiveState.duplicates``.
     """
     holder = DazRenderSettings(client)._environment_holder()
     payload = client.execute(_read_script(recipe_id, holder)).value or {}
@@ -349,6 +365,7 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
             manifest = None
 
     entities: dict[str, LiveEntity] = {}
+    copies: dict[str, list[dict]] = {}
     for n in payload.get("nodes") or []:
         rec = _owned_by(n.get("record"), recipe_id)
         if rec is None:
@@ -356,11 +373,19 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
         kind = _kind_from_path(rec.path)
         if kind is None:
             continue
+        if rec.path in entities:
+            copies.setdefault(rec.path, []).append(n)
+            continue
         observed = observed_channels(client, n["name"], kind, n)
         foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id))
         entities[rec.path] = LiveEntity(
             path=rec.path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"))
 
+    duplicates = tuple(
+        DuplicateRecord(path, (entities[path].node_name, *(n["name"] for n in extra)),
+                        (entities[path].element_id, *(n.get("element_id") for n in extra)))
+        for path, extra in copies.items())
     env = payload.get("environment") if manifest and manifest.environment else None
-    return LiveState(manifest=manifest, entities=entities, environment_observed=env)
+    return LiveState(manifest=manifest, entities=entities, environment_observed=env,
+                     duplicates=duplicates)
