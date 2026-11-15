@@ -796,10 +796,8 @@ class DazScene:
     ) -> None:
         """Export the scene to an FBX file via DAZ Studio's built-in FBX exporter.
 
-        This is a plain synchronous call, unlike
-        :meth:`~dazpy.DazClient.export_usd_submit` -- FBX export is a native
-        DAZ Studio exporter (``DzFbxExporter``) rather than a custom C++
-        pipeline, so there's no async job to poll.
+        This is a plain synchronous call: FBX export is a native DAZ Studio
+        exporter (``DzFbxExporter``), so there's no async job to poll.
 
         Args:
             path: Absolute destination path on the DAZ Studio host (should

@@ -19,6 +19,33 @@ _spec = importlib.util.spec_from_file_location(
 parity = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(parity)
 
+# A synthetic companion plugin, so these tests don't depend on which real
+# plugins companion_plugins.json currently declares.
+DEMO_PLUGIN = "demo-plugin"
+DEMO_ROUTES = {("POST", "/demo"), ("GET", "/demo/:id")}
+DEMO_YAML = """
+  /demo:
+    post:
+      tags: [CompanionPlugins]
+      summary: Demo plugin submit
+      responses:
+        '200':
+          description: OK
+  /demo/{id}:
+    get:
+      tags: [CompanionPlugins]
+      summary: Demo plugin status
+      responses:
+        '200':
+          description: OK
+"""
+
+
+def with_demo_paths(yaml: str) -> str:
+    """openapi.yaml text with the demo plugin's two operations added."""
+    i = yaml.index("\ncomponents:")
+    return yaml[:i] + "\n" + DEMO_YAML.strip("\n") + yaml[i:]
+
 
 class TestNormalize(unittest.TestCase):
 
@@ -75,34 +102,47 @@ class TestParity(unittest.TestCase):
         self.assertIn("POST /geometry/frames", out)
         self.assertIn("PUT /geometry/frames", out)
 
+    def _run_demo(self, yaml=None, plugin_src=None):
+        with mock.patch.dict(parity.COMPANION_PLUGIN_ROUTES, {DEMO_PLUGIN: set(DEMO_ROUTES)}):
+            return self._run(yaml=yaml if yaml is not None else with_demo_paths(self.yaml),
+                             plugin_src=plugin_src)
+
+    def test_declared_and_documented_plugin_passes(self):
+        self.assertEqual(self._run_demo(), "")
+
     def test_missing_plugin_route_fails(self):
-        start = self.yaml.index("  /export/usd/{id}:")
-        end = self.yaml.index("\ncomponents:", start)
-        out = self._run(yaml=self.yaml[:start] + self.yaml[end:])
+        yaml = with_demo_paths(self.yaml)
+        start = yaml.index("  /demo/{id}:")
+        end = yaml.index("\ncomponents:", start)
+        out = self._run_demo(yaml=yaml[:start] + yaml[end:])
         self.assertIn("companion-plugin routes missing from openapi.yaml", out)
 
     def test_plugin_route_without_tag_fails(self):
-        yaml = self.yaml.replace("tags: [CompanionPlugins]", "tags: [Scene]")
-        self.assertIn("documented without tag", self._run(yaml=yaml))
+        yaml = with_demo_paths(self.yaml).replace("tags: [CompanionPlugins]", "tags: [Scene]")
+        self.assertIn("documented without tag", self._run_demo(yaml=yaml))
+
+    def test_documented_plugin_route_nobody_declares_fails(self):
+        out = self._run(yaml=with_demo_paths(self.yaml))
+        self.assertIn("operations no known plugin registers", out)
 
     def test_plugin_source_drift_fails(self):
         src = Path(self.tmp.name) / "plugin"
         src.mkdir()
         (src / "Server.cpp").write_text(
-            'QString m = "POST", p = "/export/usd", s = "a";\n'
-            'QString g = "GET",  q = "/export/usd/:id/extra", t = "b";\n'
+            'QString m = "POST", p = "/demo", s = "a";\n'
+            'QString g = "GET",  q = "/demo/:id/extra", t = "b";\n'
             'invokeMethod(pane, "registerPluginRoute");\n', encoding="utf-8")
-        out = self._run(plugin_src={"daz-bridge-usd": src})
+        out = self._run_demo(plugin_src={DEMO_PLUGIN: src})
         self.assertIn("out of date", out)
 
     def test_plugin_source_match_passes(self):
         src = Path(self.tmp.name) / "plugin"
         src.mkdir()
         (src / "Server.cpp").write_text(
-            'QString mPost = "POST",  pPost = "/export/usd",      sPost = "h1";\n'
-            'QString mGet  = "GET",   pGet  = "/export/usd/:id",  sGet  = "h2";\n'
+            'QString mPost = "POST",  pPost = "/demo",      sPost = "h1";\n'
+            'QString mGet  = "GET",   pGet  = "/demo/:id",  sGet  = "h2";\n'
             'invokeMethod(pane, "registerPluginRoute");\n', encoding="utf-8")
-        self.assertEqual(self._run(plugin_src={"daz-bridge-usd": src}), "")
+        self.assertEqual(self._run_demo(plugin_src={DEMO_PLUGIN: src}), "")
 
     def test_sdk_calling_undocumented_endpoint_fails(self):
         fake = {"dazpy": {("GET", "/scene/nope"): ["dazpy/_x.py:1"]}}
@@ -116,6 +156,85 @@ class TestParity(unittest.TestCase):
         report = parity.sdk_report(ops, sdks)
         self.assertEqual(report.count("\n| `"), len(ops))
         self.assertIn("dazpy:", report)
+
+
+
+class TestCompanionRegistry(unittest.TestCase):
+    """companion_plugins.json loading and the --live /capabilities comparison."""
+
+    def setUp(self):
+        yaml_path = Path(tempfile.mkdtemp()) / "openapi.yaml"
+        self.addCleanup(lambda: yaml_path.unlink(missing_ok=True))
+        yaml_path.write_text(with_demo_paths((ROOT / "openapi.yaml").read_text(encoding="utf-8")),
+                             encoding="utf-8")
+        self.ops = parity.openapi_operations(yaml_path.read_text(encoding="utf-8"))
+        patcher = mock.patch.dict(parity.COMPANION_PLUGIN_ROUTES,
+                                  {DEMO_PLUGIN: set(DEMO_ROUTES)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_registry_file_loads(self):
+        reg = parity.load_companion_registry()
+        self.assertIsInstance(reg, dict)
+
+    def test_registry_routes_parsed(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "c.json"
+            f.write_text('{"plugins":[{"name":"a","routes":[{"method":"get","path":"/a/:id"}]}]}',
+                         encoding="utf-8")
+            self.assertEqual(parity.load_companion_registry(f), {"a": {("GET", "/a/:id")}})
+
+    def test_duplicate_plugin_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "c.json"
+            f.write_text('{"plugins":[{"name":"a","routes":[]},{"name":"a","routes":[]}]}',
+                         encoding="utf-8")
+            with self.assertRaises(ValueError):
+                parity.load_companion_registry(f)
+
+    @staticmethod
+    def _caps(*plugins):
+        return {"companion_plugins": list(plugins)}
+
+    @staticmethod
+    def _plugin(name=DEMO_PLUGIN, registered=True, version="0.2.0", routes=None):
+        routes = routes if routes is not None else [
+            {"method": "POST", "path": "/demo", "auth": True},
+            {"method": "GET", "path": "/demo/:id", "auth": True}]
+        return {"name": name, "registered": registered, "version": version, "routes": routes}
+
+    def test_matching_live_plugin_passes(self):
+        errors, notes = parity.check_live(self._caps(self._plugin()), self.ops)
+        self.assertEqual(errors, [])
+        self.assertEqual(notes, [])
+
+    def test_undeclared_live_plugin_fails(self):
+        live = self._plugin(name="mystery", routes=[])
+        errors, _ = parity.check_live(self._caps(self._plugin(), live), self.ops)
+        self.assertTrue(any("'mystery'" in e and "not declared" in e for e in errors), errors)
+
+    def test_live_route_drift_fails(self):
+        live = self._plugin(routes=[{"method": "POST", "path": "/demo"}])
+        errors, _ = parity.check_live(self._caps(live), self.ops)
+        self.assertTrue(any("differ from companion_plugins.json" in e for e in errors), errors)
+
+    def test_undocumented_live_route_fails(self):
+        with mock.patch.dict(parity.COMPANION_PLUGIN_ROUTES,
+                             {"x": {("GET", "/x/nope")}}):
+            live = self._plugin(name="x", routes=[{"method": "GET", "path": "/x/nope"}])
+            errors, _ = parity.check_live(self._caps(live), self.ops)
+        self.assertTrue(any("missing from openapi.yaml" in e for e in errors), errors)
+
+    def test_unattributed_declared_routes_are_a_note(self):
+        live = self._plugin(name="DemoServer", registered=False, version=None)
+        errors, notes = parity.check_live(self._caps(live), self.ops)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("without a plugin name" in n for n in notes), notes)
+        self.assertTrue(any("not loaded" in n for n in notes), notes)
+
+    def test_old_server_without_registry_fails(self):
+        errors, _ = parity.check_live({"plugin_routes": []}, self.ops)
+        self.assertTrue(errors)
 
 
 if __name__ == "__main__":

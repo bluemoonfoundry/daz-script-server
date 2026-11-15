@@ -742,6 +742,29 @@ require the API token and honour the IP whitelist; POST/PUT/DELETE/PATCH routes
 are also rate limited and body-size limited. Requests to unregistered paths
 return 404.
 
+To make its routes discoverable in `GET /capabilities` (`companion_plugins`),
+a plugin names itself first and passes that name with each route. Both calls
+are `Q_INVOKABLE` on the pane; use `Qt::BlockingQueuedConnection` from another
+thread:
+
+```cpp
+QMetaObject::invokeMethod(pane, "registerCompanionPlugin", Qt::BlockingQueuedConnection,
+    Q_RETURN_ARG(bool, ok), Q_ARG(QString, "my-exporter"),
+    Q_ARG(QString, "1.0.0"), Q_ARG(QString, "Scene export"));
+QMetaObject::invokeMethod(pane, "registerPluginRoute", Qt::BlockingQueuedConnection,
+    Q_RETURN_ARG(bool, ok), Q_ARG(QString, "POST"), Q_ARG(QString, "/my-exporter/export"),
+    receiverArg, Q_ARG(QString, "handleExport"), Q_ARG(QString, "my-exporter"));
+```
+
+Names are 1–64 characters of `A-Z a-z 0-9 . _ -`; versions are 1–64 printable
+ASCII characters. The 4-argument `registerPluginRoute` still works, but its
+routes are listed as unattributed. On a server without the registry (2.11.0 and
+earlier) the 5-argument call fails (`invokeMethod` returns false), so fall back
+to 4 arguments.
+`unregisterCompanionPlugin(name)` removes a plugin and its routes. Declare a
+new plugin's routes in `companion_plugins.json` and document them in
+`openapi.yaml` (tag `CompanionPlugins`); the parity check enforces both.
+
 ### 🐛 Bug Fixes
 
 - Fixed CRT heap mismatch crash when a catch-all dispatcher routed to a
@@ -1793,7 +1816,14 @@ auth, not rate limited)
   "studio": { "version": "4.24.0.3", "sdk_version": "4.5.0.100", "sdk_major": 4,
               "qt_version": "4.8.7", "qt_build_version": "4.8.7" },
   "routes": [ { "method": "POST", "path": "/execute", "auth": true, "kind": "json" } ],
-  "plugin_routes": [],
+  "plugin_routes": [ { "method": "POST", "path": "/my-exporter/export", "auth": true,
+                       "owner": "MyExportServer", "plugin": "my-exporter" } ],
+  "companion_plugins": [
+    { "name": "my-exporter", "registered": true, "version": "1.0.0",
+      "description": "Scene export",
+      "routes": [ { "method": "POST", "path": "/my-exporter/export", "auth": true },
+                  { "method": "GET", "path": "/my-exporter/export/:id", "auth": true } ] }
+  ],
   "features": { "async": true, "report_file": true, "sse_scene_events": true,
                 "render_animation": true, "companion_plugins": false },
   "limits": { "max_body_size_mb": 5, "max_script_length_kb": 1024,
@@ -1823,6 +1853,10 @@ auth, not rate limited)
   (including companion-plugin routes) and the feature flags. It doesn't change
   with limits, settings or render engines, so clients can cache their
   route/feature decisions by it.
+- `companion_plugins` lists each companion plugin with its version and routes.
+  Routes a plugin registered without naming itself (older plugins) are grouped
+  by the class of their handler object, with `"registered": false` and
+  `"version": null`. `plugin_routes` is the same routes as a flat list.
 - Clients must ignore unknown keys. `schema_version` goes up only on breaking
   changes to the document's shape.
 - dazpy: `DazClient.capabilities()` / `AsyncDazClient.capabilities()`.

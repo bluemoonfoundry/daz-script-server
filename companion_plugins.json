@@ -1,0 +1,4 @@
+{
+  "$comment": "Companion plugins that register HTTP routes in DazScriptServer at runtime (registerCompanionPlugin / registerPluginRoute). Each route must be documented in openapi.yaml with tag CompanionPlugins. Read by scripts/check_openapi_parity.py; --plugin-src checks a plugin's entry against its source, --live checks a running server's GET /capabilities against this file.",
+  "plugins": []
+}

@@ -1024,89 +1024,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /export/usd:
-    post:
-      tags: [CompanionPlugins]
-      summary: Queue a USD export (daz-bridge-usd plugin)
-      description: |
-        Registered by the `daz-bridge-usd` companion plugin. Queues a USD export
-        of the current scene and returns a `job_id`; poll
-        `GET /export/usd/{id}`. Unlike built-in routes, the request uses
-        camelCase fields and errors come back as `{"error": "..."}`, not as
-        `ErrorResponse`.
-      operationId: submitUsdExport
-      security:
-        - apiToken: []
-        - bearerToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UsdExportRequest'
-      responses:
-        '202':
-          description: Export job queued
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UsdExportJob'
-        '400':
-          description: Missing body, invalid JSON, or missing `outputPath`
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PluginError'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: daz-bridge-usd is not installed (`ROUTE_NOT_FOUND`)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /export/usd/{id}:
-    get:
-      tags: [CompanionPlugins]
-      summary: Poll a USD export job (daz-bridge-usd plugin)
-      operationId: getUsdExportStatus
-      security:
-        - apiToken: []
-        - bearerToken: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: The `job_id` returned by `POST /export/usd`
-      responses:
-        '200':
-          description: Job status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UsdExportJob'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: |
-            Unknown job id (`{"error": "Job not found: <id>"}`), or the plugin
-            is not installed (`ErrorResponse` with `ROUTE_NOT_FOUND`)
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/PluginError'
-                  - $ref: '#/components/schemas/ErrorResponse'
-
 components:
   securitySchemes:
     apiToken:
@@ -1298,79 +1215,6 @@ components:
           type: string
           enum: [copy, serialize, serialize+restore]
           description: How the copy was produced (see the route description)
-
-    UsdExportRequest:
-      type: object
-      required: [outputPath]
-      properties:
-        outputPath:
-          type: string
-          description: Destination `.usd`/`.usda`/`.usdc` path
-          example: "C:/exports/scene.usda"
-        includeGeometry:
-          type: boolean
-          default: true
-        includeMaterials:
-          type: boolean
-          default: true
-        includeSkeleton:
-          type: boolean
-          default: false
-        includeMorphs:
-          type: boolean
-          default: false
-        includeLights:
-          type: boolean
-          default: false
-          description: Export scene lights as UsdLux prims
-        includeCamera:
-          type: boolean
-          default: false
-          description: Export the active render camera as UsdGeomCamera
-        copyTextures:
-          type: boolean
-          default: true
-        startFrame:
-          type: integer
-          default: 0
-        endFrame:
-          type: integer
-          default: 0
-        fps:
-          type: number
-          default: 24
-
-    UsdExportJob:
-      type: object
-      required: [job_id, status, submittedAt]
-      properties:
-        job_id:
-          type: string
-        status:
-          type: string
-          enum: [queued, running, completed, failed]
-        submittedAt:
-          type: integer
-          format: int64
-          description: Submission time, milliseconds since the Unix epoch
-        completedAt:
-          type: integer
-          format: int64
-          description: Completion time, milliseconds since the Unix epoch (once finished)
-        outputPath:
-          type: string
-          description: Written file (only when `status` is `completed`)
-        error:
-          type: string
-          description: Failure message (only when the job failed)
-
-    PluginError:
-      type: object
-      description: Error body used by companion plugins that predate `ErrorResponse`
-      required: [error]
-      properties:
-        error:
-          type: string
 
     RenderVariant:
       type: object
@@ -2066,6 +1910,43 @@ components:
               owner:
                 type: string
                 description: Class name of the registering QObject
+              plugin:
+                type: string
+                description: Companion plugin name, when the route was registered with one
+        companion_plugins:
+          type: array
+          description: |
+            Companion plugins and their routes. Plugins name themselves with
+            registerCompanionPlugin(); routes registered without a plugin name
+            are grouped by handler class with `registered: false`.
+          items:
+            type: object
+            required: [name, registered, version, routes]
+            properties:
+              name:
+                type: string
+                description: Plugin name, or the handler class name when `registered` is false
+                example: my-exporter
+              registered:
+                type: boolean
+              version:
+                type: string
+                nullable: true
+                example: "1.0.0"
+              description:
+                type: string
+              routes:
+                type: array
+                items:
+                  type: object
+                  required: [method, path, auth]
+                  properties:
+                    method:
+                      type: string
+                    path:
+                      type: string
+                    auth:
+                      type: boolean
         features:
           type: object
           description: Feature flags. Unknown keys must be ignored by clients.

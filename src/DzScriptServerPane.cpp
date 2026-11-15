@@ -1620,8 +1620,104 @@ void DzScriptServerPane::setupRoutes()
 
 // ─── Plugin Route Registration ────────────────────────────────────────────────
 
+namespace {
+bool isValidCompanionName(const QString& name)
+{
+	if (name.isEmpty() || name.size() > 64) return false;
+	for (int i = 0; i < name.size(); ++i) {
+		const QChar c = name.at(i);
+		const bool ok = (c >= QLatin1Char('a') && c <= QLatin1Char('z'))
+			|| (c >= QLatin1Char('A') && c <= QLatin1Char('Z'))
+			|| (c >= QLatin1Char('0') && c <= QLatin1Char('9'))
+			|| c == QLatin1Char('.') || c == QLatin1Char('_') || c == QLatin1Char('-');
+		if (!ok) return false;
+	}
+	return true;
+}
+
+bool isValidCompanionVersion(const QString& version)
+{
+	if (version.isEmpty() || version.size() > 64) return false;
+	for (int i = 0; i < version.size(); ++i) {
+		const ushort u = version.at(i).unicode();
+		if (u < 0x21 || u > 0x7e) return false;  // printable ASCII, no spaces
+	}
+	return true;
+}
+} // namespace
+
+// Keep the busy-time /capabilities snapshot current after the registry
+// changes. buildCapabilitiesJson() reads GUI-owned settings, so only refresh
+// on the main thread (companion plugins register through a blocking queued
+// call, which lands here); otherwise the next live request refreshes it.
+void DzScriptServerPane::refreshCapabilitiesIfRunning()
+{
+	if (m_bRunning && QThread::currentThread() == thread())
+		refreshCapabilitiesSnapshot();
+}
+
+bool DzScriptServerPane::registerCompanionPlugin(const QString& name, const QString& version,
+                                                 const QString& description)
+{
+	if (!isValidCompanionName(name) || !isValidCompanionVersion(version)) {
+		appendLog(QString("[WARNING] Companion plugin registration rejected: invalid name or "
+		                  "version (%1 %2)").arg(name.left(80), version.left(80)));
+		return false;
+	}
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		CompanionPlugin p;
+		p.name        = name;
+		p.version     = version;
+		p.description = description.left(500);
+		bool found = false;
+		for (int i = 0; i < m_companionPlugins.size(); ++i) {
+			if (m_companionPlugins[i].name == name) {
+				m_companionPlugins[i] = p;
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			m_companionPlugins.append(p);
+	}
+	appendLog(QString("[INFO] Companion plugin registered: %1 %2").arg(name, version));
+	refreshCapabilitiesIfRunning();
+	return true;
+}
+
+void DzScriptServerPane::unregisterCompanionPlugin(const QString& name)
+{
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		for (int i = m_companionPlugins.size() - 1; i >= 0; --i)
+			if (m_companionPlugins[i].name == name)
+				m_companionPlugins.removeAt(i);
+		for (int i = m_pluginRoutes.size() - 1; i >= 0; --i)
+			if (m_pluginRoutes[i].plugin == name)
+				m_pluginRoutes.removeAt(i);
+	}
+	refreshCapabilitiesIfRunning();
+}
+
 bool DzScriptServerPane::registerPluginRoute(const QString& method, const QString& path,
                                               QObject* receiver, const QString& slotName)
+{
+	return registerPluginRouteImpl(method, path, receiver, slotName, QString());
+}
+
+bool DzScriptServerPane::registerPluginRoute(const QString& method, const QString& path,
+                                              QObject* receiver, const QString& slotName,
+                                              const QString& pluginName)
+{
+	if (!isValidCompanionName(pluginName))
+		return false;
+	return registerPluginRouteImpl(method, path, receiver, slotName, pluginName);
+}
+
+bool DzScriptServerPane::registerPluginRouteImpl(const QString& method, const QString& path,
+                                                  QObject* receiver, const QString& slotName,
+                                                  const QString& pluginName)
 {
 	if (!receiver || path.isEmpty() || slotName.isEmpty())
 		return false;
@@ -1635,9 +1731,20 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
 	r.path      = path;
 	r.receiver  = receiver;
 	r.slotName  = slotName;
+	r.plugin    = pluginName;
 
 	{
 		QMutexLocker lock(&m_pluginRoutesMutex);
+		if (!pluginName.isEmpty()) {
+			bool known = false;
+			for (int i = 0; i < m_companionPlugins.size(); ++i)
+				if (m_companionPlugins[i].name == pluginName) { known = true; break; }
+			if (!known) {
+				CompanionPlugin p;
+				p.name = pluginName;
+				m_companionPlugins.append(p);
+			}
+		}
 		bool found = false;
 		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
 			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
@@ -1649,20 +1756,26 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
 		if (!found)
 			m_pluginRoutes.append(r);
 	}
-	appendLog(QString("[INFO] Plugin route registered: %1 %2").arg(m).arg(path));
+	appendLog(pluginName.isEmpty()
+		? QString("[INFO] Plugin route registered: %1 %2").arg(m).arg(path)
+		: QString("[INFO] Plugin route registered: %1 %2 (%3)").arg(m, path, pluginName));
+	refreshCapabilitiesIfRunning();
 	return true;
 }
 
 void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QString& path)
 {
 	const QString m = method.toUpper();
-	QMutexLocker lock(&m_pluginRoutesMutex);
-	for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-		if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
-			m_pluginRoutes.removeAt(i);
-			return;
+	{
+		QMutexLocker lock(&m_pluginRoutesMutex);
+		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
+				m_pluginRoutes.removeAt(i);
+				break;
+			}
 		}
 	}
+	refreshCapabilitiesIfRunning();
 }
 
 // Match a path-pattern (e.g. "/export/usd/:id") against a concrete path.
@@ -1764,12 +1877,22 @@ void DzScriptServerPane::applyPluginRoutes()
 			}
 
 			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
-			HttpResult result;
-			QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
+			HttpResult result(0, QByteArray());
+			const bool invoked = QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
 			                          Qt::BlockingQueuedConnection,
 			                          Q_RETURN_ARG(HttpResult, result),
 			                          Q_ARG(QByteArray, body),
 			                          Q_ARG(QByteArray, ip));
+			// A slot that doesn't exist (or has the wrong signature) leaves
+			// result untouched; status 0 made httplib send no response at all.
+			if (!invoked || result.first < 100 || result.first > 599) {
+				res.status = 500;
+				res.set_content(ErrorResponse::build(ErrorCode::INTERNAL_ERROR, invoked
+				                    ? "companion plugin handler returned an invalid HTTP status"
+				                    : "companion plugin handler could not be called"),
+				                "application/json");
+				return;
+			}
 			res.status = result.first;
 			if (!result.second.isEmpty())
 				res.set_content(result.second.constData(), static_cast<size_t>(result.second.size()),
@@ -3598,10 +3721,12 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 	json.finishArray();
 
 	bool hasPluginRoutes = false;
-	json.addKey("plugin_routes");
-	json.startArray();
 	{
 		QMutexLocker lock(&m_pluginRoutesMutex);
+
+		// Flat list, kept for existing clients; companion_plugins below groups it.
+		json.addKey("plugin_routes");
+		json.startArray();
 		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
 			const PluginRoute& r = m_pluginRoutes.at(i);
 			QVariantMap m;
@@ -3609,12 +3734,73 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 			m["path"]   = r.path;
 			m["auth"]   = true;
 			m["owner"]  = r.receiver ? QString(r.receiver->metaObject()->className()) : QString();
+			if (!r.plugin.isEmpty()) m["plugin"] = r.plugin;
 			json.addItem(QVariant(m));
 			hasPluginRoutes = true;
 			hashLines << QString("plugin %1 %2").arg(r.method, r.path);
 		}
+		json.finishArray();
+
+		// Discovery registry: one entry per companion plugin with its routes.
+		// Routes registered without a plugin name are grouped by the class of
+		// their receiver, with "registered": false and no version. Built with
+		// JsonBuilder item by item (no QVariantList; see the CRT note above).
+		QStringList groups;      // plugin names, then unattributed owner classes
+		QList<bool> registered;
+		for (int i = 0; i < m_companionPlugins.size(); ++i) {
+			groups << m_companionPlugins.at(i).name;
+			registered << true;
+			hashLines << QString("companion %1").arg(m_companionPlugins.at(i).name);
+		}
+		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+			const PluginRoute& r = m_pluginRoutes.at(i);
+			if (!r.plugin.isEmpty()) continue;
+			const QString owner = r.receiver ? QString(r.receiver->metaObject()->className())
+			                                 : QString("unknown");
+			bool seen = false;
+			for (int g = 0; g < groups.size(); ++g)
+				if (!registered.at(g) && groups.at(g) == owner) { seen = true; break; }
+			if (!seen) { groups << owner; registered << false; }
+		}
+
+		json.addKey("companion_plugins");
+		json.startArray();
+		for (int g = 0; g < groups.size(); ++g) {
+			const bool isRegistered = registered.at(g);
+			json.startObjectItem();
+			json.addMember("name", groups.at(g));
+			json.addMember("registered", isRegistered);
+			const CompanionPlugin* info = nullptr;
+			if (isRegistered)
+				for (int i = 0; i < m_companionPlugins.size(); ++i)
+					if (m_companionPlugins.at(i).name == groups.at(g)) { info = &m_companionPlugins.at(i); break; }
+			if (info && !info->version.isEmpty()) json.addMember("version", info->version);
+			else                                  json.addMemberNull("version");
+			if (info && !info->description.isEmpty()) json.addMember("description", info->description);
+			json.addKey("routes");
+			json.startArray();
+			for (int i = 0; i < m_pluginRoutes.size(); ++i) {
+				const PluginRoute& r = m_pluginRoutes.at(i);
+				bool belongs;
+				if (isRegistered) {
+					belongs = (r.plugin == groups.at(g));
+				} else {
+					const QString owner = r.receiver ? QString(r.receiver->metaObject()->className())
+					                                 : QString("unknown");
+					belongs = r.plugin.isEmpty() && owner == groups.at(g);
+				}
+				if (!belongs) continue;
+				json.startObjectItem();
+				json.addMember("method", r.method);
+				json.addMember("path", r.path);
+				json.addMember("auth", true);
+				json.finishObject();
+			}
+			json.finishArray();
+			json.finishObject();
+		}
+		json.finishArray();
 	}
-	json.finishArray();
 
 	// ── Feature flags ────────────────────────────────────────────────────────
 	QVariantMap features;

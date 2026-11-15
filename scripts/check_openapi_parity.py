@@ -4,7 +4,7 @@
 Fails (exit 1) when:
   * a route registered in ``setupRoutes()`` (src/DzScriptServerPane.cpp) has
     no matching path + method in openapi.yaml, or vice versa;
-  * a companion-plugin route (``COMPANION_PLUGIN_ROUTES`` below) is missing
+  * a companion-plugin route (declared in ``companion_plugins.json``) is missing
     from openapi.yaml, or is documented without the ``CompanionPlugins`` tag;
   * openapi.yaml documents a ``CompanionPlugins`` operation that no known
     plugin registers;
@@ -12,9 +12,12 @@ Fails (exit 1) when:
     that openapi.yaml does not document.
 
 Companion plugins live in other repos and register routes at runtime through
-``registerPluginRoute()``, so their routes are listed here by hand. Pass
-``--plugin-src NAME=DIR`` (e.g. ``daz-bridge-usd=../daz-bridge-usd``) to also
-check that list against the plugin's own source.
+``registerCompanionPlugin()`` / ``registerPluginRoute()``, so their routes are
+declared in ``companion_plugins.json`` at the repo root. Pass
+``--plugin-src NAME=DIR`` (e.g. ``my-exporter=../my-exporter``) to also
+check a plugin's entry against its own source, and ``--live URL`` to check the
+``companion_plugins`` a running server reports in ``GET /capabilities``
+(token from ``DSS_API_TOKEN`` or ``~/.daz3d/dazscriptserver_token.txt``).
 
 ``--sdk-report FILE`` writes a Markdown table of which documented operations
 each SDK calls (``-`` for stdout). Gaps in SDK coverage are reported, not
@@ -23,14 +26,19 @@ failures.
 Usage:
   python scripts/check_openapi_parity.py
   python scripts/check_openapi_parity.py --sdk-report -
-  python scripts/check_openapi_parity.py --plugin-src daz-bridge-usd=../daz-bridge-usd
+  python scripts/check_openapi_parity.py --plugin-src my-exporter=../my-exporter
+  python scripts/check_openapi_parity.py --live http://127.0.0.1:18811
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,11 +49,25 @@ DAZ_TS_DIR = ROOT / "daz-ts" / "src"
 
 PLUGIN_TAG = "CompanionPlugins"
 
-# Routes companion plugins register via registerPluginRoute(). Keep in sync
-# with each plugin's source; --plugin-src checks this list against it.
-COMPANION_PLUGIN_ROUTES: dict[str, set[tuple[str, str]]] = {
-    "daz-bridge-usd": {("POST", "/export/usd"), ("GET", "/export/usd/:id")},
-}
+COMPANION_REGISTRY = ROOT / "companion_plugins.json"
+
+
+def load_companion_registry(path: Path = COMPANION_REGISTRY) -> dict[str, set[tuple[str, str]]]:
+    """{plugin name: {(METHOD, path)}} from companion_plugins.json."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    registry: dict[str, set[tuple[str, str]]] = {}
+    for plugin in data.get("plugins", []):
+        name = plugin["name"]
+        if name in registry:
+            raise ValueError(f"{path.name}: plugin {name!r} declared twice")
+        registry[name] = {(r["method"].upper(), r["path"]) for r in plugin.get("routes", [])}
+    return registry
+
+
+# Routes companion plugins register at runtime, from companion_plugins.json.
+# --plugin-src checks an entry against the plugin's source; --live against a
+# running server.
+COMPANION_PLUGIN_ROUTES: dict[str, set[tuple[str, str]]] = load_companion_registry()
 
 HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
@@ -83,8 +105,8 @@ def server_routes(src: str) -> set[Route]:
 
 
 # Matches the method literal followed closely by the path literal, the shape
-# every registerPluginRoute() call site uses (daz-bridge-usd assigns them to
-# QStrings on one line: `QString mPost = "POST", pPost = "/export/usd", ...`).
+# every registerPluginRoute() call site uses (plugins typically assign them to
+# QStrings on one line: `QString mPost = "POST", pPost = "/my/route", ...`).
 PLUGIN_SRC_RE = re.compile(
     r'"(GET|POST|PUT|DELETE|PATCH)"[^"\n]{0,80}?"(/[^"\s]*)"')
 
@@ -231,7 +253,7 @@ def check(plugin_src: dict[str, Path]) -> tuple[list[str], dict[Route, dict], di
             actual = plugin_routes_from_source(plugin_src[name])
             if actual != declared:
                 errors.append(
-                    f"COMPANION_PLUGIN_ROUTES[{name!r}] is out of date with "
+                    f"companion_plugins.json entry {name!r} is out of date with "
                     f"{plugin_src[name]}:\n  source registers:\n{fmt(actual)}\n"
                     f"  list declares:\n{fmt(declared)}")
 
@@ -258,7 +280,7 @@ def check(plugin_src: dict[str, Path]) -> tuple[list[str], dict[Route, dict], di
                       + fmt(mistagged))
     if plugin_docs - plugin_routes:
         errors.append(f"openapi.yaml [{PLUGIN_TAG}] operations no known plugin registers "
-                      "(add them to COMPANION_PLUGIN_ROUTES):\n"
+                      "(add them to companion_plugins.json):\n"
                       + fmt(plugin_docs - plugin_routes))
 
     sdks = collect_sdks()
@@ -271,12 +293,81 @@ def check(plugin_src: dict[str, Path]) -> tuple[list[str], dict[Route, dict], di
     return errors, ops, sdks
 
 
+# ─── Live check against GET /capabilities ───────────────────────────────────
+
+def _read_token() -> str | None:
+    token = os.environ.get("DSS_API_TOKEN")
+    if token:
+        return token.strip()
+    path = Path.home() / ".daz3d" / "dazscriptserver_token.txt"
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def fetch_capabilities(base_url: str, token: str | None) -> dict:
+    req = urllib.request.Request(base_url.rstrip("/") + "/capabilities")
+    if token:
+        req.add_header("X-API-Token", token)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def check_live(caps: dict, ops: dict[Route, dict]) -> tuple[list[str], list[str]]:
+    """Compare a server's companion_plugins with companion_plugins.json and openapi.yaml.
+
+    Returns (errors, notes). A route served by a registered plugin must be
+    declared under that plugin's name and documented with the CompanionPlugins
+    tag. Routes registered without a plugin name, and declared plugins that
+    aren't loaded, are notes only: older plugins and partial installs are
+    normal.
+    """
+    errors: list[str] = []
+    notes: list[str] = []
+    if "companion_plugins" not in caps:
+        return (["server's /capabilities has no companion_plugins "
+                 "(server older than the discovery registry?)"], notes)
+
+    registry = {name: {(m, normalize(p)) for m, p in routes}
+                for name, routes in COMPANION_PLUGIN_ROUTES.items()}
+    seen: set[str] = set()
+    for plugin in caps["companion_plugins"]:
+        name = plugin.get("name")
+        routes = {(r["method"].upper(), normalize(r["path"])) for r in plugin.get("routes", [])}
+        if not plugin.get("registered"):
+            notes.append(f"routes registered without a plugin name (owner {name}):\n" + fmt(routes))
+            declared_anywhere = set().union(*registry.values()) if registry else set()
+            if routes - declared_anywhere:
+                errors.append(f"unattributed live routes (owner {name}) not in companion_plugins.json:\n"
+                              + fmt(routes - declared_anywhere))
+        else:
+            seen.add(name)
+            if name not in registry:
+                errors.append(f"live companion plugin {name!r} (version {plugin.get('version')}) "
+                              "is not declared in companion_plugins.json")
+            elif routes != registry[name]:
+                errors.append(f"live routes of {name!r} differ from companion_plugins.json:\n"
+                              f"  server serves:\n{fmt(routes)}\n  file declares:\n{fmt(registry[name])}")
+            if plugin.get("version") is None:
+                notes.append(f"companion plugin {name!r} registered routes but no version")
+        undocumented = {r for r in routes if r not in ops or PLUGIN_TAG not in ops[r]["tags"]}
+        if undocumented:
+            errors.append(f"live routes of {name!r} missing from openapi.yaml [{PLUGIN_TAG}]:\n"
+                          + fmt(undocumented))
+    for name in sorted(set(registry) - seen):
+        notes.append(f"declared companion plugin {name!r} is not loaded on this server")
+    return errors, notes
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--sdk-report", metavar="FILE",
                     help="write the SDK coverage table as Markdown ('-' for stdout)")
     ap.add_argument("--plugin-src", action="append", default=[], metavar="NAME=DIR",
                     help="check a companion plugin's declared routes against its source")
+    ap.add_argument("--live", metavar="URL",
+                    help="also check a running server's GET /capabilities companion_plugins")
     args = ap.parse_args(argv)
 
     plugin_src: dict[str, Path] = {}
@@ -290,6 +381,17 @@ def main(argv=None) -> int:
         plugin_src[name] = Path(d)
 
     errors, ops, sdks = check(plugin_src)
+
+    if args.live:
+        try:
+            caps = fetch_capabilities(args.live, _read_token())
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            print(f"ERROR: --live {args.live}: {exc}", file=sys.stderr)
+            return 2
+        live_errors, notes = check_live(caps, ops)
+        errors += live_errors
+        for n in notes:
+            print(f"note: {n}", file=sys.stderr)
 
     if args.sdk_report:
         report = sdk_report(ops, sdks)

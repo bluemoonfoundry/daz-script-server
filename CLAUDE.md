@@ -158,9 +158,10 @@ the chain by method after route matching. `tests/test_route_security.py` (unit
 suite) enforces this. New routes must use one of them.
 
 **OpenAPI parity:** every route in `setupRoutes()` must have a matching path +
-method in `openapi.yaml`, and vice versa. Companion-plugin routes are listed in
-`COMPANION_PLUGIN_ROUTES` in `scripts/check_openapi_parity.py` and documented
-with tag `CompanionPlugins`. SDK calls (dazpy, daz-ts) to endpoints the spec
+method in `openapi.yaml`, and vice versa. Companion-plugin routes are declared in
+`companion_plugins.json` (read by `scripts/check_openapi_parity.py`; `--live URL`
+checks a running server's `/capabilities` against it) and documented with tag
+`CompanionPlugins`. SDK calls (dazpy, daz-ts) to endpoints the spec
 doesn't document also fail. CI runs the script (`openapi-parity` job, which
 posts SDK coverage to the job summary), as does `tests/test_openapi_parity.py`.
 

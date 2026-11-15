@@ -591,41 +591,6 @@ class AsyncDazClient:
         except httpx.HTTPError as exc:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {exc}") from exc
 
-    # ── USD export ────────────────────────────────────────────────────────────
-
-    async def export_usd_submit(
-        self,
-        output_path: str,
-        *,
-        include_geometry: bool = True,
-        include_materials: bool = True,
-        include_skeleton: bool = False,
-        include_morphs: bool = False,
-        include_lights: bool = False,
-        include_camera: bool = False,
-    ) -> dict:
-        """See :meth:`dazpy.DazClient.export_usd_submit`."""
-        payload = {
-            "outputPath": output_path,
-            "includeGeometry": include_geometry,
-            "includeMaterials": include_materials,
-            "includeSkeleton": include_skeleton,
-            "includeMorphs": include_morphs,
-            "includeLights": include_lights,
-            "includeCamera": include_camera,
-        }
-        resp = await self._post("/export/usd", payload)
-        _raise_for_error(resp)
-        return resp.json()
-
-    async def get_usd_export_status(self, job_id: str) -> dict:
-        """See :meth:`dazpy.DazClient.get_usd_export_status`."""
-        resp = await self._get(f"/export/usd/{job_id}")
-        if resp.status_code == 404:
-            return {"job_id": job_id, "status": "not_found"}
-        _raise_for_error(resp)
-        return resp.json()
-
     # ── Server health ─────────────────────────────────────────────────────────
 
     async def status(self) -> dict:

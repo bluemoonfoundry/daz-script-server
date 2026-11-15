@@ -30,6 +30,18 @@ void JsonBuilder::finishArray()
     m_needsSeparator = true;
 }
 
+void JsonBuilder::startObjectItem()
+{
+    addSeparator();
+    startObject();
+}
+
+void JsonBuilder::startArrayItem()
+{
+    addSeparator();
+    startArray();
+}
+
 void JsonBuilder::addSeparator()
 {
     if (m_needsSeparator) {

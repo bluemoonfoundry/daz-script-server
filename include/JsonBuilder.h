@@ -46,6 +46,10 @@ public:
     void addItem(const QString& value);
     void addItemNull();
     void addItem(const QVariant& value);
+    // Start a nested object or array as the next item of the current array
+    // (startObject()/startArray() alone don't write the separating comma).
+    void startObjectItem();
+    void startArrayItem();
 
     // Get final JSON string
     QString toString() const;

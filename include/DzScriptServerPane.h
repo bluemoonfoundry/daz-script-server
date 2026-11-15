@@ -119,7 +119,24 @@ public:
 	// receiver must expose slotName as Q_INVOKABLE with signature HttpResult(QByteArray,QByteArray).
 	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
 	                                     QObject* receiver, const QString& slotName);
+	// Same, attributing the route to a companion plugin (see
+	// registerCompanionPlugin). A plugin name not yet registered is added
+	// with no version. Returns false (and registers nothing) if pluginName is
+	// not a valid plugin name.
+	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
+	                                     QObject* receiver, const QString& slotName,
+	                                     const QString& pluginName);
 	Q_INVOKABLE void unregisterPluginRoute(const QString& method, const QString& path);
+
+	// Companion-plugin discovery registry, listed in GET /capabilities under
+	// "companion_plugins" with each plugin's routes. name: 1-64 chars of
+	// [A-Za-z0-9._-] (e.g. "daz-bridge-usd"); version: 1-64 printable chars.
+	// Re-registering a name updates its version/description. Returns false on
+	// an invalid name or version.
+	Q_INVOKABLE bool registerCompanionPlugin(const QString& name, const QString& version,
+	                                         const QString& description);
+	// Removes the plugin and every route attributed to it.
+	Q_INVOKABLE void unregisterCompanionPlugin(const QString& name);
 
 public slots:
 	Q_INVOKABLE void startServer();
@@ -332,8 +349,20 @@ private:
 		QString          path;
 		QPointer<QObject> receiver;
 		QString          slotName;  // Q_INVOKABLE: HttpResult slotName(QByteArray, QByteArray)
+		QString          plugin;    // companion plugin name; empty if unattributed
 	};
 	QList<PluginRoute> m_pluginRoutes;
+	// Guarded by m_pluginRoutesMutex too.
+	struct CompanionPlugin {
+		QString name;
+		QString version;      // empty when only routes named it
+		QString description;
+	};
+	QList<CompanionPlugin> m_companionPlugins;
+	void refreshCapabilitiesIfRunning();
+	bool registerPluginRouteImpl(const QString& method, const QString& path,
+	                             QObject* receiver, const QString& slotName,
+	                             const QString& pluginName);
 	mutable QMutex     m_pluginRoutesMutex;
 
 	QByteArray         m_serverInstanceId;       // see serverInstanceId()

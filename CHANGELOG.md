@@ -6,6 +6,24 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **Companion-plugin discovery registry.** Plugins can name themselves with
+  `registerCompanionPlugin(name, version, description)` and attribute routes
+  with a 5th `pluginName` argument to `registerPluginRoute()` (the 4-argument
+  form still works). `GET /capabilities` adds `companion_plugins`: each plugin's
+  name, version, description and routes; unattributed routes are grouped by
+  handler class with `"registered": false`. `plugin_routes` entries gain
+  `plugin`. The parity check's hand-kept route list moved to
+  `companion_plugins.json`, and `check_openapi_parity.py --live URL` checks a
+  running server's companion routes against it and `openapi.yaml`.
+
+### Removed
+
+- **USD export routes and their dazpy methods**, until the daz-bridge-usd
+  companion plugin is ready. `POST /export/usd` and `GET /export/usd/{id}` are
+  no longer documented in `openapi.yaml` or declared in
+  `companion_plugins.json`, and `export_usd_submit()` /
+  `get_usd_export_status()` are gone from `DazClient` and `AsyncDazClient`.
+
 - **Job liveness and progress metadata.** Status, result and `GET /requests`
   records now carry `progress_supported`, `progress_source`
   (`frames` / `report` / `none`), `last_activity_at` and, while the job is
