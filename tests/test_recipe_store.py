@@ -1,0 +1,135 @@
+"""Unit tests for dazpy._recipe_store (client.execute is mocked)."""
+
+import json
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from dazpy._recipe_store import (EntityRecord, Manifest, read_live, remove_record_script,
+                                 write_manifest_script, write_record_script)
+from recipe_fakes import fake_client, man, node, rec
+
+
+class RecordTests(unittest.TestCase):
+    def test_record_json_round_trip(self):
+        r = EntityRecord("r1", "actors.anna", 1, {"transform": {"position": [1.0, 2.0, 3.0]}},
+                         {"pose": {"snapshot": {"bones": {}}}})
+        self.assertEqual(EntityRecord.from_json(r.to_json()), r)
+
+    def test_manifest_json_round_trip(self):
+        m = man("r1", ["a", "b"], rec("r1", "lighting.environment", {"environment": {"x": 1}}))
+        self.assertEqual(Manifest.from_json(m.to_json()), m)
+        m2 = man("r1", [])
+        self.assertEqual(Manifest.from_json(m2.to_json()), m2)
+
+
+class ReadLiveTests(unittest.TestCase):
+    def test_read_live_filters_by_recipe_id(self):
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna")),
+                                    node("B", rec("r2", "actors.anna"))])
+        self.assertEqual([e.node_name for e in read_live(client, "r1").entities.values()], ["A"])
+
+    def test_read_live_finds_node_by_record_not_label(self):
+        client = fake_client(nodes=[node("Genesis 9", rec("r1", "actors.anna"), label="renamed by user")])
+        self.assertIn("actors.anna", read_live(client, "r1").entities)
+
+    def test_foreign_children_listed(self):
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"),
+                                         children=[node("Shirt", None)])])
+        self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Shirt",))
+
+    def test_child_owned_by_recipe_is_not_foreign(self):
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"),
+                                         children=[node("P", rec("r1", "props.hat")),
+                                                   node("Q", rec("r2", "props.hat"))])])
+        self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Q",))
+
+    def test_manifest_lists_entity_missing_from_scene(self):
+        st = read_live(fake_client(nodes=[], manifest=man("r1", ["cameras.wide"])), "r1")
+        self.assertEqual(st.manifest.entities, ("cameras.wide",))
+        self.assertEqual(st.entities, {})
+
+    def test_no_manifest(self):
+        st = read_live(fake_client(), "r1")
+        self.assertIsNone(st.manifest)
+        self.assertIsNone(st.environment_observed)
+
+    def test_one_script_call_for_non_actors(self):
+        client = fake_client(nodes=[node("A", rec("r1", "props.a")), node("B", rec("r1", "props.b"))])
+        read_live(client, "r1")
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_actor_gets_pose_snapshot_and_extra_call(self):
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), kind="actor", element_id=7,
+                                         position=(1, 2, 3), rotation=(0, 90, 0))],
+                             pose={"bones": {"hip": [0, 1, 0]}, "morphs": {}, "props": {}})
+        e = read_live(client, "r1").entities["actors.anna"]
+        self.assertEqual(client.execute.call_count, 2)
+        self.assertEqual(e.observed["pose"]["snapshot"]["bones"], {"hip": [0, 1, 0]})
+        self.assertEqual(e.observed["transform"], {"position": [1, 2, 3], "rotation": [0, 90, 0]})
+        self.assertEqual((e.kind, e.element_id), ("actor", 7))
+
+    def test_camera_and_light_channels(self):
+        client = fake_client(nodes=[
+            node("C", rec("r1", "cameras.w"), kind="camera", optics={"focal_length": 50.0}),
+            node("L", rec("r1", "lighting.lights.k"), kind="light",
+                 output={"intensity": 1.0, "color": [255, 255, 255]})])
+        ents = read_live(client, "r1").entities
+        self.assertEqual(ents["cameras.w"].observed["optics"], {"focal_length": 50.0})
+        self.assertEqual(ents["lighting.lights.k"].observed["output"]["intensity"], 1.0)
+        self.assertNotIn("pose", ents["cameras.w"].observed)
+
+    def test_environment_observed_only_with_manifest_environment(self):
+        env = {"intensity": 1.5}
+        m = man("r1", [], rec("r1", "lighting.environment"))
+        self.assertEqual(read_live(fake_client(manifest=m, environment=env), "r1").environment_observed, env)
+        self.assertIsNone(read_live(fake_client(manifest=man("r1", []), environment=env), "r1")
+                          .environment_observed)
+
+    def test_unparseable_record_is_ignored(self):
+        client = fake_client(nodes=[node("A", rec("r1", "props.a"))])
+        client.execute.side_effect = None
+        from dazpy._result import ExecutionResult
+        client.execute.return_value = ExecutionResult(value={"nodes": [
+            {"name": "A", "record": "not json", "kind": "prop", "position": [0, 0, 0],
+             "rotation": [0, 0, 0], "children": []}]})
+        self.assertEqual(read_live(client, "r1").entities, {})
+
+    def test_read_script_shape(self):
+        client = fake_client()
+        read_live(client, "r1")
+        s = client.execute.call_args_list[0][0][0]
+        for frag in ('"dazpy.scene_recipe"', '"dazpy.scene_recipe.r1"', "Scene.getNodeList()",
+                     "getWSPos()", "getElementID()", "findDataItem", "Environment Intensity"):
+            self.assertIn(frag, s)
+
+
+class ScriptBuilderTests(unittest.TestCase):
+    def test_write_record_script_uses_simple_element_data(self):
+        s = write_record_script("A", rec("r1", "actors.anna"))
+        self.assertIn("DzSimpleElementData", s)
+        self.assertIn('"dazpy.scene_recipe"', s)
+        self.assertIn("removeDataItem", s)       # replaces an existing record
+        self.assertIn('Scene.findNode("A")', s)
+
+    def test_write_record_script_embeds_record_json(self):
+        r = rec("r1", 'actors."q"')
+        self.assertIn(json.dumps(r.to_json()), write_record_script("A", r))
+
+    def test_remove_record_script(self):
+        s = remove_record_script("A")
+        self.assertIn("removeDataItem", s)
+        self.assertNotIn("DzSimpleElementData", s)
+
+    def test_write_manifest_script(self):
+        s = write_manifest_script(man("r1", ["a"]))
+        self.assertIn("DzSimpleSceneData", s)
+        self.assertIn('"dazpy.scene_recipe.r1"', s)
+        self.assertIn("Scene.addDataItem", s)
+
+
+if __name__ == "__main__":
+    unittest.main()
