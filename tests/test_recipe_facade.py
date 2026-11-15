@@ -147,6 +147,12 @@ class TestObserve(FacadeCase):
                          [("cameras.cu.transform", "hand_tweak_kept")])
         self.assertFalse(rep2.in_sync)
 
+    def test_accepted_hand_deletion_is_in_sync(self):
+        live = live_without(live_matching(D, deleted=("cameras.cu",)), "cameras.cu")
+        rep = observe(R, fake_scene(live))
+        self.assertEqual((rep.applied, rep.in_sync, rep.pending, rep.conflicts),
+                         (True, True, (), ()))
+
     def test_reports_deleted_in_scene(self):
         rep = observe(R, fake_scene(live_without(live_matching(D), "cameras.cu")))
         self.assertEqual([(i.path, i.code) for i in rep.drift], [("cameras.cu", "deleted_in_scene")])
@@ -388,6 +394,17 @@ class RoundTripTests(unittest.TestCase):
         self.assertIsNone(ball["record"])            # ... but no longer owned
         self.assertEqual(self.assert_no_op(bare).warnings, ())
         self.assertTrue(observe(bare, self.sim).in_sync)
+
+    def test_accepted_hand_deletion_round_trips_to_a_no_op(self):
+        r = two_actor_recipe()
+        self.assertTrue(apply(r, self.sim).applied)
+        self.sim.delete(self.sim.by_label(f"{RID}:cu")["name"])  # deleted by hand
+        self.assertFalse(observe(r, self.sim).in_sync)
+        self.assertTrue(apply(r, self.sim, on_conflict="scene_wins").applied)
+        p = self.assert_no_op(r)
+        self.assertEqual([(w.code, w.path) for w in p.warnings], [("hand_deleted_kept", "cameras.cu")])
+        rep = observe(r, self.sim)
+        self.assertEqual((rep.in_sync, rep.pending), (True, ()))
 
 
 if __name__ == "__main__":

@@ -160,10 +160,17 @@ def _pending(the_plan: RecipePlan) -> tuple[str, ...]:
 
 
 def observe(recipe: SceneRecipe | dict, scene: "DazScene") -> ObserveReport:
-    """Compare *scene* with *recipe* without changing anything."""
+    """Compare *scene* with *recipe* without changing anything.
+
+    Diffs as if the recipe won every conflict, except that hand deletions
+    already accepted (tombstoned in the manifest) stay accepted: they are not
+    pending recreates.
+    """
     model = _checked(recipe, None)
     desired, live = _read(model, scene)
-    p = diff(desired, live, on_conflict="recipe_wins")
+    accepted = {p: "scene" for p in (live.manifest.deleted if live.manifest else ())
+                if p in desired and p not in live.entities}
+    p = diff(desired, live, on_conflict="recipe_wins", resolutions=accepted)
     drift = tuple(w for w in p.warnings if w.code == "hand_tweak_kept") + tuple(
         RecipeIssue(c.path, "deleted_in_scene",
                     f"{c.path} was deleted in the scene; apply would recreate it.")
