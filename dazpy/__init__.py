@@ -27,6 +27,7 @@ from ._modifier import DazModifier
 from ._morph import DazMorph
 from ._dforce import DazDForce
 from ._geometry import DazGeometry
+from ._geometry_frames import GeometryFrames, parse_geometry_frames
 from ._render import DazRenderSettings, Canvas, RenderOutcome
 from ._viewport import DazViewport
 from ._timeline import DazTimeline
@@ -123,6 +124,8 @@ from . import exceptions
 
 __all__ = [
     "DazClient",
+    "GeometryFrames",
+    "parse_geometry_frames",
     "DazScene",
     "DazNode",
     "NodeIdentifier",

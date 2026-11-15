@@ -58,6 +58,7 @@ from dazpy import (
     apply_interaction_recipe_to_scene,
     resolve_interaction_target,
 )
+from dazpy import GeometryFrames, parse_geometry_frames
 from dazpy._node import DazNode, NodeIdentifier
 from dazpy._scene import DazScene
 from dazpy._client import DazClient
@@ -273,6 +274,157 @@ class TestDazClientRegisteredScripts(unittest.TestCase):
         self.assertFalse(client.cancel_render("script-1"))
         client._session.post.assert_not_called()
         client._session.delete.assert_not_called()
+
+
+
+def _dzgf(frames, verts, bones, indices=None, version=1, magic=b"DZGF"):
+    """Build a DZGF payload: verts[f][v] / bones[f][b] are (x, y, z) tuples."""
+    import struct
+    n_verts = len(verts[0]) if verts else 0
+    n_bones = len(bones[0]) if bones else 0
+    out = struct.pack("<4s7I", magic, version, len(frames), n_verts, n_bones,
+                      1 if indices is not None else 0, 0, 0)
+    out += struct.pack(f"<{len(frames)}i", *frames)
+    if indices is not None:
+        out += struct.pack(f"<{len(indices)}I", *indices)
+    for per_frame in verts:
+        for p in per_frame:
+            out += struct.pack("<3f", *p)
+    for per_frame in bones:
+        for p in per_frame:
+            out += struct.pack("<3f", *p)
+    return out
+
+
+class TestScriptRegistryManagement(unittest.TestCase):
+    """GET /scripts and DELETE /scripts/{id} (5d6f.25)."""
+
+    def _client(self, status_code=200, json_data=None):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.json.return_value = json_data or {}
+        response.text = json.dumps(json_data or {})
+        client._session.get.return_value = response
+        client._session.delete.return_value = response
+        return client
+
+    def test_list_scripts_returns_script_list(self):
+        scripts = [{"name": "scene-info", "description": "d", "registered_at": "2026-11-14T10:00:00"}]
+        client = self._client(json_data={"scripts": scripts, "count": 1})
+        self.assertEqual(client.list_scripts(), scripts)
+        self.assertEqual(client._session.get.call_args.args[0], "http://127.0.0.1:18811/scripts")
+
+    def test_list_scripts_empty_registry(self):
+        self.assertEqual(self._client(json_data={"scripts": [], "count": 0}).list_scripts(), [])
+
+    def test_delete_script(self):
+        client = self._client(json_data={"success": True, "id": "scene-info"})
+        self.assertTrue(client.delete_script("scene-info"))
+        self.assertEqual(client._session.delete.call_args.args[0],
+                         "http://127.0.0.1:18811/scripts/scene-info")
+
+    def test_delete_unknown_script_raises(self):
+        body = {"success": False, "error_code": "SCRIPT_NOT_FOUND", "error": "Unknown script",
+                "retryable": False, "detail": "nope"}
+        client = self._client(status_code=404, json_data=body)
+        with self.assertRaises(exceptions.ServerResponseError) as ctx:
+            client.delete_script("nope")
+        self.assertEqual(ctx.exception.error_code, "SCRIPT_NOT_FOUND")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_delete_unknown_script_missing_ok(self):
+        client = self._client(status_code=404, json_data={"error_code": "SCRIPT_NOT_FOUND"})
+        self.assertFalse(client.delete_script("nope", missing_ok=True))
+
+    def test_delete_missing_ok_still_raises_auth_errors(self):
+        client = self._client(status_code=401, json_data={"error": "Unauthorized"})
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.delete_script("nope", missing_ok=True)
+
+
+class TestGeometryFrames(unittest.TestCase):
+    """POST /geometry/frames client + DZGF parser (5d6f.25)."""
+
+    VERTS = [[(0.0, 1.0, 2.0), (3.0, 4.0, 5.0)], [(0.5, 1.5, 2.5), (3.5, 4.5, 5.5)]]
+    BONES = [[(10.0, 20.0, 30.0)], [(11.0, 21.0, 31.0)]]
+
+    def _client(self, content=b"", status_code=200, json_data=None):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.content = content
+        response.json.return_value = json_data or {}
+        response.text = json.dumps(json_data or {})
+        client._session.post.return_value = response
+        return client
+
+    def test_export_sends_minimal_payload_and_parses(self):
+        client = self._client(_dzgf([0, 10], self.VERTS, self.BONES))
+        gf = client.export_geometry_frames([0, 10], bones=["lHand"])
+        call = client._session.post.call_args
+        self.assertEqual(call.args[0], "http://127.0.0.1:18811/geometry/frames")
+        self.assertEqual(call.kwargs["json"], {"frames": [0, 10], "bones": ["lHand"]})
+        self.assertEqual(call.kwargs["timeout"], 30.0)
+        self.assertIsInstance(gf, GeometryFrames)
+        self.assertEqual(gf.frames, [0, 10])
+        self.assertEqual(gf.num_frames, 2)
+        self.assertEqual(gf.num_vertices, 2)
+        self.assertIsNone(gf.indices)
+        self.assertEqual(gf.frame(10), [(0.5, 1.5, 2.5), (3.5, 4.5, 5.5)])
+        self.assertEqual(gf.bone("lHand"), [(10.0, 20.0, 30.0), (11.0, 21.0, 31.0)])
+
+    def test_export_full_payload_and_timeout(self):
+        client = self._client(_dzgf([5], [[(1.0, 2.0, 3.0)]], [[]], indices=[42]))
+        gf = client.export_geometry_frames(
+            (5,), node="Genesis 9", indices=[42], surfaces=["Face"],
+            resolution="current", scene_update=False, timeout=120)
+        call = client._session.post.call_args
+        self.assertEqual(call.kwargs["json"], {
+            "frames": [5], "node": "Genesis 9", "indices": [42], "surfaces": ["Face"],
+            "resolution": "current", "sceneUpdate": False})
+        self.assertEqual(call.kwargs["timeout"], 120)
+        self.assertEqual(gf.indices, [42])
+        self.assertEqual(gf.bones, [[]])
+
+    def test_export_rejects_bad_arguments_without_request(self):
+        client = self._client()
+        with self.assertRaises(ValueError):
+            client.export_geometry_frames([])
+        with self.assertRaises(ValueError):
+            client.export_geometry_frames([0], resolution="high")
+        client._session.post.assert_not_called()
+
+    def test_export_server_error_raises(self):
+        body = {"success": False, "error_code": "BAD_REQUEST", "error": "figure not found",
+                "retryable": False}
+        client = self._client(status_code=400, json_data=body)
+        with self.assertRaises(exceptions.ServerResponseError) as ctx:
+            client.export_geometry_frames([0], node="Nobody")
+        self.assertIn("figure not found", str(ctx.exception))
+
+    def test_parse_rejects_malformed_payloads(self):
+        good = _dzgf([0, 10], self.VERTS, self.BONES)
+        cases = {
+            "short": good[:10],
+            "truncated": good[:-4],
+            "magic": _dzgf([0], [[(0.0, 0.0, 0.0)]], [[]], magic=b"XXXX"),
+            "version": _dzgf([0], [[(0.0, 0.0, 0.0)]], [[]], version=2),
+        }
+        for name, data in cases.items():
+            with self.subTest(name), self.assertRaises(exceptions.ServerResponseError):
+                parse_geometry_frames(data)
+        with self.assertRaises(exceptions.ServerResponseError):
+            parse_geometry_frames(good, bone_names=["a", "b"])
+
+    def test_lookup_errors(self):
+        gf = parse_geometry_frames(_dzgf([0, 10], self.VERTS, self.BONES), ["lHand"])
+        with self.assertRaises(KeyError):
+            gf.frame(3)
+        with self.assertRaises(KeyError):
+            gf.bone("rHand")
 
 
 def _make_client(return_value=None, output=None):

@@ -6,6 +6,13 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **dazpy covers every documented operation.** `DazClient` and
+  `AsyncDazClient` add `list_scripts()` (`GET /scripts`),
+  `delete_script(name, missing_ok=False)` (`DELETE /scripts/{id}`) and
+  `export_geometry_frames(frames, ...)` (`POST /geometry/frames`), which decodes
+  the binary DZGF payload into a `GeometryFrames` object (`frame(n)`,
+  `bone(name)`, `raw` bytes for numpy). `parse_geometry_frames()` is exported
+  for callers that fetch the payload themselves.
 - **Artifact downloads: `GET /artifacts/{id}` and
   `GET /artifacts/{id}/{artifact_id}`.** Clients no longer need to share a
   filesystem with DAZ Studio to fetch job outputs. Only files the job declared

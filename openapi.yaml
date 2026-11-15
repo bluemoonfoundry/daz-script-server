@@ -1524,10 +1524,11 @@ components:
           type: array
           items:
             type: object
-            required: [id, registered_at]
+            required: [name, registered_at]
             properties:
-              id:
+              name:
                 type: string
+                description: Registered script name (the `{id}` in `/scripts/{id}/...`)
               description:
                 type: string
               registered_at:

@@ -2046,7 +2046,7 @@ The script registry allows you to register scripts once and execute them by name
 {
   "scripts": [
     {
-      "id": "scene-info",
+      "name": "scene-info",
       "description": "Return scene node count",
       "registered_at": "2026-03-27T10:15:00"
     }
@@ -2466,6 +2466,17 @@ float32 bones[numFrames][numBones][3]
 
 Errors use the usual JSON error body (for example a missing `frames` field, an
 invalid `resolution`, or `figure not found`).
+
+**dazpy:**
+
+```python
+from dazpy import DazClient
+
+with DazClient() as client:
+    gf = client.export_geometry_frames([0, 10, 20], bones=["lHand", "rHand"])
+    print(gf.frame(10)[0])     # (x, y, z) of vertex 0 at frame 10
+    print(gf.bone("lHand"))    # lHand origin for each frame
+```
 
 ---
 

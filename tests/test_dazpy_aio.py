@@ -608,3 +608,59 @@ class TestAsyncDazClientArtifacts:
             paths = await client.download_artifacts("rnd-1", tmp_path)
         assert [os.path.basename(p) for p in paths] == ["0_a.png"]
         assert (tmp_path / "0_a.png").read_bytes() == b"A"
+
+
+class TestAsyncScriptRegistryAndGeometry:
+    """GET /scripts, DELETE /scripts/{id}, POST /geometry/frames (5d6f.25)."""
+
+    @pytest.mark.asyncio
+    async def test_list_scripts(self):
+        client, mock_http = _client_with_mock_http()
+        scripts = [{"name": "scene-info", "registered_at": "2026-11-14T10:00:00"}]
+        mock_http.get.return_value = _mock_resp(json_data={"scripts": scripts, "count": 1})
+        assert await client.list_scripts() == scripts
+        assert mock_http.get.call_args.args[0] == "http://127.0.0.1:18811/scripts"
+
+    @pytest.mark.asyncio
+    async def test_delete_script(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.delete.return_value = _mock_resp(json_data={"success": True, "id": "scene-info"})
+        assert await client.delete_script("scene-info") is True
+        assert mock_http.delete.call_args.args[0] == "http://127.0.0.1:18811/scripts/scene-info"
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_script(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.delete.return_value = _mock_resp(
+            status_code=404, json_data={"error_code": "SCRIPT_NOT_FOUND", "error": "Unknown script"})
+        assert await client.delete_script("nope", missing_ok=True) is False
+        with pytest.raises(exceptions.ServerResponseError) as excinfo:
+            await client.delete_script("nope")
+        assert excinfo.value.error_code == "SCRIPT_NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_export_geometry_frames(self):
+        import struct
+        payload = struct.pack("<4s7I", b"DZGF", 1, 1, 1, 1, 0, 0, 0)
+        payload += struct.pack("<i", 7) + struct.pack("<3f", 1, 2, 3) + struct.pack("<3f", 4, 5, 6)
+        client, mock_http = _client_with_mock_http()
+        resp = _mock_resp()
+        resp.content = payload
+        mock_http.post.return_value = resp
+        gf = await client.export_geometry_frames([7], bones=["head"], scene_update=False)
+        assert mock_http.post.call_args.args[0] == "http://127.0.0.1:18811/geometry/frames"
+        assert mock_http.post.call_args.kwargs["json"] == {
+            "frames": [7], "bones": ["head"], "sceneUpdate": False}
+        assert "timeout" not in mock_http.post.call_args.kwargs
+        assert gf.frame(7) == [(1.0, 2.0, 3.0)]
+        assert gf.bone("head") == [(4.0, 5.0, 6.0)]
+
+    @pytest.mark.asyncio
+    async def test_export_geometry_frames_timeout_override(self):
+        import struct
+        client, mock_http = _client_with_mock_http()
+        resp = _mock_resp()
+        resp.content = struct.pack("<4s7I", b"DZGF", 1, 1, 0, 0, 0, 0, 0) + struct.pack("<i", 0)
+        mock_http.post.return_value = resp
+        await client.export_geometry_frames([0], timeout=90)
+        assert mock_http.post.call_args.kwargs["timeout"] == 90

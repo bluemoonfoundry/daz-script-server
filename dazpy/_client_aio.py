@@ -18,6 +18,7 @@ from .exceptions import (
     DazBusyError,
     TimeoutError,
 )
+from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
 from ._version import server_version_from_status, warn_if_server_older
 from ._client import (
@@ -98,11 +99,14 @@ class AsyncDazClient:
                 return None
         return self._server_version
 
-    async def _post(self, path: str, payload: dict, headers: dict | None = None) -> "httpx.Response":
+    async def _post(
+        self, path: str, payload: dict, headers: dict | None = None, timeout: float | None = None
+    ) -> "httpx.Response":
         await self._check_server_version()
         merged = {**self._headers, **headers} if headers else self._headers
+        extra = {} if timeout is None else {"timeout": timeout}
         try:
-            return await self._http.post(f"{self._base}{path}", json=payload, headers=merged)
+            return await self._http.post(f"{self._base}{path}", json=payload, headers=merged, **extra)
         except httpx.ConnectError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
@@ -243,6 +247,42 @@ class AsyncDazClient:
         )
         _raise_for_error(resp)
         return resp.json()
+
+    async def list_scripts(self) -> list[dict]:
+        """Return the registered scripts. See :meth:`dazpy.DazClient.list_scripts`."""
+        resp = await self._get("/scripts")
+        _raise_for_error(resp)
+        return resp.json().get("scripts", [])
+
+    async def delete_script(self, name: str, *, missing_ok: bool = False) -> bool:
+        """Remove a registered script. See :meth:`dazpy.DazClient.delete_script`."""
+        resp = await self._delete(f"/scripts/{name}")
+        if resp.status_code == 404 and missing_ok:
+            return False
+        _raise_for_error(resp)
+        return True
+
+    async def export_geometry_frames(
+        self,
+        frames,
+        *,
+        node: str | None = None,
+        indices=None,
+        surfaces=None,
+        bones=None,
+        resolution: str = "base",
+        scene_update: bool = True,
+        timeout: float | None = None,
+    ) -> GeometryFrames:
+        """Export deformed figure vertices and bone origins for several frames.
+
+        See :meth:`dazpy.DazClient.export_geometry_frames`.
+        """
+        payload = geometry_frames_payload(
+            frames, node, indices, surfaces, bones, resolution, scene_update)
+        resp = await self._post("/geometry/frames", payload, timeout=timeout)
+        _raise_for_error(resp)
+        return parse_geometry_frames(resp.content, payload.get("bones", []))
 
     async def execute_registered(
         self, name: str, args: object = None, *, retry_on_busy: bool = False,

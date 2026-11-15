@@ -18,6 +18,7 @@ from .exceptions import (
     ServerResponseError,
     TimeoutError,
 )
+from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
 from ._version import server_version_from_status, warn_if_server_older
 
@@ -211,14 +212,16 @@ class DazClient:
                 return None
         return self._server_version
 
-    def _post(self, path: str, payload: dict, headers: dict | None = None) -> _requests.Response:
+    def _post(
+        self, path: str, payload: dict, headers: dict | None = None, timeout: float | None = None
+    ) -> _requests.Response:
         self._check_server_version()
         try:
             return self._session.post(
                 f"{self._base}{path}",
                 json=payload,
                 headers={**self._headers, **headers} if headers else self._headers,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else timeout,
             )
         except _requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
@@ -463,6 +466,79 @@ class DazClient:
         )
         _raise_for_error(resp)
         return resp.json()
+
+    def list_scripts(self) -> list[dict]:
+        """Return the registered scripts.
+
+        Returns:
+            One dict per script with ``"name"``, ``"registered_at"`` and,
+            when given at registration, ``"description"``. The registry is
+            in-memory, so it is empty after a server restart.
+        """
+        resp = self._get("/scripts")
+        _raise_for_error(resp)
+        return resp.json().get("scripts", [])
+
+    def delete_script(self, name: str, *, missing_ok: bool = False) -> bool:
+        """Remove a registered script.
+
+        Args:
+            name: The script's registered name.
+            missing_ok: Return ``False`` instead of raising when no script
+                has that name.
+
+        Returns:
+            ``True`` if the script was removed, ``False`` if it was not
+            registered and *missing_ok* is true.
+
+        Raises:
+            ServerResponseError: ``error_code == "SCRIPT_NOT_FOUND"`` when
+                the name is unknown and *missing_ok* is false.
+        """
+        resp = self._delete(f"/scripts/{name}")
+        if resp.status_code == 404 and missing_ok:
+            return False
+        _raise_for_error(resp)
+        return True
+
+    def export_geometry_frames(
+        self,
+        frames,
+        *,
+        node: str | None = None,
+        indices=None,
+        surfaces=None,
+        bones=None,
+        resolution: str = "base",
+        scene_update: bool = True,
+        timeout: float | None = None,
+    ) -> GeometryFrames:
+        """Export the deformed figure mesh and bone origins for several frames.
+
+        One native call (``POST /geometry/frames``), about 25x faster than a
+        DazScript loop. Only the figure is re-evaluated per frame; the
+        original frame and resolution level are restored afterwards.
+
+        Args:
+            frames: Frame numbers to evaluate (at least one).
+            node: Figure name or label. Default: the first figure.
+            indices: Vertex subset to return.
+            surfaces: Surface names whose vertices are added to the subset.
+            bones: Bones whose world-space origins are returned per frame.
+            resolution: ``"base"`` (base cage, default) or ``"current"``.
+            scene_update: ``False`` skips the final Scene update (about
+                130 ms). For back-to-back calls, let only the last update.
+            timeout: HTTP timeout for this call; defaults to the client's.
+                Raise it for long frame lists on heavy figures.
+
+        Returns:
+            A :class:`~dazpy.GeometryFrames`.
+        """
+        payload = geometry_frames_payload(
+            frames, node, indices, surfaces, bones, resolution, scene_update)
+        resp = self._post("/geometry/frames", payload, timeout=timeout)
+        _raise_for_error(resp)
+        return parse_geometry_frames(resp.content, payload.get("bones", []))
 
     def execute_registered(
         self, name: str, args: object = None, *, retry_on_busy: bool = False,
