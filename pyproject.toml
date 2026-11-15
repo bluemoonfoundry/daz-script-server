@@ -31,4 +31,4 @@ aio = [
 include = ["dazpy*"]
 
 [tool.setuptools.package-data]
-dazpy = ["py.typed"]
+dazpy = ["py.typed", "schemas/*.json"]

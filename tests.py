@@ -2,7 +2,7 @@
 Unified test runner for DazScriptServer.
 
 Suites:
-  unit         tests/test_dazpy.py              mocked, no server needed
+  unit         tests/test_dazpy.py (+ test_recipe_*)  mocked, no server needed
   api          tests/test_api.py                raw HTTP API, requires server
   integration  tests/test_dazpy_integration.py  dazpy SDK, requires DAZ Studio
 
@@ -61,6 +61,13 @@ def main():
         suite.addTests(loader.loadTestsFromModule(_openapi))
         from tests import test_smoke_live as _smoke
         suite.addTests(loader.loadTestsFromModule(_smoke))
+        # Scene-recipe unit tests (test_recipe_live.py needs DAZ Studio; excluded)
+        import importlib
+        from pathlib import Path
+        for _p in sorted(Path(__file__).parent.joinpath("tests").glob("test_recipe_*.py")):
+            if _p.stem != "test_recipe_live":
+                suite.addTests(loader.loadTestsFromModule(
+                    importlib.import_module(f"tests.{_p.stem}")))
 
     if "api" in args.suites:
         from tests import test_api as _api
