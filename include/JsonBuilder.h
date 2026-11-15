@@ -36,6 +36,8 @@ public:
     void addMember(const QString& name, const char* value);
     void addMemberNull(const QString& name);
     void addMember(const QString& name, const QVariant& value);
+    // Writes "name": and expects a nested startObject()/startArray() next.
+    void addKey(const QString& name);
 
     // Add array items
     void addItem(bool value);

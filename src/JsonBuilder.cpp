@@ -106,6 +106,13 @@ void JsonBuilder::addMember(const QString& name, const QVariant& value)
     m_json += variantToJson(value);
 }
 
+void JsonBuilder::addKey(const QString& name)
+{
+    addSeparator();
+    m_json += "\"" + escapeString(name) + "\":";
+    m_needsSeparator = false;
+}
+
 // ─── Add array items ──────────────────────────────────────────────────────────
 
 void JsonBuilder::addItem(bool value)
@@ -164,8 +171,23 @@ QString JsonBuilder::variantToJson(const QVariant& v) const
     case QVariant::String: {
         return "\"" + escapeString(v.toString()) + "\"";
     }
-    case QVariant::List:
     case QVariant::StringList: {
+        // Never v.toList() here: converting a StringList makes QtCore build a
+        // fresh QVariantList whose QVariant* nodes come from Qt's CRT heap
+        // (msvcr100 on DAZ Studio 4), while ~QList is inline and deletes them
+        // with ours (ucrtbase) -> heap corruption (0xc0000374) at startup via
+        // the /capabilities snapshot. QStringList stores QStrings in place and
+        // frees through QtCore's exported qFree, so it is safe.
+        const QStringList list = v.toStringList();
+        QString json = "[";
+        for (int i = 0; i < list.size(); ++i) {
+            if (i > 0) json += ",";
+            json += "\"" + escapeString(list.at(i)) + "\"";
+        }
+        json += "]";
+        return json;
+    }
+    case QVariant::List: {
         QVariantList list = v.toList();
         QString json = "[";
         for (int i = 0; i < list.size(); ++i) {

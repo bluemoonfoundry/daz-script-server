@@ -762,7 +762,7 @@ void DzScriptServerPane::startServer()
 	m_pRenderProgress = new RenderProgressBroker();
 
 	// Prime the snapshot GET /capabilities serves while the main thread is busy.
-	refreshCapabilitiesSnapshot(buildCapabilities());
+	refreshCapabilitiesSnapshot();
 
 	updateUI();
 	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
@@ -3508,17 +3508,26 @@ const SelectableEngine kSelectableEngines[] = {
 
 } // namespace
 
-QVariantMap DzScriptServerPane::buildCapabilities() const
+QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource) const
 {
 	// Main thread only: reads GUI-owned settings and DzRenderMgr.
-	QVariantMap caps;
-	caps["schema_version"] = ServerConfig::CAPABILITIES_SCHEMA_VERSION;
+	//
+	// Written straight to JSON on purpose. A QVariantList built here allocates
+	// its QVariant* nodes with this DLL's CRT (ucrtbase); stored inside a
+	// QVariant/QVariantMap, the last reference is released by QtCore's
+	// ~QVariant, which frees them with Qt's CRT (msvcr100 on DAZ Studio 4)
+	// -> heap corruption on startup. QVariantMap and QStringList are safe
+	// (their storage is allocated and freed inside QtCore), so arrays here
+	// are emitted item by item and never wrapped in a QVariant.
+	JsonBuilder json;
+	json.startObject();
+	json.addMember("schema_version", ServerConfig::CAPABILITIES_SCHEMA_VERSION);
 
 	QVariantMap server;
 	server["name"]    = QString("DazScriptServer");
 	server["version"] = QString(DZSRV_VERSION_STR);
 	server["instance_id"] = QString::fromLatin1(m_serverInstanceId);
-	caps["server"] = server;
+	json.addMember("server", QVariant(server));
 
 	QVariantMap studio;
 	studio["version"]          = dzApp ? dzApp->getVersionString() : QString();
@@ -3528,11 +3537,12 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	studio["sdk_major"]        = DZ_SDK_VERSION_MAJOR;
 	studio["qt_version"]       = QString(qVersion());
 	studio["qt_build_version"] = QString(QT_VERSION_STR);
-	caps["studio"] = studio;
+	json.addMember("studio", QVariant(studio));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 	QStringList hashLines;
-	QVariantList routes;
+	json.addKey("routes");
+	json.startArray();
 	for (size_t i = 0; i < sizeof(kCapabilityRoutes) / sizeof(kCapabilityRoutes[0]); ++i) {
 		const CapabilityRoute& r = kCapabilityRoutes[i];
 		QVariantMap m;
@@ -3540,12 +3550,14 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 		m["path"]   = QString(r.path);
 		m["auth"]   = r.auth;
 		m["kind"]   = QString(r.kind);
-		routes.append(m);
+		json.addItem(QVariant(m));
 		hashLines << QString("route %1 %2").arg(QString(r.method), QString(r.path));
 	}
-	caps["routes"] = routes;
+	json.finishArray();
 
-	QVariantList pluginRoutes;
+	bool hasPluginRoutes = false;
+	json.addKey("plugin_routes");
+	json.startArray();
 	{
 		QMutexLocker lock(&m_pluginRoutesMutex);
 		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
@@ -3555,11 +3567,12 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 			m["path"]   = r.path;
 			m["auth"]   = true;
 			m["owner"]  = r.receiver ? QString(r.receiver->metaObject()->className()) : QString();
-			pluginRoutes.append(m);
+			json.addItem(QVariant(m));
+			hasPluginRoutes = true;
 			hashLines << QString("plugin %1 %2").arg(r.method, r.path);
 		}
 	}
-	caps["plugin_routes"] = pluginRoutes;
+	json.finishArray();
 
 	// ── Feature flags ────────────────────────────────────────────────────────
 	QVariantMap features;
@@ -3576,14 +3589,14 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	features["render_cancel"]       = true;
 	features["scene_save_copy"]     = true;
 	features["geometry_frames"]     = true;
-	features["companion_plugins"]   = !pluginRoutes.isEmpty();
+	features["companion_plugins"]   = hasPluginRoutes;
 	features["idempotency_key"]     = true;   // Idempotency-Key on job submission routes
 	features["correlation_id"]      = true;   // X-Correlation-Id echoed on job routes + records
 	features["server_instance_id"]  = true;   // per-run identity (X-Server-Instance-Id)
 	features["scene_revision"]      = true;   // change counter on /status and job responses
 	features["error_envelope"]      = true;   // error_code/error/retryable on every failure
 	features["artifacts"]           = true;   // GET /artifacts/{id}[/{artifact_id}] downloads
-	caps["features"] = features;
+	json.addMember("features", QVariant(features));
 	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
 		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));
 
@@ -3599,7 +3612,7 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	limits["async_result_ttl_seconds"] = ServerConfig::ASYNC_RESULT_TTL_SEC;
 	limits["idempotency_ttl_seconds"]  = m_idempotency.ttlSeconds();
 	limits["stale_job_timeout_minutes"] = m_nStaleJobTimeoutMin;
-	caps["limits"] = limits;
+	json.addMember("limits", QVariant(limits));
 
 	QVariantMap rateLimit;
 	rateLimit["enabled"]        = m_rateLimiter.isEnabled();
@@ -3608,19 +3621,21 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	rateLimit["window_seconds"] = m_pRateLimitWindowSpin ? m_pRateLimitWindowSpin->value()
 	                                                     : ServerConfig::DEFAULT_RATE_LIMIT_WINDOW;
 	rateLimit["applies_to"]     = QString("write");  // POST/DELETE routes only
-	caps["rate_limit"] = rateLimit;
+	json.addMember("rate_limit", QVariant(rateLimit));
 
 	QVariantMap security;
 	security["auth_enabled"]         = m_auth.isEnabled();
 	security["auth_headers"]         = QStringList() << "X-API-Token" << "Authorization: Bearer";
 	security["ip_whitelist_enabled"] = m_ipWhitelist.isEnabled();
-	caps["security"] = security;
+	json.addMember("security", QVariant(security));
 
 	// ── Render engines, read live from DzRenderMgr ───────────────────────────
-	QVariantMap engines;
-	QVariantList registered;
-	QVariantList selectable;
+	json.addKey("render_engines");
+	json.startObject();
+	QStringList selectable;
 	QString activeClass;
+	json.addKey("registered");
+	json.startArray();
 	DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
 	if (renderMgr) {
 		DzRenderer* active = renderMgr->getActiveRenderer();
@@ -3633,20 +3648,21 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 			m["class_name"] = cls;
 			m["name"]       = r->getName();
 			m["active"]     = (r == active);
-			registered.append(m);
+			json.addItem(QVariant(m));
 		}
 		for (size_t i = 0; i < sizeof(kSelectableEngines) / sizeof(kSelectableEngines[0]); ++i) {
 			const SelectableEngine& e = kSelectableEngines[i];
 			if (!e.rendererClass || renderMgr->findRenderer(QString(e.rendererClass)))
-				selectable.append(QString(e.engine));
+				selectable << QString(e.engine);
 		}
 	}
-	engines["registered"]   = registered;
-	engines["selectable"]   = selectable;   // values POST /render accepts for "engine"
-	engines["active_class"] = activeClass.isEmpty() ? QVariant() : QVariant(activeClass);
-	engines["source"]       = QString("live");
-	engines["read_at"]      = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-	caps["render_engines"] = engines;
+	json.finishArray();
+	json.addMember("selectable", QVariant(selectable));   // values POST /render accepts for "engine"
+	if (activeClass.isEmpty()) json.addMemberNull("active_class");
+	else                       json.addMember("active_class", activeClass);
+	json.addMember("source", engineSource);              // "live" or "snapshot"
+	json.addMember("read_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+	json.finishObject();
 
 	// Stable fingerprint of the API surface: schema, routes (incl. companion
 	// routes) and feature flags. Changes in limits, settings or render engines
@@ -3655,29 +3671,15 @@ QVariantMap DzScriptServerPane::buildCapabilities() const
 	hashLines.sort();
 	QByteArray digest = QCryptographicHash::hash(hashLines.join("\n").toUtf8(),
 	                                             QCryptographicHash::Sha1).toHex();
-	caps["compatibility_hash"] = QString::fromLatin1(digest.left(16));
+	json.addMember("compatibility_hash", QString::fromLatin1(digest.left(16)));
 
-	return caps;
-}
-
-static QByteArray capabilitiesToJson(const QVariantMap& caps)
-{
-	JsonBuilder json;
-	json.startObject();
-	for (QVariantMap::const_iterator it = caps.begin(); it != caps.end(); ++it)
-		json.addMember(it.key(), it.value());
 	json.finishObject();
 	return json.toString().toUtf8();
 }
 
-void DzScriptServerPane::refreshCapabilitiesSnapshot(const QVariantMap& caps)
+void DzScriptServerPane::refreshCapabilitiesSnapshot()
 {
-	QVariantMap snap = caps;
-	QVariantMap engines = snap.value("render_engines").toMap();
-	engines["source"] = QString("snapshot");
-	snap["render_engines"] = engines;
-	QByteArray body = capabilitiesToJson(snap);
-
+	const QByteArray body = buildCapabilitiesJson(QString("snapshot"));
 	QMutexLocker lock(&m_capabilitiesMutex);
 	m_capabilitiesSnapshot = body;
 }
@@ -3690,9 +3692,8 @@ QByteArray DzScriptServerPane::capabilitiesSnapshot() const
 
 HttpResult DzScriptServerPane::handleCapabilitiesRequest()
 {
-	QVariantMap caps = buildCapabilities();
-	refreshCapabilitiesSnapshot(caps);
-	return HttpResult(200, capabilitiesToJson(caps));
+	refreshCapabilitiesSnapshot();
+	return HttpResult(200, buildCapabilitiesJson(QString("live")));
 }
 
 bool DzScriptServerPane::isMainThreadBusy() const

@@ -248,8 +248,8 @@ private:
 	void    loadSettings();
 	void    saveSettings();
 	void    applySettings(const ServerSettings& s);
-	QVariantMap buildCapabilities() const;   // main thread only
-	void        refreshCapabilitiesSnapshot(const QVariantMap& caps);
+	QByteArray  buildCapabilitiesJson(const QString& engineSource) const;   // main thread only
+	void        refreshCapabilitiesSnapshot();
 
 	// Server state
 	httplib::Server* m_pServer;
