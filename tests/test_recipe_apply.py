@@ -294,11 +294,11 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         return client, DazSceneOps(DazScene(client))
 
     def test_create_camera_labels_the_new_root(self):
-        client, ops = self.ops(("recipe:roots", ["11", "12"]), ("new DzBasicCamera", "Camera 3"),
+        client, ops = self.ops(("recipe:snapshot", ["11", "12"]), ("new DzBasicCamera", "Camera 3"),
                                ("recipe:claim", ["Camera 3"]))
         names = ops.create(d_camera("new"))
         self.assertEqual(names, ["Camera 3"])
-        roots = next(i for i, s in enumerate(client.scripts) if "recipe:roots" in s)
+        roots = next(i for i, s in enumerate(client.scripts) if "recipe:snapshot" in s)
         make = next(i for i, s in enumerate(client.scripts) if "new DzBasicCamera" in s)
         claim = next(i for i, s in enumerate(client.scripts) if "recipe:claim" in s)
         self.assertLess(roots, make)
@@ -308,12 +308,12 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertIn("setName", client.scripts[claim])  # unique-name fix happens in the claim
 
     def test_create_light_uses_light_type(self):
-        client, ops = self.ops(("recipe:roots", []), ("new DzSpotLight", "Spotlight 1"),
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", "Spotlight 1"),
                                ("recipe:claim", ["Spotlight 1"]))
         self.assertEqual(ops.create(d_light("key")), ["Spotlight 1"])
 
     def test_asset_content_path_resolved_then_loaded(self):
-        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:roots", ["1"]),
+        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:snapshot", ["1"]),
                                ("recipe:claim", ["Genesis 9", "Genesis 9 Eyes"]))
         names = ops.create(d_actor("anna"))
         self.assertEqual(names, ["Genesis 9", "Genesis 9 Eyes"])
@@ -340,10 +340,41 @@ class DazSceneOpsCreateTests(unittest.TestCase):
                 ops.create(entity)
         self.assertEqual(client.scripts, [])
 
-    def test_load_adding_no_root_node_raises(self):
-        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:roots", []), ("recipe:claim", []))
+    def test_load_adding_no_root_node_removes_added_nodes_and_raises(self):
+        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:snapshot", ["1", "2"]),
+                               ("recipe:claim", []), ("recipe:cleanup", 1))
         with self.assertRaises(DazError):
             ops.create(d_prop("ball"))
+        cleanup = [s for s in client.scripts if "recipe:cleanup" in s]
+        self.assertEqual(len(cleanup), 1)
+        self.assertIn('["1", "2"]', cleanup[0])  # all pre-load nodes, not just roots
+        self.assertIn("Scene.removeNode", cleanup[0])
+        self.assertLess(client.scripts.index(next(s for s in client.scripts if "loadScene" in s)),
+                        client.scripts.index(cleanup[0]))
+
+    def test_claim_failure_after_load_removes_added_nodes_and_reraises(self):
+        def claim(script):
+            raise RuntimeError("setLabel blew up")
+        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:snapshot", ["1"]),
+                               ("recipe:claim", claim), ("recipe:cleanup", 3))
+        with self.assertRaisesRegex(RuntimeError, "setLabel blew up"):
+            ops.create(d_prop("ball"))
+        self.assertTrue(any("recipe:cleanup" in s for s in client.scripts))
+
+    def test_failed_cleanup_is_reported_with_the_cause(self):
+        def boom(script):
+            raise RuntimeError("cleanup broke")
+        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:snapshot", ["1"]),
+                               ("recipe:claim", []), ("recipe:cleanup", boom))
+        with self.assertRaisesRegex(DazError, "cleanup broke"):
+            ops.create(d_prop("ball"))
+
+    def test_snapshot_lists_every_node_not_only_roots(self):
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzBasicCamera", "Camera"),
+                               ("recipe:claim", ["Camera"]))
+        ops.create(d_camera("new"))
+        snap = next(s for s in client.scripts if "recipe:snapshot" in s)
+        self.assertNotIn("getNodeParent", snap)
 
 
 class DazSceneOpsChannelTests(unittest.TestCase):
@@ -400,6 +431,31 @@ class DazSceneOpsChannelTests(unittest.TestCase):
             self.ops.set_channels("Genesis 9", "actor", {"pose": {"pose_path": None}})
         self.assertEqual(apply_pose.call_count, 1)
         self.assertEqual(apply_pose.call_args[0][1], "C:/p.json")
+
+    def test_pose_preset_resolved_selected_and_merged(self):
+        self.client = scripted_client(("findFile", "C:/Lib/Poses/Sit.duf"), ("openFile", True))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with patch("dazpy._recipe_ops.apply_pose") as apply_pose:
+            self.ops.set_channels("Genesis 9", "actor", {"pose": {"pose_path": "/Poses/Sit.DUF"}})
+        apply_pose.assert_not_called()
+        find, open_ = self.client.scripts
+        self.assertIn(json.dumps("/Poses/Sit.DUF"), find)
+        self.assertIn('Scene.setPrimarySelection(_node)', open_)
+        self.assertIn('openFile("C:/Lib/Poses/Sit.duf", true)', open_)
+        self.assertLess(open_.index("setPrimarySelection"), open_.index("openFile"))
+
+    def test_missing_pose_preset_raises_without_opening(self):
+        self.client = scripted_client(("findFile", ""))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with patch("dazpy._recipe_ops.os.path.isfile", return_value=False):
+            with self.assertRaises(DazError):
+                self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "/Poses/Missing.dsf"}})
+        self.assertFalse(any("openFile" in s for s in self.client.scripts))
+
+    def test_unsupported_pose_extension_raises(self):
+        with self.assertRaisesRegex(DazError, r"\.duf.*\.json"):
+            self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "C:/p.bvh"}})
+        self.assertEqual(self.client.scripts, [])
 
     def test_desired_environment_goes_through_apply_hdri_environment(self):
         env = d_environment().channels["environment"]

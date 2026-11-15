@@ -11,7 +11,9 @@ Channel shapes accepted by ``set_channels`` (desired and observed alike):
   ``aim_at`` when ``aim`` is set, else set_rotation);
 - ``optics``: ``{focal_length, depth_of_field, focal_distance}`` (None skipped);
 - ``output``: ``{intensity, color}``;
-- ``pose``: ``{"pose_path": p}`` (``poses.apply_pose``; None = no-op) or
+- ``pose``: ``{"pose_path": p}`` (``.duf``/``.dsf`` Daz preset: resolved like an
+  asset, figure made primary selection, ``ContentMgr.openFile(path, true)``;
+  ``.json``: ``poses.apply_pose``; None = no-op; other extensions raise) or
   ``{"snapshot": DazPose.to_dict()}`` (``DazPose.apply_full``).
 
 ``set_environment`` takes the desired environment (``mode`` is a label, applied
@@ -76,18 +78,46 @@ class SceneOps(Protocol):
     def write_manifest(self, manifest: Manifest) -> None: ...
 
 
-# Root-node keys: element ID when the API exposes it (survives duplicate names),
+# Node keys: element ID when the API exposes it (survives duplicate names),
 # else the node name.
 _KEY_JS = """
 function _key(n) {
     return (typeof n.getElementID === "function") ? String(n.getElementID()) : n.getName();
 }"""
 
-_ROOTS_SCRIPT = ScriptBuilder.iife(f"""// recipe:roots{_KEY_JS}
+# Keys of every node in the scene (not just roots), so a create can find and,
+# on failure, remove everything it added.
+_SNAPSHOT_SCRIPT = ScriptBuilder.iife(f"""// recipe:snapshot{_KEY_JS}
 var _nodes = Scene.getNodeList(), _out = [];
-for (var _i = 0; _i < _nodes.length; _i++)
-    if (!_nodes[_i].getNodeParent()) _out.push(_key(_nodes[_i]));
+for (var _i = 0; _i < _nodes.length; _i++) _out.push(_key(_nodes[_i]));
 return _out;""")
+
+
+def _cleanup_script(before: list[str]) -> str:
+    """Remove every node whose key is not in *before*; return how many were removed."""
+    return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}
+var _before = {{}}, _keys = {json.dumps(before)};
+for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
+var _nodes = Scene.getNodeList(), _new = [];
+for (var _i = 0; _i < _nodes.length; _i++) if (!_before[_key(_nodes[_i])]) _new.push(_nodes[_i]);
+var _removed = 0;
+for (var _j = _new.length - 1; _j >= 0; _j--) if (Scene.removeNode(_new[_j])) _removed++;
+return _removed;""")
+
+
+def _pose_preset_script(node_name: str, path: str) -> str:
+    """Select *node_name* as primary and merge-open the Daz pose preset at *path*."""
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""
+var _node = Scene.findNode({esc(node_name)});
+if (!_node) return false;
+Scene.setPrimarySelection(_node);
+App.getContentMgr().openFile({esc(path)}, true);
+return true;""")
+
+
+_POSE_PRESET_EXTS = (".duf", ".dsf")
+_POSE_JSON_EXTS = (".json",)
 
 
 def _claim_script(before: list[str], label: str) -> str:
@@ -160,20 +190,35 @@ class DazSceneOps:
     def create(self, entity: DesiredEntity) -> list[str]:
         if entity.kind in ("actor", "prop"):
             path = self._resolve_asset(entity.create["asset_path"])
-            before = self._client.execute(_ROOTS_SCRIPT).value or []
+            before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
             self._scene.load(path)
         elif entity.kind == "camera":
-            before = self._client.execute(_ROOTS_SCRIPT).value or []
+            before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
             self._scene.create_camera()
         elif entity.kind == "light":
-            before = self._client.execute(_ROOTS_SCRIPT).value or []
+            before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
             self._scene.create_light(entity.create["light_type"])
         else:
             raise DazError(f"{entity.path}: kind {entity.kind!r} has no node to create")
-        names = self._client.execute(_claim_script(before, entity.label)).value or []
+        try:
+            names = self._client.execute(_claim_script(before, entity.label)).value or []
+        except Exception as e:
+            self._remove_added(before, entity.path, e)
+            raise
         if not names:
-            raise DazError(f"{entity.path}: creating it added no root node to the scene")
+            err = DazError(f"{entity.path}: creating it added no root node to the scene; "
+                           "every node it added was removed")
+            self._remove_added(before, entity.path, err)
+            raise err
         return list(names)
+
+    def _remove_added(self, before: list[str], path: str, cause: Exception) -> None:
+        """Remove every node added since *before* (a create that cannot be owned)."""
+        try:
+            self._client.execute(_cleanup_script(before))
+        except Exception as e:
+            raise DazError(f"{path}: create failed ({cause}) and removing the nodes it added "
+                           f"also failed: {e}") from cause
 
     def _resolve_asset(self, path: str) -> str:
         """Absolute file path for *path*; raises DazError when missing (never opens it)."""
@@ -230,9 +275,22 @@ class DazSceneOps:
                     DazPose(figure=s["figure"], bones=s["bones"], morphs=s["morphs"],
                             props=s["props"]).apply_full(skeleton)
                 elif value.get("pose_path") is not None:
-                    apply_pose(skeleton, value["pose_path"])
+                    self._apply_pose_path(node_name, skeleton, value["pose_path"])
             else:
                 raise DazError(f"{node_name}: unknown channel {name!r}")
+
+    def _apply_pose_path(self, node_name: str, skeleton: DazSkeleton, path: str) -> None:
+        ext = os.path.splitext(path)[1].lower()
+        if ext in _POSE_JSON_EXTS:
+            apply_pose(skeleton, path)
+        elif ext in _POSE_PRESET_EXTS:
+            resolved = self._resolve_asset(path)
+            if self._client.execute(_pose_preset_script(node_name, resolved)).value is False:
+                raise NodeNotFoundError(f"Cannot apply pose preset, node not found: {node_name!r}")
+        else:
+            raise DazError(f"Unsupported pose file {path!r}; supported: Daz pose presets "
+                           f"({', '.join(_POSE_PRESET_EXTS)}) or dazpy pose JSON "
+                           f"({', '.join(_POSE_JSON_EXTS)})")
 
     def _set_transform(self, ident: NodeIdentifier, kind: EntityKind, t: dict) -> None:
         node = DazCamera(self._client, ident) if kind == "camera" else DazNode(self._client, ident)
