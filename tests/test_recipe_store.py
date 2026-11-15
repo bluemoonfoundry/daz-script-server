@@ -47,6 +47,33 @@ class ReadLiveTests(unittest.TestCase):
                                                    node("Q", rec("r2", "props.hat"))])])
         self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Q",))
 
+    def test_bone_children_not_foreign_but_walked(self):
+        hand_prop = node("Sword", None)
+        bones = node("hip", None, bone=True, children=[node("rHand", None, bone=True, children=[hand_prop])])
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), kind="actor", children=[bones])])
+        self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Sword",))
+
+    def test_owned_child_subtree_not_attributed_to_ancestor(self):
+        owned = node("P", rec("r1", "props.hat"), children=[node("Grand", None)])
+        client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), children=[owned]),
+                                    node("P", rec("r1", "props.hat"), children=[node("Grand", None)])])
+        ents = read_live(client, "r1").entities
+        self.assertEqual(ents["actors.anna"].foreign_children, ())
+        self.assertEqual(ents["props.hat"].foreign_children, ("Grand",))
+
+    def test_rigged_prop_is_prop_without_pose(self):
+        client = fake_client(nodes=[node("R", rec("r1", "props.robot"), kind="actor")])
+        e = read_live(client, "r1").entities["props.robot"]
+        self.assertEqual(e.kind, "prop")
+        self.assertNotIn("pose", e.observed)
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_kind_from_path_prefix(self):
+        client = fake_client(nodes=[node("C", rec("r1", "cameras.w")),
+                                    node("L", rec("r1", "lighting.rigs.x.key"))])
+        ents = read_live(client, "r1").entities
+        self.assertEqual((ents["cameras.w"].kind, ents["lighting.rigs.x.key"].kind), ("camera", "light"))
+
     def test_manifest_lists_entity_missing_from_scene(self):
         st = read_live(fake_client(nodes=[], manifest=man("r1", ["cameras.wide"])), "r1")
         self.assertEqual(st.manifest.entities, ("cameras.wide",))
@@ -103,7 +130,7 @@ class ReadLiveTests(unittest.TestCase):
         read_live(client, "r1")
         s = client.execute.call_args_list[0][0][0]
         for frag in ('"dazpy.scene_recipe"', '"dazpy.scene_recipe.r1"', "Scene.getNodeList()",
-                     "getWSPos()", "getElementID()", "findDataItem", "Environment Intensity"):
+                     "getWSPos()", 'typeof n.getElementID === "function"', "findDataItem", "Environment Intensity"):
             self.assertIn(frag, s)
 
 

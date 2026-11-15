@@ -28,10 +28,12 @@ def man(recipe_id: str, entities: list[str], environment: EntityRecord | None = 
 def node(name: str, record: EntityRecord | None, *, kind: str = "prop", label: str | None = None,
          element_id: int = 1, position=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0),
          optics: dict | None = None, output: dict | None = None,
-         children: list[dict] | None = None) -> dict:
+         children: list[dict] | None = None, bone: bool = False,
+         camera: bool = False, light: bool = False) -> dict:
     """One canned node as the readback script reports it.
 
-    ``children`` are other ``node(...)`` results (record may be None = foreign).
+    ``kind`` is ignored by the reader (derived from the record path); ``bone``
+    marks a DzBone child.  ``children`` are other ``node(...)`` results (record may be None = foreign).
     A node with ``record=None`` is only meaningful as a child.
     """
     return {
@@ -39,7 +41,9 @@ def node(name: str, record: EntityRecord | None, *, kind: str = "prop", label: s
         "record": record.to_json() if record else None, "kind": kind,
         "position": list(position), "rotation": list(rotation),
         "optics": optics, "output": output,
-        "children": [{"name": c["name"], "record": c["record"]} for c in children or []],
+        "is_camera": camera, "is_light": light, "bone": bone,
+        "children": [{"name": c["name"], "record": c["record"], "bone": c["bone"],
+                      "children": c["children"]} for c in children or []],
     }
 
 

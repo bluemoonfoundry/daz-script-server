@@ -9,6 +9,14 @@ last-observed (``observed``) channel values.  A scene-level data item
 This is the data-item backend.  Another backend only has to provide the same
 three script builders and a ``read_live`` returning :class:`LiveState`.
 Nodes are addressed by Daz node name (``getName()``), assumed unique per scene.
+
+Observed-channel conventions (controller ruling): ``transform.position`` is
+world (``getWSPos``); ``transform.rotation`` is the node's LOCAL X/Y/Z rotation
+controls, i.e. what ``DazNode.set_rotation`` writes.  Recipe nodes are created
+at scene root so the two coincide unless the user re-parents them.  The
+environment ``mode`` is observed as the raw enum int and must be written back
+with ``setValue(int)``.  Entity ``kind`` comes from the record's path prefix,
+not the node class (a rigged prop is still a prop).
 """
 
 from __future__ import annotations
@@ -150,6 +158,13 @@ function _prop(n, label) {{
     var p = n.findPropertyByLabel(label);
     return p ? p.getValue() : null;
 }}
+function _tree(n) {{
+    var kids = n.getNodeChildren(false), out = [];
+    for (var k = 0; k < kids.length; k++)
+        out.push({{name: kids[k].getName(), record: _rec(kids[k]),
+                  bone: kids[k].inherits("DzBone"), children: _tree(kids[k])}});
+    return out;
+}}
 var _out = {{manifest: null, environment: null, nodes: []}};
 var _mi = Scene.findDataItem({esc(scene_item_name(recipe_id))});
 if (_mi) _out.manifest = _mi.getSettings().getStringValue({esc(_MANIFEST_KEY)});
@@ -170,25 +185,23 @@ for (var _i = 0; _i < _nodes.length; _i++) {{
     if (!record) continue;
     var p = n.getWSPos();
     var info = {{
-        name: n.getName(), element_id: n.getElementID(), record: record,
-        kind: n.inherits("DzCamera") ? "camera" : n.inherits("DzLight") ? "light"
-            : n.inherits("DzSkeleton") ? "actor" : "prop",
+        name: n.getName(), record: record,
+        element_id: (typeof n.getElementID === "function") ? n.getElementID() : null,
+        is_camera: n.inherits("DzCamera"), is_light: n.inherits("DzLight"),
         position: [p.x, p.y, p.z],
         rotation: [n.getXRotControl().getValue(), n.getYRotControl().getValue(),
                    n.getZRotControl().getValue()],
         optics: null, output: null, children: []
     }};
-    if (info.kind === "camera") {{
+    if (info.is_camera) {{
         info.optics = {{focal_length: n.focalLength,
                         depth_of_field: _prop(n, "Depth of Field"),
                         focal_distance: n.focalDistance}};
-    }} else if (info.kind === "light") {{
+    }} else if (info.is_light) {{
         var c = n.getDiffuseColor();
         info.output = {{intensity: _prop(n, "Intensity"), color: [c.red, c.green, c.blue]}};
     }}
-    var d = n.getNodeChildren(true);
-    for (var _j = 0; _j < d.length; _j++)
-        info.children.push({{name: d[_j].getName(), record: _rec(d[_j])}});
+    info.children = _tree(n);
     _out.nodes.push(info);
 }}
 return _out;""")
@@ -204,6 +217,34 @@ def _owned_by(record_json: str | None, recipe_id: str) -> EntityRecord | None:
     except (ValueError, KeyError, TypeError):
         return None
     return rec if rec.recipe_id == recipe_id else None
+
+
+_KIND_PREFIXES = (("actors.", "actor"), ("props.", "prop"), ("cameras.", "camera"),
+                  ("lighting.lights.", "light"), ("lighting.rigs.", "light"))
+
+
+def _kind_from_path(path: str) -> str | None:
+    for prefix, kind in _KIND_PREFIXES:
+        if path.startswith(prefix):
+            return kind
+    return None
+
+
+def _foreign(children: list, recipe_id: str) -> list[str]:
+    """Descendant names not owned by *recipe_id*.
+
+    Bones are never candidates but are walked (items parented to a bone count).
+    A descendant owned by this recipe is not foreign and owns its own subtree,
+    so it is not descended into.
+    """
+    out: list[str] = []
+    for c in children:
+        if c.get("bone"):
+            out += _foreign(c.get("children") or [], recipe_id)
+        elif _owned_by(c.get("record"), recipe_id) is None:
+            out.append(c["name"])
+            out += _foreign(c.get("children") or [], recipe_id)
+    return out
 
 
 def read_live(client: "DazClient", recipe_id: str) -> LiveState:
@@ -230,19 +271,21 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
         rec = _owned_by(n.get("record"), recipe_id)
         if rec is None:
             continue
+        kind = _kind_from_path(rec.path)
+        if kind is None:
+            continue
         observed: dict[str, dict] = {
             "transform": {"position": n["position"], "rotation": n["rotation"]}}
         if n.get("optics") is not None:
             observed["optics"] = n["optics"]
         if n.get("output") is not None:
             observed["output"] = n["output"]
-        if n["kind"] == "actor":
+        if kind == "actor":
             pose = DazPose.capture(DazSkeleton(client, NodeIdentifier(n["name"])))
             observed["pose"] = {"snapshot": pose.to_dict()}
-        foreign = tuple(c["name"] for c in n.get("children") or []
-                        if _owned_by(c.get("record"), recipe_id) is None)
+        foreign = tuple(_foreign(n.get("children") or [], recipe_id))
         entities[rec.path] = LiveEntity(
-            path=rec.path, node_name=n["name"], kind=n["kind"], record=rec,
+            path=rec.path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"))
 
     env = payload.get("environment") if manifest and manifest.environment else None
