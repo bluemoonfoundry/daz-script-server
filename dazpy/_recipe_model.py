@@ -170,9 +170,12 @@ class SceneRecipe:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SceneRecipe":
-        # SEAM (Task 3): call validate_offline(data) here and raise
-        # RecipeValidationError(report) when report.ok is False. Until then
-        # the input is assumed valid.
+        from ._recipe_validate import validate_offline
+        from .exceptions import RecipeValidationError
+
+        report = validate_offline(data)
+        if not report.ok:
+            raise RecipeValidationError(report)
         lighting = data.get("lighting") or {}
         env = lighting.get("environment")
         return cls(

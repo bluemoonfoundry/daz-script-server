@@ -260,6 +260,12 @@
         "type",
         "position"
       ],
+      "not": {
+        "required": [
+          "look_at",
+          "rotation"
+        ]
+      },
       "properties": {
         "type": {
           "enum": [

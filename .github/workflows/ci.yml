@@ -50,7 +50,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dazpy and test dependencies
-        run: pip install -e ".[docs]" requests
+        run: pip install -e ".[docs]" requests jsonschema
 
       - name: Run unit tests
         run: python tests.py unit
