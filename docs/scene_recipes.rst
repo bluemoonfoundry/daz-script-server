@@ -133,8 +133,10 @@ The iterative loop
 ``report`` is the :class:`~dazpy.recipe.ObserveReport`) if the recipe was never
 applied, has conflicts or unapplied changes, or a rendered shot's camera was
 changed or deleted in the scene. Pass ``force=True`` to render anyway. Each shot
-renders through the camera ``"<id>:<camera key>"`` with the shot's ``render``
-over the top-level ``render``; unset values use the scene's defaults.
+renders through the recipe's own camera node (found by its ownership record, so
+renaming it in Studio is fine; normally labelled ``"<id>:<camera key>"``) with
+the shot's ``render`` over the top-level ``render``; unset values use the
+scene's defaults.
 
 ``observe`` reports ``applied`` (the recipe has a manifest in the scene),
 ``in_sync``, ``drift`` (hand edits kept, hand deletions), ``pending`` (what an

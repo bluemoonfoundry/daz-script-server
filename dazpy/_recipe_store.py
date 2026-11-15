@@ -121,6 +121,7 @@ class LiveEntity:
     observed: dict[str, dict]
     foreign_children: tuple[str, ...]
     element_id: int | None = None
+    label: str | None = None  # the node's current label (the user may have renamed it)
 
 
 @dataclass(frozen=True)
@@ -281,6 +282,7 @@ for (var _i = 0; _i < _nodes.length; _i++) {{
     if (!record) continue;
     var info = _observe(n);
     info.name = n.getName();
+    info.label = n.getLabel();
     info.record = record;
     info.element_id = (typeof n.getElementID === "function") ? n.getElementID() : null;
     info.children = _tree(n);
@@ -380,7 +382,8 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
         foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id))
         entities[rec.path] = LiveEntity(
             path=rec.path, node_name=n["name"], kind=kind, record=rec,
-            observed=observed, foreign_children=foreign, element_id=n.get("element_id"))
+            observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
+            label=n.get("label"))
 
     duplicates = tuple(
         DuplicateRecord(path, (entities[path].node_name, *(n["name"] for n in extra)),

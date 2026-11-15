@@ -174,7 +174,10 @@ def observe(recipe: SceneRecipe | dict, scene: "DazScene") -> ObserveReport:
     pending recreates.
     """
     model = _checked(recipe, None)
-    desired, live = _read(model, scene)
+    return _observation(*_read(model, scene))
+
+
+def _observation(desired: dict, live: LiveState) -> ObserveReport:
     accepted = {p: "scene" for p in (live.manifest.deleted if live.manifest else ())
                 if p in desired and p not in live.entities}
     p = diff(desired, live, on_conflict="recipe_wins", resolutions=accepted)
@@ -238,8 +241,11 @@ def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str
            force: bool = False, wait: bool = True, timeout: float = 300.0) -> list[ShotRender]:
     """Render the recipe's shots (all, or the ids in *shots*) in recipe order.
 
-    Each shot renders from the recipe-scoped camera ``"<recipe.id>:<camera key>"``
-    with the top-level ``render`` settings overridden by the shot's own; anything
+    Each shot renders from the recipe's camera node, found through its ownership
+    record and passed to Studio by its current label (``"<recipe.id>:<camera
+    key>"`` unless renamed in Studio; that label too when the camera is missing
+    and *force* is set), with the top-level ``render`` settings overridden by
+    the shot's own; anything
     unset is passed as ``0`` / ``""`` so Studio uses the scene default. The output
     folders are created on the Studio host first.
 
@@ -258,8 +264,9 @@ def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str
         chosen = [s for s in model.shots if s.id in wanted]
     else:
         chosen = list(model.shots)
+    desired, live = _read(model, scene)
     if not force:
-        _guard(observe(model, scene), [s.camera for s in chosen])
+        _guard(_observation(desired, live), [s.camera for s in chosen])
     if not chosen:
         return []
     dirs = list(dict.fromkeys(d for d in (_parent_dir(s.output) for s in chosen) if d))
@@ -268,9 +275,14 @@ def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str
     out: list[ShotRender] = []
     for shot in chosen:
         top, own = model.render, shot.render
-        pick = lambda name: (getattr(own, name, None) if own is not None else None)             or getattr(top, name)
+
+        def pick(name: str):
+            return (getattr(own, name, None) if own is not None else None) or getattr(top, name)
+
         width, height = pick("resolution") or (0, 0)
-        label = f"{model.id}:{shot.camera}"
+        camera = live.entities.get(f"cameras.{shot.camera}")
+        label = (camera.label if camera is not None and camera.label
+                 else f"{model.id}:{shot.camera}")
         result = render_api.render(
             scene._client, shot.output, camera=label, engine=pick("engine") or "",
             width=width, height=height, iray_samples=pick("iray_samples") or 0,

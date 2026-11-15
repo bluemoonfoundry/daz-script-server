@@ -40,7 +40,9 @@ class ReadLiveTests(unittest.TestCase):
 
     def test_read_live_finds_node_by_record_not_label(self):
         client = fake_client(nodes=[node("Genesis 9", rec("r1", "actors.anna"), label="renamed by user")])
-        self.assertIn("actors.anna", read_live(client, "r1").entities)
+        e = read_live(client, "r1").entities["actors.anna"]
+        self.assertEqual(e.label, "renamed by user")
+        self.assertIn("n.getLabel()", client.execute.call_args_list[0][0][0])
 
     def test_foreign_children_listed(self):
         client = fake_client(nodes=[node("A", rec("r1", "actors.anna"),

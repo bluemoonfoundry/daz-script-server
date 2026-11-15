@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dazpy
 from dazpy._recipe_desired import compute_desired
 from dazpy._recipe_model import SceneRecipe
+from dazpy._recipe_store import LiveEntity, LiveState
 from unittest.mock import patch
 
 from dazpy._render_api import RenderResult
@@ -306,6 +307,22 @@ class TestRender(FacadeCase):
         render(RS, self.applied(), shots=["wide"])
         self.assertEqual(self.mock.call_args.kwargs["camera"], f"{RID}:cu")
         self.assertEqual(self.mock.call_args.args[1], "C:/out/shots/wide.png")
+
+    def test_renders_through_the_cameras_current_label(self):
+        live = live_matching(DS)
+        e = live.entities["cameras.cu"]
+        ents = dict(live.entities)
+        ents["cameras.cu"] = LiveEntity(e.path, e.node_name, e.kind, e.record, e.observed,
+                                        e.foreign_children, e.element_id, label="Hero Cam")
+        scene = fake_scene(LiveState(live.manifest, ents, live.environment_observed))
+        out = render(RS, scene, shots=["wide"])
+        self.assertEqual(self.mock.call_args.kwargs["camera"], "Hero Cam")
+        self.assertEqual(out[0].camera_label, "Hero Cam")
+
+    def test_reads_the_scene_once(self):
+        with patch("dazpy.recipe.read_live", side_effect=lambda c, rid: live_matching(DS)) as rl:
+            render(RS, fake_scene())
+        self.assertEqual(rl.call_count, 1)
 
     def test_one_mkdir_script_for_unique_parent_dirs(self):
         scene = self.applied()
