@@ -14,6 +14,7 @@ const char* ErrorResponse::codeString(ErrorCode code)
     case ErrorCode::ARTIFACT_UNAVAILABLE:      return "ARTIFACT_UNAVAILABLE";
     case ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT: return "IDEMPOTENCY_KEY_IN_FLIGHT";
     case ErrorCode::IDEMPOTENCY_KEY_REUSED:    return "IDEMPOTENCY_KEY_REUSED";
+    case ErrorCode::THUMBNAIL_UNSUPPORTED:     return "THUMBNAIL_UNSUPPORTED";
     case ErrorCode::BODY_TOO_LARGE:            return "BODY_TOO_LARGE";
     case ErrorCode::RATE_LIMIT_EXCEEDED:       return "RATE_LIMIT_EXCEEDED";
     case ErrorCode::CONCURRENT_LIMIT_EXCEEDED: return "CONCURRENT_LIMIT_EXCEEDED";
@@ -61,6 +62,8 @@ const char* ErrorResponse::defaultMessage(ErrorCode code)
         return "A request with this Idempotency-Key is still being processed; retry shortly";
     case ErrorCode::IDEMPOTENCY_KEY_REUSED:
         return "This Idempotency-Key was already used on this route with a different request body";
+    case ErrorCode::THUMBNAIL_UNSUPPORTED:
+        return "No thumbnail can be made for this artifact: it is not an image Qt can decode, or it is too large";
     case ErrorCode::BODY_TOO_LARGE:
         return "Request body exceeds maximum allowed size";
     case ErrorCode::RATE_LIMIT_EXCEEDED:
@@ -124,6 +127,7 @@ int ErrorResponse::httpStatus(ErrorCode code)
     case ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT:
         return 409;
     case ErrorCode::IDEMPOTENCY_KEY_REUSED:
+    case ErrorCode::THUMBNAIL_UNSUPPORTED:
         return 422;
     case ErrorCode::BODY_TOO_LARGE:
         return 413;

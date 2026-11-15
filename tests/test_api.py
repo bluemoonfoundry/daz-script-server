@@ -960,6 +960,139 @@ class TestArtifacts(unittest.TestCase):
             self.assertEqual(dl.content, f.read())
 
 
+class TestArtifactThumbnails(unittest.TestCase):
+    """GET /artifacts/{job_id}/{artifact_id}?thumbnail=<px> (5d6f.24): scaled
+    previews of image artifacts, decoded on the main thread."""
+
+    @staticmethod
+    def _png(width, height, rgba=False):
+        import struct, zlib
+        channels = 4 if rgba else 3
+        row = bytes([0]) + bytes((x * 7) % 256 for x in range(width * channels))
+        raw = row * height
+
+        def chunk(tag, data):
+            body = tag + data
+            return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+        ihdr = struct.pack(">IIBBBBB", width, height, 8, 6 if rgba else 2, 0, 0, 0)
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    @staticmethod
+    def _png_size(data):
+        import struct
+        assert data[:8] == b"\x89PNG\r\n\x1a\n", data[:16]
+        return struct.unpack(">II", data[16:24])
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="dss-thumbs-")
+        cls.wide = os.path.join(cls.tmp, "wide.png")       # 300x150 RGB
+        cls.alpha = os.path.join(cls.tmp, "alpha.png")     # 40x80 RGBA
+        cls.fake = os.path.join(cls.tmp, "fake.png")       # .png, not an image
+        cls.text = os.path.join(cls.tmp, "notes.txt")      # no decoder for .txt
+        with open(cls.wide, "wb") as f:
+            f.write(cls._png(300, 150))
+        with open(cls.alpha, "wb") as f:
+            f.write(cls._png(40, 80, rgba=True))
+        with open(cls.fake, "wb") as f:
+            f.write(b"definitely not a png" * 10)
+        with open(cls.text, "w") as f:
+            f.write("hello")
+        outputs = [{"path": p, "kind": "image"} for p in (cls.wide, cls.alpha, cls.fake, cls.text)]
+        outputs.append({"path": os.path.join(cls.tmp, "missing.png")})
+        script = iife(
+            "var cfg = getArguments()[0]; "
+            "var f = new DzFile(cfg.__dssReportFile); "
+            "if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+            "f.write(JSON.stringify({type:'manifest', outputs:cfg.outputs}) + '\\n'); "
+            "f.close(); return 'declared';"
+        )
+        r = async_execute(script=script, args={"outputs": outputs},
+                          report_file=os.path.join(cls.tmp, "report.jsonl"))
+        assert r.status_code == 200, r.text
+        cls.rid = r.json()["request_id"]
+        body = get_result(cls.rid, wait=True, timeout=30).json()
+        assert body.get("status") == "completed", body
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _thumb(self, aid, query, headers=None):
+        h = auth_headers()
+        h.update(headers or {})
+        return requests.get(f"{BASE_URL}/artifacts/{self.rid}/{aid}?{query}", headers=h, timeout=30)
+
+    def assertError(self, r, status, code):
+        self.assertEqual(r.status_code, status, r.text)
+        self.assertFalse(r.json()["success"])
+        self.assertEqual(r.json()["error_code"], code)
+
+    def test_capabilities_advertise_thumbnails(self):
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        self.assertTrue(caps["features"]["artifact_thumbnails"])
+        self.assertEqual(caps["limits"]["thumbnail_min_px"], 16)
+        self.assertEqual(caps["limits"]["thumbnail_max_px"], 1024)
+        self.assertIn("png", caps["thumbnail_source_formats"])
+
+    def test_list_reports_thumbnail_supported(self):
+        r = requests.get(f"{BASE_URL}/artifacts/{self.rid}", headers=auth_headers(), timeout=10)
+        flags = [a["thumbnail_supported"] for a in r.json()["artifacts"]]
+        # wide, alpha, fake (extension only; content is checked on request), text, missing
+        self.assertEqual(flags, [True, True, True, False, False])
+
+    def test_scales_longest_edge_and_caches(self):
+        first = self._thumb(0, "thumbnail=64")
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.headers["Content-Type"], "image/png")
+        self.assertEqual(self._png_size(first.content), (64, 32))
+        self.assertIn("wide.png.thumb.png", first.headers["Content-Disposition"])
+        again = self._thumb(0, "thumbnail=64")
+        self.assertEqual(again.headers["X-Thumbnail-Cache"], "hit")
+        self.assertEqual(again.content, first.content)
+
+    def test_tall_image_and_never_upscales(self):
+        r = self._thumb(1, "thumbnail=20")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self._png_size(r.content), (10, 20))
+        r = self._thumb(0, "thumbnail=1024")
+        self.assertEqual(self._png_size(r.content), (300, 150))
+
+    def test_jpeg_format(self):
+        for fmt in ("jpeg", "jpg"):
+            with self.subTest(format=fmt):
+                r = self._thumb(1, f"thumbnail=32&format={fmt}")
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.headers["Content-Type"], "image/jpeg")
+                self.assertEqual(r.content[:2], b"\xff\xd8")
+
+    def test_bad_params(self):
+        for query in ("thumbnail=", "thumbnail=8", "thumbnail=2000", "thumbnail=abc",
+                      "thumbnail=-64", "thumbnail=64px", "thumbnail=64&format=gif"):
+            with self.subTest(query=query):
+                self.assertError(self._thumb(0, query), 400, "INVALID_FIELD")
+
+    def test_undecodable_and_unsupported(self):
+        self.assertError(self._thumb(2, "thumbnail=64"), 422, "THUMBNAIL_UNSUPPORTED")
+        self.assertError(self._thumb(3, "thumbnail=64"), 422, "THUMBNAIL_UNSUPPORTED")
+        self.assertError(self._thumb(4, "thumbnail=64"), 410, "ARTIFACT_UNAVAILABLE")
+        self.assertError(self._thumb(99, "thumbnail=64"), 404, "ARTIFACT_NOT_FOUND")
+
+    def test_error_bodies_are_not_labelled_as_images(self):
+        r = self._thumb(3, "thumbnail=64")
+        self.assertTrue(r.headers["Content-Type"].startswith("application/json"))
+        self.assertNotIn("Content-Disposition", r.headers)
+
+    def test_requires_auth(self):
+        if not auth_headers():
+            self.skipTest("auth disabled")
+        r = requests.get(f"{BASE_URL}/artifacts/{self.rid}/0?thumbnail=64", timeout=10)
+        self.assertEqual(r.status_code, 401)
+
+
 class TestResponseShape(unittest.TestCase):
 
     def test_success_response_has_all_fields(self):

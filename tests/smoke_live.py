@@ -402,7 +402,21 @@ class Smoke:
             data = self.client.download_artifact(st["rid"], avail[0]["artifact_id"])
             check(isinstance(data, bytes) and len(data) > 0, "empty artifact download")
             check(data[:8] == PNG_MAGIC, f"artifact is not a PNG (first bytes {data[:8]!r})")
+            st["artifact_id"] = avail[0]["artifact_id"]
+            st["thumbnail_supported"] = avail[0].get("thumbnail_supported")
             return {"bytes": len(data)}
+
+        def thumbnail():
+            check("artifact_id" in st, "no downloadable artifact")
+            check(st.get("thumbnail_supported") is True,
+                  f"render artifact thumbnail_supported={st.get('thumbnail_supported')!r}")
+            # RENDER_SIZE is the longest edge; half of it must scale down.
+            px = max(16, RENDER_SIZE // 2)
+            data = self.client.get_artifact_thumbnail(st["rid"], st["artifact_id"], px)
+            check(data[:8] == PNG_MAGIC, f"thumbnail is not a PNG (first bytes {data[:8]!r})")
+            w, h = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+            check(max(w, h) == px, f"thumbnail is {w}x{h}, want longest edge {px}")
+            return {"size": [w, h], "bytes": len(data)}
 
         def scene_events_sse():
             check(st.get("scene_stream"), "GET /scene/events did not open")
@@ -421,6 +435,7 @@ class Smoke:
         if engine == "iray":
             self.run("render", f"{engine}.iray_samples_readback", iray_samples_readback)
         self.run("render", f"{engine}.artifact", artifact)
+        self.run("render", f"{engine}.thumbnail", thumbnail)
         if watch_scene_events:
             stop.set()
             self.run("render", "scene_events_sse", scene_events_sse)

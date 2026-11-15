@@ -178,14 +178,32 @@ class TestRouteSecurity(unittest.TestCase):
         for path in ("/artifacts/([^/]+)", "/artifacts/([^/]+)/([^/]+)"):
             with self.subTest(route=path):
                 self.assertIn("m_pReadChain->run(ctx)", found[("GET", path)])
-        serve = self.src[self.src.index("static void serveArtifact("):]
-        serve = serve[:serve.index("\n}\n")]
-        self.assertLess(serve.index("artifactIdsValid(req, res)"), serve.index("findArtifact("))
-        self.assertLess(serve.index("findArtifact("), serve.index("ArtifactFile::openForRead("))
+        def body(signature):
+            fn = self.src[self.src.index(signature):]
+            return fn[:fn.index("\n}\n")]
+
+        # Shared lookup: IDs validated, then the manifest, then the file.
+        opener = body("static bool openDeclaredArtifact(")
+        self.assertLess(opener.index("artifactIdsValid(req, res)"), opener.index("findArtifact("))
+        self.assertLess(opener.index("findArtifact("), opener.index("ArtifactFile::openForRead("))
+
+        serve = body("static void serveArtifact(")
+        self.assertIn("openDeclaredArtifact(", serve)
+        self.assertNotIn("ArtifactFile::openForRead(", serve)
         # httplib only answers Range with 206 when the handler leaves status unset.
-        tail = serve[serve.index("ArtifactFile::openForRead("):]
-        tail = tail[tail.index("case ArtifactFile::OPEN_OK:"):]
-        self.assertNotIn("res.status", tail[tail.index("const QByteArray disposition"):])
+        self.assertNotIn("res.status", serve[serve.index("const QByteArray disposition"):])
+
+        # ?thumbnail: same lookup, IDs checked before anything else, and the
+        # worker never touches QtGui or blocks on the main thread unbounded.
+        thumb = body("void DzScriptServerPane::serveArtifactThumbnail(")
+        self.assertLess(thumb.index("artifactIdsValid(req, res)"), thumb.index("openDeclaredArtifact("))
+        self.assertNotIn("ArtifactFile::openForRead(", thumb)
+        self.assertNotIn("QImage", thumb)
+        self.assertNotIn("BlockingQueuedConnection", thumb)
+        self.assertIn("Qt::QueuedConnection", thumb)
+        self.assertIn("tryAcquire(1, kMainThreadTimeoutMs)", thumb)
+        route = found[("GET", "/artifacts/([^/]+)/([^/]+)")]
+        self.assertLess(route.index("m_pReadChain->run(ctx)"), route.index("serveArtifactThumbnail("))
 
     def test_capabilities_route_uses_read_chain(self):
         found = {(m, p): h for m, p, h in self.routes}

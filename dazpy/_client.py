@@ -765,6 +765,60 @@ class DazClient:
         finally:
             resp.close()
 
+    def get_artifact_thumbnail(
+        self,
+        request_id: str,
+        artifact_id: str | int,
+        size: int = 256,
+        *,
+        format: str = "png",
+        dest: "str | os.PathLike[str] | None" = None,
+        timeout: float | None = None,
+    ) -> "bytes | str":
+        """Fetch a scaled preview of an image artifact
+        (GET /artifacts/{request_id}/{artifact_id}?thumbnail=<size>).
+
+        The longest edge fits in *size* pixels, the aspect ratio is kept and
+        the image is never upscaled. Check ``thumbnail_supported`` on
+        :meth:`list_artifacts` entries first; ``/capabilities`` lists the
+        decodable types under ``thumbnail_source_formats``.
+
+        Args:
+            request_id: The async job's id.
+            artifact_id: The manifest entry's ``artifact_id``.
+            size: Longest edge in pixels, 16-1024.
+            format: ``"png"`` (keeps alpha) or ``"jpeg"`` (alpha flattened
+                onto white).
+            dest: Local file to write the thumbnail to. When omitted the
+                encoded image is returned as ``bytes``.
+            timeout: Socket timeout; defaults to the client's timeout.
+
+        Returns:
+            The encoded image as ``bytes``, or the path written when *dest*
+            is given.
+
+        Raises:
+            ServerResponseError: ``THUMBNAIL_UNSUPPORTED`` (422) when the
+                artifact isn't a decodable image or is too large,
+                ``INVALID_FIELD`` (400) for a bad *size*/*format*, plus the
+                :meth:`download_artifact` errors.
+            StudioBusyError: Studio's main thread is busy (rendering, loading
+                a scene, running a long job); retry after ``retry_after``.
+                Cached thumbnails are still served while busy.
+        """
+        resp = self._get(
+            f"/artifacts/{request_id}/{artifact_id}",
+            params={"thumbnail": int(size), "format": format},
+            timeout=timeout,
+        )
+        _raise_for_error(resp)
+        if dest is None:
+            return resp.content
+        path = os.fspath(dest)
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
+
     def download_artifacts(
         self, request_id: str, dest_dir: "str | os.PathLike[str]"
     ) -> "list[str]":

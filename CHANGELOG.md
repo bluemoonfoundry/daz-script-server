@@ -16,6 +16,20 @@ All notable changes to DazScript Server are documented here.
   `companion_plugins.json`, and `check_openapi_parity.py --live URL` checks a
   running server's companion routes against it and `openapi.yaml`.
 
+- **Artifact thumbnails.** `GET /artifacts/{id}/{artifact_id}?thumbnail=<px>`
+  returns a scaled PNG (or JPEG with `format=jpeg`) of an image artifact: the
+  longest edge fits in 16-1024 px, the aspect ratio is kept, and nothing is
+  upscaled. The HTTP worker reads the file. Decoding and scaling run on the
+  main thread through a queued call with a 10 s timeout, and the server
+  answers `503 STUDIO_BUSY` while Studio is busy, so no request hangs behind
+  a render. Results are cached per file size/mtime (`X-Thumbnail-Cache`).
+  Artifacts that can't be thumbnailed return the new `422
+  THUMBNAIL_UNSUPPORTED`. `GET /artifacts/{id}` entries gain
+  `thumbnail_supported`. `/capabilities` adds `features.artifact_thumbnails`,
+  `thumbnail_source_formats` and `limits.thumbnail_min_px` / `_max_px` /
+  `_max_source_mb`. dazpy adds `get_artifact_thumbnail()` on `DazClient` and
+  `AsyncDazClient`.
+
 ### Changed
 
 - **`GET /render/{id}/progress` streams animation frame events on Studio 6.**

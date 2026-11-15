@@ -217,6 +217,42 @@ class TestDazClientArtifacts(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 404)
         resp.close.assert_called_once()
 
+    def test_thumbnail_sends_params(self):
+        client, _ = self._client(content=b"\x89PNG")
+        self.assertEqual(client.get_artifact_thumbnail("rnd-1", 0, 128, format="jpeg"), b"\x89PNG")
+        call = client._session.get.call_args
+        self.assertEqual(call.args[0], "http://127.0.0.1:18811/artifacts/rnd-1/0")
+        self.assertEqual(call.kwargs["params"], {"thumbnail": 128, "format": "jpeg"})
+
+    def test_thumbnail_defaults_and_dest(self):
+        import tempfile
+        client, _ = self._client(content=b"\x89PNG")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "t.png")
+            self.assertEqual(client.get_artifact_thumbnail("rnd-1", "0", dest=dest), dest)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), b"\x89PNG")
+        self.assertEqual(client._session.get.call_args.kwargs["params"],
+                         {"thumbnail": 256, "format": "png"})
+
+    def test_thumbnail_unsupported_is_typed(self):
+        client, _ = self._client(status_code=422, json_data={
+            "success": False, "error_code": "THUMBNAIL_UNSUPPORTED", "error": "x",
+            "retryable": False})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.get_artifact_thumbnail("rnd-1", "0")
+        self.assertEqual(cm.exception.error_code, "THUMBNAIL_UNSUPPORTED")
+        self.assertEqual(cm.exception.status_code, 422)
+        self.assertFalse(cm.exception.retryable)
+
+    def test_thumbnail_busy_raises_studio_busy(self):
+        client, resp = self._client(status_code=503, json_data={
+            "success": False, "error_code": "STUDIO_BUSY", "error": "rendering",
+            "retryable": True})
+        resp.headers = {"Retry-After": "2"}
+        with self.assertRaises(exceptions.StudioBusyError):
+            client.get_artifact_thumbnail("rnd-1", "0")
+
     def test_download_artifacts_skips_unavailable_and_sanitizes_names(self):
         import tempfile
         client = DazClient(token="")

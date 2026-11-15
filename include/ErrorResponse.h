@@ -26,6 +26,9 @@ enum class ErrorCode {
     IDEMPOTENCY_KEY_IN_FLIGHT,
     IDEMPOTENCY_KEY_REUSED,
 
+    // 422 Unprocessable: the artifact exists but can't be thumbnailed
+    THUMBNAIL_UNSUPPORTED,
+
     // 413 Payload Too Large
     BODY_TOO_LARGE,
 

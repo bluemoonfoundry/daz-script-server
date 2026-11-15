@@ -29,8 +29,10 @@ enum OpenStatus {
 };
 
 // Opens a declared output for reading. On OPEN_OK, *outFile is an open FILE*
-// the caller must fclose(), and *outSize is its size in bytes.
-OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize);
+// the caller must fclose(), and *outSize is its size in bytes. When outMtime
+// is given it receives the modification time (seconds since the epoch).
+OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize,
+                       qint64* outMtime = 0);
 
 // Size of a declared output without keeping it open; -1 when unavailable.
 qint64 sizeOf(const QString& path);

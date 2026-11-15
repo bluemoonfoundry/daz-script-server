@@ -44,6 +44,7 @@
 #include "ServerSettings.h"
 #include "SceneEventBroker.h"
 #include "RenderProgressBroker.h"
+#include "ArtifactThumbnail.h"
 
 // Required for BlockingQueuedConnection return from execute/register handlers.
 typedef QPair<int, QByteArray> HttpResult;
@@ -178,6 +179,11 @@ public slots:
 	// Also refreshes the snapshot served while the main thread is busy.
 	Q_INVOKABLE HttpResult handleCapabilitiesRequest();
 
+	// GET /artifacts/{id}/{artifact_id}?thumbnail=<px> — main thread. job is an
+	// ArtifactThumbnail::Job* posted with Qt::QueuedConnection by the HTTP worker,
+	// which waits on job->done with a timeout (see serveArtifactThumbnail()).
+	Q_INVOKABLE void handleThumbnailJob(qulonglong job);
+
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
 	// not ::free, so it is safe to construct/destroy on httplib worker threads).
@@ -254,6 +260,9 @@ private:
 	void   runJobRoute(const httplib::Request& req, httplib::Response& res,
 	                   IRequestHandler* handler, bool idempotent);
 	void   applyPluginRoutes();
+	// HTTP worker: GET /artifacts/:job_id/:artifact_id?thumbnail=<px>[&format=].
+	// Decoding happens on the main thread via handleThumbnailJob().
+	void   serveArtifactThumbnail(const httplib::Request& req, httplib::Response& res);
 	void   updateUI();
 	DzScript* ensurePersistentScript();
 	QString buildResponseJson(bool success,
@@ -370,6 +379,10 @@ private:
 	IdempotencyCache   m_idempotency;            // Idempotency-Key replay records (cleared per run)
 
 	QByteArray         m_capabilitiesSnapshot;   // see capabilitiesSnapshot()
+	// Image extensions Qt can decode, read on the main thread before the HTTP
+	// server starts and read-only while it runs (thumbnail_supported, 422s).
+	QStringList        m_thumbnailExtensions;
+	ArtifactThumbnail::Cache m_thumbnailCache;   // encoded thumbnails, LRU, mutex-protected
 	mutable QMutex     m_capabilitiesMutex;
 
 	AsyncRequestManager*  m_pAsyncMgr;

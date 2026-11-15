@@ -416,6 +416,30 @@ class AsyncDazClient:
         except httpx.HTTPError as e:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
+    async def get_artifact_thumbnail(
+        self,
+        request_id: str,
+        artifact_id: str | int,
+        size: int = 256,
+        *,
+        format: str = "png",
+        dest: "str | os.PathLike[str] | None" = None,
+        timeout: float | None = None,
+    ) -> "bytes | str":
+        """See :meth:`dazpy.DazClient.get_artifact_thumbnail`."""
+        resp = await self._get(
+            f"/artifacts/{request_id}/{artifact_id}",
+            params={"thumbnail": int(size), "format": format},
+            timeout=timeout,
+        )
+        _raise_for_error(resp)
+        if dest is None:
+            return resp.content
+        path = os.fspath(dest)
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
+
     async def download_artifacts(
         self, request_id: str, dest_dir: "str | os.PathLike[str]"
     ) -> "list[str]":

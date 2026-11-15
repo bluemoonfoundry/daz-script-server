@@ -72,10 +72,12 @@ static FILE* openRaw(const QString& path)
 #endif
 }
 
-OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize)
+OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize,
+                       qint64* outMtime)
 {
     *outFile = 0;
     *outSize = 0;
+    if (outMtime) *outMtime = 0;
     if (!isServablePath(path)) return OPEN_PATH_REJECTED;
 
     FILE* f = openRaw(path);
@@ -96,6 +98,7 @@ OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize)
     }
     *outFile = f;
     *outSize = (qint64)st.st_size;
+    if (outMtime) *outMtime = (qint64)st.st_mtime;
     return OPEN_OK;
 }
 

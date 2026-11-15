@@ -602,6 +602,22 @@ paths:
         `bytes=-512`, `bytes=1024-`), answered with 206 + `Content-Range`, and
         `HEAD` for size/type without the body. Uses the read middleware chain
         (IP whitelist, then auth), so it is not rate limited.
+
+        **Thumbnails.** With `?thumbnail=<px>` the response is a scaled copy of
+        an image artifact instead of the file: the longest edge fits in `px`
+        (16-1024), the aspect ratio is kept, and the image is never upscaled.
+        `format=png` (default, keeps alpha) or `format=jpeg` (alpha flattened
+        onto white). The source must have an extension in `/capabilities`
+        `thumbnail_source_formats` (the Qt image plugins this Studio loaded;
+        EXR/HDR usually aren't) and be at most `limits.thumbnail_max_source_mb`
+        and 100 megapixels, otherwise 422 `THUMBNAIL_UNSUPPORTED`.
+        `thumbnail_supported` on `GET /artifacts/{id}` entries predicts this.
+        Decoding runs on Studio's main thread: while it is busy (render, scene
+        load, a long job), or doesn't get to the request within 10 s, the
+        answer is 503 `STUDIO_BUSY` with `Retry-After`. Results are cached per
+        file size/mtime, px and format (`X-Thumbnail-Cache: hit|miss`), and a
+        cache hit is served even while Studio is busy. Range requests are not
+        meaningful for thumbnails.
       operationId: downloadArtifact
       security:
         - apiToken: []
@@ -615,6 +631,22 @@ paths:
           schema:
             type: string
             pattern: '^[A-Za-z0-9_-]{1,64}$'
+        - name: thumbnail
+          in: query
+          required: false
+          description: Return a thumbnail whose longest edge fits in this many pixels (image artifacts only)
+          schema:
+            type: integer
+            minimum: 16
+            maximum: 1024
+        - name: format
+          in: query
+          required: false
+          description: Thumbnail encoding (only with `thumbnail`)
+          schema:
+            type: string
+            enum: [png, jpeg, jpg]
+            default: png
         - name: Range
           in: header
           required: false
@@ -631,8 +663,15 @@ paths:
             Content-Disposition:
               description: '`inline; filename="..."; filename*=UTF-8''''...`'
               schema: {type: string}
+            X-Thumbnail-Cache:
+              description: '`hit` or `miss`; only on `?thumbnail` responses'
+              schema: {type: string, enum: [hit, miss]}
           content:
             application/octet-stream:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+            image/jpeg:
               schema: {type: string, format: binary}
         '206':
           description: Requested byte range(s)
@@ -657,6 +696,17 @@ paths:
           $ref: '#/components/responses/ArtifactUnavailable'
         '416':
           description: Range outside the file
+        '422':
+          description: |
+            `?thumbnail` on an artifact that can't be thumbnailed
+            (`THUMBNAIL_UNSUPPORTED`): no Qt decoder for its type, undecodable
+            content, or over the size limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /scene/events:
     get:
@@ -1740,6 +1790,12 @@ components:
               description: MIME type by extension (application/octet-stream if unknown)
             filename:
               type: string
+            thumbnail_supported:
+              type: boolean
+              description: |
+                `?thumbnail` should work: available, within the size limit, and
+                an extension Qt can decode here. The content is only checked
+                when a thumbnail is requested.
 
     ArtifactListResponse:
       type: object
@@ -1998,6 +2054,13 @@ components:
             animation_frame_progress:
               type: boolean
               description: Animation render job status reports frame N of M (Studio 4 and 6)
+            artifact_thumbnails:
+              type: boolean
+              description: GET /artifacts/{id}/{artifact_id}?thumbnail=<px>
+        thumbnail_source_formats:
+          type: array
+          items: {type: string}
+          description: Lower-case file extensions ?thumbnail can decode (Qt image plugins loaded in this Studio)
         limits:
           type: object
           description: Current settings (not compiled defaults)
@@ -2011,6 +2074,9 @@ components:
             async_result_ttl_seconds: {type: integer}
             idempotency_ttl_seconds: {type: integer}
             stale_job_timeout_minutes: {type: integer}
+            thumbnail_min_px: {type: integer}
+            thumbnail_max_px: {type: integer}
+            thumbnail_max_source_mb: {type: integer}
         rate_limit:
           type: object
           properties:
@@ -2101,6 +2167,7 @@ components:
             - ARTIFACT_UNAVAILABLE
             - IDEMPOTENCY_KEY_IN_FLIGHT
             - IDEMPOTENCY_KEY_REUSED
+            - THUMBNAIL_UNSUPPORTED
             - BODY_TOO_LARGE
             - RATE_LIMIT_EXCEEDED
             - CONCURRENT_LIMIT_EXCEEDED

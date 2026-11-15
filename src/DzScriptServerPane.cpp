@@ -10,6 +10,7 @@
 #include "ErrorResponse.h"
 #include "IdempotencyCache.h"
 #include "ArtifactFile.h"
+#include "ArtifactThumbnail.h"
 #include "SecureRandom.h"
 #include "RequestValidator.h"
 #include "common_version.h"
@@ -655,6 +656,10 @@ void DzScriptServerPane::startServer()
 	}
 	m_sceneRevision.fetchAndStoreOrdered(0);
 	m_idempotency.clear();
+	// QImageReader is QtGui: list the decodable formats here, on the main
+	// thread, before any HTTP worker exists.
+	m_thumbnailExtensions = ArtifactThumbnail::readableExtensions();
+	m_thumbnailCache.clear();
 	m_pAsyncMgr->setServerInstanceId(QString::fromLatin1(m_serverInstanceId));
 
 	// Every error response carries the JSON error envelope. httplib produces
@@ -1142,8 +1147,8 @@ static bool artifactIdsValid(const httplib::Request& req, httplib::Response& res
 }
 
 // GET /artifacts/:job_id — the job's declared outputs plus file metadata.
-static void listArtifacts(AsyncRequestManager& mgr, const httplib::Request& req,
-                          httplib::Response& res)
+static void listArtifacts(AsyncRequestManager& mgr, const QStringList& thumbnailExts,
+                          const httplib::Request& req, httplib::Response& res)
 {
 	if (!artifactIdsValid(req, res)) return;
 	const std::string jobId = req.matches[1].str();
@@ -1164,6 +1169,9 @@ static void listArtifacts(AsyncRequestManager& mgr, const httplib::Request& req,
 		entry.insert("size", size >= 0 ? QVariant(size) : QVariant());
 		entry.insert("content_type", QString::fromLatin1(ArtifactFile::contentTypeFor(path)));
 		entry.insert("filename", ArtifactFile::baseName(path));
+		entry.insert("thumbnail_supported",
+			size >= 0 && size <= ArtifactThumbnail::kMaxSourceBytes
+			&& ArtifactThumbnail::extensionIn(path, thumbnailExts));
 		artifacts.append(entry);
 	}
 
@@ -1177,43 +1185,53 @@ static void listArtifacts(AsyncRequestManager& mgr, const httplib::Request& req,
 	res.set_content(JsonStd::variantToJson(QVariant(body)), "application/json");
 }
 
+// Resolve :job_id/:artifact_id to the declared file and open it. On failure
+// the error response is already written and false is returned; on success the
+// caller owns *file and must fclose() it.
+static bool openDeclaredArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
+                                 httplib::Response& res, QString* path, FILE** file,
+                                 qint64* size, qint64* mtime = 0)
+{
+	if (!artifactIdsValid(req, res)) return false;
+	const std::string jobId      = req.matches[1].str();
+	const std::string artifactId = req.matches[2].str();
+
+	switch (mgr.findArtifact(jobId, artifactId, *path)) {
+	case AsyncRequestManager::ARTIFACT_JOB_NOT_FOUND:
+		respondError(res, ErrorCode::REQUEST_NOT_FOUND, jobId);
+		return false;
+	case AsyncRequestManager::ARTIFACT_NOT_DECLARED:
+		respondError(res, ErrorCode::ARTIFACT_NOT_FOUND, jobId + "/" + artifactId);
+		return false;
+	case AsyncRequestManager::ARTIFACT_FOUND:
+		break;
+	}
+
+	switch (ArtifactFile::openForRead(*path, file, size, mtime)) {
+	case ArtifactFile::OPEN_OK:
+		return true;
+	case ArtifactFile::OPEN_PATH_REJECTED:
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not an absolute file path");
+		return false;
+	case ArtifactFile::OPEN_NOT_REGULAR:
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not a regular file");
+		return false;
+	case ArtifactFile::OPEN_MISSING:
+	default:
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared file does not exist or cannot be read");
+		return false;
+	}
+}
+
 // GET /artifacts/:job_id/:artifact_id — stream one declared output. httplib
 // answers Range requests (206 / 416) and HEAD from the sized content provider.
 static void serveArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
                           httplib::Response& res)
 {
-	if (!artifactIdsValid(req, res)) return;
-	const std::string jobId      = req.matches[1].str();
-	const std::string artifactId = req.matches[2].str();
-
 	QString path;
-	switch (mgr.findArtifact(jobId, artifactId, path)) {
-	case AsyncRequestManager::ARTIFACT_JOB_NOT_FOUND:
-		respondError(res, ErrorCode::REQUEST_NOT_FOUND, jobId);
-		return;
-	case AsyncRequestManager::ARTIFACT_NOT_DECLARED:
-		respondError(res, ErrorCode::ARTIFACT_NOT_FOUND, jobId + "/" + artifactId);
-		return;
-	case AsyncRequestManager::ARTIFACT_FOUND:
-		break;
-	}
-
-	FILE*  file = 0;
-	qint64 size = 0;
-	switch (ArtifactFile::openForRead(path, &file, &size)) {
-	case ArtifactFile::OPEN_OK:
-		break;
-	case ArtifactFile::OPEN_PATH_REJECTED:
-		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not an absolute file path");
-		return;
-	case ArtifactFile::OPEN_NOT_REGULAR:
-		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not a regular file");
-		return;
-	case ArtifactFile::OPEN_MISSING:
-	default:
-		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared file does not exist or cannot be read");
-		return;
-	}
+	FILE*   file = 0;
+	qint64  size = 0;
+	if (!openDeclaredArtifact(mgr, req, res, &path, &file, &size)) return;
 
 	// Leave res.status unset: httplib then picks 200, or 206 for a Range
 	// request (and 416 for an unsatisfiable one). An explicit 200 would make
@@ -1238,6 +1256,127 @@ static void serveArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
 			return true;
 		},
 		[file](bool) { std::fclose(file); });
+}
+
+// GET /artifacts/:job_id/:artifact_id?thumbnail=<px>[&format=png|jpeg]
+//
+// HTTP worker: validation, the file read (C stdio) and the cache never touch
+// QtGui. Decoding is posted to the main thread (handleThumbnailJob) and waited
+// on with a timeout, so a long job holding the main thread yields 503
+// STUDIO_BUSY instead of a hung request. See ArtifactThumbnail.h.
+void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, httplib::Response& res)
+{
+	using namespace ArtifactThumbnail;
+
+	if (!artifactIdsValid(req, res)) return;
+	int         px = 0;
+	Format      format = FORMAT_PNG;
+	std::string paramError;
+	if (!parseParams(req.get_param_value("thumbnail"), req.get_param_value("format"),
+	                 req.has_param("format"), &px, &format, &paramError)) {
+		respondError(res, ErrorCode::INVALID_FIELD, paramError);
+		return;
+	}
+
+	QString path;
+	FILE*   file  = 0;
+	qint64  size  = 0;
+	qint64  mtime = 0;
+	if (!openDeclaredArtifact(*m_pAsyncMgr, req, res, &path, &file, &size, &mtime)) return;
+
+	if (!extensionIn(path, m_thumbnailExtensions)) {
+		std::fclose(file);
+		const QByteArray decodable = m_thumbnailExtensions.join(", ").toUtf8();
+		respondError(res, ErrorCode::THUMBNAIL_UNSUPPORTED,
+			"no image decoder for this file type (decodable: "
+			+ std::string(decodable.constData(), decodable.size()) + ")");
+		return;
+	}
+	if (size > kMaxSourceBytes) {
+		std::fclose(file);
+		respondError(res, ErrorCode::THUMBNAIL_UNSUPPORTED,
+			"file is larger than the " + std::to_string(kMaxSourceBytes / (1024 * 1024))
+			+ " MB thumbnail limit");
+		return;
+	}
+
+	// Image headers go on success only, never on an error envelope.
+	auto sendImage = [&](const QByteArray& img, const char* cacheState) {
+		res.set_header("Cache-Control", "private, no-store");
+		res.set_header("X-Content-Type-Options", "nosniff");
+		res.set_header("Content-Disposition",
+			ArtifactFile::contentDisposition(path + ".thumb." + extension(format)).constData());
+		res.set_header("X-Thumbnail-Cache", cacheState);
+		res.status = 200;
+		res.set_content(img.constData(), static_cast<size_t>(img.size()), contentType(format));
+	};
+
+	const QString cacheKey = Cache::key(path, size, mtime, px, format);
+	QByteArray image;
+	if (m_thumbnailCache.get(cacheKey, &image)) {
+		std::fclose(file);
+		sendImage(image, "hit");
+		return;
+	}
+
+	if (isMainThreadBusy()) {
+		std::fclose(file);
+		res.set_header("Retry-After", "2");
+		respondError(res, ErrorCode::STUDIO_BUSY, mainThreadBusyMessage());
+		return;
+	}
+
+	QByteArray source;
+	source.resize(static_cast<int>(size));
+	size_t got = 0;
+	while (got < static_cast<size_t>(size)) {
+		const size_t n = std::fread(source.data() + got, 1, static_cast<size_t>(size) - got, file);
+		if (n == 0) break;
+		got += n;
+	}
+	std::fclose(file);
+	if (got != static_cast<size_t>(size)) {
+		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared file changed while it was being read");
+		return;
+	}
+
+	Job* job = new Job();
+	job->source = source;
+	job->maxPx  = px;
+	job->format = format;
+	if (!QMetaObject::invokeMethod(this, "handleThumbnailJob", Qt::QueuedConnection,
+	                               Q_ARG(qulonglong, static_cast<qulonglong>(reinterpret_cast<quintptr>(job))))) {
+		release(job);   // the main thread's reference
+		release(job);   // ours
+		respondError(res, ErrorCode::INTERNAL_ERROR, "could not reach the main thread");
+		return;
+	}
+	if (!job->done.tryAcquire(1, kMainThreadTimeoutMs)) {
+		// The main thread skips the job when it gets to it and frees it.
+		job->abandoned.fetchAndStoreOrdered(1);
+		release(job);
+		res.set_header("Retry-After", "2");
+		respondError(res, ErrorCode::STUDIO_BUSY,
+			"DAZ Studio's main thread did not get to the thumbnail within "
+			+ std::to_string(kMainThreadTimeoutMs / 1000) + " s");
+		return;
+	}
+
+	const bool ok = job->ok;
+	image = job->image;
+	const QByteArray error = job->error.toUtf8();
+	release(job);
+	if (!ok) {
+		respondError(res, ErrorCode::THUMBNAIL_UNSUPPORTED, std::string(error.constData(), error.size()));
+		return;
+	}
+	m_thumbnailCache.put(cacheKey, image);
+	sendImage(image, "miss");
+}
+
+void DzScriptServerPane::handleThumbnailJob(qulonglong job)
+{
+	ArtifactThumbnail::run(reinterpret_cast<ArtifactThumbnail::Job*>(static_cast<quintptr>(job)));
 }
 
 // ─── Route setup ──────────────────────────────────────────────────────────────
@@ -1409,17 +1548,21 @@ void DzScriptServerPane::setupRoutes()
 	// Read chain (IP whitelist -> auth), like the other polling GETs: a client
 	// fetching a large file in Range chunks must not trip the rate limiter.
 	// Downloads only serve files in the job's output manifest; see
-	// listArtifacts()/serveArtifact() above.
+	// listArtifacts()/serveArtifact() above. ?thumbnail=<px> goes to
+	// serveArtifactThumbnail(), which decodes on the main thread.
 	m_pServer->Get("/artifacts/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (!m_pReadChain->run(ctx)) { applyContext(ctx, res); return; }
-		listArtifacts(*m_pAsyncMgr, req, res);
+		listArtifacts(*m_pAsyncMgr, m_thumbnailExtensions, req, res);
 	});
 
 	m_pServer->Get("/artifacts/([^/]+)/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (!m_pReadChain->run(ctx)) { applyContext(ctx, res); return; }
-		serveArtifact(*m_pAsyncMgr, req, res);
+		if (req.has_param("thumbnail"))
+			serveArtifactThumbnail(req, res);
+		else
+			serveArtifact(*m_pAsyncMgr, req, res);
 	});
 
 	// ── Render endpoints ──────────────────────────────────────────────────────
@@ -3850,6 +3993,7 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 	features["artifacts"]           = true;   // GET /artifacts/{id}[/{artifact_id}] downloads
 	features["job_activity"]        = true;   // progress_supported/_source, last_activity_at, idle_ms
 	features["animation_frame_progress"] = true; // frame N of M in /render/animation job status
+	features["artifact_thumbnails"] = true;   // GET /artifacts/{id}/{artifact_id}?thumbnail=<px>
 	json.addMember("features", QVariant(features));
 	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
 		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));
@@ -3866,7 +4010,13 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 	limits["async_result_ttl_seconds"] = ServerConfig::ASYNC_RESULT_TTL_SEC;
 	limits["idempotency_ttl_seconds"]  = m_idempotency.ttlSeconds();
 	limits["stale_job_timeout_minutes"] = m_nStaleJobTimeoutMin;
+	limits["thumbnail_min_px"]          = ArtifactThumbnail::kMinPx;
+	limits["thumbnail_max_px"]          = ArtifactThumbnail::kMaxPx;
+	limits["thumbnail_max_source_mb"]   = int(ArtifactThumbnail::kMaxSourceBytes / (1024 * 1024));
 	json.addMember("limits", QVariant(limits));
+	// Image types ?thumbnail can decode (Qt image plugins loaded in this
+	// Studio). QStringList, not QVariantList: see the DS4 CRT rule.
+	json.addMember("thumbnail_source_formats", QVariant(m_thumbnailExtensions));
 
 	QVariantMap rateLimit;
 	rateLimit["enabled"]        = m_rateLimiter.isEnabled();

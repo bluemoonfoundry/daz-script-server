@@ -583,6 +583,35 @@ class TestAsyncDazClientArtifacts:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_thumbnail(self, tmp_path):
+        route = respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(200, content=b"\x89PNG",
+                                        headers={"Content-Type": "image/png"}))
+        async with AsyncDazClient() as client:
+            assert await client.get_artifact_thumbnail("rnd-1", 0, 64) == b"\x89PNG"
+            dest = tmp_path / "t.jpg"
+            assert await client.get_artifact_thumbnail(
+                "rnd-1", "0", format="jpeg", dest=dest) == str(dest)
+        assert dest.read_bytes() == b"\x89PNG"
+        first, second = route.calls[0].request.url.params, route.calls[1].request.url.params
+        assert (first["thumbnail"], first["format"]) == ("64", "png")
+        assert (second["thumbnail"], second["format"]) == ("256", "jpeg")
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_thumbnail_unsupported_raises_typed_error(self):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(422, json={
+                "success": False, "error_code": "THUMBNAIL_UNSUPPORTED",
+                "error": "no decoder", "retryable": False}))
+        async with AsyncDazClient() as client:
+            with pytest.raises(exceptions.ServerResponseError) as ei:
+                await client.get_artifact_thumbnail("rnd-1", "0")
+        assert ei.value.status_code == 422
+        assert ei.value.error_code == "THUMBNAIL_UNSUPPORTED"
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_unavailable_artifact_raises_typed_error(self):
         respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
             return_value=httpx.Response(410, json={

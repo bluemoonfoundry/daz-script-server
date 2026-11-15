@@ -2433,14 +2433,17 @@ Lists the job's artifacts with file metadata read at request time:
       "filename": "shot-01.png",
       "content_type": "image/png",
       "size": 482113,
-      "available": true
+      "available": true,
+      "thumbnail_supported": true
     }
   ]
 }
 ```
 
 `available` is false (and `size` null) when the declared path is missing, is a
-directory, or is not absolute.
+directory, or is not absolute. `thumbnail_supported` says whether `?thumbnail`
+should work (see below). It is judged by extension and size only; the content
+is checked when a thumbnail is requested.
 
 ### `GET /artifacts/:id/:artifact_id`
 
@@ -2458,6 +2461,37 @@ Streams the file with `Content-Type` (by extension), `Content-Length`,
 | ID isn't 1-64 chars of `A-Z a-z 0-9 - _` (e.g. `..`, `a.png`) | `400 INVALID_FIELD` |
 | Declared file is missing, a directory, or a relative path | `410 ARTIFACT_UNAVAILABLE` |
 
+### Thumbnails: `GET /artifacts/:id/:artifact_id?thumbnail=<px>`
+
+Returns a scaled copy of an image artifact instead of the file, for previews
+of renders that may be thousands of pixels across.
+
+- `thumbnail` is the longest edge in pixels, 16-1024. The aspect ratio is kept
+  and the image is never upscaled (a 300×150 render at `thumbnail=1024` stays
+  300×150).
+- `format=png` (default, keeps alpha) or `format=jpeg` (quality 85, alpha
+  flattened onto white).
+- The source needs an extension listed in `/capabilities`
+  `thumbnail_source_formats`, which are the Qt image plugins this Studio has
+  loaded. PNG, JPEG, BMP and TIFF are typical; EXR and HDR usually aren't. It
+  must also be at most 64 MB (`limits.thumbnail_max_source_mb`) and 100
+  megapixels.
+- Decoding runs on Studio's main thread, because Qt's image code isn't proven
+  safe on the server's worker threads under Qt 4.8. The server reads the
+  file on the worker and only hands the decode and scale to the main thread.
+  While the main thread is busy (rendering, loading a scene, running a long
+  job), or if it doesn't get to the request within 10 s, the answer is
+  `503 STUDIO_BUSY` with `Retry-After`.
+- Thumbnails are cached in memory per file size and mtime, size and format
+  (64 entries). `X-Thumbnail-Cache: hit|miss` shows which, and a cached
+  thumbnail is served even while Studio is busy.
+
+| Situation | Response |
+|---|---|
+| `thumbnail` not an integer 16-1024, or `format` not `png`/`jpeg` | `400 INVALID_FIELD` |
+| No Qt decoder for the extension, undecodable content, or over the limits | `422 THUMBNAIL_UNSUPPORTED` |
+| Studio's main thread busy, or no decode within 10 s | `503 STUDIO_BUSY` (retryable) |
+
 ```python
 from dazpy import DazClient
 
@@ -2470,6 +2504,8 @@ png = client.download_artifact(rid, 0)             # bytes
 client.download_artifact(rid, 0, "local.png")      # stream to a file
 head = client.download_artifact(rid, 0, byte_range=(0, 1023))
 client.download_artifacts(rid, "out/")             # every available artifact
+thumb = client.get_artifact_thumbnail(rid, 0, 256)  # PNG bytes, longest edge 256
+client.get_artifact_thumbnail(rid, 0, 512, format="jpeg", dest="preview.jpg")
 ```
 
 `AsyncDazClient` has the same methods as coroutines.
