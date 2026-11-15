@@ -850,8 +850,11 @@ paths:
         events until the render completes or fails. The SDK exposes no
         intra-frame percent, so a single-frame render gets a 0% event when it
         starts and then a terminal event. An animation render
-        (`POST /render/animation`) also gets one `progress` event per frame
-        boundary on Studio 4 and 6. A subscriber that joins mid-render first
+        (`POST /render/animation`) also gets `progress` events at frame
+        boundaries. Studio 4 sends one per frame. Studio 6 checks the frame
+        report every 0.5 s, so frames faster than that are merged into an event
+        for the latest frame. Frame numbers only ever increase. A subscriber
+        that joins mid-render first
         receives the latest frame event. If the render already finished, the
         stored terminal event is sent and the stream closes. `:keepalive`
         comments are sent about every 3 s while idle.

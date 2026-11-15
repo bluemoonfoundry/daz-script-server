@@ -21,8 +21,9 @@ All notable changes to DazScript Server are documented here.
 - **`GET /render/{id}/progress` streams animation frame events on Studio 6.**
   Studio 6 shims `print()`, so the `[DAZPY_FRAME]` marker never reached the
   stream there. The SSE handler now polls the job's server-owned frame report,
-  the same source job status uses, and emits one `progress` event per frame
-  (`percent`, `frame`, `total_frames`), as Studio 4 already did. Frame events
+  every 0.5 s, the same source job status uses, and emits `progress` events
+  (`percent`, `frame`, `total_frames`) as Studio 4 already did. Frames faster
+  than 0.5 s are merged into an event for the latest frame. Frame events
   are never duplicated or reordered, and a subscriber that joins mid-render
   first gets the latest frame. The OpenAPI example payloads for this stream now
   match what the server sends.

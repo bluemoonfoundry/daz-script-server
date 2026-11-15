@@ -360,7 +360,9 @@ each frame boundary during an animation render, instead of only start/
 terminal events — the DAZ SDK exposes no per-percent render progress
 signal, so this frame-level marker is the most granular progress available.
 The frame events arrive on Studio 4 and Studio 6. Studio 6 shims `print()`,
-so its SSE handler reads the job's frame report instead of the print marker.
+so its SSE handler reads the job's frame report every 0.5 s instead of using
+the print marker. Frames faster than that are merged into an event for the
+latest frame.
 `GET /requests/:id/status` reports the same frame N of M
 (`observation.progress.frame` / `total`, `progress_source: "frames"`).
 
