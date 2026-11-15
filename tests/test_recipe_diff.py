@@ -172,9 +172,10 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(ops(p), [("delete", "lighting.lights.key")])
         self.assertEqual(p.overwritten, ("lighting.lights.key",))
 
-    def test_scene_wins_on_removed_tweaked_entity_keeps_node_with_warning(self):
+    def test_scene_wins_on_removed_tweaked_entity_releases_node_with_warning(self):
         p = diff(ds(ANNA, CU), live_tweaked(D, "lighting.lights.key", "output"), on_conflict="scene_wins")
-        self.assertEqual(p.steps, ())
+        self.assertEqual(ops(p), [("release", "lighting.lights.key")])
+        self.assertEqual(p.steps[0].node_name, "r1:key")
         self.assertEqual(p.kept, ("lighting.lights.key",))
         self.assertEqual([(w.code, w.path) for w in p.warnings],
                          [("removed_entity_kept", "lighting.lights.key")])
@@ -187,9 +188,9 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(unparent.channels, {"children": {"names": ["Shirt"]}})
         self.assertEqual(unparent.node_name, "r1:anna")
 
-    def test_scene_wins_on_foreign_children_keeps_node_with_warning(self):
+    def test_scene_wins_on_foreign_children_releases_node_with_warning(self):
         p = diff(D_without_actor, live_with_children(D), on_conflict="scene_wins")
-        self.assertEqual(p.steps, ())
+        self.assertEqual(ops(p), [("release", "actors.anna")])
         self.assertEqual([w.code for w in p.warnings], ["removed_entity_kept"])
 
     def test_deleted_in_scene_recipe_wins_recreates_scene_wins_drops_from_manifest(self):
@@ -250,6 +251,13 @@ class ChannelGranularityTests(unittest.TestCase):
         p = diff(D1, live, on_conflict="scene_wins", resolutions={"actors.anna": "recipe"})
         self.assertEqual([s.op for s in p.steps],
                          ["create", "modify", "set_environment", "adopt", "unparent", "delete"])
+
+    def test_release_runs_with_the_reversible_steps_before_removals(self):
+        D0 = ds(ANNA, CU, KEY, d_prop("ball"))
+        live = live_with_children(D0, "actors.anna", ("Shirt",))
+        live = live_tweaked(D0, "props.ball", "transform", live=live)
+        p = diff(ds(CU, KEY), live, resolutions={"actors.anna": "recipe", "props.ball": "scene"})
+        self.assertEqual([s.op for s in p.steps], ["release", "unparent", "delete"])
 
 
 class PoseTests(unittest.TestCase):
@@ -426,7 +434,9 @@ class FixRound1Tests(unittest.TestCase):
         self.assertEqual(ops(rw), [("create", "actors.anna"), ("delete", "actors.anna")])
         self.assertEqual(rw.overwritten, ("actors.anna",))
         sw = diff(D1, live, on_conflict="scene_wins")
-        self.assertEqual(sw.steps, ())
+        # kept replace: the old node is released (kept, unowned), the new asset created
+        self.assertEqual(ops(sw), [("create", "actors.anna"), ("release", "actors.anna")])
+        self.assertEqual(sw.steps[1].node_name, "r1:anna")
         self.assertEqual(sw.kept, ("actors.anna",))
         self.assertEqual([(w.code, w.path) for w in sw.warnings], [("removed_entity_kept", "actors.anna")])
 
@@ -438,7 +448,7 @@ class FixRound1Tests(unittest.TestCase):
         rw = diff(D1, live, resolutions={"actors.anna": "recipe"})
         self.assertEqual([s.op for s in rw.steps], ["create", "unparent", "delete"])
         sw = diff(D1, live, on_conflict="scene_wins")
-        self.assertEqual(sw.steps, ())
+        self.assertEqual([s.op for s in sw.steps], ["create", "release"])
         self.assertEqual([w.code for w in sw.warnings], ["removed_entity_kept"])
 
     def test_record_without_create_info_is_not_replaced(self):

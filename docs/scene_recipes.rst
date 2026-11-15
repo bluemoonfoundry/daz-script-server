@@ -164,7 +164,9 @@ values. Moving an actor in the recipe moves the cameras and lights that
 reference it. Dragging her in the viewport is a hand tweak on that actor only.
 
 A different asset or light type for an existing entity is a **replace**: the old
-node goes through the same checks as a removal, then a new node is created.
+node goes through the same checks as a removal, then a new node is created. If
+that check keeps the old node (``scene``), it stays in the scene but is
+released: the recipe no longer owns it.
 
 Conflict model
 --------------
@@ -208,7 +210,13 @@ A node to be deleted that has children the recipe does not own (clothing or
 props you parented to it) is a ``has_foreign_children`` conflict. If the recipe
 wins, those children are unparented to the scene root (keeping their world
 transform) and then the node is deleted. Apply never deletes a node it did not
-create. Poses are compared by a full pose capture, so a hand-posed figure is a
+create.
+
+Keeping a removed node (``scene`` on ``removed_from_recipe`` or
+``has_foreign_children``) **releases** it: apply removes its ownership record
+and drops it from the manifest, so the node stays in the scene as an ordinary,
+unowned node and later applies no longer report it. To bring it back under the
+recipe, delete it and add the entity again. Poses are compared by a full pose capture, so a hand-posed figure is a
 hand tweak, and a pose swap on top of it is a conflict.
 
 Numeric comparisons use a tolerance of 0.05.
@@ -250,7 +258,8 @@ Accepting a hand deletion (resolution ``scene`` on ``deleted_in_scene``) records
 a tombstone in the manifest, so later applies do not recreate the node and
 instead warn ``hand_deleted_kept``. Resolve that path with ``recipe`` to bring
 it back. Other warning codes: ``hand_tweak_kept``, ``removed_entity_kept`` (an
-entity removed from the recipe whose node was kept), ``unknown_resolution`` and
+entity removed or replaced in the recipe whose node was kept and released),
+``unknown_resolution`` and
 ``deleted_not_restored`` (see below).
 
 Rollback guarantees
@@ -264,7 +273,8 @@ cannot do this: it only drops the undo grouping.
 - Work is journaled. On failure the journal is walked in reverse: created nodes
   (including everything a load added) are deleted, modified channels are written
   back to their prior values (a write that fails halfway is restored too), the
-  environment and records are restored, unparented children are reparented.
+  environment and records are restored (including records removed by a
+  release), unparented children are reparented.
 - Deletions and unparenting run **last**, after everything that can still fail,
   because a deleted node cannot be brought back. A failure in that phase leaves
   the deletes already done in place; ``result.steps`` lists them and each carries

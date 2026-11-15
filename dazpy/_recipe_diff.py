@@ -21,6 +21,11 @@ Step semantics for the executor:
   Studio; ``prior`` = live observed values of those channels, for rollback.
 - ``adopt``: write nothing to Studio; rewrite the record so
   ``desired[ch] = channels[ch]`` and ``observed[ch] = prior[ch]``.
+- ``release``: remove the ownership record from ``node_name`` and drop the
+  path from the manifest (unless a ``create`` for the same path gives it a new
+  node).  The node stays in the scene, no longer owned.  Emitted when a
+  removal conflict is resolved ``"scene"``; reversible (the executor restores
+  the record on rollback).
 - ``unparent``: move ``channels["children"]["names"]`` to scene root
   (preserving world transform) before the entity's ``delete``.
 - ``delete``: delete the node (runs last; cannot be rolled back).
@@ -29,8 +34,10 @@ Record contract: when writing an entity's record the executor stores
 ``DesiredEntity.create`` (asset path, light type) in ``EntityRecord.desired``
 under the reserved key ``"_create"``.  A changed create-info is a **replace**:
 the old node goes through the same checks as a removal (hand tweak →
-``removed_from_recipe``, foreign children → ``has_foreign_children``), and when
-it is deleted a ``create`` step builds the new node with every desired channel.
+``removed_from_recipe``, foreign children → ``has_foreign_children``); unless
+that conflict is unresolved, a ``create`` step builds the new node with every
+desired channel, and the old node is deleted (``"recipe"`` / no conflict) or
+released (``"scene"``).
 A record without ``"_create"`` is treated as unchanged (no replace).
 
 Conflict paths are ``<entity path>.<channel>`` for ``modified`` and the entity
@@ -54,7 +61,7 @@ from ._scene_state import _DEFAULT_VERIFY_TOLERANCE, _pose_mismatches
 OnConflict = Literal["ask", "recipe_wins", "scene_wins"]
 Resolution = Literal["recipe", "scene"]
 ConflictKind = Literal["modified", "removed_from_recipe", "deleted_in_scene", "has_foreign_children"]
-StepOp = Literal["create", "modify", "set_environment", "adopt", "unparent", "delete"]
+StepOp = Literal["create", "modify", "set_environment", "adopt", "release", "unparent", "delete"]
 
 ENVIRONMENT_PATH = "lighting.environment"
 CREATE_KEY = "_create"
@@ -67,7 +74,7 @@ _MAX_DRIFTED = 5
 # "live already equals desired" can be detected (controller ruling 3).
 _NO_SHORTCUT_CHANNELS = (_POSE_CHANNEL, _ENVIRONMENT_CHANNEL)
 _STEP_ORDER: dict[str, int] = {op: i for i, op in enumerate(
-    ("create", "modify", "set_environment", "adopt", "unparent", "delete"))}
+    ("create", "modify", "set_environment", "adopt", "release", "unparent", "delete"))}
 
 
 @dataclass(frozen=True)
@@ -258,20 +265,21 @@ class _Planner:
             self.step("create", path, d.channels, None, None)
 
     def removed(self, entity: LiveEntity) -> None:
-        self.retire(entity, None, f"{entity.path} was removed from the recipe but kept in the scene.")
+        self.retire(entity, None, f"{entity.path} was removed from the recipe but kept in the "
+                                  "scene; the recipe no longer owns it.")
 
     def replace(self, d: DesiredEntity, entity: LiveEntity) -> None:
-        """Create-info changed: retire the old node; create the new one if it goes."""
+        """Create-info changed: retire the old node and create the new one."""
         desired = dict(d.channels, **{CREATE_KEY: d.create})
         if self.retire(entity, desired,
-                       f"{entity.path} changed asset/type in the recipe, but the existing node "
-                       "was kept in the scene and not replaced."):
+                       f"{entity.path} changed asset/type in the recipe; the existing node was "
+                       "kept in the scene (no longer owned by the recipe) and a new one created."):
             self.step("create", entity.path, d.channels, None, None)
 
     def retire(self, entity: LiveEntity, desired: object, kept_message: str) -> bool:
-        """Delete *entity*'s node unless a removal conflict keeps or blocks it.
+        """Delete *entity*'s node, or release it when a removal conflict keeps it.
 
-        Returns True when delete steps were emitted.
+        Returns False only when the conflict is unresolved (nothing emitted).
         """
         path = entity.path
         if entity.foreign_children:
@@ -283,10 +291,12 @@ class _Planner:
             kind = None
         if kind is not None:
             res = self.conflict(Conflict(path, kind, desired, entity.record.desired, live_report))
+            if res is None:
+                return False
             if res == "scene":
                 self.warn(path, "removed_entity_kept", kept_message)
-            if res != "recipe":
-                return False
+                self.step("release", path, {}, None, entity.node_name)
+                return True
         if entity.foreign_children:
             self.step("unparent", path, {"children": {"names": list(entity.foreign_children)}},
                       None, entity.node_name)

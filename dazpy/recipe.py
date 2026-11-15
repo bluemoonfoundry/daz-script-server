@@ -51,7 +51,7 @@ class ObserveReport:
     kept (``hand_tweak_kept``) and hand deletions (``deleted_in_scene``).
     ``pending``: what an apply would change if the recipe won every conflict
     (``<entity>.<channel>`` for modified/environment channels, the entity path
-    for creates, unparents and deletes). ``in_sync``: applied, with no pending
+    for creates, releases, unparents and deletes). ``in_sync``: applied, with no pending
     change, drift or conflict.
     """
 
@@ -154,7 +154,7 @@ def _pending(the_plan: RecipePlan) -> tuple[str, ...]:
     for s in the_plan.steps:
         if s.op in ("modify", "set_environment"):
             out += [f"{s.path}.{ch}" for ch in s.channels]
-        elif s.op in ("create", "unparent", "delete"):
+        elif s.op in ("create", "release", "unparent", "delete"):
             out.append(s.path)
     return tuple(dict.fromkeys(out))
 

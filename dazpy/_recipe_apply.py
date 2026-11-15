@@ -7,7 +7,8 @@ walked in reverse, so a failed apply leaves the scene as it was (dazpy's
 
 Order of work:
 
-1. ``create`` / ``modify`` / ``set_environment`` / ``adopt`` steps;
+1. ``create`` / ``modify`` / ``set_environment`` / ``adopt`` / ``release``
+   steps;
 2. ownership records for every created, modified or adopted entity;
 3. ``unparent`` / ``delete`` steps (irreversible, so after everything that can
    still fail and be undone);
@@ -19,7 +20,8 @@ is restored too); set_environment → write back the pre-apply environment (the
 step's prior, or one ``observe_environment`` taken just before when the plan
 has none); record write → write the previous record back (records on nodes
 created by this apply are not compensated, since those nodes are deleted);
-unparent → reparent the children, unless their owner has already been deleted.
+release → write the removed record back; unparent → reparent the children,
+unless their owner has already been deleted.
 Deletes cannot be undone: a failure in the delete phase leaves the deletes
 already done in place, reports them in ``ApplyResult.steps`` and as
 ``deleted_not_restored`` warnings.  Compensations that fail are collected in
@@ -30,7 +32,8 @@ channel plus ``"_create"`` and a fresh ``observe``; a modified entity's record
 is merged per channel (only changed channels get new desired + fresh observed
 values); an adopted channel stores the new desired value and the step's prior
 (live) value.  The manifest lists every recipe entity with an owned node after
-apply, ``deleted = plan.tombstones``, and the environment record (new when the
+apply (a released path is dropped unless this apply created a new node for
+it), ``deleted = plan.tombstones``, and the environment record (new when the
 environment was written or adopted, else the previous one).
 
 Known v1 gap: recipe-owned nodes parented under a node being deleted are not
@@ -88,6 +91,7 @@ class _Run:
         self.created: dict[str, list[str]] = {}
         self.deleted_steps: list[Step] = []
         self.deleted_nodes: set[str] = set()
+        self.released: set[str] = set()
         self.current: Step | None = None
         self.context = ""
         self.env_record = live.manifest.environment if live.manifest else None
@@ -121,6 +125,12 @@ class _Run:
             if prior is not None:
                 self.undo("restore the scene environment", lambda: ops.set_environment(prior))
             ops.set_environment(step.channels[_ENV_CHANNEL])
+        elif step.op == "release":
+            node, prev = step.node_name, self.live.entities[step.path].record
+            self.undo(f"restore the ownership record of {step.path} on {node!r}",
+                      lambda: ops.write_record(node, prev))
+            ops.remove_record(node)
+            self.released.add(step.path)
         elif step.op == "unparent":
             names, owner = list(step.channels["children"]["names"]), step.node_name
 
@@ -189,8 +199,8 @@ class _Run:
 
     def write_manifest(self) -> None:
         self.context = "writing the recipe manifest"
-        deleted = {s.path for s in self.deleted_steps}
-        entities = [p for p in self.live.entities if p not in deleted or p in self.created]
+        gone = {s.path for s in self.deleted_steps} | self.released
+        entities = [p for p in self.live.entities if p not in gone or p in self.created]
         entities += [p for p in self.created if p not in entities]
         self.ops.write_manifest(Manifest(self.recipe_id, tuple(entities), self.env_record,
                                          tuple(self.plan.tombstones)))

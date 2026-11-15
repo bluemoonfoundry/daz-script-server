@@ -74,7 +74,8 @@ class SceneOps(Protocol):
 
     def write_record(self, node_name: str, record: EntityRecord) -> None: ...
 
-    def remove_record(self, node_name: str) -> None: ...
+    def remove_record(self, node_name: str) -> None:
+        """Remove the ownership record (release: the node stays, unowned)."""
 
     def write_manifest(self, manifest: Manifest) -> None: ...
 
@@ -378,7 +379,8 @@ class DazSceneOps:
             raise NodeNotFoundError(f"Cannot write ownership record, node not found: {node_name!r}")
 
     def remove_record(self, node_name: str) -> None:
-        self._client.execute(remove_record_script(node_name))
+        if self._client.execute(remove_record_script(node_name)).value is False:
+            raise DazError(f"Cannot release {node_name!r}: node or ownership record not found")
 
     def write_manifest(self, manifest: Manifest) -> None:
         self._client.execute(write_manifest_script(manifest))

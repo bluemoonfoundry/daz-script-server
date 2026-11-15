@@ -373,6 +373,22 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual(self.assert_no_op(moved).warnings, ())
         self.assertTrue(observe(moved, self.sim).in_sync)
 
+    def test_kept_removal_releases_ownership_and_round_trips_to_a_no_op(self):
+        r = two_actor_recipe()
+        r["props"] = {"ball": {"asset": "g9", "position": [0, 0, 100]}}
+        self.assertTrue(apply(r, self.sim).applied)
+        ball = self.sim.by_label(f"{RID}:ball")
+        ball["position"][0] += 30.0  # hand tweak
+        bare = two_actor_recipe()
+        self.assertTrue(plan(bare, self.sim).blocked)  # removed_from_recipe conflict
+        result = apply(bare, self.sim, on_conflict="scene_wins")
+        self.assertTrue(result.applied)
+        self.assertIn("removed_entity_kept", [w.code for w in result.warnings])
+        self.assertIn(ball["name"], self.sim.nodes)  # kept in the scene ...
+        self.assertIsNone(ball["record"])            # ... but no longer owned
+        self.assertEqual(self.assert_no_op(bare).warnings, ())
+        self.assertTrue(observe(bare, self.sim).in_sync)
+
 
 if __name__ == "__main__":
     unittest.main()

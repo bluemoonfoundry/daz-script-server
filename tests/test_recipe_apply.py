@@ -117,19 +117,35 @@ class ExecuteSuccessTests(unittest.TestCase):
 
     def test_manifest_lists_owned_nodes_and_tombstones(self):
         # box deleted by hand (accepted -> tombstone); ball removed from recipe but
-        # hand-tweaked (kept); camera one untouched.
+        # hand-tweaked (kept -> released, no longer owned); camera one untouched.
         D_old = ds(d_camera("one"), d_prop("ball"), d_prop("box"))
         L = live_tweaked(D_old, "props.ball", "transform", live=live_without(live_matching(D_old), "props.box"))
         D = ds(d_camera("one"), d_prop("box"))
         ops = FakeOps()
         plan, r = run(D, L, ops, on_conflict="scene_wins")
-        self.assertEqual(plan.steps, ())
+        self.assertEqual([(s.op, s.path) for s in plan.steps], [("release", "props.ball")])
         self.assertTrue(r.applied)
-        self.assertEqual(ops.methods(), ["write_manifest"])
+        self.assertEqual(ops.calls, [("remove_record", "r1:ball"), ("write_manifest",
+                                                                     written_manifest(ops))])
         m = written_manifest(ops)
-        self.assertEqual(set(m.entities), {"cameras.one", "props.ball"})
+        self.assertEqual(set(m.entities), {"cameras.one"})
         self.assertEqual(m.deleted, ("props.box",))
         self.assertIsNone(m.environment)
+
+    def test_kept_replace_releases_old_node_and_creates_new_one(self):
+        D_old = ds(d_camera("one"), d_prop("ball"))
+        L = live_tweaked(D_old, "props.ball", "transform", live=live_matching(D_old))
+        new_ball = d_prop("ball")
+        new_ball = type(new_ball)(new_ball.path, new_ball.kind, new_ball.label,
+                                  {"asset_path": "/ball2.duf"}, new_ball.channels)
+        ops = FakeOps(create_names={"props.ball": ["Ball 2"]})
+        plan, r = run(ds(d_camera("one"), new_ball), L, ops, on_conflict="scene_wins")
+        self.assertTrue(r.applied)
+        self.assertIn(("remove_record", "r1:ball"), ops.calls)
+        self.assertNotIn(("delete", "r1:ball"), ops.calls)
+        self.assertEqual(written_records(ops)["Ball 2"].desired["_create"], {"asset_path": "/ball2.duf"})
+        self.assertNotIn("r1:ball", written_records(ops))
+        self.assertEqual(set(written_manifest(ops).entities), {"cameras.one", "props.ball"})
 
     def test_manifest_drops_deleted_entities(self):
         D_old = ds(d_camera("one"), d_prop("ball"))
@@ -277,6 +293,15 @@ class RollbackTests(unittest.TestCase):
         self.assertTrue(r.rolled_back)
         self.assertIn(("write_record", "r1:key", L_OLD.entities["lighting.lights.key"].record),
                       ops.calls_with_args)
+
+    def test_failed_apply_restores_released_record(self):
+        D_old = ds(d_camera("one"), d_prop("ball"))
+        L = live_tweaked(D_old, "props.ball", "transform", live=live_matching(D_old))
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        plan, r = run(ds(d_camera("one")), L, ops, on_conflict="scene_wins")
+        self.assertTrue(r.rolled_back)
+        self.assertEqual(ops.calls_with_args[-1],
+                         ("write_record", "r1:ball", L.entities["props.ball"].record))
 
     def test_created_nodes_get_no_record_compensation(self):
         # they are deleted anyway; removing their record first only adds failure points
@@ -555,6 +580,13 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.ops.write_manifest(m)
         self.assertEqual(self.client.scripts, [write_record_script("Ball", r), remove_record_script("Ball"),
                                                write_manifest_script(m)])
+
+
+class DazSceneOpsReleaseTests(unittest.TestCase):
+    def test_remove_record_raises_when_nothing_was_released(self):
+        ops = DazSceneOps(DazScene(scripted_client(("removeDataItem", False))))
+        with self.assertRaisesRegex(DazError, "Ball"):
+            ops.remove_record("Ball")
 
 
 class DazSceneOpsObserveTests(unittest.TestCase):
