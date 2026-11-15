@@ -8,6 +8,17 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **Scene recipes (5d6f.18).** New `dazpy.recipe` module: `validate`, `plan`,
+  `apply`, `observe` and `render` over a versioned JSON scene description
+  (`schemas/scene-recipe.v1.schema.json`, also shipped as dazpy package data and
+  returned by `recipe_schema()`). Apply is incremental and three-way: it
+  compares the recipe, the last-applied state and the live scene, keeps hand
+  tweaks with a `hand_tweak_kept` warning, and reports conflicts
+  (`on_conflict="ask" | "recipe_wins" | "scene_wins"`, per-path `resolutions`).
+  A failed apply rolls back by compensation. Sync only; no `dazpy.aio`
+  variants. Includes `docs/examples/recipes/g9-portrait.json`, live tests
+  (`tests/test_recipe_live.py`) and `docs/scene_recipes.rst`.
+
 - **Companion-plugin discovery registry.** Plugins can name themselves with
   `registerCompanionPlugin(name, version, description)` and attribute routes
   with a 5th `pluginName` argument to `registerPluginRoute()` (the 4-argument

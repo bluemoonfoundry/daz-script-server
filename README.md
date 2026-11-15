@@ -379,6 +379,15 @@ See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## What's New in v2.9.0
 
+### 🧾 dazpy.recipe — declarative scene recipes
+
+`dazpy.recipe` validates, plans, applies, observes and renders a versioned JSON
+scene description (assets, actors, poses, lighting, cameras, shots). Re-applying
+only changes what the recipe changed, keeps your hand tweaks (warning, or a
+conflict you resolve), and rolls back a failed apply. See
+[docs/scene_recipes.rst](docs/scene_recipes.rst) and the example
+[g9-portrait.json](docs/examples/recipes/g9-portrait.json).
+
 ### 🎬 dazpy.cinematics — camera shot builders
 
 `dazpy.cinematics` packages common camera choreography on top of

@@ -21,6 +21,7 @@ manipulate the scene through a type-safe Python API.
    :caption: Contents
 
    quickstart
+   scene_recipes
    api/index
 
 Indices
