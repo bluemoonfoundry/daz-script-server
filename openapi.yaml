@@ -91,6 +91,14 @@ tags:
     description: Render job submission, progress streaming, and cancellation (v2.6.0+)
   - name: Artifacts
     description: Authenticated downloads of the files a job declared
+  - name: Scene
+    description: Scene file I/O
+  - name: CompanionPlugins
+    description: |
+      Routes registered at runtime by optional companion plugins through
+      `registerPluginRoute()`. They return 404 `ROUTE_NOT_FOUND` when the
+      plugin is not installed. POST routes run the write chain and GET routes
+      the read chain, like built-in routes; the response body is the plugin's own.
 
 paths:
   /status:
@@ -784,6 +792,52 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /render/animation:
+    post:
+      tags: [Render]
+      summary: Submit a per-frame animation render job
+      description: |
+        Renders each frame from `start_frame` to `end_frame` inclusive as its own
+        image and returns a `request_id` immediately. The `{frame}` token in
+        `output_path` is replaced by the zero-padded frame number. Progress
+        advances at frame boundaries (`GET /render/{id}/progress`); the completed
+        job's output manifest lists every frame written (`kind: "frame"`).
+        If `camera` is given, the server checks that it exists in the scene before queueing.
+      operationId: submitRenderAnimation
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderAnimationRequest'
+      responses:
+        '200':
+          description: Animation render job submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncSubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /render/{id}/progress:
     get:
       tags: [Render]
@@ -921,6 +975,136 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /scene/save-copy:
+    post:
+      tags: [Scene]
+      summary: Save a copy of the current scene
+      description: |
+        Writes the current scene to `path` without changing the scene's
+        filename or dirty flag ("Save a Copy As…"). A clean scene that already
+        has a file on disk is copied byte for byte (`method: "copy"`). A dirty
+        scene is serialized with `Scene.saveScene()` (`"serialize"`); if that
+        changes the scene's filename, the original file is saved again to
+        restore it (`"serialize+restore"`), which also writes the unsaved
+        changes to the original file. An existing file at `path` is overwritten,
+        so retries are safe.
+      operationId: saveSceneCopy
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveCopyRequest'
+      responses:
+        '200':
+          description: Copy written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveCopyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: File copy or `saveScene()` failed (`INTERNAL_ERROR`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /export/usd:
+    post:
+      tags: [CompanionPlugins]
+      summary: Queue a USD export (daz-bridge-usd plugin)
+      description: |
+        Registered by the `daz-bridge-usd` companion plugin. Queues a USD export
+        of the current scene and returns a `job_id`; poll
+        `GET /export/usd/{id}`. Unlike built-in routes, the request uses
+        camelCase fields and errors come back as `{"error": "..."}`, not as
+        `ErrorResponse`.
+      operationId: submitUsdExport
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsdExportRequest'
+      responses:
+        '202':
+          description: Export job queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsdExportJob'
+        '400':
+          description: Missing body, invalid JSON, or missing `outputPath`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: daz-bridge-usd is not installed (`ROUTE_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /export/usd/{id}:
+    get:
+      tags: [CompanionPlugins]
+      summary: Poll a USD export job (daz-bridge-usd plugin)
+      operationId: getUsdExportStatus
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The `job_id` returned by `POST /export/usd`
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsdExportJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: |
+            Unknown job id (`{"error": "Job not found: <id>"}`), or the plugin
+            is not installed (`ErrorResponse` with `ROUTE_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PluginError'
+                  - $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     apiToken:
@@ -1040,6 +1224,151 @@ components:
           items:
             $ref: '#/components/schemas/FigureMorphs'
           description: Per-figure morph overrides applied before rendering
+
+    RenderAnimationRequest:
+      type: object
+      required: [output_path, start_frame, end_frame]
+      properties:
+        output_path:
+          type: string
+          description: Absolute output path; must contain the literal token `{frame}`
+          example: "C:/renders/walk_{frame}.png"
+        start_frame:
+          type: integer
+          minimum: 0
+          description: First frame to render
+          example: 0
+        end_frame:
+          type: integer
+          minimum: 0
+          description: |
+            Last frame to render, inclusive; must be >= `start_frame`. At most
+            1000 frames per job.
+          example: 47
+        frame_padding:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 4
+          description: Zero-padded width of the number substituted for `{frame}`
+        width:
+          type: integer
+          minimum: 1
+          description: Render width in pixels; must be given together with `height`
+          example: 1920
+        height:
+          type: integer
+          minimum: 1
+          description: Render height in pixels; must be given together with `width`
+          example: 1080
+        camera:
+          type: string
+          description: Scene-panel label of the camera to use (400 if not found)
+          example: "Camera 1"
+        engine:
+          type: string
+          enum: [iray, viewport, filament]
+          description: Render engine; omitted keeps the scene's current selection
+
+    SaveCopyRequest:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Destination `.duf` path; overwritten if it exists
+          example: "C:/backups/scene_v2.duf"
+
+    SaveCopyResponse:
+      type: object
+      required: [ok, path, source, method]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        path:
+          type: string
+          description: Destination path written
+        source:
+          type: string
+          description: The scene's own filename (empty for a never-saved scene)
+        method:
+          type: string
+          enum: [copy, serialize, serialize+restore]
+          description: How the copy was produced (see the route description)
+
+    UsdExportRequest:
+      type: object
+      required: [outputPath]
+      properties:
+        outputPath:
+          type: string
+          description: Destination `.usd`/`.usda`/`.usdc` path
+          example: "C:/exports/scene.usda"
+        includeGeometry:
+          type: boolean
+          default: true
+        includeMaterials:
+          type: boolean
+          default: true
+        includeSkeleton:
+          type: boolean
+          default: false
+        includeMorphs:
+          type: boolean
+          default: false
+        includeLights:
+          type: boolean
+          default: false
+          description: Export scene lights as UsdLux prims
+        includeCamera:
+          type: boolean
+          default: false
+          description: Export the active render camera as UsdGeomCamera
+        copyTextures:
+          type: boolean
+          default: true
+        startFrame:
+          type: integer
+          default: 0
+        endFrame:
+          type: integer
+          default: 0
+        fps:
+          type: number
+          default: 24
+
+    UsdExportJob:
+      type: object
+      required: [job_id, status, submittedAt]
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        submittedAt:
+          type: integer
+          format: int64
+          description: Submission time, milliseconds since the Unix epoch
+        completedAt:
+          type: integer
+          format: int64
+          description: Completion time, milliseconds since the Unix epoch (once finished)
+        outputPath:
+          type: string
+          description: Written file (only when `status` is `completed`)
+        error:
+          type: string
+          description: Failure message (only when the job failed)
+
+    PluginError:
+      type: object
+      description: Error body used by companion plugins that predate `ErrorResponse`
+      required: [error]
+      properties:
+        error:
+          type: string
 
     RenderVariant:
       type: object
@@ -1887,6 +2216,17 @@ components:
             success: false
             error_code: CONCURRENT_LIMIT_EXCEEDED
             error: "Server busy: maximum concurrent requests reached, please retry"
+            retryable: true
+    ServiceUnavailable:
+      description: Studio main thread busy, or the job queue is full (retry; `Retry-After` may be set)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: STUDIO_BUSY
+            error: "DAZ Studio's main thread is busy; please retry shortly"
             retryable: true
     IdempotencyInFlight:
       description: A request with this Idempotency-Key is still being processed (retry after `Retry-After`)
