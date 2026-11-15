@@ -148,7 +148,10 @@ def live_matching(D: dict, *, deleted: tuple = ()) -> LiveState:
     env_obs = None
     for path, e in D.items():
         obs = observed_for(e)
-        r = rec(RID, path, _copy.deepcopy(e.channels), _copy.deepcopy(obs))
+        rdesired = _copy.deepcopy(e.channels)
+        if e.kind != "environment":
+            rdesired["_create"] = _copy.deepcopy(e.create)  # executor's record contract
+        r = rec(RID, path, rdesired, _copy.deepcopy(obs))
         if e.kind == "environment":
             env_rec, env_obs = r, _copy.deepcopy(obs["environment"])
             continue

@@ -7,8 +7,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from dazpy._recipe_desired import DesiredEntity
 from dazpy._recipe_diff import Conflict, RecipePlan, Step, diff
-from dazpy._recipe_store import LiveState
+from dazpy._recipe_store import EntityRecord, LiveEntity, LiveState
 from recipe_fakes import (ENV_PATH, d_actor, d_camera, d_environment, d_light, d_prop, ds,
                           live_matching, live_tweaked, live_with_children, live_without,
                           with_observed)
@@ -335,6 +336,108 @@ class ShapeTests(unittest.TestCase):
         for obj in (s, c, diff(D, live_matching(D))):
             with self.assertRaises(Exception):
                 obj.path = "x"  # type: ignore[misc]
+
+
+class FixRound1Tests(unittest.TestCase):
+    """Review fix round 1: resolution validation, unknown keys, tombstones, replace."""
+
+    def test_invalid_resolution_value_raises_naming_path_and_allowed(self):
+        live = live_tweaked(D, "cameras.cu", "transform")
+        with self.assertRaises(ValueError) as cm:
+            diff(D_cam_moved, live, resolutions={"cameras.cu.transform": "Recipe"})
+        msg = str(cm.exception)
+        for part in ("cameras.cu.transform", "'recipe'", "'scene'"):
+            self.assertIn(part, msg)
+
+    def test_invalid_on_conflict_raises(self):
+        with self.assertRaises(ValueError) as cm:
+            diff(D, live_matching(D), on_conflict="recipe")  # type: ignore[arg-type]
+        self.assertIn("recipe_wins", str(cm.exception))
+
+    def test_unknown_resolution_key_warns_without_blocking(self):
+        live = live_tweaked(D, "cameras.cu", "transform")
+        p = diff(D_cam_moved, live, resolutions={"cameras.cu.transform": "recipe",
+                                                 "cameras.cu.transform.position": "scene"})
+        self.assertFalse(p.blocked)
+        w = [x for x in p.warnings if x.code == "unknown_resolution"]
+        self.assertEqual([x.path for x in w], ["cameras.cu.transform.position"])
+        self.assertIn("<entity>.<channel>", w[0].message)
+        self.assertIn("cameras.cu.transform", w[0].message.split("Conflict paths")[1])
+
+    def test_unknown_resolution_does_not_cover_a_real_conflict(self):
+        p = diff(D_cam_moved, live_tweaked(D, "cameras.cu", "transform"),
+                 resolutions={"cameras.cu.transform.position": "recipe"})
+        self.assertTrue(p.blocked)
+        self.assertIn("unknown_resolution", [w.code for w in p.warnings])
+
+    def test_tombstone_resolution_key_is_not_unknown(self):
+        live = live_without(live_matching(D, deleted=("cameras.cu",)), "cameras.cu")
+        p = diff(D, live, resolutions={"cameras.cu": "scene"})
+        self.assertNotIn("unknown_resolution", [w.code for w in p.warnings])
+
+    def test_tombstone_recreate_is_reported_overwritten(self):
+        live = live_without(live_matching(D, deleted=("cameras.cu",)), "cameras.cu")
+        for kwargs in ({"on_conflict": "recipe_wins"}, {"resolutions": {"cameras.cu": "recipe"}}):
+            self.assertEqual(diff(D, live, **kwargs).overwritten, ("cameras.cu",))
+
+    # replace on create-info change
+    @staticmethod
+    def _new_asset():
+        return ds(DesiredEntity(ANNA.path, ANNA.kind, ANNA.label, {"asset_path": "/g8.duf"},
+                                ANNA.channels), CU, KEY)
+
+    def test_create_info_change_replaces_untouched_node(self):
+        D1 = self._new_asset()
+        p = diff(D1, live_matching(D))
+        self.assertEqual(ops(p), [("create", "actors.anna"), ("delete", "actors.anna")])
+        self.assertEqual(p.steps[0].channels, D1["actors.anna"].channels)
+        self.assertEqual(p.steps[1].node_name, "r1:anna")
+
+    def test_light_type_change_replaces(self):
+        D1 = ds(ANNA, CU, DesiredEntity(KEY.path, KEY.kind, KEY.label, {"light_type": "point"},
+                                        KEY.channels))
+        self.assertEqual(ops(diff(D1, live_matching(D))),
+                         [("create", "lighting.lights.key"), ("delete", "lighting.lights.key")])
+
+    def test_replace_of_tweaked_node_is_removed_from_recipe_conflict(self):
+        D1 = self._new_asset()
+        live = live_tweaked(D, "actors.anna", "transform")
+        p = diff(D1, live)
+        self.assertTrue(p.blocked)
+        self.assertEqual([(c.path, c.kind) for c in p.conflicts], [("actors.anna", "removed_from_recipe")])
+        self.assertEqual(p.conflicts[0].desired["_create"], {"asset_path": "/g8.duf"})
+        rw = diff(D1, live, on_conflict="recipe_wins")
+        self.assertEqual(ops(rw), [("create", "actors.anna"), ("delete", "actors.anna")])
+        self.assertEqual(rw.overwritten, ("actors.anna",))
+        sw = diff(D1, live, on_conflict="scene_wins")
+        self.assertEqual(sw.steps, ())
+        self.assertEqual(sw.kept, ("actors.anna",))
+        self.assertEqual([(w.code, w.path) for w in sw.warnings], [("removed_entity_kept", "actors.anna")])
+
+    def test_replace_with_foreign_children(self):
+        D1 = self._new_asset()
+        live = live_with_children(D, "actors.anna", ("Shirt",))
+        p = diff(D1, live)
+        self.assertEqual([(c.path, c.kind) for c in p.conflicts], [("actors.anna", "has_foreign_children")])
+        rw = diff(D1, live, resolutions={"actors.anna": "recipe"})
+        self.assertEqual([s.op for s in rw.steps], ["create", "unparent", "delete"])
+        sw = diff(D1, live, on_conflict="scene_wins")
+        self.assertEqual(sw.steps, ())
+        self.assertEqual([w.code for w in sw.warnings], ["removed_entity_kept"])
+
+    def test_record_without_create_info_is_not_replaced(self):
+        D1 = self._new_asset()
+        live = live_matching(D)
+        e = live.entities["actors.anna"]
+        r = e.record
+        stripped = {k: v for k, v in r.desired.items() if k != "_create"}
+        ents = dict(live.entities)
+        ents["actors.anna"] = LiveEntity(e.path, e.node_name, e.kind,
+                                         EntityRecord(r.recipe_id, r.path, r.recipe_version,
+                                                      stripped, r.observed),
+                                         e.observed, e.foreign_children)
+        p = diff(D1, LiveState(live.manifest, ents, live.environment_observed))
+        self.assertEqual(p.steps, ())
 
 
 if __name__ == "__main__":

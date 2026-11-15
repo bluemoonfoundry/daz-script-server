@@ -25,8 +25,18 @@ Step semantics for the executor:
   (preserving world transform) before the entity's ``delete``.
 - ``delete``: delete the node (runs last; cannot be rolled back).
 
+Record contract: when writing an entity's record the executor stores
+``DesiredEntity.create`` (asset path, light type) in ``EntityRecord.desired``
+under the reserved key ``"_create"``.  A changed create-info is a **replace**:
+the old node goes through the same checks as a removal (hand tweak →
+``removed_from_recipe``, foreign children → ``has_foreign_children``), and when
+it is deleted a ``create`` step builds the new node with every desired channel.
+A record without ``"_create"`` is treated as unchanged (no replace).
+
 Conflict paths are ``<entity path>.<channel>`` for ``modified`` and the entity
-path for the other kinds; ``resolutions`` are keyed the same way.
+path for the other kinds; ``resolutions`` are keyed the same way (channel
+paths, never property paths).  Resolution keys that match no conflict (or
+accepted hand deletion) produce an ``unknown_resolution`` warning.
 """
 
 from __future__ import annotations
@@ -46,6 +56,9 @@ ConflictKind = Literal["modified", "removed_from_recipe", "deleted_in_scene", "h
 StepOp = Literal["create", "modify", "set_environment", "adopt", "unparent", "delete"]
 
 ENVIRONMENT_PATH = "lighting.environment"
+CREATE_KEY = "_create"
+_ON_CONFLICT_VALUES = ("ask", "recipe_wins", "scene_wins")
+_RESOLUTION_VALUES = ("recipe", "scene")
 _ENVIRONMENT_CHANNEL = "environment"
 _POSE_CHANNEL = "pose"
 _MAX_DRIFTED = 5
@@ -143,8 +156,11 @@ class _Planner:
         self.overwritten: list[str] = []
         self.kept: list[str] = []
         self.tombstones: list[str] = []
+        # Paths a resolution may legitimately name: conflicts + accepted deletions.
+        self.targets: list[str] = []
 
     def resolution_for(self, path: str) -> Resolution | None:
+        self.targets.append(path)
         if path in self.resolutions:
             return self.resolutions[path]
         return {"recipe_wins": "recipe", "scene_wins": "scene"}.get(self.on_conflict)
@@ -203,9 +219,14 @@ class _Planner:
         entity = live.entities.get(path)
         if entity is not None:
             r = entity.record
+            old_create = r.desired.get(CREATE_KEY)
+            if old_create is not None and not _equal(old_create, d.create, self.tol):
+                self.replace(d, entity)
+                return
             self.compare(d, path, r.desired, r.observed, entity.observed, entity.node_name, "modify")
         elif path in tombstoned:
             if self.resolution_for(path) == "recipe":
+                self.overwritten.append(path)
                 self.step("create", path, d.channels, None, None)
             else:
                 self.tombstones.append(path)
@@ -222,29 +243,40 @@ class _Planner:
             self.step("create", path, d.channels, None, None)
 
     def removed(self, entity: LiveEntity) -> None:
+        self.retire(entity, None, f"{entity.path} was removed from the recipe but kept in the scene.")
+
+    def replace(self, d: DesiredEntity, entity: LiveEntity) -> None:
+        """Create-info changed: retire the old node; create the new one if it goes."""
+        desired = dict(d.channels, **{CREATE_KEY: d.create})
+        if self.retire(entity, desired,
+                       f"{entity.path} changed asset/type in the recipe, but the existing node "
+                       "was kept in the scene and not replaced."):
+            self.step("create", entity.path, d.channels, None, None)
+
+    def retire(self, entity: LiveEntity, desired: object, kept_message: str) -> bool:
+        """Delete *entity*'s node unless a removal conflict keeps or blocks it.
+
+        Returns True when delete steps were emitted.
+        """
         path = entity.path
         if entity.foreign_children:
-            res = self.conflict(Conflict(path, "has_foreign_children", None, entity.record.desired,
-                                         {"foreign_children": list(entity.foreign_children)}))
-            if res == "recipe":
-                self.step("unparent", path, {"children": {"names": list(entity.foreign_children)}},
-                          None, entity.node_name)
-                self.step("delete", path, {}, None, entity.node_name)
-            elif res == "scene":
-                self.removed_kept(path)
+            kind = "has_foreign_children"
+            live_report: object = {"foreign_children": list(entity.foreign_children)}
         elif _tweaked_channels(entity, self.tol):
-            res = self.conflict(Conflict(path, "removed_from_recipe", None, entity.record.desired,
-                                         entity.observed))
-            if res == "recipe":
-                self.step("delete", path, {}, None, entity.node_name)
-            elif res == "scene":
-                self.removed_kept(path)
+            kind, live_report = "removed_from_recipe", entity.observed
         else:
-            self.step("delete", path, {}, None, entity.node_name)
-
-    def removed_kept(self, path: str) -> None:
-        self.warn(path, "removed_entity_kept",
-                  f"{path} was removed from the recipe but kept in the scene.")
+            kind = None
+        if kind is not None:
+            res = self.conflict(Conflict(path, kind, desired, entity.record.desired, live_report))
+            if res == "scene":
+                self.warn(path, "removed_entity_kept", kept_message)
+            if res != "recipe":
+                return False
+        if entity.foreign_children:
+            self.step("unparent", path, {"children": {"names": list(entity.foreign_children)}},
+                      None, entity.node_name)
+        self.step("delete", path, {}, None, entity.node_name)
+        return True
 
     def environment(self, d: DesiredEntity | None, live: LiveState) -> None:
         record = live.manifest.environment if live.manifest else None
@@ -273,6 +305,13 @@ def diff(desired: dict[str, DesiredEntity], live: LiveState, *, on_conflict: OnC
     plan: ``blocked=True`` and no steps (all conflicts and warnings are still
     reported).
     """
+    if on_conflict not in _ON_CONFLICT_VALUES:
+        raise ValueError(f"on_conflict={on_conflict!r} is invalid; allowed values: "
+                         f"{', '.join(map(repr, _ON_CONFLICT_VALUES))}")
+    for key, value in (resolutions or {}).items():
+        if value not in _RESOLUTION_VALUES:
+            raise ValueError(f"resolutions[{key!r}]={value!r} is invalid; allowed values: "
+                             f"{', '.join(map(repr, _RESOLUTION_VALUES))}")
     p = _Planner(on_conflict, resolutions, tolerance)
     manifest = live.manifest
     owned = set(manifest.entities) if manifest else set()
@@ -286,6 +325,15 @@ def diff(desired: dict[str, DesiredEntity], live: LiveState, *, on_conflict: OnC
         if path not in desired:
             p.removed(entity)
     p.environment(desired.get(ENVIRONMENT_PATH), live)
+
+    conflict_paths = [c.path for c in p.conflicts]
+    for key in p.resolutions:
+        if key not in p.targets:
+            p.warn(key, "unknown_resolution",
+                   f"Resolution {key!r} matches no conflict and was ignored. Resolution keys are "
+                   "channel paths like '<entity>.<channel>' (e.g. 'cameras.cu.transform'), or the "
+                   "entity path for removal/deletion conflicts. Conflict paths in this plan: "
+                   f"{', '.join(conflict_paths) if conflict_paths else '(none)'}.")
 
     blocked = on_conflict == "ask" and any(c.path not in p.resolutions for c in p.conflicts)
     if blocked:
