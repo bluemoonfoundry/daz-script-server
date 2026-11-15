@@ -18,6 +18,21 @@ jobs:
       - name: Check version is the same in every file
         run: python scripts/check_version_consistency.py
 
+  openapi-parity:
+    name: Route / OpenAPI parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check routes, companion-plugin routes and SDK calls against openapi.yaml
+        run: python scripts/check_openapi_parity.py --sdk-report sdk-coverage.md
+      - name: Publish SDK endpoint coverage
+        if: always()
+        run: |
+          if [ -f sdk-coverage.md ]; then cat sdk-coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
+
   unit-tests:
     name: dazpy unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

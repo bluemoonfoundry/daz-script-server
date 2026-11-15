@@ -153,6 +153,13 @@ and SSE streams. Companion-plugin routes (`applyPluginRoutes()` catch-alls) pick
 the chain by method after route matching. `tests/test_route_security.py` (unit
 suite) enforces this. New routes must use one of them.
 
+**OpenAPI parity:** every route in `setupRoutes()` must have a matching path +
+method in `openapi.yaml`, and vice versa. Companion-plugin routes are listed in
+`COMPANION_PLUGIN_ROUTES` in `scripts/check_openapi_parity.py` and documented
+with tag `CompanionPlugins`. SDK calls (dazpy, daz-ts) to endpoints the spec
+doesn't document also fail. CI runs the script (`openapi-parity` job, which
+posts SDK coverage to the job summary), as does `tests/test_openapi_parity.py`.
+
 **Rate Limiting:** Per-IP sliding window (default: 60 req/60s). QMutex-protected. Periodic cleanup (every 100 requests).
 
 **Input Validation:**
