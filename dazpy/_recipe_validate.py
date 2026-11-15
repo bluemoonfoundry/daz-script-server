@@ -6,8 +6,8 @@ pass. Issues are written to be read by an LLM: precise dotted paths
 (``shots[1].camera``), stable codes, the allowed values, and a closest-match
 suggestion for typos.
 
-Reference namespaces: ``actor.asset``/``prop.asset`` name an entry in
-``assets``; ``shots[].camera`` names a ``cameras`` entry; ``rig.target``,
+Actor and prop keys share one namespace (``duplicate_key``).  Reference
+namespaces: ``actor.asset``/``prop.asset`` name an entry in ``assets``; ``shots[].camera`` names a ``cameras`` entry; ``rig.target``,
 ``facing``, ``look_at`` and camera ``frame`` name an actor or prop.
 """
 
@@ -417,6 +417,11 @@ class _Validator:
         shots = self.shots(d["shots"], "shots") if "shots" in d else []
         if "render" in d:
             self.render(d["render"], "render")
+        for k in props:
+            if k in actors:
+                self.err(f"props.{k}", "duplicate_key",
+                         f"key '{k}' is already used by actors.{k}; actor and prop keys share one "
+                         "namespace (node labels, facing/frame/target references)")
         self.resolve_refs(assets, actors, props, cameras)
         if isinstance(env, dict):
             self.check_environment_engine(d, shots)

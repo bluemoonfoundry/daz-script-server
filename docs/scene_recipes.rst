@@ -56,7 +56,9 @@ Schema reference
 The JSON Schema is ``schemas/scene-recipe.v1.schema.json`` at the repository
 root (a byte-identical copy ships inside the package; get it with
 ``dazpy.recipe.recipe_schema()``). Unknown fields are errors, entity keys match
-``^[A-Za-z0-9_-]{1,64}$``, and ``recipe_version`` must be ``1``.
+``^[A-Za-z0-9_-]{1,64}$``, and ``recipe_version`` must be ``1``. Actors and props
+share one key namespace: a prop key that is also an actor key is a
+``duplicate_key`` error (the schema cannot express this; ``validate`` checks it).
 
 .. list-table::
    :header-rows: 1

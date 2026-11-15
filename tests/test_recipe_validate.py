@@ -22,7 +22,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "recipes"
 VALID = FIXTURES / "valid"
 INVALID = FIXTURES / "invalid"
 SCHEMA = Path(__file__).parents[1] / "schemas" / "scene-recipe.v1.schema.json"
-CROSS_REFERENCE_CODES = {"unknown_reference", "duplicate_shot_id", "environment_requires_iray"}
+# Codes the JSON Schema cannot express (validator-only).
+CROSS_REFERENCE_CODES = {"unknown_reference", "duplicate_shot_id", "duplicate_key",
+                         "environment_requires_iray"}
 
 
 def load_invalid(name):
@@ -48,7 +50,12 @@ class ValidateOfflineTests(unittest.TestCase):
         self.assertEqual(codes, {
             "unsupported_version", "missing_field", "unknown_field", "unsupported_in_version",
             "invalid_type", "invalid_enum", "out_of_range", "invalid_id", "unknown_reference",
-            "mutually_exclusive", "duplicate_shot_id", "environment_requires_iray"})
+            "mutually_exclusive", "duplicate_shot_id", "duplicate_key", "environment_requires_iray"})
+
+    def test_actor_and_prop_keys_share_one_namespace(self):
+        rep = validate_offline(load_invalid("duplicate_key"))
+        self.assertEqual([(e.path, e.code) for e in rep.errors], [("props.anna", "duplicate_key")])
+        self.assertIn("actors.anna", rep.errors[0].message)
 
     def test_valid_corpus_passes(self):
         for case in VALID.glob("*.json"):

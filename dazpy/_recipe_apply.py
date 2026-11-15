@@ -12,7 +12,8 @@ Order of work:
 2. ownership records for every created, modified or adopted entity;
 3. ``unparent`` / ``delete`` steps (irreversible, so after everything that can
    still fail and be undone);
-4. the manifest, last.
+4. the manifest, last (skipped when the plan has no steps and the manifest
+   would not change).
 
 Compensations: create → delete every created node; modify → write the step's
 prior values back (journaled *before* the write, so a write that fails halfway
@@ -64,7 +65,8 @@ class ApplyResult:
     """Outcome of :func:`execute`.
 
     ``steps`` are the steps in effect afterwards: every plan step on success;
-    after a rollback, only the deletes that ran (they cannot be undone).
+    after a rollback, only the deletes that ran (they cannot be undone), and
+    ``overwritten`` / ``kept`` are empty.
     ``failed_step`` is None when the failure happened while writing records or
     the manifest (``error`` then says which).
     """
@@ -200,12 +202,18 @@ class _Run:
         return self.record(path, desired, observed)
 
     def write_manifest(self) -> None:
-        self.context = "writing the recipe manifest"
         gone = {s.path for s in self.deleted_steps} | self.released
         entities = [p for p in self.live.entities if p not in gone or p in self.created]
         entities += [p for p in self.created if p not in entities]
-        self.ops.write_manifest(Manifest(self.recipe_id, tuple(entities), self.env_record,
-                                         tuple(self.plan.tombstones)))
+        new = Manifest(self.recipe_id, tuple(entities), self.env_record,
+                       tuple(self.plan.tombstones))
+        old = self.live.manifest
+        if not self.plan.steps and old is not None and (
+                set(old.entities), old.environment, set(old.deleted)) == (
+                set(new.entities), new.environment, set(new.deleted)):
+            return  # the apply changed nothing: skip the write
+        self.context = "writing the recipe manifest"
+        self.ops.write_manifest(new)
         self.context = ""
 
     # ── driver ────────────────────────────────────────────────────────────────
@@ -243,7 +251,7 @@ class _Run:
             message=f"{s.path} (node {s.node_name!r}) was deleted before the apply failed; "
                     "deletions cannot be rolled back.") for s in self.deleted_steps)
         return ApplyResult(False, tuple(self.deleted_steps), self.plan.conflicts,
-                           self.plan.warnings + partial, (), self.plan.kept, rolled_back=True,
+                           self.plan.warnings + partial, (), (), rolled_back=True,
                            failed_step=self.current, error=error, rollback_errors=tuple(errors))
 
 

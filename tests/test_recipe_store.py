@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dazpy._recipe_store import (EntityRecord, Manifest, read_live, remove_record_script,
                                  write_manifest_script, write_record_script)
+from dazpy.exceptions import DazError
 from recipe_fakes import fake_client, man, node, rec
 
 
@@ -144,6 +145,14 @@ class ReadLiveTests(unittest.TestCase):
         self.assertEqual(read_live(fake_client(manifest=m, environment=env), "r1").environment_observed, env)
         self.assertIsNone(read_live(fake_client(manifest=man("r1", []), environment=env), "r1")
                           .environment_observed)
+
+    def test_corrupt_manifest_raises(self):
+        client = fake_client()
+        from dazpy._result import ExecutionResult
+        client.execute.side_effect = None
+        client.execute.return_value = ExecutionResult(value={"manifest": "{not json", "nodes": []})
+        with self.assertRaisesRegex(DazError, "manifest"):
+            read_live(client, "r1")
 
     def test_unparseable_record_is_ignored(self):
         client = fake_client(nodes=[node("A", rec("r1", "props.a"))])

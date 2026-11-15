@@ -174,6 +174,24 @@ class ExecuteSuccessTests(unittest.TestCase):
         run(ds(d_camera("one", focal_length=85.0), d_environment()), L, ops)
         self.assertEqual(written_manifest(ops).environment, L.manifest.environment)
 
+    def test_no_op_apply_writes_nothing_at_all(self):
+        ops = FakeOps()
+        plan, r = run(D_OLD, L_OLD, ops)
+        self.assertEqual(plan.steps, ())
+        self.assertTrue(r.applied)
+        self.assertEqual(ops.calls, [])
+
+    def test_no_steps_but_new_tombstone_still_writes_the_manifest(self):
+        ops = FakeOps()
+        plan, r = run(D_OLD, live_without(L_OLD, "cameras.one"), ops, on_conflict="scene_wins")
+        self.assertEqual(plan.steps, ())
+        self.assertEqual(written_manifest(ops).deleted, ("cameras.one",))
+
+    def test_first_apply_of_an_empty_recipe_writes_the_manifest(self):
+        ops = FakeOps()
+        run({}, EMPTY, ops)
+        self.assertEqual(ops.methods(), ["write_manifest"])
+
     def test_blocked_plan_executes_nothing(self):
         D = ds(d_camera("one"), d_light("key", intensity=2.0))
         L = live_tweaked(D_OLD, "lighting.lights.key", "output")
@@ -322,6 +340,15 @@ class RollbackTests(unittest.TestCase):
         self.assertTrue(r.rolled_back)
         self.assertEqual(ops.calls_with_args[-1],
                          ("write_record", "r1:ball", L.entities["props.ball"].record))
+
+    def test_rolled_back_result_reports_nothing_kept(self):
+        D = ds(d_camera("one"), d_light("key", intensity=2.0))
+        L = live_tweaked(D_OLD, "lighting.lights.key", "output")
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        plan, r = run(D, L, ops, on_conflict="scene_wins")
+        self.assertEqual(plan.kept, ("lighting.lights.key.output",))
+        self.assertTrue(r.rolled_back)
+        self.assertEqual((r.overwritten, r.kept), ((), ()))
 
     def test_created_nodes_get_no_record_compensation(self):
         # they are deleted anyway; removing their record first only adds failure points
@@ -562,7 +589,11 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertIn(json.dumps("/Poses/Sit.DUF"), find)
         self.assertIn('Scene.setPrimarySelection(_node)', open_)
         self.assertIn('openFile("C:/Lib/Poses/Sit.duf", true)', open_)
-        self.assertLess(open_.index("setPrimarySelection"), open_.index("openFile"))
+        self.assertLess(open_.index("setPrimarySelection(_node)"), open_.index("openFile"))
+        # the user's previous primary selection is restored afterwards, even on error
+        self.assertLess(open_.index("Scene.getPrimarySelection()"), open_.index("setPrimarySelection(_node)"))
+        self.assertIn("finally", open_)
+        self.assertLess(open_.index("openFile"), open_.index("Scene.setPrimarySelection(_prev)"))
 
     def test_pose_preset_open_failure_raises_dazerror_distinct_from_missing_node(self):
         self.client = scripted_client(("recipe:resolve", {"/Poses/Sit.duf": "C:/Lib/Poses/Sit.duf"}),

@@ -77,6 +77,20 @@ def _new_scene() -> DazScene:
 @skip_if_down
 @skip_no_daz
 class TestSceneRecipeLive(unittest.TestCase):
+    def tearDown(self):
+        # Leave Studio with an empty scene, whatever the test did.
+        try:
+            DazScene()._client.execute("(function(){ Scene.clear(); return true; })()")
+        except Exception:
+            pass
+
+    def _tweak_key(self, recipe: dict, scene: DazScene) -> dict:
+        """Move the rig's key light 30 cm by hand; return its new position."""
+        key = scene.find_node_by_label(f"{recipe['id']}:main.key")
+        pos = key.position
+        key.set_position(pos["x"] + 30, pos["y"], pos["z"])
+        return key.position
+
     def test_recipe_example_renders_end_to_end(self):
         recipe = _example("end_to_end")
         scene = _new_scene()
@@ -167,7 +181,40 @@ class TestSceneRecipeLive(unittest.TestCase):
         scene.save(path)
         scene = _new_scene()
         scene.load(path)
-        self.assertEqual(plan(recipe, scene).steps, ())
+        after = plan(recipe, scene)
+        self.assertEqual(after.steps, ())
+        self.assertEqual(after.warnings, ())
+
+    def test_recipe_ask_conflict_changes_nothing(self):
+        recipe = _example("ask_blocks")
+        scene = _new_scene()
+        self.assertTrue(apply(recipe, scene).applied)
+        tweaked = self._tweak_key(recipe, scene)
+        changed = copy.deepcopy(recipe)
+        changed["lighting"]["rigs"]["main"]["key"] = {"azimuth_deg": 60}
+        changed["cameras"]["close_up"]["focal_length"] = 120  # a safe change, blocked too
+        before = observe(changed, scene)
+        result = apply(changed, scene, on_conflict="ask")
+        self.assertFalse(result.applied)
+        self.assertEqual([c.path for c in result.conflicts], ["lighting.rigs.main.key.transform"])
+        self.assertEqual(observe(changed, scene), before)
+        key = scene.find_node_by_label(f"{recipe['id']}:main.key")
+        self.assertAlmostEqual(key.position["x"], tweaked["x"], places=1)
+
+    def test_recipe_scene_wins_keeps_tweak_and_adopts_it(self):
+        recipe = _example("scene_wins")
+        scene = _new_scene()
+        self.assertTrue(apply(recipe, scene).applied)
+        tweaked = self._tweak_key(recipe, scene)
+        changed = copy.deepcopy(recipe)
+        changed["lighting"]["rigs"]["main"]["key"] = {"azimuth_deg": 60}
+        result = apply(changed, scene, on_conflict="scene_wins")
+        self.assertTrue(result.applied)
+        self.assertEqual(result.kept, ("lighting.rigs.main.key.transform",))
+        key = scene.find_node_by_label(f"{recipe['id']}:main.key")
+        self.assertAlmostEqual(key.position["x"], tweaked["x"], places=1)
+        again = plan(changed, scene)  # the tweak was adopted into the record
+        self.assertEqual((again.steps, again.warnings, again.conflicts), ((), (), ()))
 
 
 if __name__ == "__main__":

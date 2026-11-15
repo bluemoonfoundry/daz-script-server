@@ -35,6 +35,7 @@ from ._recipe_desired import EntityKind
 from ._render import DazRenderSettings
 from ._scene_state import _TRANSFORM_KEYS
 from ._script_builder import ScriptBuilder
+from .exceptions import DazError
 
 if TYPE_CHECKING:
     from ._client import DazClient
@@ -354,7 +355,9 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
     Plus one ``DazPose.capture`` per actor with a record.  Nodes whose record
     belongs to another recipe, or is unparseable, are ignored.  When several
     nodes carry the same record path, the entity is keyed on the first and the
-    path is reported in ``LiveState.duplicates``.
+    path is reported in ``LiveState.duplicates``.  Raises :class:`DazError`
+    when the recipe's manifest exists but cannot be parsed (its tombstones
+    would otherwise be silently lost).
     """
     holder = DazRenderSettings(client)._environment_holder()
     payload = client.execute(_read_script(recipe_id, holder)).value or {}
@@ -363,8 +366,10 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
     if payload.get("manifest"):
         try:
             manifest = Manifest.from_json(payload["manifest"])
-        except (ValueError, KeyError, TypeError):
-            manifest = None
+        except (ValueError, KeyError, TypeError) as e:
+            raise DazError(f"the scene's manifest for recipe {recipe_id!r} "
+                           f"({scene_item_name(recipe_id)!r}) cannot be read ({e}); refusing to "
+                           "plan without it, since accepted hand deletions would be lost") from e
 
     entities: dict[str, LiveEntity] = {}
     copies: dict[str, list[dict]] = {}

@@ -20,7 +20,8 @@ Channels are written pose first, so a pose preset's root transform never
 overrides the recipe's ``transform``.
 
 - ``pose``: ``{"pose_path": p}`` (``.duf``/``.dsf`` Daz preset: resolved like an
-  asset, figure made primary selection, ``ContentMgr.openFile(path, true)``;
+  asset, figure made primary selection, ``ContentMgr.openFile(path, true)``,
+  previous primary selection restored;
   ``.json``: ``poses.apply_pose``; None = no-op; other extensions raise) or
   ``{"snapshot": DazPose.to_dict()}`` (``DazPose.apply_full``, keeping the
   figure's current node-transform props: snapshots do not carry them).
@@ -122,13 +123,20 @@ return _removed;""")
 
 
 def _pose_preset_script(node_name: str, path: str) -> str:
-    """Select *node_name* as primary and merge-open the Daz pose preset at *path*."""
+    """Select *node_name* as primary, merge-open the Daz pose preset at *path*,
+    then restore the previous primary selection (or deselect the figure)."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
 var _node = Scene.findNode({esc(node_name)});
 if (!_node) return "node_not_found";
+var _prev = Scene.getPrimarySelection();
 Scene.setPrimarySelection(_node);
-return !!App.getContentMgr().openFile({esc(path)}, true);""")
+try {{
+    return !!App.getContentMgr().openFile({esc(path)}, true);
+}} finally {{
+    if (_prev) Scene.setPrimarySelection(_prev);
+    else _node.select(false);
+}}""")
 
 
 _POSE_PRESET_EXTS = (".duf", ".dsf")
