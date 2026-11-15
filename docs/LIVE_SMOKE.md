@@ -42,7 +42,7 @@ Start DAZ Studio with the plugin, start the server from its pane, then:
 | SDK | Engines | Command |
 |---|---|---|
 | DS4 (Qt 4.8) | Iray, viewport | `python tests/smoke_live.py --engines iray,viewport --require-engines` |
-| DS6 (Qt 6) | Iray, Filament, viewport | `python tests/smoke_live.py --engines iray,filament,viewport --require-engines` |
+| DS6 (Qt 6) | Iray, viewport (+ Filament if registered) | `python tests/smoke_live.py --engines iray,filament,viewport` |
 | any | one engine | `python tests/smoke_live.py --stages render --engines filament` |
 | any | no renders | `python tests/smoke_live.py --stages api,async` |
 | any | + MCP | add `--mcp-dir ../daz-mcp-server` (needs `uv`) |
@@ -50,6 +50,14 @@ Start DAZ Studio with the plugin, start the server from its pane, then:
 Without `--require-engines`, an engine that isn't registered on this Studio
 (e.g. Filament on DS4) is reported as `skip`, not `fail`. The list of
 registered engines comes from `GET /capabilities` → `render_engines.selectable`.
+
+**Filament on DS 6.26:** Filament ships as a viewport draw style
+(`dsp_dzfilamentdrawstyle.dll`), not as a `DzRenderer`. Checked live on
+2026-11-14: `DzRenderMgr` lists only `DzIrayRenderer`, and
+`findRenderer("DzFilamentRenderer")` returns null. So `engine: "filament"` can't
+be selected and the smoke run reports it as `skip`. Don't pass
+`--require-engines` for Filament on DS6 until a build registers it as a
+renderer.
 
 Other flags: `--host/--port` (or `DAZ_HOST`/`DAZ_PORT`), `--render-timeout`
 (default 300 s per render), `--out-dir` (host folder for renders), `--report
@@ -64,7 +72,7 @@ For each release, run the matrix once per SDK build with `--record`:
 
 ```bash
 python tests/smoke_live.py --engines iray,viewport --mcp-dir ../daz-mcp-server --record   # DS4
-python tests/smoke_live.py --engines iray,filament,viewport --mcp-dir ../daz-mcp-server --record   # DS6
+python tests/smoke_live.py --engines iray,filament,viewport --mcp-dir ../daz-mcp-server --record   # DS6 (filament skips on 6.26)
 ```
 
 This writes `docs/smoke-results/v<server>-ds<sdk>.json` and regenerates
