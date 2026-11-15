@@ -149,14 +149,38 @@ if (_new.length) _new[0].setLabel({esc(label)});
 return _names;""")
 
 
+def _find_file_js(path_js: str) -> str:
+    """JS statements leaving the absolute file for content path *path_js* in ``_f`` ("" = none)."""
+    return f"""var _cm = App.getContentMgr();
+var _f = "";
+try {{ _f = _cm.findFile({path_js}, DzContentMgr.AllDirs); }} catch (e) {{ _f = ""; }}
+if (!_f) _f = _cm.findFile({path_js});"""
+
+
 def _resolve_script(path: str) -> str:
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _cm = App.getContentMgr();
-var _f = "";
-try {{ _f = _cm.findFile({esc(path)}, DzContentMgr.AllDirs); }} catch (e) {{ _f = ""; }}
-if (!_f) _f = _cm.findFile({esc(path)});
+{_find_file_js(esc(path))}
 return _f ? String(_f) : "";""")
+
+
+def exists_script(paths: list[str]) -> str:
+    """One script reporting ``{path: bool}`` for every path (never opens a file).
+
+    Paths starting with ``/`` are content paths resolved like :func:`_resolve_script`
+    (every content directory); the others must be absolute files (``DzFileInfo``).
+    """
+    return ScriptBuilder.iife(f"""// recipe:exists
+var _paths = {json.dumps(paths)}, _out = {{}};
+function _exists(_p) {{
+    if (_p.charAt(0) === "/") {{
+        {_find_file_js("_p").replace(chr(10), chr(10) + "        ")}
+        return !!_f;
+    }}
+    return new DzFileInfo(_p).exists();
+}}
+for (var _i = 0; _i < _paths.length; _i++) _out[_paths[_i]] = _exists(_paths[_i]);
+return _out;""")
 
 
 def _move_script(child_names: list[str], parent_name: str | None) -> str:

@@ -45,6 +45,7 @@ from typing import Callable
 
 from ._recipe_desired import DesiredEntity
 from ._recipe_diff import CREATE_KEY, ENVIRONMENT_PATH, Conflict, RecipePlan, Step
+from ._recipe_json import to_jsonable
 from ._recipe_ops import SceneOps
 from ._recipe_store import EntityRecord, LiveState, Manifest
 from ._recipe_validate import RecipeIssue
@@ -73,6 +74,9 @@ class ApplyResult:
     failed_step: Step | None = None
     error: str | None = None
     rollback_errors: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
 
 
 class _Run:

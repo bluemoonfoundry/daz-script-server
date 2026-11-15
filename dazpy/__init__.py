@@ -118,7 +118,12 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import RenderError, MaterialError
+from .exceptions import RenderError, MaterialError, RecipeValidationError
+from ._recipe_model import SceneRecipe
+from ._recipe_validate import RecipeIssue, ValidationReport
+from ._recipe_diff import Conflict, RecipePlan
+from ._recipe_apply import ApplyResult
+from .recipe import ObserveReport
 from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
@@ -227,6 +232,14 @@ __all__ = [
     "RenderResult",
     "RenderError",
     "MaterialError",
+    "RecipeValidationError",
+    "SceneRecipe",
+    "RecipeIssue",
+    "ValidationReport",
+    "RecipePlan",
+    "Conflict",
+    "ApplyResult",
+    "ObserveReport",
     "render",
     "render_variants",
     "SceneEvent",

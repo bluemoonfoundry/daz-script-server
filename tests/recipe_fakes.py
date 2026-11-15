@@ -317,3 +317,52 @@ def scripted_client(*responses) -> MagicMock:
 
     client.execute.side_effect = execute
     return client
+
+
+# ── facade fakes (Task 8) ────────────────────────────────────────────────────
+
+def empty_live() -> LiveState:
+    """A scene the recipe has never been applied to."""
+    return LiveState(manifest=None, entities={}, environment_observed=None)
+
+
+class FakeScene:
+    """Stands in for a ``DazScene`` in facade tests.
+
+    ``_client`` answers the batched file-existence script (every path exists
+    except *missing_files*) and records scripts in ``_client.scripts``.  Facade
+    tests patch ``dazpy.recipe.read_live`` / ``DazSceneOps`` with
+    :func:`patch_facade`, so ``live`` is what the facade reads and ``ops`` (a
+    :class:`FakeOps`) is what it writes through.
+    """
+
+    def __init__(self, live: LiveState, missing_files=(), ops: "FakeOps | None" = None) -> None:
+        self.live = live
+        self.ops = ops or FakeOps()
+        self.missing = set(missing_files)
+        self._client = scripted_client(("recipe:exists", self._exists))
+        self._client.scene = self
+
+    def _exists(self, script: str) -> dict:
+        import re
+        paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
+        return {p: p not in self.missing for p in paths}
+
+    def tweak(self, path: str, channel: str) -> None:
+        """Hand-edit *path*'s observed *channel* in the live state."""
+        self.live = live_tweaked(None, path, channel, live=self.live)
+
+
+def fake_scene(live: LiveState | None = None, *, missing_files=(),
+               ops: "FakeOps | None" = None) -> FakeScene:
+    return FakeScene(live if live is not None else empty_live(), missing_files, ops)
+
+
+def patch_facade(test) -> None:
+    """Route ``dazpy.recipe`` reads/writes to the FakeScene's ``live``/``ops`` for *test*."""
+    from unittest.mock import patch
+    for target, repl in (("dazpy.recipe.read_live", lambda client, rid: client.scene.live),
+                         ("dazpy.recipe.DazSceneOps", lambda scene: scene.ops)):
+        p = patch(target, side_effect=repl)
+        p.start()
+        test.addCleanup(p.stop)

@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from ._recipe_json import to_jsonable
+
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _LIGHT_TYPES = ("distant", "point", "spot")
 _ENGINES = ("filament", "iray", "viewport")
@@ -31,12 +33,25 @@ class RecipeIssue:
     allowed: Optional[Tuple[str, ...]] = None
     suggestion: Optional[str] = None
 
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
+
 
 @dataclass(frozen=True)
 class ValidationReport:
     ok: bool
     errors: Tuple[RecipeIssue, ...]
     warnings: Tuple[RecipeIssue, ...]
+
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
+
+
+def file_not_found(path: str, file: str) -> RecipeIssue:
+    """The issue for a recipe *path* naming *file*, which Studio cannot find."""
+    return RecipeIssue(path, "file_not_found",
+                       f"File not found: {file!r}. Content paths starting with '/' are looked "
+                       "up in every Daz content directory; other paths must be absolute and exist.")
 
 
 def _closest(name: Any, candidates: Iterable[str]) -> Optional[str]:

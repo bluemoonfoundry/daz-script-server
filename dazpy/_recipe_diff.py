@@ -46,6 +46,7 @@ from typing import Any, Literal, Mapping
 
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity
+from ._recipe_json import to_jsonable
 from ._recipe_store import LiveEntity, LiveState
 from ._recipe_validate import RecipeIssue
 from ._scene_state import _DEFAULT_VERIFY_TOLERANCE, _pose_mismatches
@@ -77,6 +78,9 @@ class Conflict:
     base: object
     live: object
 
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
+
 
 @dataclass(frozen=True)
 class Step:
@@ -85,6 +89,9 @@ class Step:
     channels: dict[str, dict]
     prior: dict[str, dict] | None
     node_name: str | None
+
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,9 @@ class RecipePlan:
     kept: tuple[str, ...]
     # The complete new value for Manifest.deleted (accepted hand deletions).
     tombstones: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return to_jsonable(self)
 
 
 # ── comparison ────────────────────────────────────────────────────────────────
