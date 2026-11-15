@@ -511,21 +511,22 @@ print(rs.canvas_output_paths("C:/renders/shot01.png"))
 
 ### 📸 Scene Checkpoints — `DazSceneState`
 
-A full scene checkpoint in one call: every skeleton's complete pose
+A pose checkpoint in one call: every skeleton's complete pose
 (bone-level, via `DazPose`) plus camera and light transforms/key
 properties, captured and restored via raw property values so repeated
 capture/apply cycles are idempotent — no more creeping drift on a
-character's morph dials across repeated pose save/restore.
+character's morph dials across repeated pose save/restore. It does not
+cover materials, environment, render settings or added/deleted nodes; see
+[Pose Checkpoints vs. Full Scene Backups](#pose-checkpoints-vs-full-scene-backups).
 
 ```python
-from dazpy import DazClient, DazSceneState
+from dazpy import DazClient, DazScene, DazSceneState
 
-client = DazClient()
-state = DazSceneState(client)
+scene = DazScene(DazClient())
 
-snapshot = state.capture()
+checkpoint = DazSceneState.capture(scene)
 # ... pose the scene for a render ...
-state.apply(snapshot)   # back to exactly where you started
+checkpoint.apply(scene)   # poses, cameras and lights back where you started
 ```
 
 ### 🧱 Scene Editing — Node Creation, Deletion, Reparenting
@@ -1298,6 +1299,49 @@ scene.set_anim_range(0, 240)
 print(scene.is_playing())
 scene.loop_playback(True)
 ```
+
+---
+
+### Pose Checkpoints vs. Full Scene Backups
+
+dazpy has two ways to get back to an earlier state. They are not
+interchangeable:
+
+| | Pose checkpoint — `DazSceneState` | Full scene backup — `scene.save_copy()` |
+|---|---|---|
+| Lives | In memory (or `to_dict()` JSON) | A `.duf` file on the DAZ Studio host |
+| Captures | Every figure's bone rotations, morphs and figure-level numeric properties; each figure's fit-to target; camera and light transforms; light Flux / Shadow Softness / Spread Angle | The whole scene |
+| Does **not** capture | Materials and surfaces; HDRI / environment and render settings; nodes added or deleted after capture; props and other non-figure, non-camera, non-light nodes; bone translations; keyframes; any other camera or light property (e.g. focal length, color) | — |
+| Restore | `state.apply(scene)`: fast, in place, verified, best effort | Reload the file (`scene.load()` merges; clear the scene first for a clean restore) |
+| Use for | Resetting poses/cameras/lights between renders or experiments | Anything destructive, before it happens |
+
+```python
+from dazpy import DazClient, DazScene, DazSceneState
+
+scene = DazScene(DazClient())
+
+# Pose checkpoint, plus a full-scene backup written first (optional).
+checkpoint = DazSceneState.capture(scene, backup_path="C:/backups/pre_shot.duf")
+# ... experiment ...
+report = checkpoint.apply(scene)
+if not report["complete"]:
+    for s in report["skipped"]:          # nodes deleted since capture
+        print(f"skipped {s['kind']} {s['name']} ({s['reason']})")
+    print("full backup at", report["backup"]["path"])
+```
+
+`apply()` returns a verification report:
+
+- `restored`: every node that was restored. Each figure was read back and
+  compared against the checkpoint, and retried if it didn't match.
+- `skipped`: one `{"kind", "name", "reason"}` entry for each figure, camera
+  or light that no longer exists (`reason: "not_found"`). A `follow_target`
+  entry means the figure was restored but the figure it was fitted to is
+  gone. Missing nodes are never recreated.
+- `errors`: human-readable messages for every problem, skips included.
+- `complete`: `True` only when nothing was skipped or failed.
+- `backup`: the `save_copy()` result from `capture(backup_path=...)`, or
+  `None`.
 
 ---
 

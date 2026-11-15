@@ -4,7 +4,7 @@ import json
 import time
 from typing import TYPE_CHECKING
 
-from .exceptions import DazBusyError
+from .exceptions import DazBusyError, NodeNotFoundError
 from ._pose import _ZERO3, DazPose
 from ._script_builder import ScriptBuilder
 
@@ -115,8 +115,12 @@ class DazSceneState:
         light_transforms: dict[str, dict[str, float]],
         light_extra: dict[str, dict[str, float]],
         follow_targets: dict[str, str | None] | None = None,
+        backup: dict | None = None,
     ) -> None:
         self.skeleton_poses = skeleton_poses
+        # Result of the DazScene.save_copy() call made by
+        # capture(backup_path=...), or None if no full-scene backup was taken.
+        self.backup = backup
         self.camera_transforms = camera_transforms
         self.light_transforms = light_transforms
         self.light_extra = light_extra
@@ -135,15 +139,25 @@ class DazSceneState:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def capture(cls, scene: "DazScene") -> "DazSceneState":
+    def capture(cls, scene: "DazScene", *, backup_path: str | None = None) -> "DazSceneState":
         """Capture the current state of every skeleton, camera, and light in *scene*.
 
         Args:
             scene: The scene to capture.
+            backup_path: If given, first write a full-scene backup to this
+                absolute path on the server host via
+                :meth:`~dazpy.DazScene.save_copy`, before anything else is
+                captured. Use it before destructive work (deleting nodes,
+                changing materials or render settings), which this checkpoint
+                cannot undo. The save-copy result is kept in :attr:`backup`
+                and reported again by :meth:`apply`. If the backup fails, the
+                error is raised and nothing is captured.
 
         Returns:
             A new :class:`DazSceneState`.
         """
+        backup = scene.save_copy(backup_path) if backup_path is not None else None
+
         skeleton_poses: dict[str, DazPose] = {}
         follow_targets: dict[str, str | None] = {}
         for skel in scene.skeletons():
@@ -207,6 +221,7 @@ class DazSceneState:
             light_transforms=light_result.get("transforms", {}),
             light_extra=light_result.get("extra", {}),
             follow_targets=follow_targets,
+            backup=backup,
         )
 
     # ── serialisation ─────────────────────────────────────────────────────────
@@ -218,6 +233,7 @@ class DazSceneState:
             "cameras": self.camera_transforms,
             "lights": {"transforms": self.light_transforms, "extra": self.light_extra},
             "follow_targets": self.follow_targets,
+            "backup": self.backup,
         }
 
     @classmethod
@@ -234,6 +250,7 @@ class DazSceneState:
             light_transforms=lights.get("transforms", {}),
             light_extra=lights.get("extra", {}),
             follow_targets=data.get("follow_targets", {}),
+            backup=data.get("backup"),
         )
 
     # ── apply ─────────────────────────────────────────────────────────────────
@@ -248,9 +265,12 @@ class DazSceneState:
         """Apply this snapshot's skeleton poses, camera transforms, and light
         properties back onto *scene* in a small, fixed number of HTTP calls.
 
-        Nodes that no longer exist in the scene are skipped and reported in
-        ``errors`` rather than raising -- matching the behaviour of the
-        registered-script checkpoint this class replaces.
+        Restore is best effort. A skeleton, camera or light that no longer
+        exists in the scene (deleted or renamed since capture) is skipped and
+        listed in ``skipped``, and the rest of the checkpoint is still
+        applied. Nothing is recreated: this restores values, not the scene
+        graph. To get deleted nodes back, reload the full-scene backup taken
+        by ``capture(backup_path=...)``.
 
         Each skeleton restore is independently verified: after
         ``pose.apply_full(skel)`` returns, a fresh :meth:`DazPose.capture` is
@@ -273,18 +293,42 @@ class DazSceneState:
                 and the read-back before it's considered a mismatch.
 
         Returns:
-            ``{"restored": [name, ...], "errors": [message, ...]}``.
+            A verification report::
+
+                {
+                    "restored": [name, ...],   # applied (skeletons read back and verified)
+                    "skipped": [               # nodes no longer in the scene
+                        {"kind": "skeleton" | "camera" | "light" | "follow_target",
+                         "name": str, "reason": "not_found"},
+                    ],
+                    "errors": [message, ...],  # every problem, skips included
+                    "complete": bool,          # True only if nothing was skipped or failed
+                    "backup": dict | None,     # save_copy() result from capture(backup_path=...)
+                }
+
+            Each skipped node also has a line in ``errors``, so a caller that
+            treats any ``errors`` entry as a failed restore stays safe. A
+            ``follow_target`` skip means the skeleton was restored but the
+            figure it was fitted to is gone, so the fit was not restored.
         """
         restored: list[str] = []
+        skipped: list[dict] = []
         errors: list[str] = []
         resolved_skeletons: dict[str, "DazSkeleton"] = {}  # noqa: F821
+
+        def _skip(kind: str, name: str, message: str) -> None:
+            skipped.append({"kind": kind, "name": name, "reason": "not_found"})
+            errors.append(message)
 
         for name, pose in self.skeleton_poses.items():
             try:
                 skel = scene.find_skeleton(name)
                 resolved_skeletons[name] = skel
-            except Exception:
-                errors.append(f"Skeleton not found: {name}")
+            except NodeNotFoundError:
+                _skip("skeleton", name, f"Skeleton not found: {name}")
+                continue
+            except Exception as exc:
+                errors.append(f"Failed to look up skeleton {name}: {exc}")
                 continue
 
             attempt = 0
@@ -339,7 +383,16 @@ class DazSceneState:
                 if target_name is None:
                     _retry_on_busy(skel.unfit)
                 else:
-                    target_skel = resolved_skeletons.get(target_name) or scene.find_skeleton(target_name)
+                    target_skel = resolved_skeletons.get(target_name)
+                    if target_skel is None:
+                        try:
+                            target_skel = scene.find_skeleton(target_name)
+                        except NodeNotFoundError:
+                            _skip(
+                                "follow_target", name,
+                                f"Follow-target {target_name} of skeleton {name} not found; fit not restored",
+                            )
+                            continue
                     _retry_on_busy(lambda: skel.fit_to(target_skel))
             except Exception as exc:
                 errors.append(f"Failed to restore follow-target for skeleton {name}: {exc}")
@@ -356,18 +409,27 @@ class DazSceneState:
                 }}
             }}
             var restored = [];
+            var skipped = [];
             var errors = [];
 
             for (var name in _camTransforms) {{
                 var c = Scene.findNode(name);
-                if (!c) {{ errors.push("Camera not found: " + name); continue; }}
+                if (!c) {{
+                    skipped.push({{kind: "camera", name: name, reason: "not_found"}});
+                    errors.push("Camera not found: " + name);
+                    continue;
+                }}
                 _applyTransforms(c, _camTransforms[name]);
                 restored.push(name);
             }}
 
             for (var lname in _lightTransforms) {{
                 var l = Scene.findNode(lname);
-                if (!l) {{ errors.push("Light not found: " + lname); continue; }}
+                if (!l) {{
+                    skipped.push({{kind: "light", name: lname, reason: "not_found"}});
+                    errors.push("Light not found: " + lname);
+                    continue;
+                }}
                 _applyTransforms(l, _lightTransforms[lname]);
                 var extra = _lightExtra[lname] || {{}};
                 for (var ek in extra) {{
@@ -377,15 +439,22 @@ class DazSceneState:
                 restored.push(lname);
             }}
 
-            return {{restored: restored, errors: errors}};
+            return {{restored: restored, skipped: skipped, errors: errors}};
         """)
         node_result = scene._client.execute(
             restore_script, retry_on_busy=True, max_wait=_FOLLOW_TARGET_RETRY_MAX_WAIT
         ).value or {"restored": [], "errors": []}
         restored.extend(node_result.get("restored", []))
+        skipped.extend(node_result.get("skipped", []))
         errors.extend(node_result.get("errors", []))
 
-        return {"restored": restored, "errors": errors}
+        return {
+            "restored": restored,
+            "skipped": skipped,
+            "errors": errors,
+            "complete": not errors,
+            "backup": self.backup,
+        }
 
     # ── dunder ────────────────────────────────────────────────────────────────
 

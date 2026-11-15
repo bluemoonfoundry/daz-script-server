@@ -41,8 +41,23 @@ All notable changes to DazScript Server are documented here.
 - **Retry safety documented per operation** in the README and `openapi.yaml`.
 - dazpy: every `*_submit` method takes `idempotency_key=` and
   `correlation_id=`, and `ServerResponseError` gains `.retryable`.
+- **`DazSceneState` restore report and optional full-scene backup.**
+  `DazSceneState.apply()` now also returns `skipped` (one
+  `{"kind", "name", "reason"}` entry per figure, camera, light or fit target
+  deleted since capture), `complete` and `backup`. `restored` and `errors`
+  are unchanged, and skipped nodes still appear in `errors`.
+  `DazSceneState.capture(scene, backup_path=...)` writes a `save_copy()`
+  backup before capturing and keeps the result in `.backup` (round-trips
+  through `to_dict()`/`from_dict()`). The README's new "Pose Checkpoints vs.
+  Full Scene Backups" section lists what a checkpoint does and does not
+  cover.
 
 ### Changed
+
+- **`DazSceneState.apply()` treats only `NodeNotFoundError` as a missing
+  skeleton.** Any other lookup failure is now reported as
+  `Failed to look up skeleton <name>: …` in `errors` instead of
+  `Skeleton not found`, and is not listed in `skipped`.
 
 - **One error format everywhere.** Every failure now returns
   `{"success": false, "error_code", "error", "retryable", "detail"?}`. This

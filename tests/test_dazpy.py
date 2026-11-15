@@ -5167,8 +5167,9 @@ class TestDazSceneStateApply(unittest.TestCase):
         scene = MagicMock()
 
         def _find_skeleton(name):
+            from dazpy.exceptions import NodeNotFoundError
             if name == "Missing":
-                raise LookupError("not found")
+                raise NodeNotFoundError("not found")
             return skel_good
 
         scene.find_skeleton.side_effect = _find_skeleton
@@ -5186,6 +5187,153 @@ class TestDazSceneStateApply(unittest.TestCase):
         good_pose.apply_full.assert_called_once_with(skel_good)
         self.assertIn("Good", result["restored"])
         self.assertTrue(any("Missing" in e for e in result["errors"]))
+        self.assertEqual(
+            result["skipped"], [{"kind": "skeleton", "name": "Missing", "reason": "not_found"}]
+        )
+        self.assertFalse(result["complete"])
+
+    def test_apply_lookup_failure_other_than_not_found_is_an_error_not_a_skip(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = RuntimeError("socket closed")
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        self.assertEqual(result["skipped"], [])
+        self.assertTrue(any("Failed to look up skeleton Genesis9" in e for e in result["errors"]))
+        self.assertFalse(result["complete"])
+
+    def test_apply_report_for_nodes_deleted_between_capture_and_restore(self):
+        # A skeleton, a camera and a light that were captured are deleted
+        # before restore. apply() must restore what is still there and list
+        # each missing node in "skipped" with its kind.
+        from dazpy.exceptions import NodeNotFoundError
+        from dazpy._scene_state import DazSceneState
+
+        skel_kept = MagicMock()
+        skel_kept._identifier.value = "Kept"
+        skel_kept._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        skel_kept.follow_target.return_value = None
+
+        def _find_skeleton(name):
+            if name == "Kept":
+                return skel_kept
+            raise NodeNotFoundError(f"Skeleton not found: {name!r}")
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = _find_skeleton
+        # What the camera/light restore script returns when CamGone and
+        # LightGone no longer exist.
+        scene._client.execute.return_value = ExecutionResult(
+            value={
+                "restored": ["CamKept"],
+                "skipped": [
+                    {"kind": "camera", "name": "CamGone", "reason": "not_found"},
+                    {"kind": "light", "name": "LightGone", "reason": "not_found"},
+                ],
+                "errors": ["Camera not found: CamGone", "Light not found: LightGone"],
+            },
+            output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Kept": MagicMock(), "Deleted": MagicMock()},
+            camera_transforms={"CamKept": {"XTranslate": 1.0}, "CamGone": {"XTranslate": 2.0}},
+            light_transforms={"LightGone": {"XTranslate": 3.0}},
+            light_extra={"LightGone": {}},
+            follow_targets={"Kept": None, "Deleted": None},
+        )
+        result = state.apply(scene)
+
+        self.assertEqual(result["restored"], ["Kept", "CamKept"])
+        self.assertEqual(
+            result["skipped"],
+            [
+                {"kind": "skeleton", "name": "Deleted", "reason": "not_found"},
+                {"kind": "camera", "name": "CamGone", "reason": "not_found"},
+                {"kind": "light", "name": "LightGone", "reason": "not_found"},
+            ],
+        )
+        self.assertEqual(len(result["errors"]), 3)
+        self.assertFalse(result["complete"])
+        self.assertIsNone(result["backup"])
+
+        # The restore script itself must report missing cameras/lights as skips.
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('kind: "camera"', script)
+        self.assertIn('kind: "light"', script)
+
+    def test_apply_skips_follow_target_whose_target_figure_was_deleted(self):
+        from dazpy.exceptions import NodeNotFoundError
+        from dazpy._scene_state import DazSceneState
+
+        boots = MagicMock()
+        boots._identifier.value = "Boots"
+        boots._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        boots.follow_target.return_value = None
+
+        def _find_skeleton(name):
+            if name == "Boots":
+                return boots
+            raise NodeNotFoundError(name)
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = _find_skeleton
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        # Genesis9 was captured as Boots' fit target but is not part of this
+        # checkpoint's skeleton set any more (deleted before restore).
+        state = DazSceneState(
+            skeleton_poses={"Boots": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Boots": "Genesis9"},
+        )
+        result = state.apply(scene)
+
+        boots.fit_to.assert_not_called()
+        self.assertIn("Boots", result["restored"])
+        self.assertEqual(
+            result["skipped"], [{"kind": "follow_target", "name": "Boots", "reason": "not_found"}]
+        )
+        self.assertFalse(result["complete"])
+
+    def test_apply_clean_restore_is_complete(self):
+        from dazpy._scene_state import DazSceneState
+
+        skel = MagicMock()
+        skel._identifier.value = "Genesis9"
+        skel._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        skel.follow_target.return_value = None
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None},
+        )
+        result = state.apply(scene)
+
+        self.assertEqual(result["restored"], ["Genesis9"])
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(result["errors"], [])
+        self.assertTrue(result["complete"])
 
     def test_apply_does_not_trust_apply_full_success_without_verifying(self):
         # Regression for dpi-mxq: apply_full() can return normally (no
@@ -5431,6 +5579,70 @@ class TestDazSceneStateApply(unittest.TestCase):
         self.assertEqual(boots_skel.follow_target.call_count, 2)
         boots_skel.fit_to.assert_called_once_with(base_skel)
         self.assertEqual(result["errors"], [])
+
+
+class TestDazSceneStateBackup(unittest.TestCase):
+    """capture(backup_path=...) takes a full-scene save-copy before the pose checkpoint."""
+
+    def _scene(self):
+        scene = MagicMock()
+        scene.skeletons.return_value = []
+        scene._client.execute.return_value = ExecutionResult(value={}, output=[], request_id="x")
+        scene.save_copy.return_value = {
+            "ok": True, "path": "C:/backups/pre.duf", "source": "C:/scenes/a.duf", "method": "copy",
+        }
+        return scene
+
+    def test_capture_without_backup_path_does_not_save_copy(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        state = DazSceneState.capture(scene)
+
+        scene.save_copy.assert_not_called()
+        self.assertIsNone(state.backup)
+
+    def test_capture_with_backup_path_saves_copy_before_capturing(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        order = []
+        scene.save_copy.side_effect = lambda p: order.append("save_copy") or {"ok": True, "path": p}
+        scene.skeletons.side_effect = lambda: order.append("skeletons") or []
+
+        state = DazSceneState.capture(scene, backup_path="C:/backups/pre.duf")
+
+        scene.save_copy.assert_called_once_with("C:/backups/pre.duf")
+        self.assertEqual(order[0], "save_copy")
+        self.assertEqual(state.backup, {"ok": True, "path": "C:/backups/pre.duf"})
+
+    def test_capture_backup_failure_propagates(self):
+        from dazpy.exceptions import DazError
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        scene.save_copy.side_effect = DazError("disk full")
+
+        with self.assertRaises(DazError):
+            DazSceneState.capture(scene, backup_path="C:/backups/pre.duf")
+        scene.skeletons.assert_not_called()
+
+    def test_backup_round_trips_and_is_reported_by_apply(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        state = DazSceneState.capture(scene, backup_path="C:/backups/pre.duf")
+
+        restored = DazSceneState.from_dict(json.loads(json.dumps(state.to_dict())))
+        self.assertEqual(restored.backup, state.backup)
+        self.assertIsNone(DazSceneState.from_dict({}).backup)
+
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        result = restored.apply(scene)
+        self.assertEqual(result["backup"]["path"], "C:/backups/pre.duf")
+        self.assertTrue(result["complete"])
 
 
 class TestSceneSnapshot(unittest.TestCase):
