@@ -125,6 +125,13 @@ public:
     // the request isn't currently RUNNING (e.g. late call after cancel/timeout).
     void updateFrameProgress(const QString& id, int frame, int total);
 
+    // HTTP threads: the frame an animation render last reported starting
+    // (1-based) and its total. On Studio 6 this ingests the server-owned frame
+    // report first, the same way status polling does, so the SSE progress
+    // stream can see frames the shimmed print() never delivers. Returns false
+    // when the job is unknown, isn't frame-tracked, or no frame has started.
+    bool frameProgress(const QString& id, int* frame, int* total);
+
     // Record that the job currently on the main thread did something (it
     // printed a line). Feeds last_activity_at. No-op when nothing is running.
     void touchCurrent();

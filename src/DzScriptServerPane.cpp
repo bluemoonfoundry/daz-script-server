@@ -1595,14 +1595,38 @@ void DzScriptServerPane::setupRoutes()
 		QMetaObject::invokeMethod(this, "updateEventClientsLabel", Qt::QueuedConnection);
 
 		RenderProgressBroker* broker = m_pRenderProgress;
+		AsyncRequestManager*  asyncMgr = m_pAsyncMgr;
+#if DAZ_SDK_MAJOR_VERSION >= 6
+		// Studio 6 shims print(), so the [DAZPY_FRAME] marker never reaches
+		// onMessagePosted. Poll the job's frame report (ingested here on the
+		// HTTP thread, like status polling) and feed the broker, which drops
+		// frames already sent. Shorter pop so frames show up promptly;
+		// keepalives still go out about every 3 s.
+		const int  popMs          = 500;
+		const bool pollFrames     = true;
+#else
+		const int  popMs          = 3000;
+		const bool pollFrames     = false;
+#endif
+		std::shared_ptr<int> idleMs = std::make_shared<int>(0);
 		res.set_chunked_content_provider("text/event-stream",
-			[queue](size_t, httplib::DataSink& sink) -> bool {
-				QString event = queue->pop(3000);
+			[queue, broker, asyncMgr, requestId, popMs, pollFrames, idleMs](
+				size_t, httplib::DataSink& sink) -> bool {
+				if (pollFrames && !queue->isClosed()) {
+					int frame = 0, total = 0;
+					if (asyncMgr->frameProgress(requestId, &frame, &total))
+						broker->notifyProgress(requestId, frame, total);
+				}
+				QString event = queue->pop(popMs);
 				if (event.isEmpty()) {
 					if (queue->isClosed()) return false;
+					*idleMs += popMs;
+					if (*idleMs < 3000) return true;
+					*idleMs = 0;
 					static const char ka[] = ":keepalive\n\n";
 					return sink.write(ka, sizeof(ka) - 1);
 				}
+				*idleMs = 0;
 				QByteArray payload = event.toUtf8();
 				bool ok = sink.write(payload.constData(), payload.size());
 				return ok && !queue->isClosed();

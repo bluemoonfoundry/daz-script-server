@@ -790,6 +790,21 @@ void AsyncRequestManager::updateFrameProgress(const QString& id, int frame, int 
     touchLocked(req, QDateTime::currentMSecsSinceEpoch());
 }
 
+bool AsyncRequestManager::frameProgress(const QString& id, int* frame, int* total)
+{
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(id)) return false;
+    AsyncRequest& req = m_requests[id];
+    if (req.progressSource != PROGRESS_FRAMES) return false;
+    ingestReportFromWorkerLocked(req);
+    const int f = req.progressDetail.value("frame").toInt();
+    const int t = req.progressDetail.value("total").toInt();
+    if (f < 1 || t < 1) return false;
+    if (frame) *frame = f;
+    if (total) *total = t;
+    return true;
+}
+
 void AsyncRequestManager::touchCurrent()
 {
     QMutexLocker locker(&m_mutex);

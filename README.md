@@ -359,8 +359,9 @@ The `GET /render/:id/progress` SSE stream now emits a progress event at
 each frame boundary during an animation render, instead of only start/
 terminal events — the DAZ SDK exposes no per-percent render progress
 signal, so this frame-level marker is the most granular progress available.
-The SSE frame events are Studio 4 only; on Studio 6 poll
-`GET /requests/:id/status`, which reports frame N of M on both
+The frame events arrive on Studio 4 and Studio 6. Studio 6 shims `print()`,
+so its SSE handler reads the job's frame report instead of the print marker.
+`GET /requests/:id/status` reports the same frame N of M
 (`observation.progress.frame` / `total`, `progress_source: "frames"`).
 
 ### ⚡ Async client — `dazpy.aio.AsyncDazClient`

@@ -16,6 +16,17 @@ All notable changes to DazScript Server are documented here.
   `companion_plugins.json`, and `check_openapi_parity.py --live URL` checks a
   running server's companion routes against it and `openapi.yaml`.
 
+### Changed
+
+- **`GET /render/{id}/progress` streams animation frame events on Studio 6.**
+  Studio 6 shims `print()`, so the `[DAZPY_FRAME]` marker never reached the
+  stream there. The SSE handler now polls the job's server-owned frame report,
+  the same source job status uses, and emits one `progress` event per frame
+  (`percent`, `frame`, `total_frames`), as Studio 4 already did. Frame events
+  are never duplicated or reordered, and a subscriber that joins mid-render
+  first gets the latest frame. The OpenAPI example payloads for this stream now
+  match what the server sends.
+
 ### Removed
 
 - **USD export routes and their dazpy methods**, until the daz-bridge-usd

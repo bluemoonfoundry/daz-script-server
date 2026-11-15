@@ -435,6 +435,30 @@ class Smoke:
                 pattern, 0, frames - 1, width=RENDER_SIZE, height=RENDER_SIZE, engine="viewport")
             rid = sub["request_id"]
             seen_frames: set[int] = set()
+            sse_frames: list[int] = []
+            sse_end: dict = {}
+
+            # GET /render/{id}/progress frame events (Studio 6 polls the frame
+            # report; Studio 4 uses the print marker). Watched alongside status.
+            resp = self.client.stream_render_progress(rid, stream_timeout=self.args.render_timeout)
+            check(resp is not None, "GET /render/{id}/progress did not open")
+
+            def _watch():
+                try:
+                    for ev_type, data in _parse_sse_events(resp):
+                        if ev_type == "progress" and isinstance(data, dict)                                 and isinstance(data.get("frame"), int):
+                            sse_frames.append(data["frame"])
+                            sse_end["total_frames"] = data.get("total_frames")
+                        if ev_type in ("complete", "error"):
+                            sse_end["terminal"] = ev_type
+                            break
+                except Exception:  # noqa: BLE001 - stream timeout/close ends the watch
+                    pass
+                finally:
+                    resp.close()
+            watcher = threading.Thread(target=_watch, daemon=True)
+            watcher.start()
+
             deadline = time.monotonic() + self.args.render_timeout
             st: dict = {}
             while time.monotonic() < deadline:
@@ -454,9 +478,15 @@ class Smoke:
                   and detail.get("phase") == "done", f"final frame progress {detail}")
             check("report_file" not in (st.get("observation") or {}),
                   "server-owned frame report leaked as report_file")
+            watcher.join(timeout=10.0)
+            check(sse_end.get("terminal") == "complete", f"SSE terminal {sse_end.get('terminal')!r}")
+            check(sse_frames == sorted(set(sse_frames)),
+                  f"SSE frame events duplicated or out of order: {sse_frames}")
+            check(not sse_frames or sse_end.get("total_frames") == frames,
+                  f"SSE total_frames {sse_end.get('total_frames')!r}, want {frames}")
             # Viewport frames can be faster than the poll; seeing any running
             # frame proves the live path, seeing none is reported, not failed.
-            return {"frames_seen_running": sorted(seen_frames)}
+            return {"frames_seen_running": sorted(seen_frames), "sse_frames": sse_frames}
 
         self.run("render", "animation.frame_progress", frame_progress)
 

@@ -13,9 +13,11 @@
 //   setOutputPath()   — called on main thread when render is enqueued
 //   watchRequest()    — called from HTTP thread; registers a subscriber queue
 //   notifyStarted()   — called on main thread when render begins executing
-//   notifyProgress()  — called on main thread for animation renders, once
-//                       per frame boundary (see DzScriptServerPane::
-//                       onMessagePosted's [DAZPY_FRAME] marker handling)
+//   notifyProgress()  — animation renders, once per frame boundary. Studio 4:
+//                       main thread, from onMessagePosted's [DAZPY_FRAME]
+//                       marker. Studio 6 (print() is shimmed): the SSE
+//                       handler thread, polling AsyncRequestManager::
+//                       frameProgress() for the job's frame report.
 //   notifyCompleted() — called on main thread after successful render
 //   notifyFailed()    — called on main thread after failed/cancelled render
 //
@@ -42,9 +44,13 @@ public:
     // Main thread: lifecycle notifications from processNextAsyncRequest.
     void notifyStarted(const QString& requestId);
 
-    // Main thread: frame-boundary progress for animation renders. frame is
-    // 1-based (frame N of totalFrames about to start). Sends
-    // percent = 100 * (frame-1) / totalFrames.
+    // Frame-boundary progress for animation renders. frame is 1-based (frame
+    // N of totalFrames about to start). Sends percent = 100 * (frame-1) /
+    // totalFrames. Called from the main thread (Studio 4 print marker) and
+    // from SSE handler threads (Studio 6 frame-report polling), so it only
+    // pushes when frame moves past the last one sent: concurrent pollers and
+    // both sources never duplicate or reorder events. The latest progress
+    // event is replayed to subscribers that join mid-render.
     void notifyProgress(const QString& requestId, int frame, int totalFrames);
 
     void notifyCompleted(const QString& requestId, int durationMs);
@@ -60,8 +66,11 @@ private:
     static QString makeEvent(const QString& type, const QString& dataJson);
 
     struct RequestWatch {
+        RequestWatch() : lastFrame(0) {}
         QString                 outputPath;
         QString                 terminalEvent; // non-empty once complete/error
+        QString                 lastProgressEvent; // latest frame event, for late subscribers
+        int                     lastFrame;     // highest frame pushed (0 = none)
         QList<SubscriberQueue*> queues;
     };
     QMap<QString, RequestWatch> m_watches;

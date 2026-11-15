@@ -802,7 +802,8 @@ paths:
         `output_path` is replaced by the zero-padded frame number. Progress
         advances at frame boundaries: the job status reports frame N of M
         (`progress_source: frames`, `observation.progress.frame` / `total`) on
-        Studio 4 and 6, and `GET /render/{id}/progress` streams it on Studio 4.
+        Studio 4 and 6, and `GET /render/{id}/progress` streams it as SSE
+        `progress` events on both.
         The completed job's output manifest lists every frame written (`kind: "frame"`).
         If `camera` is given, the server checks that it exists in the scene before queueing.
       operationId: submitRenderAnimation
@@ -845,8 +846,15 @@ paths:
       tags: [Render]
       summary: Stream render progress via SSE
       description: |
-        Opens an SSE connection for the given render job and delivers real-time
-        progress events until the render completes or fails.
+        Opens an SSE connection for the given render job and delivers progress
+        events until the render completes or fails. The SDK exposes no
+        intra-frame percent, so a single-frame render gets a 0% event when it
+        starts and then a terminal event. An animation render
+        (`POST /render/animation`) also gets one `progress` event per frame
+        boundary on Studio 4 and 6. A subscriber that joins mid-render first
+        receives the latest frame event. If the render already finished, the
+        stored terminal event is sent and the stream closes. `:keepalive`
+        comments are sent about every 3 s while idle.
       operationId: renderProgress
       security:
         - apiToken: []
@@ -861,10 +869,14 @@ paths:
               schema:
                 type: string
                 description: |
-                  Progress events:
-                  `data: {"stage":"rendering","progress":0.42,"elapsed_ms":4200}`
-                  Completion event:
-                  `data: {"stage":"complete","progress":1.0,"output_path":"/path/render.png","elapsed_ms":9800}`
+                  Start (`event: progress`):
+                  `data: {"request_id":"rnd-1a2b3c4d","percent":0}`
+                  Frame boundary, animation renders (`event: progress`; frame N of M about to start):
+                  `data: {"request_id":"rnd-1a2b3c4d","percent":25.00,"frame":2,"total_frames":8}`
+                  Completion (`event: complete`):
+                  `data: {"request_id":"rnd-1a2b3c4d","output_path":"/path/render.png","file_size_bytes":123456,"duration_ms":9800}`
+                  Failure or cancellation (`event: error`):
+                  `data: {"request_id":"rnd-1a2b3c4d","error":"...","duration_ms":1200}`
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
