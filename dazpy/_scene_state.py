@@ -83,11 +83,31 @@ _RAW_WRITE_JS = (
 
 
 class DazSceneState:
-    """A full snapshot of scene state, suitable for a save/restore checkpoint.
+    """An in-memory pose checkpoint: figure poses plus camera and light placement.
 
-    Captures every skeleton's complete pose (bone rotations, morphs, and
-    node-level properties -- see :class:`~dazpy.DazPose`) plus transform and
-    a handful of key properties for every camera and light in the scene.
+    This is not a full scene snapshot. For anything it does not cover, take a
+    full-scene backup with :meth:`~dazpy.DazScene.save_copy`, or pass
+    ``backup_path`` to :meth:`capture` to do both at once.
+
+    Captured, for nodes that exist at capture time:
+
+    * every skeleton (figure): bone rotations, morph values and the
+      figure node's own numeric properties (see :class:`~dazpy.DazPose`);
+    * every skeleton's fit-to (follow) target;
+    * every camera: X/Y/Z translate, X/Y/Z rotate and Scale;
+    * every light: the same transform channels, plus Flux, Shadow Softness
+      and Spread Angle.
+
+    Not captured:
+
+    * materials and surface properties;
+    * HDRI / environment and render settings;
+    * nodes added or deleted after capture (restore never creates or
+      deletes nodes; missing ones are reported as skipped);
+    * props and any other node that is not a skeleton, camera or light;
+    * bone translations, keyframes / animation, and any other camera or
+      light property (focal length, color, etc.).
+
     Everything is captured and restored via each property's raw (pre-ERC)
     value, so repeated capture/apply cycles are idempotent even for
     properties driven by ``DzERCLink`` controllers (e.g. a "Scale" dial fed
