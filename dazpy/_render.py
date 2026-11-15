@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from dataclasses import dataclass
 
 from ._client import DazClient
@@ -126,6 +127,18 @@ def _normalize_engine_readback(raw: object) -> dict:
         state["reason"] = "active_renderer_unavailable"
     return state
 
+# Render-element groups from App.getRenderMgr().getRenderElementObjects(),
+# confirmed live on DAZ Studio 6.26 with renderType == Software:
+#   [0] DzRenderOptionsHelper  "General Render"
+#   [1] DzIrayPropertyHolder   "NVIDIA Iray Render Options"
+#   [2] DzTonemapperNode       "Tonemapper Options"
+#   [3] DzEnvironmentNode      "Environment Options"
+# With any other renderType (e.g. ScreenShot/viewport) only [0] exists, so
+# the Iray/Environment lookups below resolve to null. Lookups go by class,
+# then label, then the index above (with a warning) -- see
+# DazRenderSettings._render_element_lookup.
+_HOLDER_FALLBACK_MARKER = "[dazpy-warning:render-element-fallback]"
+
 # (max_samples, max_time_secs, quality, quality_enable)
 _QUALITY_PRESETS = {
     "draft":   {"max_samples": 100,  "max_time": 300,  "quality_enable": False},
@@ -136,9 +149,8 @@ _QUALITY_PRESETS = {
 
 # Iray Canvases (Render Settings > Advanced > Canvases) are not exposed on
 # DzIrayRenderer/DzRenderOptions at all -- they live on a separate
-# DzIrayPropertyHolder returned as element [1] of
-# App.getRenderMgr().getRenderElementObjects(), confirmed against a live
-# DAZ Studio instance:
+# DzIrayPropertyHolder returned by App.getRenderMgr().getRenderElementObjects()
+# (element [1] when present), confirmed against live DAZ Studio 4.x and 6.26:
 #
 #   holder.renderToCanvases            -- bool, master on/off for all canvas output
 #   holder.getNumCanvasDefinitions()    -- int
@@ -217,11 +229,51 @@ class DazRenderSettings:
         """)
         self._client.execute(script)
 
+    def _render_element_lookup(self, class_name: str, label: str, fallback_index: int) -> str:
+        """DazScript expression resolving one render-element group, or ``null``.
+
+        Matches by class (``inherits``), then by label, and only then falls
+        back to the historical fixed index -- printing a
+        :data:`_HOLDER_FALLBACK_MARKER` line so :meth:`_execute` can surface
+        a Python warning. Evaluates to ``null`` when the group is absent,
+        which is normal when the render type is not Software: DAZ Studio
+        then exposes only the "General Render" group.
+        """
+        return f"""(function () {{
+            var _objs = {self._render_mgr()}.getRenderElementObjects() || [];
+            var _i, _o;
+            for (_i = 0; _i < _objs.length; _i++) {{
+                _o = _objs[_i];
+                if (_o && _o.inherits && _o.inherits({json.dumps(class_name)})) return _o;
+            }}
+            for (_i = 0; _i < _objs.length; _i++) {{
+                _o = _objs[_i];
+                if (_o && _o.getLabel && _o.getLabel() == {json.dumps(label)}) return _o;
+            }}
+            _o = _objs.length > {fallback_index} ? _objs[{fallback_index}] : null;
+            if (_o) print({json.dumps(_HOLDER_FALLBACK_MARKER)} + " {class_name} not found by class or label; using render element index {fallback_index} (" + _o.className() + ")");
+            return _o || null;
+        }})()"""
+
+    def _execute(self, script: str):
+        """Execute *script* and turn holder-fallback output into a Python warning."""
+        result = self._client.execute(script)
+        for line in getattr(result, "output", None) or []:
+            if isinstance(line, str) and line.startswith(_HOLDER_FALLBACK_MARKER):
+                warnings.warn(
+                    line[len(_HOLDER_FALLBACK_MARKER):].strip(),
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+        return result
+
     def _environment_holder(self) -> str:
-        # Index 3 of the 4 fixed render element groups (General Render,
-        # Iray, Tonemapper, Environment) -- confirmed against a live
-        # instance alongside index 1 (see _iray_render_options_holder).
-        return f"{self._render_mgr()}.getRenderElementObjects()[3]"
+        # The "Environment Options" group (DzEnvironmentNode). Historically
+        # index 3 of General Render / Iray / Tonemapper / Environment;
+        # looked up by class so a reorder can't silently retarget writes.
+        return self._render_element_lookup(
+            "DzEnvironmentNode", "Environment Options", 3
+        )
 
     def _get_environment_property(self, name: str):
         script = ScriptBuilder.iife(f"""
@@ -230,7 +282,7 @@ class DazRenderSettings:
             var p = holder.findProperty({json.dumps(name)});
             return p ? p.getValue() : null;
         """)
-        return self._client.execute(script).value
+        return self._execute(script).value
 
     def _set_environment_property(self, name: str, value: object) -> None:
         serialized = ScriptBuilder.serialize_arg(value)
@@ -240,7 +292,7 @@ class DazRenderSettings:
             var p = holder.findProperty({json.dumps(name)});
             if (p) p.setValue({serialized});
         """)
-        self._client.execute(script)
+        self._execute(script)
 
     def _set_environment_property_from_string(self, name: str, value: str) -> None:
         script = ScriptBuilder.iife(f"""
@@ -249,7 +301,7 @@ class DazRenderSettings:
             var p = holder.findProperty({json.dumps(name)});
             if (p) p.setValueFromString({json.dumps(value)});
         """)
-        self._client.execute(script)
+        self._execute(script)
 
     def _set_environment_map(self, path: str) -> None:
         """Validate *path* against the local filesystem before sending ``setMap()``.
@@ -273,14 +325,15 @@ class DazRenderSettings:
             var p = holder.findProperty({json.dumps("Environment Map")});
             if (p) p.setMap({json.dumps(path)});
         """)
-        self._client.execute(script)
+        self._execute(script)
 
     def _iray_render_options_holder(self) -> str:
-        # Canvas definitions live on this holder, not on getActiveRenderer()
-        # .getPropertyHolder() -- confirmed against a live instance; index 1
-        # is "NVIDIA Iray Render Options" among the 4 fixed render element
-        # groups (General Render, Iray, Tonemapper, Environment).
-        return f"{self._render_mgr()}.getRenderElementObjects()[1]"
+        # Canvas definitions live on this holder (DzIrayPropertyHolder,
+        # "NVIDIA Iray Render Options"), not on getActiveRenderer()
+        # .getPropertyHolder(). Historically index 1; looked up by class.
+        return self._render_element_lookup(
+            "DzIrayPropertyHolder", "NVIDIA Iray Render Options", 1
+        )
 
     @staticmethod
     def _refresh_render_settings_pane_script() -> str:
@@ -743,7 +796,7 @@ class DazRenderSettings:
                 output_path: mgr.getRenderOptions().renderImgFilename
             }};
         """)
-        result = self._client.execute(script).value or {}
+        result = self._execute(script).value or {}
         return RenderOutcome(
             success=bool(result.get("success", False)),
             output_path=result.get("output_path"),
@@ -827,7 +880,7 @@ class DazRenderSettings:
             if (!holder) return null;
             return holder.renderToCanvases;
         """)
-        result = self._client.execute(script).value
+        result = self._execute(script).value
         return None if result is None else bool(result)
 
     @canvases_enabled.setter
@@ -839,7 +892,7 @@ class DazRenderSettings:
             holder.renderToCanvases = {js_bool};
             {self._refresh_render_settings_pane_script()}
         """)
-        self._client.execute(script)
+        self._execute(script)
 
     def list_canvases(self) -> list[Canvas]:
         """List the Iray Canvases currently configured on the active render."""
@@ -858,7 +911,7 @@ class DazRenderSettings:
             }}
             return result;
         """)
-        result = self._client.execute(script).value or []
+        result = self._execute(script).value or []
         return [Canvas(**c) for c in result]
 
     def add_canvas(self, name: str, canvas_type: str) -> Canvas:
@@ -895,10 +948,11 @@ class DazRenderSettings:
                 index: c.index
             }};
         """)
-        result = self._client.execute(script).value
+        result = self._execute(script).value
         if result is None:
             raise RenderError(
-                "Failed to add canvas: render manager or Iray property holder unavailable"
+                "Failed to add canvas: Iray render options (DzIrayPropertyHolder) unavailable -- "
+                "the render type must be Software (Iray)"
             )
         return Canvas(**result)
 
@@ -918,7 +972,7 @@ class DazRenderSettings:
             {self._refresh_render_settings_pane_script()}
             return true;
         """)
-        return bool(self._client.execute(script).value)
+        return bool(self._execute(script).value)
 
     def canvas_output_paths(self, output_path: str) -> dict[str, str]:
         """Return each configured canvas's resolved output file path for a render to *output_path*.

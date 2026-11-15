@@ -74,6 +74,15 @@ All notable changes to DazScript Server are documented here.
 - `/capabilities` `compatibility_hash` changes, because new feature flags
   were added (`idempotency_key`, `correlation_id`, `server_instance_id`,
   `scene_revision`, `error_envelope`).
+- **dazpy finds Iray render settings by class, not by position.** Iray
+  Canvases and the HDRI/environment helpers used to read
+  `getRenderElementObjects()[1]` and `[3]`. They now look for
+  `DzIrayPropertyHolder` and `DzEnvironmentNode` by class, then by label.
+  Only if neither matches do they fall back to the old index, and then they
+  raise a `RuntimeWarning`. Checked live on DAZ Studio 6.26. Those groups only
+  exist while the render type is Software (Iray); in viewport mode they are
+  absent, the canvas/environment calls return `None` or do nothing as before,
+  and the error messages now say to switch to Iray.
 
 ## [2.11.0] - 2026-11-14
 

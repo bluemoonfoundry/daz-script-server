@@ -1563,8 +1563,8 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         from dazpy._render import DazRenderSettings
         self.DazRenderSettings = DazRenderSettings
 
-    def _make_render(self, return_value=None):
-        client = _make_client(return_value)
+    def _make_render(self, return_value=None, output=None):
+        client = _make_client(return_value, output=output)
         return self.DazRenderSettings(client), client
 
     def test_resolution_getter_uses_imageSize(self):
@@ -2043,8 +2043,44 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         val = rs.canvases_enabled
         self.assertTrue(val)
         script = client.execute.call_args[0][0]
-        self.assertIn("getRenderElementObjects()[1]", script)
+        self.assertIn('inherits("DzIrayPropertyHolder")', script)
+        self.assertNotIn("getRenderElementObjects()[1]", script)
         self.assertIn("renderToCanvases", script)
+
+    def test_iray_holder_lookup_order_class_then_label_then_index(self):
+        rs, _ = self._make_render(None)
+        expr = rs._iray_render_options_holder()
+        cls_pos = expr.index('inherits("DzIrayPropertyHolder")')
+        label_pos = expr.index('"NVIDIA Iray Render Options"')
+        index_pos = expr.index("_objs[1]")
+        self.assertLess(cls_pos, label_pos)
+        self.assertLess(label_pos, index_pos)
+        self.assertIn("_objs.length > 1", expr)
+
+    def test_holder_fallback_output_becomes_runtime_warning(self):
+        from dazpy._render import _HOLDER_FALLBACK_MARKER
+        rs, _ = self._make_render(
+            True,
+            output=[f"{_HOLDER_FALLBACK_MARKER} DzIrayPropertyHolder not found; using index 1"],
+        )
+        with self.assertWarnsRegex(RuntimeWarning, "DzIrayPropertyHolder not found"):
+            self.assertTrue(rs.canvases_enabled)
+
+    def test_holder_lookup_without_fallback_emits_no_warning(self):
+        import warnings as _w
+        rs, _ = self._make_render(True, output=["unrelated log line"])
+        with _w.catch_warnings():
+            _w.simplefilter("error")
+            self.assertTrue(rs.canvases_enabled)
+
+    def test_render_uses_class_based_canvas_holder_lookup(self):
+        rs, client = self._make_render({"success": True, "output_path": "C:/x.png"})
+        try:
+            rs.render()
+        except Exception:
+            pass
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertTrue(any('inherits("DzIrayPropertyHolder")' in s for s in scripts))
 
     def test_canvases_enabled_setter_refreshes_pane(self):
         rs, client = self._make_render(None)
@@ -2129,11 +2165,14 @@ class TestDazRenderSettingsEnvironment(unittest.TestCase):
         client = _make_client(return_value)
         return self.DazRenderSettings(client), client
 
-    def test_environment_holder_uses_render_element_objects_index_3(self):
+    def test_environment_holder_looks_up_by_class_with_index_3_fallback(self):
         rs, client = self._make_render(1.0)
         rs._get_environment_property("Environment Intensity")
         script = client.execute.call_args[0][0]
-        self.assertIn("getRenderElementObjects()[3]", script)
+        self.assertIn('inherits("DzEnvironmentNode")', script)
+        self.assertIn('"Environment Options"', script)
+        self.assertIn("_objs[3]", script)
+        self.assertNotIn("getRenderElementObjects()[3]", script)
 
     def test_get_environment_property_reads_named_property(self):
         rs, client = self._make_render(1.0)
@@ -6727,8 +6766,8 @@ class TestHDRIEnvironment(unittest.TestCase):
                 self.assertIn(label, mode_script)
 
     def test_apply_raises_render_error_when_environment_holder_unavailable(self):
-        """Simulates getRenderElementObjects()[3] being wrong on this DAZ Studio
-        version/build: every write silently no-ops and the readback returns None."""
+        """Simulates the Environment Options group being absent (render type not
+        Software): every write silently no-ops and the readback returns None."""
         from dazpy._render import DazRenderSettings
         from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
         from dazpy.exceptions import RenderError
