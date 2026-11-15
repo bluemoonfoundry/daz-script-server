@@ -69,10 +69,15 @@ root (a byte-identical copy ships inside the package; get it with
        ``"<id>:<entity>"`` (rig lights ``"<id>:<rig>.<role>"``).
    * - ``assets.<key>.path``
      - A content-library path (leading ``/``, looked up in every Daz content
-       directory) or an absolute path.
+       directory, then tried as an absolute path for macOS) or an absolute path
+       on the Studio host. v1 supports **single-root assets** only: an asset
+       whose load adds more than one root node (some sets and scene subsets) is
+       removed again and the apply fails with ``loads N root nodes``.
    * - ``actors.<key>``
      - ``asset`` (required), ``position``, ``rotation`` or ``facing`` (an actor
-       key or ``[x, y, z]``; yaw only; not both), ``pose`` (a pose preset path).
+       key or ``[x, y, z]``; yaw only; not both), ``pose`` (a Daz pose preset,
+       ``.duf`` / ``.dsf``, resolved like an asset path, or a dazpy pose
+       ``.json`` file, which is read on the client machine).
    * - ``props.<key>``
      - ``asset``, ``position``, ``rotation``.
    * - ``lighting.rigs.<key>``
@@ -301,6 +306,10 @@ samples. It has no ``environment`` block, so it needs no third-party HDRI.
 
 .. literalinclude:: examples/recipes/g9-portrait.json
    :language: json
+
+File checks run on the Studio host (one script for the whole recipe), so paths
+are always as Studio sees them. The one exception is a dazpy pose ``.json``
+file: dazpy reads it on the client, so ``validate`` checks it there.
 
 A session against a running Studio:
 

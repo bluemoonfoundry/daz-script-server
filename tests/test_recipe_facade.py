@@ -70,8 +70,36 @@ class TestValidate(FacadeCase):
         scene = fake_scene()
         self.assertTrue(validate(R, scene).ok)
         self.assertEqual(len(scene._client.scripts), 1)
+        self.assertIn("recipe:resolve", scene._client.scripts[0])
         self.assertIn("DzFileInfo", scene._client.scripts[0])
         self.assertIn("findFile", scene._client.scripts[0])
+
+    def test_absolute_files_are_checked_studio_side_not_with_os_path(self):
+        scene = fake_scene(missing_files={HDRI})
+        with patch("dazpy._recipe_ops.os.path.isfile", return_value=True) as isfile, \
+                patch("dazpy.recipe.os.path.isfile", return_value=True, create=True):
+            rep = validate(R, scene)
+        self.assertEqual([(e.path, e.code) for e in rep.errors],
+                         [("lighting.environment.image_path", "file_not_found")])
+        isfile.assert_not_called()
+
+    def test_json_pose_files_are_checked_client_side(self):
+        r = recipe()
+        r["actors"]["anna"]["pose"] = "C:/poses/wave.JSON"
+        scene = fake_scene()
+        with patch("dazpy._recipe_ops.os.path.isfile", return_value=False) as isfile:
+            rep = validate(r, scene)
+        isfile.assert_called_once_with("C:/poses/wave.JSON")
+        self.assertEqual([(e.path, e.code) for e in rep.errors], [("actors.anna.pose", "file_not_found")])
+        self.assertNotIn("wave.JSON", scene._client.scripts[0])
+
+    def test_null_existence_result_raises(self):
+        scene = fake_scene()
+        scene._client.execute.side_effect = lambda *a, **kw: __import__(
+            "dazpy._result", fromlist=["ExecutionResult"]).ExecutionResult(value=None)
+        with self.assertRaises(DazError) as cm:
+            validate(R, scene)
+        self.assertNotIsInstance(cm.exception, RecipeValidationError)
 
     def test_offline_errors_skip_the_scene_check(self):
         scene = fake_scene()

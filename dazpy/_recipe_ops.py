@@ -4,6 +4,11 @@
 Studio, so the executor and its rollback can be tested against a fake.
 :class:`DazSceneOps` implements it with dazpy primitives.
 
+File paths (assets, pose presets, HDRI maps) are resolved Studio-side by the
+one shared :func:`resolve_files`; only dazpy pose JSON files are read, and
+checked, client-side.  ``create`` supports single-root assets only (v1): a load
+adding several root nodes is removed again and raises.
+
 Channel shapes accepted by ``set_channels`` (desired and observed alike):
 
 - ``transform``: ``{position, rotation}`` (set_position + set_rotation), or a
@@ -11,6 +16,9 @@ Channel shapes accepted by ``set_channels`` (desired and observed alike):
   ``aim_at`` when ``aim`` is set, else set_rotation);
 - ``optics``: ``{focal_length, depth_of_field, focal_distance}`` (None skipped);
 - ``output``: ``{intensity, color}``;
+Channels are written pose first, so a pose preset's root transform never
+overrides the recipe's ``transform``.
+
 - ``pose``: ``{"pose_path": p}`` (``.duf``/``.dsf`` Daz preset: resolved like an
   asset, figure made primary selection, ``ContentMgr.openFile(path, true)``;
   ``.json``: ``poses.apply_pose``; None = no-op; other extensions raise) or
@@ -26,16 +34,17 @@ from __future__ import annotations
 
 import json
 import os
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Iterable, Protocol
 
 from ._camera import DazCamera
 from ._light import DazLight
 from ._node import DazNode, NodeIdentifier
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity, EntityKind
-from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest,
+from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest, foreign_descendants,
                             observe_environment_script, observe_node_script, observed_channels,
-                            remove_record_script, write_manifest_script, write_record_script)
+                            remove_record_script, subtree_script, write_manifest_script,
+                            write_record_script)
 from ._render import DazRenderSettings
 from ._script_builder import ScriptBuilder
 from ._skeleton import DazSkeleton
@@ -44,6 +53,7 @@ from .lighting import HDRIEnvironment, apply_hdri_environment
 from .poses import apply_pose
 
 if TYPE_CHECKING:
+    from ._client import DazClient
     from ._scene import DazScene
 
 
@@ -63,14 +73,18 @@ class SceneOps(Protocol):
     def observe_environment(self) -> dict | None:
         """Read the scene environment (None when Studio exposes none)."""
 
-    def unparent(self, child_names: list[str]) -> None:
-        """Move the nodes to scene root, preserving their world transform."""
+    def unparent(self, owner_name: str, child_names: list[str]) -> None:
+        """Move the named descendants of *owner_name* to scene root (world transform kept)."""
 
     def reparent(self, child_names: list[str], parent_name: str) -> None:
         """Move the nodes under *parent_name*, preserving world transform (undoes unparent)."""
 
-    def delete(self, node_name: str) -> None:
-        """Remove the node from the scene."""
+    def delete(self, node_name: str, owner_recipe: str | None = None) -> None:
+        """Remove the node from the scene.
+
+        With *owner_recipe*, first verify that no descendant foreign to that
+        recipe remains (raise instead of deleting a user's node).
+        """
 
     def write_record(self, node_name: str, record: EntityRecord) -> None: ...
 
@@ -151,55 +165,112 @@ if (_new.length) _new[0].setLabel({esc(label)});
 return _names;""")
 
 
-def _find_file_js(path_js: str) -> str:
-    """JS statements leaving the absolute file for content path *path_js* in ``_f`` ("" = none)."""
-    return f"""var _cm = App.getContentMgr();
-var _f = "";
-try {{ _f = _cm.findFile({path_js}, DzContentMgr.AllDirs); }} catch (e) {{ _f = ""; }}
-if (!_f) _f = _cm.findFile({path_js});"""
+def is_local_pose_file(path: str) -> bool:
+    """True for a dazpy pose JSON file, read client-side by ``poses.apply_pose``."""
+    return os.path.splitext(path)[1].lower() in _POSE_JSON_EXTS
 
 
-def _resolve_script(path: str) -> str:
-    esc = ScriptBuilder.escape_string
-    return ScriptBuilder.iife(f"""
-{_find_file_js(esc(path))}
-return _f ? String(_f) : "";""")
+def resolve_script(paths: list[str]) -> str:
+    """One script mapping every path to its absolute file, or ``""`` (never opens a file).
 
-
-def exists_script(paths: list[str]) -> str:
-    """One script reporting ``{path: bool}`` for every path (never opens a file).
-
-    Paths starting with ``/`` are content paths resolved like :func:`_resolve_script`
-    (every content directory); the others must be absolute files (``DzFileInfo``).
+    A leading ``/`` is a content path: ``findFile`` over every content directory
+    (two-argument form, then the one-argument form), falling back to
+    ``DzFileInfo`` because it may also be a macOS absolute path.  Any other
+    path must be an existing absolute file (``DzFileInfo``).
     """
-    return ScriptBuilder.iife(f"""// recipe:exists
+    return ScriptBuilder.iife(f"""// recipe:resolve
 var _paths = {json.dumps(paths)}, _out = {{}};
-function _exists(_p) {{
+var _cm = App.getContentMgr();
+function _resolve(_p) {{
     if (_p.charAt(0) === "/") {{
-        {_find_file_js("_p").replace(chr(10), chr(10) + "        ")}
-        return !!_f;
+        var _f = "";
+        try {{ _f = _cm.findFile(_p, DzContentMgr.AllDirs); }} catch (e) {{ _f = ""; }}
+        if (!_f) _f = _cm.findFile(_p);
+        if (_f) return String(_f);
     }}
-    return new DzFileInfo(_p).exists();
+    return new DzFileInfo(_p).exists() ? _p : "";
 }}
-for (var _i = 0; _i < _paths.length; _i++) _out[_paths[_i]] = _exists(_paths[_i]);
+for (var _i = 0; _i < _paths.length; _i++) _out[_paths[_i]] = _resolve(_paths[_i]);
 return _out;""")
 
 
-def _move_script(child_names: list[str], parent_name: str | None) -> str:
-    """Reparent *child_names* to *parent_name* (None = scene root), keeping world transform."""
-    parent = ("null" if parent_name is None
-              else f"Scene.findNode({ScriptBuilder.escape_string(parent_name)})")
-    return ScriptBuilder.iife(f"""
-var _names = {json.dumps(child_names)}, _parent = {parent}, _errs = [];
-if ({json.dumps(parent_name is not None)} && !_parent) return ["parent not found"];
+def resolve_files(client: "DazClient", paths: Iterable[str]) -> dict[str, str]:
+    """``{path: absolute file or ""}`` for Studio-side files, in one script call.
+
+    The one resolver ``validate`` and :class:`DazSceneOps` share.  Paths are
+    never checked with ``os.path``: they live on the Studio host.  (dazpy pose
+    JSON files are the exception, see :func:`is_local_pose_file`; callers check
+    those client-side.)  Raises :class:`DazError` when Studio returns no result.
+    """
+    unique = sorted(set(paths))
+    if not unique:
+        return {}
+    found = client.execute(resolve_script(unique)).value
+    if not isinstance(found, dict):
+        raise DazError("Daz Studio returned no result for the file-existence check "
+                       f"({len(unique)} file(s)); nothing was reported missing")
+    return {p: str(found.get(p) or "") for p in unique}
+
+
+def _unparent_script(owner_name: str, child_names: list[str]) -> str:
+    """Move the named descendants of *owner_name* to scene root, keeping world transform.
+
+    Children are found in the owner's subtree, never by a scene-wide name
+    lookup.  A listed node under another listed node moves with it (the user's
+    own hierarchy is kept).  Nothing moves unless every name is found.
+    """
+    owner = ScriptBuilder.escape_string(owner_name)
+    return ScriptBuilder.iife(f"""// recipe:unparent{_KEY_JS}
+var _owner = Scene.findNode({owner});
+if (!_owner) return [{owner} + ": owner not found"];
+var _names = {json.dumps(child_names)}, _all = _owner.getNodeChildren(true);
+var _picked = {{}}, _nodes = [], _errs = [];
 for (var _i = 0; _i < _names.length; _i++) {{
-    var _n = Scene.findNode(_names[_i]);
-    if (!_n) {{ _errs.push(_names[_i] + ": not found"); continue; }}
-    var _old = _n.getNodeParent();
-    if (_old === _parent) continue;
-    if (_old) _old.removeNodeChild(_n, true);
-    if (_parent) _parent.addNodeChild(_n, true);
+    var _n = null;
+    for (var _j = 0; _j < _all.length; _j++)
+        if (_all[_j].getName() === _names[_i] && !_picked[_key(_all[_j])]) {{ _n = _all[_j]; break; }}
+    if (!_n) {{ _errs.push(_names[_i] + ": not found under " + {owner}); continue; }}
+    _picked[_key(_n)] = true;
+    _nodes.push(_n);
 }}
+if (_errs.length) return _errs;
+var _ownerKey = _key(_owner);
+for (var _k = 0; _k < _nodes.length; _k++) {{
+    var _inner = false;
+    for (var _p = _nodes[_k].getNodeParent(); _p && _key(_p) !== _ownerKey; _p = _p.getNodeParent())
+        if (_picked[_key(_p)]) {{ _inner = true; break; }}
+    if (_inner) continue;
+    var _old = _nodes[_k].getNodeParent();
+    if (_old) _old.removeNodeChild(_nodes[_k], true);
+}}
+return [];""")
+
+
+def _reparent_script(child_names: list[str], parent_name: str) -> str:
+    """Move root nodes named *child_names* under *parent_name* (undoes ``_unparent_script``).
+
+    A name not at scene root is fine when it sits under one of the moved
+    nodes (it went along with that ancestor).
+    """
+    parent = ScriptBuilder.escape_string(parent_name)
+    return ScriptBuilder.iife(f"""// recipe:reparent
+var _parent = Scene.findNode({parent});
+if (!_parent) return [{parent} + ": parent not found"];
+var _names = {json.dumps(child_names)}, _nodes = Scene.getNodeList(), _roots = {{}}, _errs = [];
+for (var _i = 0; _i < _nodes.length; _i++) {{
+    var _nm = _nodes[_i].getName();
+    if (!_nodes[_i].getNodeParent() && _names.indexOf(_nm) >= 0 && !_roots[_nm]) _roots[_nm] = _nodes[_i];
+}}
+for (var _j = 0; _j < _names.length; _j++) {{
+    if (_roots[_names[_j]]) continue;
+    var _inside = false;
+    for (var _r in _roots) {{
+        var _kids = _roots[_r].getNodeChildren(true);
+        for (var _k = 0; _k < _kids.length; _k++) if (_kids[_k].getName() === _names[_j]) _inside = true;
+    }}
+    if (!_inside) _errs.push(_names[_j] + ": not found at scene root");
+}}
+for (var _m in _roots) _parent.addNodeChild(_roots[_m], true);
 return _errs;""")
 
 
@@ -236,6 +307,12 @@ class DazSceneOps:
                            "every node it added was removed")
             self._remove_added(before, entity.path, err)
             raise err
+        if len(names) > 1:
+            source = entity.create.get("asset_path") or entity.path
+            err = DazError(f"asset {source} loads {len(names)} root nodes; scene recipes v1 "
+                           "support single-root assets (every node it added was removed)")
+            self._remove_added(before, entity.path, err)
+            raise err
         return list(names)
 
     def _remove_added(self, before: list[str], path: str, cause: Exception) -> None:
@@ -247,36 +324,44 @@ class DazSceneOps:
                            f"also failed: {e}") from cause
 
     def _resolve_asset(self, path: str) -> str:
-        """Absolute file path for *path*; raises DazError when missing (never opens it)."""
-        if path.startswith("/"):
-            found = self._client.execute(_resolve_script(path)).value
-            if found:
-                return found
-            raise DazError(f"Asset not found in any content directory: {path}")
-        if not os.path.isfile(path):
-            raise DazError(f"Asset file not found: {path}")
-        return path
+        """Absolute file path for *path* on the Studio host; DazError when missing (never opens it)."""
+        found = resolve_files(self._client, [path])[path]
+        if found:
+            return found
+        where = "in any content directory" if path.startswith("/") else "on the Daz Studio host"
+        raise DazError(f"Asset not found {where}: {path}")
 
-    def delete(self, node_name: str) -> None:
+    def delete(self, node_name: str, owner_recipe: str | None = None) -> None:
+        if owner_recipe is not None:
+            tree = self._client.execute(subtree_script(node_name)).value
+            if tree is None:
+                raise NodeNotFoundError(f"Cannot delete, node not found: {node_name!r}")
+            foreign = foreign_descendants(tree, owner_recipe)
+            if foreign:
+                raise DazError(f"Refusing to delete {node_name!r}: it still has descendants the "
+                               f"recipe does not own ({', '.join(foreign)})")
         if not DazNode(self._client, NodeIdentifier(node_name)).delete():
             raise DazError(f"Could not delete node {node_name!r} (not found or not removed)")
 
-    def unparent(self, child_names: list[str]) -> None:
-        self._move(child_names, None)
+    def unparent(self, owner_name: str, child_names: list[str]) -> None:
+        self._check_moved("unparent", _unparent_script(owner_name, list(child_names)))
 
     def reparent(self, child_names: list[str], parent_name: str) -> None:
-        self._move(child_names, parent_name)
+        self._check_moved("reparent", _reparent_script(list(child_names), parent_name))
 
-    def _move(self, child_names: list[str], parent_name: str | None) -> None:
-        errors = self._client.execute(_move_script(list(child_names), parent_name)).value
+    def _check_moved(self, what: str, script: str) -> None:
+        errors = self._client.execute(script).value
         if errors:
-            raise DazError(f"reparent failed: {'; '.join(map(str, errors))}")
+            raise DazError(f"{what} failed: {'; '.join(map(str, errors))}")
 
     # ── channels ──────────────────────────────────────────────────────────────
 
     def set_channels(self, node_name: str, kind: EntityKind, channels: dict[str, dict]) -> None:
         ident = NodeIdentifier(node_name)
-        for name, value in channels.items():
+        # Pose first: a pose preset can carry a root transform, which the
+        # recipe's transform must then override.
+        for name in sorted(channels, key=lambda ch: ch != "pose"):
+            value = channels[name]
             if name == "transform":
                 self._set_transform(ident, kind, value)
             elif name == "optics":

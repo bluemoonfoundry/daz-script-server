@@ -258,8 +258,28 @@ class RollbackTests(unittest.TestCase):
         plan, r = run(ds(), L, ops, on_conflict="recipe_wins")
         self.assertEqual([s.op for s in plan.steps], ["unparent", "delete", "delete"])
         self.assertTrue(r.rolled_back)
-        self.assertIn(("unparent", ["Shirt"]), ops.calls_with_args)
+        self.assertIn(("unparent", "r1:anna", ["Shirt"]), ops.calls_with_args)
         self.assertIn(("reparent", ["Shirt"], "r1:anna"), ops.calls_with_args)
+
+    def test_failure_at_the_unparent_step_reparents_and_deletes_nothing(self):
+        D_old = ds(d_prop("ball"), d_actor("anna"))
+        L = live_with_children(D_old, "actors.anna", ("Shirt",))
+        ops = FakeOps(fail_on=("unparent", 1))
+        plan, r = run(ds(d_prop("ball")), L, ops, on_conflict="recipe_wins")
+        self.assertTrue(r.rolled_back)
+        self.assertEqual(r.failed_step.op, "unparent")
+        self.assertIn(("reparent", ["Shirt"], "r1:anna"), ops.calls_with_args)
+        self.assertNotIn("delete", ops.methods())
+        self.assertEqual((r.steps, r.rollback_errors), ((), ()))
+
+    def test_delete_steps_are_checked_deletes_rollback_deletes_are_not(self):
+        D_old = ds(d_prop("ball"))
+        ops = FakeOps()
+        run(ds(), live_matching(D_old), ops)
+        self.assertIn(("delete", "r1:ball", RID), ops.calls_with_args)
+        ops = FakeOps(fail_on=("set_channels", 1), create_names=NAMES)
+        run(D_CREATE_MODIFY, L_OLD, ops)
+        self.assertIn(("delete", "cam_new"), ops.calls_with_args)
 
     def test_unparent_not_undone_when_owner_already_deleted(self):
         D_old = ds(d_actor("anna"), d_prop("ball"))
@@ -338,10 +358,10 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertEqual(ops.create(d_light("key")), ["Spotlight 1"])
 
     def test_asset_content_path_resolved_then_loaded(self):
-        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:snapshot", ["1"]),
-                               ("recipe:claim", ["Genesis 9", "Genesis 9 Eyes"]))
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", ["Genesis 9"]))
         names = ops.create(d_actor("anna"))
-        self.assertEqual(names, ["Genesis 9", "Genesis 9 Eyes"])
+        self.assertEqual(names, ["Genesis 9"])
         find = next(s for s in client.scripts if "findFile" in s)
         self.assertIn(json.dumps("/g9.duf"), find)
         load = [s for s in client.scripts if "loadScene" in s]
@@ -349,49 +369,72 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertIn(json.dumps("C:/Lib/g9.duf"), load[0])
 
     def test_missing_content_path_raises_before_load(self):
-        client, ops = self.ops(("findFile", ""))
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": ""}))
         with patch("dazpy._recipe_ops.os.path.isfile", return_value=False):
             with self.assertRaises(DazError):
                 ops.create(d_actor("anna"))
         self.assertFalse(any("loadScene" in s for s in client.scripts))
 
     def test_content_path_never_falls_back_to_local_file(self):
-        client, ops = self.ops(("findFile", ""))
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": ""}))
         with patch("dazpy._recipe_ops.os.path.isfile", return_value=True):
             with self.assertRaises(DazError):
                 ops.create(d_actor("anna"))
         self.assertFalse(any("loadScene" in s for s in client.scripts))
 
-    def test_find_file_retries_one_arg_form_when_two_arg_is_empty(self):
-        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:snapshot", []),
-                               ("recipe:claim", ["Genesis 9"]))
+    def test_find_file_retries_one_arg_form_then_file_info(self):
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", []), ("recipe:claim", ["Genesis 9"]))
         ops.create(d_actor("anna"))
         find = next(s for s in client.scripts if "findFile" in s)
-        self.assertIn('if (!_f) _f = _cm.findFile("/g9.duf");', find)
+        two, one = find.index("findFile(_p, DzContentMgr.AllDirs)"), find.index("if (!_f) _f = _cm.findFile(_p);")
+        self.assertLess(two, one)
+        # a leading "/" may also be a macOS absolute path: DzFileInfo fallback
+        self.assertLess(one, find.index("new DzFileInfo(_p).exists()"))
+
+    def test_resolve_failure_result_raises(self):
+        client, ops = self.ops(("recipe:resolve", None))
+        with self.assertRaisesRegex(DazError, "file"):
+            ops.create(d_actor("anna"))
+        self.assertFalse(any("loadScene" in s for s in client.scripts))
+
+    def test_multi_root_asset_is_removed_and_rejected(self):
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", ["Set", "Set Lamp"]),
+                               ("recipe:cleanup", 2))
+        with self.assertRaisesRegex(DazError, "asset /g9.duf loads 2 root nodes; scene recipes v1 "
+                                              "support single-root assets"):
+            ops.create(d_actor("anna"))
+        cleanup = [s for s in client.scripts if "recipe:cleanup" in s]
+        self.assertEqual(len(cleanup), 1)
+        self.assertIn('["1"]', cleanup[0])
 
     def test_load_failure_after_snapshot_removes_added_nodes(self):
         def load(script):
             raise DazBusyError("busy mid-load")
-        client, ops = self.ops(("findFile", "C:/Lib/g9.duf"), ("recipe:snapshot", ["1"]),
-                               ("loadScene", load), ("recipe:cleanup", 4))
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", ["1"]), ("loadScene", load), ("recipe:cleanup", 4))
         with self.assertRaisesRegex(DazBusyError, "busy mid-load"):
             ops.create(d_actor("anna"))
         self.assertTrue(any("recipe:cleanup" in s for s in client.scripts))
         self.assertFalse(any("recipe:claim" in s for s in client.scripts))
 
-    def test_missing_absolute_path_raises_without_any_studio_call(self):
-        client, ops = self.ops()
+    def test_absolute_path_is_checked_studio_side_never_with_os_path(self):
+        client, ops = self.ops(("recipe:resolve", {"C:/nope.duf": ""}))
         entity = d_prop("ball")
         entity = type(entity)(entity.path, entity.kind, entity.label, {"asset_path": "C:/nope.duf"},
                               entity.channels)
-        with patch("dazpy._recipe_ops.os.path.isfile", return_value=False):
+        with patch("dazpy._recipe_ops.os.path.isfile", return_value=True):
             with self.assertRaises(DazError):
                 ops.create(entity)
-        self.assertEqual(client.scripts, [])
+        self.assertEqual(len(client.scripts), 1)
+        self.assertIn("new DzFileInfo(_p).exists()", client.scripts[0])
+        self.assertFalse(any("loadScene" in s for s in client.scripts))
 
     def test_load_adding_no_root_node_removes_added_nodes_and_raises(self):
-        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:snapshot", ["1", "2"]),
-                               ("recipe:claim", []), ("recipe:cleanup", 1))
+        client, ops = self.ops(("recipe:resolve", {"/ball.duf": "C:/Lib/ball.duf"}),
+                               ("recipe:snapshot", ["1", "2"]), ("recipe:claim", []),
+                               ("recipe:cleanup", 1))
         with self.assertRaises(DazError):
             ops.create(d_prop("ball"))
         cleanup = [s for s in client.scripts if "recipe:cleanup" in s]
@@ -404,8 +447,9 @@ class DazSceneOpsCreateTests(unittest.TestCase):
     def test_claim_failure_after_load_removes_added_nodes_and_reraises(self):
         def claim(script):
             raise RuntimeError("setLabel blew up")
-        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:snapshot", ["1"]),
-                               ("recipe:claim", claim), ("recipe:cleanup", 3))
+        client, ops = self.ops(("recipe:resolve", {"/ball.duf": "C:/Lib/ball.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", claim),
+                               ("recipe:cleanup", 3))
         with self.assertRaisesRegex(RuntimeError, "setLabel blew up"):
             ops.create(d_prop("ball"))
         self.assertTrue(any("recipe:cleanup" in s for s in client.scripts))
@@ -413,8 +457,9 @@ class DazSceneOpsCreateTests(unittest.TestCase):
     def test_failed_cleanup_is_reported_with_the_cause(self):
         def boom(script):
             raise RuntimeError("cleanup broke")
-        client, ops = self.ops(("findFile", "C:/Lib/ball.duf"), ("recipe:snapshot", ["1"]),
-                               ("recipe:claim", []), ("recipe:cleanup", boom))
+        client, ops = self.ops(("recipe:resolve", {"/ball.duf": "C:/Lib/ball.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", []),
+                               ("recipe:cleanup", boom))
         with self.assertRaisesRegex(DazError, "cleanup broke"):
             ops.create(d_prop("ball"))
 
@@ -433,6 +478,17 @@ class DazSceneOpsChannelTests(unittest.TestCase):
 
     def joined(self) -> str:
         return "\n".join(self.client.scripts)
+
+    def test_pose_is_applied_before_transform(self):
+        # pose presets can carry a root transform; the recipe transform must win
+        seen = []
+        with patch("dazpy._recipe_ops.apply_pose",
+                   side_effect=lambda *a: seen.append(len(self.client.scripts))):
+            self.ops.set_channels("G9", "actor", {
+                "transform": {"position": (1.0, 2.0, 3.0), "rotation": (0.0, 90.0, 0.0)},
+                "pose": {"pose_path": "C:/p.json"}})
+        self.assertEqual(seen, [0])
+        self.assertIn("setWSPos", self.joined())
 
     def test_camera_with_aim_positions_then_aims(self):
         self.ops.set_channels("Cam", "camera", {"transform": {"position": (1.0, 2.0, 3.0),
@@ -496,7 +552,8 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertEqual(apply_pose.call_args[0][1], "C:/p.json")
 
     def test_pose_preset_resolved_selected_and_merged(self):
-        self.client = scripted_client(("findFile", "C:/Lib/Poses/Sit.duf"), ("openFile", True))
+        self.client = scripted_client(("recipe:resolve", {"/Poses/Sit.DUF": "C:/Lib/Poses/Sit.duf"}),
+                                      ("openFile", True))
         self.ops = DazSceneOps(DazScene(self.client))
         with patch("dazpy._recipe_ops.apply_pose") as apply_pose:
             self.ops.set_channels("Genesis 9", "actor", {"pose": {"pose_path": "/Poses/Sit.DUF"}})
@@ -508,20 +565,22 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertLess(open_.index("setPrimarySelection"), open_.index("openFile"))
 
     def test_pose_preset_open_failure_raises_dazerror_distinct_from_missing_node(self):
-        self.client = scripted_client(("findFile", "C:/Lib/Poses/Sit.duf"), ("openFile", False))
+        self.client = scripted_client(("recipe:resolve", {"/Poses/Sit.duf": "C:/Lib/Poses/Sit.duf"}),
+                                      ("openFile", False))
         self.ops = DazSceneOps(DazScene(self.client))
         with self.assertRaisesRegex(DazError, "failed to open pose preset") as cm:
             self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "/Poses/Sit.duf"}})
         self.assertNotIsInstance(cm.exception, NodeNotFoundError)
-        self.client = scripted_client(("findFile", "C:/Lib/Poses/Sit.duf"), ("openFile", "node_not_found"))
+        self.client = scripted_client(("recipe:resolve", {"/Poses/Sit.duf": "C:/Lib/Poses/Sit.duf"}),
+                                      ("openFile", "node_not_found"))
         self.ops = DazSceneOps(DazScene(self.client))
         with self.assertRaises(NodeNotFoundError):
             self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "/Poses/Sit.duf"}})
 
     def test_missing_pose_preset_raises_without_opening(self):
-        self.client = scripted_client(("findFile", ""))
+        self.client = scripted_client(("recipe:resolve", {"/Poses/Missing.dsf": ""}))
         self.ops = DazSceneOps(DazScene(self.client))
-        with patch("dazpy._recipe_ops.os.path.isfile", return_value=False):
+        with patch("dazpy._recipe_ops.os.path.isfile", return_value=True):
             with self.assertRaises(DazError):
                 self.ops.set_channels("G9", "actor", {"pose": {"pose_path": "/Poses/Missing.dsf"}})
         self.assertFalse(any("openFile" in s for s in self.client.scripts))
@@ -562,15 +621,51 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertIn("setValue(2)", self.joined())
 
     def test_unparent_reparent_delete_scripts(self):
-        self.client = scripted_client(("Scene.removeNode", True))
+        self.client = scripted_client(("Scene.removeNode", True), ("recipe:unparent", []),
+                                      ("recipe:reparent", []))
         self.ops = DazSceneOps(DazScene(self.client))
-        self.ops.unparent(["Shirt"])
-        self.assertIn("removeNodeChild(_n, true)", self.client.scripts[-1])
-        self.assertIn(json.dumps(["Shirt"]), self.client.scripts[-1])
+        self.ops.unparent("Genesis 9", ["Shirt"])
+        s = self.client.scripts[-1]
+        self.assertIn("removeNodeChild(", s)
+        self.assertIn(json.dumps(["Shirt"]), s)
+        # children are found in the owner's subtree, never by a scene-wide name lookup
+        self.assertIn('Scene.findNode("Genesis 9")', s)
+        self.assertIn("getNodeChildren(true)", s)
+        self.assertNotIn("Scene.findNode(_names", s)
         self.ops.reparent(["Shirt"], "Genesis 9")
-        self.assertIn("addNodeChild(_n, true)", self.client.scripts[-1])
+        self.assertIn("addNodeChild(", self.client.scripts[-1])
         self.ops.delete("Genesis 9")
         self.assertIn("Scene.removeNode", self.client.scripts[-1])
+
+    def test_unparent_reports_children_missing_from_the_owner_subtree(self):
+        self.client = scripted_client(("recipe:unparent", ["Shirt: not found under 'Genesis 9'"]))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaisesRegex(DazError, "Shirt"):
+            self.ops.unparent("Genesis 9", ["Shirt"])
+
+    def test_checked_delete_refuses_when_foreign_descendants_remain(self):
+        tree = [{"name": "hip", "record": None, "bone": True,
+                 "children": [{"name": "Sword", "record": None, "bone": False, "children": []}]}]
+        self.client = scripted_client(("recipe:subtree", tree), ("Scene.removeNode", True))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaisesRegex(DazError, "Sword"):
+            self.ops.delete("Genesis 9", owner_recipe="r1")
+        self.assertFalse(any("Scene.removeNode" in s for s in self.client.scripts))
+
+    def test_checked_delete_removes_when_only_bones_and_owned_nodes_remain(self):
+        owned = EntityRecord("r1", "props.hat", 1, {}, {}).to_json()
+        tree = [{"name": "hip", "record": None, "bone": True, "children": []},
+                {"name": "Hat", "record": owned, "bone": False, "children": []}]
+        self.client = scripted_client(("recipe:subtree", tree), ("Scene.removeNode", True))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.ops.delete("Genesis 9", owner_recipe="r1")
+        self.assertIn("Scene.removeNode", self.client.scripts[-1])
+
+    def test_checked_delete_of_missing_node_raises(self):
+        self.client = scripted_client(("recipe:subtree", None))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaises(NodeNotFoundError):
+            self.ops.delete("Gone", owner_recipe="r1")
 
     def test_record_and_manifest_scripts(self):
         r = EntityRecord(RID, "props.ball", 1, {}, {})

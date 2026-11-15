@@ -276,14 +276,15 @@ class FakeOps:
         self._call("observe_environment")
         return _copy.deepcopy(self.environment)
 
-    def unparent(self, child_names):
-        self._call("unparent", child_names)
+    def unparent(self, owner_name, child_names):
+        self._call("unparent", owner_name, child_names)
 
     def reparent(self, child_names, parent_name):
         self._call("reparent", child_names, parent_name)
 
-    def delete(self, node_name):
-        self._call("delete", node_name)
+    def delete(self, node_name, owner_recipe=None):
+        # calls_with_args carries owner_recipe only when given (checked deletes)
+        self._call("delete", *((node_name,) if owner_recipe is None else (node_name, owner_recipe)))
 
     def write_record(self, node_name, record):
         self._call("write_record", node_name, record)
@@ -329,7 +330,7 @@ def empty_live() -> LiveState:
 class FakeScene:
     """Stands in for a ``DazScene`` in facade tests.
 
-    ``_client`` answers the batched file-existence script (every path exists
+    ``_client`` answers the batched file-resolve script (every path exists
     except *missing_files*) and records scripts in ``_client.scripts``.  Facade
     tests patch ``dazpy.recipe.read_live`` / ``DazSceneOps`` with
     :func:`patch_facade`, so ``live`` is what the facade reads and ``ops`` (a
@@ -340,13 +341,13 @@ class FakeScene:
         self.live = live
         self.ops = ops or FakeOps()
         self.missing = set(missing_files)
-        self._client = scripted_client(("recipe:exists", self._exists))
+        self._client = scripted_client(("recipe:resolve", self._resolve))
         self._client.scene = self
 
-    def _exists(self, script: str) -> dict:
+    def _resolve(self, script: str) -> dict:
         import re
         paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
-        return {p: p not in self.missing for p in paths}
+        return {p: ("" if p in self.missing else p) for p in paths}
 
     def tweak(self, path: str, channel: str) -> None:
         """Hand-edit *path*'s observed *channel* in the live state."""
@@ -456,13 +457,9 @@ class SimStudio:
 
     def _execute(self, script, *a, **kw):
         import re
-        if "recipe:exists" in script or "recipe:resolve" in script:
+        if "recipe:resolve" in script:
             paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
-            if "recipe:exists" in script:
-                value = {p: p not in self.missing for p in paths}
-            else:
-                value = {p: ("" if p in self.missing else p) for p in paths}
-            return ExecutionResult(value=value)
+            return ExecutionResult(value={p: ("" if p in self.missing else p) for p in paths})
         if "getAllBones" in script:
             name = json.loads(re.search(r'getName\(\) === (".*?")\)', script).group(1))
             n = self.nodes.get(name)
@@ -531,9 +528,9 @@ class SimStudio:
     def observe_environment(self):
         return _copy.deepcopy(self.environment)
 
-    def unparent(self, *args):
+    def unparent(self, owner_name, child_names):
         self._maybe_fail("unparent")
-        for name in args[-1]:
+        for name in child_names:
             self.nodes[name]["parent"] = None
 
     def reparent(self, child_names, parent_name):

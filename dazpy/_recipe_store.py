@@ -229,13 +229,12 @@ def observe_environment_script(environment_holder: str) -> str:
 return _environment();""")
 
 
-def _read_script(recipe_id: str, environment_holder: str) -> str:
-    esc = ScriptBuilder.escape_string
-    return ScriptBuilder.iife(f"""{_OBSERVE_JS}
-{_environment_js(environment_holder)}
+# JS: ``_rec(n)`` = the node's record JSON (or null); ``_tree(n)`` = its
+# descendants as ``{name, record, bone, children}`` (the shape ``foreign_descendants`` walks).
+_TREE_JS = f"""
 function _rec(n) {{
-    var it = n.findDataItem({esc(DATA_ITEM_NAME)});
-    return it ? it.getSettings().getStringValue({esc(_RECORD_KEY)}) : null;
+    var it = n.findDataItem({ScriptBuilder.escape_string(DATA_ITEM_NAME)});
+    return it ? it.getSettings().getStringValue({ScriptBuilder.escape_string(_RECORD_KEY)}) : null;
 }}
 function _tree(n) {{
     var kids = n.getNodeChildren(false), out = [];
@@ -243,7 +242,21 @@ function _tree(n) {{
         out.push({{name: kids[k].getName(), record: _rec(kids[k]),
                   bone: kids[k].inherits("DzBone"), children: _tree(kids[k])}});
     return out;
-}}
+}}"""
+
+
+def subtree_script(node_name: str) -> str:
+    """Script returning the node's descendant tree (null if the node is missing)."""
+    return ScriptBuilder.iife(f"""// recipe:subtree{_TREE_JS}
+var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+return _n ? _tree(_n) : null;""")
+
+
+def _read_script(recipe_id: str, environment_holder: str) -> str:
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""{_OBSERVE_JS}
+{_environment_js(environment_holder)}
+{_TREE_JS}
 var _out = {{manifest: null, environment: _environment(), nodes: []}};
 var _mi = Scene.findDataItem({esc(scene_item_name(recipe_id))});
 if (_mi) _out.manifest = _mi.getSettings().getStringValue({esc(_MANIFEST_KEY)});
@@ -302,7 +315,7 @@ def _kind_from_path(path: str) -> str | None:
     return None
 
 
-def _foreign(children: list, recipe_id: str) -> list[str]:
+def foreign_descendants(children: list, recipe_id: str) -> list[str]:
     """Descendant names not owned by *recipe_id*.
 
     Bones are never candidates but are walked (items parented to a bone count).
@@ -312,10 +325,10 @@ def _foreign(children: list, recipe_id: str) -> list[str]:
     out: list[str] = []
     for c in children:
         if c.get("bone"):
-            out += _foreign(c.get("children") or [], recipe_id)
+            out += foreign_descendants(c.get("children") or [], recipe_id)
         elif _owned_by(c.get("record"), recipe_id) is None:
             out.append(c["name"])
-            out += _foreign(c.get("children") or [], recipe_id)
+            out += foreign_descendants(c.get("children") or [], recipe_id)
     return out
 
 
@@ -344,7 +357,7 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
         if kind is None:
             continue
         observed = observed_channels(client, n["name"], kind, n)
-        foreign = tuple(_foreign(n.get("children") or [], recipe_id))
+        foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id))
         entities[rec.path] = LiveEntity(
             path=rec.path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"))

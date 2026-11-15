@@ -22,7 +22,9 @@ has none); record write → write the previous record back (records on nodes
 created by this apply are not compensated, since those nodes are deleted);
 release → write the removed record back; unparent → reparent the children,
 unless their owner has already been deleted.
-Deletes cannot be undone: a failure in the delete phase leaves the deletes
+Plan deletes are checked deletes (``owner_recipe``): a node that still has a
+descendant the recipe does not own is not deleted, the apply fails and rolls
+back instead.  Deletes cannot be undone: a failure in the delete phase leaves the deletes
 already done in place, reports them in ``ApplyResult.steps`` and as
 ``deleted_not_restored`` warnings.  Compensations that fail are collected in
 ``rollback_errors``, never raised.
@@ -139,9 +141,9 @@ class _Run:
                     ops.reparent(names, owner)
 
             self.undo(f"reparent {names} under {owner!r}", reparent)
-            ops.unparent(names)
+            ops.unparent(owner, names)
         elif step.op == "delete":
-            ops.delete(step.node_name)
+            ops.delete(step.node_name, owner_recipe=self.recipe_id)
             self.deleted_nodes.add(step.node_name)
             self.deleted_steps.append(step)
         # adopt: nothing to write to Studio; handled by write_records

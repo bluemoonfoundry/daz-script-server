@@ -17,6 +17,7 @@ Every result type has a JSON-safe ``to_dict()``.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from importlib import resources
 from typing import TYPE_CHECKING, Mapping, Sequence
@@ -27,7 +28,7 @@ from ._recipe_desired import compute_desired
 from ._recipe_diff import Conflict, OnConflict, RecipePlan, Resolution, diff
 from ._recipe_json import to_jsonable
 from ._recipe_model import SceneRecipe
-from ._recipe_ops import DazSceneOps, exists_script
+from ._recipe_ops import DazSceneOps, is_local_pose_file, resolve_files
 from ._recipe_store import LiveState, read_live
 from ._recipe_validate import RecipeIssue, ValidationReport, file_not_found, validate_offline
 from ._render_api import RenderResult
@@ -93,7 +94,11 @@ def validate(recipe: SceneRecipe | dict, scene: "DazScene | None" = None) -> Val
 
     Adds ``file_not_found`` at ``assets.<k>.path``, ``actors.<k>.pose`` and
     ``lighting.environment.image_path``. The existence check is skipped while the
-    recipe has offline errors.
+    recipe has offline errors. Files are resolved on the Studio host in one script
+    (content paths through the content manager), except dazpy pose ``.json``
+    files: ``poses.apply_pose`` reads those on the client, so they are checked
+    there. Raises :class:`~dazpy.exceptions.DazError` if Studio returns no
+    result for the check.
     """
     report = validate_offline(_as_dict(recipe))
     if scene is None or not report.ok:
@@ -102,8 +107,10 @@ def validate(recipe: SceneRecipe | dict, scene: "DazScene | None" = None) -> Val
     refs = _file_refs(model)
     if not refs:
         return report
-    found = scene._client.execute(exists_script(sorted({f for _, f in refs}))).value or {}
-    missing = tuple(file_not_found(path, f) for path, f in refs if not found.get(f, False))
+    local = {f for path, f in refs if path.endswith(".pose") and is_local_pose_file(f)}
+    found = resolve_files(scene._client, [f for _, f in refs if f not in local])
+    found.update({f: f if os.path.isfile(f) else "" for f in local})
+    missing = tuple(file_not_found(path, f) for path, f in refs if not found.get(f))
     if not missing:
         return report
     errors = report.errors + missing
