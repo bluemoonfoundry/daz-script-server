@@ -15,8 +15,8 @@ one-line scripts, and read-only MCP tools.
 | Stage | Checks |
 |---|---|
 | `api` | `/status`, `/health`, `/capabilities` shape, sync `/execute` (plain + `args`), DAZ globals reachable, `SCRIPT_ERROR` envelope on HTTP 200, 401 on a bad token |
-| `async` | `/execute/async` submit and long-poll result, `/requests/{id}/status`, `Idempotency-Key` replay returns the same job |
-| `render` | Per engine: `/render` submit → `/render/{id}/progress` SSE terminal event → job result → **engine readback** (in the job result *and* an independent live read afterwards) → artifact download is a PNG. Iray also checks the `iray_samples` readback (applied, then restored to the previous value). The first render also checks `GET /scene/events?filter=render` delivers `render.finished`. |
+| `async` | `/execute/async` submit and long-poll result, `/requests/{id}/status` (incl. `progress_source`/`progress_supported`/`last_activity_at`), `Idempotency-Key` replay returns the same job |
+| `render` | Per engine: `/render` submit → `/render/{id}/progress` SSE terminal event → job result → **engine readback** (in the job result *and* an independent live read afterwards) → artifact download is a PNG. Iray also checks the `iray_samples` readback (applied, then restored to the previous value). The first render also checks `GET /scene/events?filter=render` delivers `render.finished`. With viewport selected, a 3-frame 64×64 `/render/animation` checks the job status reports frame progress (`progress_source: frames`, final `current == total == 3`). |
 | `mcp` | Optional (`--mcp-dir`). Spawns the `vangard-daz-mcp` package from a checkout, registers its scripts, and calls `daz_status`, `daz_scene_info`, `daz_get_render_settings` |
 
 ### Render settings are read back after every change

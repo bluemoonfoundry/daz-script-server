@@ -36,6 +36,7 @@
 #include <QtCore/qdatetime.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
+#include <QtCore/qdir.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
 #if DAZ_SDK_MAJOR_VERSION >= 6
@@ -2565,10 +2566,13 @@ static QString buildAnimationRenderScript(
     int startFrame, int endFrame, int framePadding,
     int width, int height,
     const QString& camera,
-    const QString& engine)
+    const QString& engine,
+    const QString& frameReportFile)
 {
     QString outputPatternEsc = QString::fromStdString(
         JsonStd::escape(JsonStd::qstrToStd(outputPattern)));
+    QString frameReportEsc = frameReportFile.isEmpty() ? QString("null")
+        : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(frameReportFile))) + "\"";
     QString cameraEsc = camera.isEmpty() ? QString("null")
         : "\"" + QString::fromStdString(JsonStd::escape(JsonStd::qstrToStd(camera))) + "\"";
     QString engineEsc = engine.isEmpty() ? QString("null")
@@ -2583,13 +2587,34 @@ static QString buildAnimationRenderScript(
     script += "  var cameraName = " + cameraEsc + ";\n";
     script += "  var engineName = " + engineEsc + ";\n";
     script += "  var width = " + QString::number(width) + ";\n";
-    script += "  var height = " + QString::number(height) + ";\n\n";
+    script += "  var height = " + QString::number(height) + ";\n";
+    script += "  var frameReportFile = " + frameReportEsc + ";\n\n";
 
     script +=
         "  function padFrame(n, width) {\n"
         "    var s = String(n);\n"
         "    while (s.length < width) s = \"0\" + s;\n"
         "    return s;\n"
+        "  }\n\n";
+
+    // ── Frame progress report ─────────────────────────────────────────────
+    // On Studio 6 print() is shimmed into an array (see runDazScript), so the
+    // [DAZPY_FRAME] marker below never reaches onMessagePosted while the job
+    // runs. The server-owned JSONL report is read live by polling workers
+    // instead. The whole event list is rewritten each frame (the same
+    // pattern the report-file tests use) rather than relying on an append
+    // open mode. Best effort: a failed write must never fail the render.
+    script +=
+        "  var frameEvents = \"\";\n"
+        "  function reportFrame(frame, total) {\n"
+        "    if (!frameReportFile) return;\n"
+        "    try {\n"
+        "      frameEvents += JSON.stringify({type: \"progress\", value: (frame - 1) / total,\n"
+        "        current: frame - 1, total: total, frame: frame, phase: \"rendering\",\n"
+        "        message: \"Rendering frame \" + frame + \" of \" + total}) + \"\\n\";\n"
+        "      var rf = new DzFile(frameReportFile);\n"
+        "      if (rf.open(DzFile.WriteOnly)) { rf.write(frameEvents); rf.close(); }\n"
+        "    } catch (e) {}\n"
         "  }\n\n";
 
     // ── Configure render options (shared across all frames) ───────────────
@@ -2668,6 +2693,7 @@ static QString buildAnimationRenderScript(
         "      var framePath = outputPattern.replace('{frame}', padFrame(f, framePadding));\n"
         "      opts.renderImgFilename = framePath;\n"
         "      frameSucceeded = null;\n"
+        "      reportFrame(f - startFrame + 1, endFrame - startFrame + 1);\n"
         "      print(\"[DAZPY_FRAME] \" + (f - startFrame + 1) + \"/\" + (endFrame - startFrame + 1));\n"
         "      renderMgr.doRender(opts);\n"
         "      if (_finishedBound && frameSucceeded !== true) allSucceeded = false;\n"
@@ -3129,10 +3155,21 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
     }
 
     // ── Generate and enqueue animation render job ─────────────────────────
-    QString renderScript = buildAnimationRenderScript(
-        outputPath, startFrame, endFrame, framePadding, width, height, camera, engine);
+    // Server-owned per-job frame report (see buildAnimationRenderScript).
+    // A random name, not the request ID: the script is built before the job
+    // is submitted, and the name must not be guessable or reused.
+    QString reportToken = SecureRandom::generateHexToken(8);
+    if (reportToken.isEmpty())
+        reportToken = QUuid::createUuid().toString().mid(1, 8);
+    const QString frameReportFile =
+        QDir(QDir::tempPath()).filePath("dss-frames-" + reportToken + ".jsonl");
 
-    AsyncRequestManager::SubmitResult sr = m_pAsyncMgr->submitRender(renderScript, "rnd", corr);
+    QString renderScript = buildAnimationRenderScript(
+        outputPath, startFrame, endFrame, framePadding, width, height, camera, engine,
+        frameReportFile);
+
+    AsyncRequestManager::SubmitResult sr =
+        m_pAsyncMgr->submitRender(renderScript, "rnd", corr, frameReportFile);
     if (!sr.accepted)
         return HttpResult(503, stdToQBA(ErrorResponse::build(
             ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(sr.error))));
@@ -3190,11 +3227,16 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 				if (m_pRenderProgress)
 					m_pRenderProgress->notifyProgress(m_sCurrentRenderId, frame, total);
 				if (m_pAsyncMgr)
-					m_pAsyncMgr->updateProgress(m_sCurrentRenderId,
-						double(frame - 1) / double(total));
+					m_pAsyncMgr->updateFrameProgress(m_sCurrentRenderId, frame, total);
 			}
 		}
 	}
+
+	// Any printed line from an async job is a sign of life (last_activity_at).
+	// Studio 4 only: Studio 6 shims print() into an array (runDazScript), so
+	// this slot doesn't see job output there; report-file writes cover it.
+	if (m_pAsyncMgr)
+		m_pAsyncMgr->touchCurrent();
 }
 
 // ─── JSON helpers (main thread only) ─────────────────────────────────────────
@@ -3596,6 +3638,8 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 	features["scene_revision"]      = true;   // change counter on /status and job responses
 	features["error_envelope"]      = true;   // error_code/error/retryable on every failure
 	features["artifacts"]           = true;   // GET /artifacts/{id}[/{artifact_id}] downloads
+	features["job_activity"]        = true;   // progress_supported/_source, last_activity_at, idle_ms
+	features["animation_frame_progress"] = true; // frame N of M in /render/animation job status
 	json.addMember("features", QVariant(features));
 	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
 		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));

@@ -800,8 +800,10 @@ paths:
         Renders each frame from `start_frame` to `end_frame` inclusive as its own
         image and returns a `request_id` immediately. The `{frame}` token in
         `output_path` is replaced by the zero-padded frame number. Progress
-        advances at frame boundaries (`GET /render/{id}/progress`); the completed
-        job's output manifest lists every frame written (`kind: "frame"`).
+        advances at frame boundaries: the job status reports frame N of M
+        (`progress_source: frames`, `observation.progress.frame` / `total`) on
+        Studio 4 and 6, and `GET /render/{id}/progress` streams it on Studio 4.
+        The completed job's output manifest lists every frame written (`kind: "frame"`).
         If `camera` is given, the server checks that it exists in the scene before queueing.
       operationId: submitRenderAnimation
       security:
@@ -1631,6 +1633,36 @@ components:
           format: date-time
         elapsed_ms:
           type: integer
+        progress:
+          type: number
+          format: float
+        progress_supported:
+          type: boolean
+          description: |
+            Whether `progress` can change while the job runs. True for
+            animation renders and, on Studio 6, for script jobs with a
+            `reportFile`. False for single-frame renders (start and finish
+            only) and scripts without a report file.
+        progress_source:
+          type: string
+          enum: [frames, report, none]
+          description: |
+            `frames`: animation render, one step per frame. `report`: the
+            job's `reportFile` progress events (Studio 4 parses them only
+            after the script returns). `none`: no progress until it finishes.
+        last_activity_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Latest sign of life: job start, a frame boundary, a report-file
+            write (any event, including `heartbeat`), a printed line (Studio 4
+            only), or completion. Null while queued.
+        idle_ms:
+          type: integer
+          description: |
+            Milliseconds since `last_activity_at`. Present only while the job
+            is running, `cancel_requested` or `stale`.
 
     RequestStatusResponse:
       type: object
@@ -1651,6 +1683,33 @@ components:
           format: float
           minimum: 0
           maximum: 1
+        progress_supported:
+          type: boolean
+          description: |
+            Whether `progress` can change while the job runs. True for
+            animation renders and, on Studio 6, for script jobs with a
+            `reportFile`. False for single-frame renders (start and finish
+            only) and scripts without a report file.
+        progress_source:
+          type: string
+          enum: [frames, report, none]
+          description: |
+            `frames`: animation render, one step per frame. `report`: the
+            job's `reportFile` progress events (Studio 4 parses them only
+            after the script returns). `none`: no progress until it finishes.
+        last_activity_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Latest sign of life: job start, a frame boundary, a report-file
+            write (any event, including `heartbeat`), a printed line (Studio 4
+            only), or completion. Null while queued.
+        idle_ms:
+          type: integer
+          description: |
+            Milliseconds since `last_activity_at`. Present only while the job
+            is running, `cancel_requested` or `stale`.
         observation:
           $ref: '#/components/schemas/JobObservation'
         elapsed_ms:
@@ -1684,6 +1743,33 @@ components:
               type: string
             server_instance_id:
               type: string
+            progress_supported:
+              type: boolean
+              description: |
+                Whether `progress` can change while the job runs. True for
+                animation renders and, on Studio 6, for script jobs with a
+                `reportFile`. False for single-frame renders (start and finish
+                only) and scripts without a report file.
+            progress_source:
+              type: string
+              enum: [frames, report, none]
+              description: |
+                `frames`: animation render, one step per frame. `report`: the
+                job's `reportFile` progress events (Studio 4 parses them only
+                after the script returns). `none`: no progress until it finishes.
+            last_activity_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: |
+                Latest sign of life: job start, a frame boundary, a report-file
+                write (any event, including `heartbeat`), a printed line (Studio 4
+                only), or completion. Null while queued.
+            idle_ms:
+              type: integer
+              description: |
+                Milliseconds since `last_activity_at`. Present only while the job
+                is running, `cancel_requested` or `stale`.
 
     JobObservation:
       type: object
@@ -1706,6 +1792,7 @@ components:
           $ref: '#/components/schemas/JobOutputManifest'
         report_file:
           type: string
+          description: The client's `reportFile`. Omitted for server-owned reports (animation renders).
 
     JobProgress:
       type: object
@@ -1719,8 +1806,12 @@ components:
           type: number
         total:
           type: number
+        frame:
+          type: integer
+          description: Animation renders only; the 1-based frame now rendering (`current` counts finished frames)
         phase:
           type: string
+          description: Animation renders use `rendering`, then `done`
         message:
           type: string
         at:
@@ -2005,6 +2096,12 @@ components:
             artifacts:
               type: boolean
               description: GET /artifacts/{id} and /artifacts/{id}/{artifact_id}
+            job_activity:
+              type: boolean
+              description: Job records carry progress_supported, progress_source, last_activity_at and idle_ms
+            animation_frame_progress:
+              type: boolean
+              description: Animation render job status reports frame N of M (Studio 4 and 6)
         limits:
           type: object
           description: Current settings (not compiled defaults)

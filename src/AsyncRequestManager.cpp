@@ -87,8 +87,10 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
         req.scriptFile  = scriptFile;
         req.reportFile  = reportFile;
         req.args        = args;
-        if (!reportFile.isEmpty())
+        if (!reportFile.isEmpty()) {
             req.args.insert("__dssReportFile", reportFile);
+            req.progressSource = PROGRESS_REPORT;
+        }
         req.submittedAt = QDateTime::currentMSecsSinceEpoch();
 
         m_requests.insert(req.id, req);
@@ -106,7 +108,8 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
 }
 
 AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
-    const QString& scriptText, const QString& idPrefix, const QString& correlationId)
+    const QString& scriptText, const QString& idPrefix, const QString& correlationId,
+    const QString& frameReportFile)
 {
     SubmitResult r;
     r.accepted    = false;
@@ -126,9 +129,26 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
             return r;
         }
 
+        // Start the frame report empty so the job never sees another run's
+        // events. If it can't be created the render still runs; Studio 4's
+        // print marker still reports frames, Studio 6 just reports none.
+        bool frameReportReady = false;
+        if (!frameReportFile.isEmpty()) {
+            QFile report(frameReportFile);
+            frameReportReady = report.open(QIODevice::WriteOnly | QIODevice::Truncate);
+            report.close();
+        }
+
         AsyncRequest req;
         req.id          = MetricsCollector::generateAsyncId(idPrefix);
         req.requestType = REQUEST_TYPE_RENDER;
+        if (!frameReportFile.isEmpty()) {
+            req.progressSource = PROGRESS_FRAMES;
+            if (frameReportReady) {
+                req.reportFile     = frameReportFile;
+                req.ownsReportFile = true;
+            }
+        }
         req.correlationId    = correlationId;
         req.serverInstanceId = m_serverInstanceId;
         req.scriptText  = scriptText;
@@ -179,6 +199,7 @@ void AsyncRequestManager::applyReportEventLocked(AsyncRequest& req, const QVaria
         detail.insert("value", value);
         if (event.contains("current")) detail.insert("current", event.value("current"));
         if (event.contains("total"))   detail.insert("total", event.value("total"));
+        if (event.contains("frame"))   detail.insert("frame", event.value("frame"));
         if (event.contains("phase"))   detail.insert("phase", event.value("phase"));
         if (event.contains("message")) detail.insert("message", event.value("message"));
         if (event.contains("at"))      detail.insert("at", event.value("at"));
@@ -253,15 +274,24 @@ void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
     if (!report.open(QIODevice::ReadOnly)) return;
 
     if (report.size() < req.reportOffset) {
+        // The file was rewritten (scripts commonly rewrite the whole event
+        // list each time). Replay it from the start. Progress is kept rather
+        // than cleared: a poll that lands between the truncate and the write
+        // would otherwise briefly report no progress at all.
         req.reportOffset = 0;
         req.reportRemainder.clear();
-        req.progress = 0.0;
-        req.progressDetail.clear();
         req.logTail.clear();
         req.logTotal = 0;
         req.outputManifest.clear();
     }
     if (!report.seek(req.reportOffset)) return;
+    if (!report.atEnd()) {
+        // New events mean the job wrote recently. Use the file's mtime, not
+        // the time of this poll, since ingestion happens lazily on request.
+        const QDateTime modified = QFileInfo(req.reportFile).lastModified();
+        if (modified.isValid())
+            touchLocked(req, modified.toMSecsSinceEpoch());
+    }
 
     while (!report.atEnd()) {
         QByteArray chunk = report.read(64 * 1024);
@@ -408,7 +438,7 @@ std::string AsyncRequestManager::observationJson(const AsyncRequest& req) const
     s += ",\"log_truncated\":";
     s += (req.logTotal > req.logTail.size()) ? "true" : "false";
     s += ",\"output_manifest\":" + JsonStd::variantToJson(QVariant(manifest));
-    if (!req.reportFile.isEmpty()) {
+    if (!req.reportFile.isEmpty() && !req.ownsReportFile) {
         s += ",\"report_file\":\"";
         s += JsonStd::escape(JsonStd::qstrToStd(req.reportFile));
         s += "\"";
@@ -436,6 +466,7 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
     s += "\",\"status\":\"" + status + "\"";
     s += identityJson(req);
     s += ",\"progress\":" + std::string(progBuf);
+    s += activityJson(req);
     s += ",\"observation\":" + observationJson(req);
 
     s += lifecycleTimesJson(req);
@@ -493,6 +524,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
     s += JsonStd::escape(JsonStd::qstrToStd(observedReq.id));
     s += "\",\"status\":\"" + status + "\"";
     s += identityJson(observedReq);
+    s += activityJson(observedReq);
 
     if (observedReq.status == REQUEST_COMPLETED ||
         observedReq.status == REQUEST_COMPLETED_AFTER_CANCEL_REQUEST ||
@@ -651,6 +683,7 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
         items += ",\"status\":\"" + statusStr + "\"";
         items += identityJson(req);
         items += ",\"progress\":" + std::string(progBuf);
+        items += activityJson(req);
         items += ",\"observation_summary\":{";
         items += "\"log_total\":" + std::to_string(req.logTotal);
         items += ",\"log_truncated\":";
@@ -731,15 +764,45 @@ void AsyncRequestManager::markRunning(const QString& id)
     req.status    = REQUEST_RUNNING;
     req.startedAt = QDateTime::currentMSecsSinceEpoch();
     req.progress  = 0.0;
+    touchLocked(req, req.startedAt);
 }
 
-void AsyncRequestManager::updateProgress(const QString& id, double progress)
+void AsyncRequestManager::updateFrameProgress(const QString& id, int frame, int total)
 {
+    if (total <= 0 || frame < 1) return;
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(id)) return;
     AsyncRequest& req = m_requests[id];
     if (req.status != REQUEST_RUNNING) return;
-    req.progress = progress;
+    if (frame > total) frame = total;
+
+    // Same shape as the events the animation script writes to its frame
+    // report, so Studio 4 (print marker) and Studio 6 (report) agree.
+    QVariantMap detail;
+    detail.insert("value", double(frame - 1) / double(total));
+    detail.insert("current", frame - 1);
+    detail.insert("total", total);
+    detail.insert("frame", frame);
+    detail.insert("phase", "rendering");
+    detail.insert("message", QString("Rendering frame %1 of %2").arg(frame).arg(total));
+    req.progress       = detail.value("value").toDouble();
+    req.progressDetail = detail;
+    touchLocked(req, QDateTime::currentMSecsSinceEpoch());
+}
+
+void AsyncRequestManager::touchCurrent()
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_currentId.isEmpty() || !m_requests.contains(m_currentId)) return;
+    AsyncRequest& req = m_requests[m_currentId];
+    if (isActive(req.status))
+        touchLocked(req, QDateTime::currentMSecsSinceEpoch());
+}
+
+void AsyncRequestManager::touchLocked(AsyncRequest& req, qint64 at)
+{
+    if (at > req.lastActivityAt)
+        req.lastActivityAt = at;
 }
 
 void AsyncRequestManager::markCompleted(const QString& id, bool executed,
@@ -768,9 +831,17 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
     const bool wasStale = (req.status == REQUEST_STALE);
 
     req.completedAt    = QDateTime::currentMSecsSinceEpoch();
+    touchLocked(req, req.completedAt);
     req.progress       = 1.0;
-    if (executed && !req.cancelRequested && !req.progressDetail.isEmpty())
+    if (executed && !req.cancelRequested && !req.progressDetail.isEmpty()) {
         req.progressDetail.insert("value", 1.0);
+        // All frames are done; the last frame event said "frame N starting".
+        if (req.progressSource == PROGRESS_FRAMES && req.progressDetail.contains("total")) {
+            req.progressDetail.insert("current", req.progressDetail.value("total"));
+            req.progressDetail.insert("phase", "done");
+            req.progressDetail.remove("message");
+        }
+    }
     req.outputLines    = output;
     for (int i = 0; i < output.size(); ++i) {
         QVariantMap entry;
@@ -848,8 +919,12 @@ int AsyncRequestManager::cleanupExpired(qint64 ttlMs)
             if (terminal && req.completedAt > 0 && (now - req.completedAt) > ttlMs)
                 toRemove.append(it.key());
         }
-        for (const QString& expired : toRemove)
+        for (const QString& expired : toRemove) {
+            const AsyncRequest& req = m_requests[expired];
+            if (req.ownsReportFile && !req.reportFile.isEmpty())
+                QFile::remove(req.reportFile);
             m_requests.remove(expired);
+        }
     }
     return toRemove.size();
 }
@@ -930,6 +1005,46 @@ std::string AsyncRequestManager::identityJson(const AsyncRequest& req)
         s += ",\"correlation_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.correlationId)) + "\"";
     if (!req.serverInstanceId.isEmpty())
         s += ",\"server_instance_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.serverInstanceId)) + "\"";
+    return s;
+}
+
+// ,"progress_supported":..,"progress_source":"..","last_activity_at":..|null
+// and, while the main thread still owns the job, "idle_ms" since that activity.
+std::string AsyncRequestManager::activityJson(const AsyncRequest& req)
+{
+    // progress_supported means progress can change *while the job runs*.
+    // Studio 4 only parses a report after the script returns, so a
+    // report-driven job there gets its progress at the end, not live.
+    bool supported = false;
+    const char* source = "none";
+    switch (req.progressSource) {
+        case PROGRESS_FRAMES:
+            source = "frames";
+            supported = true;
+            break;
+        case PROGRESS_REPORT:
+            source = "report";
+#if DAZ_SDK_MAJOR_VERSION >= 6
+            supported = true;
+#endif
+            break;
+        case PROGRESS_NONE:
+            break;
+    }
+    std::string s = ",\"progress_supported\":";
+    s += supported ? "true" : "false";
+    s += ",\"progress_source\":\"";
+    s += source;
+    s += "\",\"last_activity_at\":";
+    if (req.lastActivityAt > 0)
+        s += "\"" + JsonStd::msecToIso((long long)req.lastActivityAt) + "\"";
+    else
+        s += "null";
+    if (isActive(req.status) && req.lastActivityAt > 0) {
+        long long idle = (long long)(QDateTime::currentMSecsSinceEpoch() - req.lastActivityAt);
+        if (idle < 0) idle = 0;
+        s += ",\"idle_ms\":" + std::to_string(idle);
+    }
     return s;
 }
 

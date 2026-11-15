@@ -202,6 +202,17 @@ class Smoke:
             st = self.client.get_request_status(state["rid"])
             check(st.get("status") == "completed", f"status {st!r}")
 
+        def activity_fields():
+            # A plain script (no reportFile) has no progress until it ends.
+            check("rid" in state, "no request from previous check")
+            st = self.client.get_request_status(state["rid"])
+            check(st.get("progress_source") == "none", f"progress_source {st.get('progress_source')!r}")
+            check(st.get("progress_supported") is False,
+                  f"progress_supported {st.get('progress_supported')!r}")
+            check(isinstance(st.get("last_activity_at"), str), f"last_activity_at {st.get('last_activity_at')!r}")
+            check("idle_ms" not in st, f"idle_ms on a finished job: {st.get('idle_ms')!r}")
+            return {"last_activity_at": st["last_activity_at"]}
+
         def idempotency_replay():
             key = f"smoke-{uuid.uuid4().hex}"
             a = self.client.execute_async_submit(iife("return 1;"), idempotency_key=key)
@@ -211,6 +222,7 @@ class Smoke:
 
         self.run("async", "submit_and_wait", submit_and_wait)
         self.run("async", "status_endpoint", status_endpoint)
+        self.run("async", "activity_fields", activity_fields)
         self.run("async", "idempotency_replay", idempotency_replay)
 
     def _wait_result(self, rid: str, timeout: float) -> dict:
@@ -281,6 +293,12 @@ class Smoke:
                     continue
                 self._render_engine(engine, watch_scene_events=first)
                 first = False
+            if "viewport" in engines:
+                if "viewport" in selectable:
+                    self._render_animation_frames()
+                else:
+                    self.run("render", "animation.frame_progress", None,
+                             skip="viewport not registered")
         finally:
             self.restore_render_settings()
 
@@ -406,6 +424,41 @@ class Smoke:
         if watch_scene_events:
             stop.set()
             self.run("render", "scene_events_sse", scene_events_sse)
+
+    def _render_animation_frames(self):
+        """3-frame viewport animation: job status must report frame N of M."""
+        frames = 3
+
+        def frame_progress():
+            pattern = (self.out_dir / f"smoke_anim_{int(time.time())}_{{frame}}.png").as_posix()
+            sub = self.client.render_animation_submit(
+                pattern, 0, frames - 1, width=RENDER_SIZE, height=RENDER_SIZE, engine="viewport")
+            rid = sub["request_id"]
+            seen_frames: set[int] = set()
+            deadline = time.monotonic() + self.args.render_timeout
+            st: dict = {}
+            while time.monotonic() < deadline:
+                st = self.client.get_request_status(rid)
+                detail = (st.get("observation") or {}).get("progress") or {}
+                if st.get("status") == "running" and isinstance(detail.get("frame"), int):
+                    seen_frames.add(detail["frame"])
+                if st.get("status") not in ("queued", "running"):
+                    break
+                time.sleep(0.05)
+            check(st.get("status") == "completed", f"status {st.get('status')!r}: {_short(st)}")
+            check(st.get("progress_source") == "frames", f"progress_source {st.get('progress_source')!r}")
+            check(st.get("progress_supported") is True, f"progress_supported {st.get('progress_supported')!r}")
+            check(isinstance(st.get("last_activity_at"), str), f"last_activity_at {st.get('last_activity_at')!r}")
+            detail = (st.get("observation") or {}).get("progress") or {}
+            check(detail.get("total") == frames and detail.get("current") == frames
+                  and detail.get("phase") == "done", f"final frame progress {detail}")
+            check("report_file" not in (st.get("observation") or {}),
+                  "server-owned frame report leaked as report_file")
+            # Viewport frames can be faster than the poll; seeing any running
+            # frame proves the live path, seeing none is reported, not failed.
+            return {"frames_seen_running": sorted(seen_frames)}
+
+        self.run("render", "animation.frame_progress", frame_progress)
 
     # -- stage: mcp --
 

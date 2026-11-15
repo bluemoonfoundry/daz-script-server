@@ -73,8 +73,13 @@ public:
 
     // Enqueue a render job. Same as submit() but tags the request as
     // REQUEST_TYPE_RENDER so cancel dispatch calls killRender() correctly.
+    // frameReportFile is non-empty for animation renders: a server-owned
+    // JSONL file the generated script writes one progress event per frame
+    // to (Studio 6 reads it live; see onMessagePosted for Studio 4). The
+    // manager truncates it on submit and deletes it when the job expires.
     SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix,
-                                     const QString& correlationId);
+                                     const QString& correlationId,
+                                     const QString& frameReportFile = QString());
 
     // All five methods below are safe to call from HTTP threads. Studio 6 may
     // ingest report JSON here because QJsonDocument is reentrant. Studio 4
@@ -114,9 +119,15 @@ public:
     // Mark the running request as RUNNING (sets startedAt).
     void markRunning(const QString& id);
 
-    // Update progress (0.0-1.0) for the running request. No-op if the
-    // request isn't currently RUNNING (e.g. late call after cancel/timeout).
-    void updateProgress(const QString& id, double progress);
+    // Frame-boundary progress for an animation render: frame N of total is
+    // about to start (1-based). Sets progress to (frame-1)/total and the
+    // observation detail to {current, total, frame, phase, message}. No-op if
+    // the request isn't currently RUNNING (e.g. late call after cancel/timeout).
+    void updateFrameProgress(const QString& id, int frame, int total);
+
+    // Record that the job currently on the main thread did something (it
+    // printed a line). Feeds last_activity_at. No-op when nothing is running.
+    void touchCurrent();
 
     // Record the real outcome after script execution returns. Accepts a
     // request that is RUNNING, CANCEL_REQUESTED or STALE; a cancel request or
@@ -181,12 +192,16 @@ private:
     static bool isActive(RequestStatus s)
     { return s == REQUEST_RUNNING || s == REQUEST_CANCEL_REQUESTED || s == REQUEST_STALE; }
 
+    // How a job reports progress, fixed at submission (progress_source).
+    enum ProgressSource { PROGRESS_NONE, PROGRESS_REPORT, PROGRESS_FRAMES };
+
     struct AsyncRequest {
         AsyncRequest()
             : status(REQUEST_QUEUED), requestType(REQUEST_TYPE_SCRIPT)
             , scriptExecuted(false), progress(0.0)
             , submittedAt(0), startedAt(0), completedAt(0), reportOffset(0)
             , logTotal(0), cancelRequested(0), cancelRequestedAt(0), staleAt(0)
+            , lastActivityAt(0), progressSource(PROGRESS_NONE), ownsReportFile(false)
         {}
 
         QString       id;
@@ -216,12 +231,21 @@ private:
         int           cancelRequested;
         qint64        cancelRequestedAt;
         qint64        staleAt;
+        // Latest sign of life: start, a printed line, a progress update, a
+        // report-file write (its mtime) or completion. 0 until it starts.
+        qint64        lastActivityAt;
+        ProgressSource progressSource;
+        // reportFile was created by the server (animation frame report), not
+        // the client: hidden from the observation and deleted on expiry.
+        bool          ownsReportFile;
     };
 
     std::string statusToString(RequestStatus s) const;
     std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly);
     static std::string lifecycleTimesJson(const AsyncRequest& req);
     static std::string identityJson(const AsyncRequest& req);
+    static std::string activityJson(const AsyncRequest& req);
+    static void touchLocked(AsyncRequest& req, qint64 at);
     void ingestReportFromWorkerLocked(AsyncRequest& req);
     void ingestReportLocked(AsyncRequest& req, bool final = false);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);

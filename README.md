@@ -359,6 +359,9 @@ The `GET /render/:id/progress` SSE stream now emits a progress event at
 each frame boundary during an animation render, instead of only start/
 terminal events — the DAZ SDK exposes no per-percent render progress
 signal, so this frame-level marker is the most granular progress available.
+The SSE frame events are Studio 4 only; on Studio 6 poll
+`GET /requests/:id/status`, which reports frame N of M on both
+(`observation.progress.frame` / `total`, `progress_source: "frames"`).
 
 ### ⚡ Async client — `dazpy.aio.AsyncDazClient`
 
@@ -2165,7 +2168,10 @@ duplicate it inside `args`:
 ```
 
 Progress events require either `value` (0–1) or `current` plus `total`. Log
-events require `message`. Output events require `path`; repeating a path updates
+events require `message`. Every write to the file updates the job's
+`last_activity_at` (taken from the file's modification time), so a long step
+with nothing else to report can write `{"type":"heartbeat"}` to show it is
+still alive; unknown event types are otherwise ignored. Output events require `path`; repeating a path updates
 that manifest entry. A `manifest` event may provide an `outputs` array. Use a
 unique report file for every job. Declared outputs can be downloaded over HTTP;
 see [Artifacts](#-artifacts-job-output-downloads).
@@ -2211,6 +2217,10 @@ is still running.
   "request_id": "a3f2b891",
   "status": "running",
   "progress": 0.25,
+  "progress_supported": true,
+  "progress_source": "report",
+  "last_activity_at": "2026-04-09T10:15:01",
+  "idle_ms": 320,
   "observation": {
     "progress": {"value": 0.25, "current": 1, "total": 4, "phase": "render"},
     "log_tail": [{"level": "info", "source": "script", "message": "Loaded scene"}],
@@ -2241,6 +2251,23 @@ is still running.
 Once set, `cancel_requested_at` and `stale_at` stay in status and result responses.
 
 `queue_position` is only meaningful when `status` is `queued`.
+
+**Progress and liveness fields** (status, result and `GET /requests` entries):
+
+| Field | Meaning |
+|---|---|
+| `progress_source` | `frames` (animation render: one step per frame), `report` (the job's `reportFile` progress events), or `none` |
+| `progress_supported` | `true` when `progress` can move while the job runs: animation renders, and `report` jobs on Studio 6. Studio 4 parses a report only after the script returns, and a single-frame render has only start and finish, so those are `false` |
+| `last_activity_at` | Latest sign of life: start, a frame boundary, a report-file write, a printed line (Studio 4 only), or completion. `null` while queued |
+| `idle_ms` | Milliseconds since `last_activity_at`; present only while the job is running, `cancel_requested` or `stale` |
+
+A growing `idle_ms` on a job with `progress_supported: true` means it has
+stopped reporting, which tells you more than `elapsed_ms` alone. For
+animation renders, `observation.progress` reads
+`{"value": 0.4, "current": 2, "total": 5, "frame": 3, "phase": "rendering",
+"message": "Rendering frame 3 of 5"}`: `current` counts finished frames and
+`frame` is the one rendering now. On completion it becomes `current == total`
+with `phase: "done"`.
 
 ---
 

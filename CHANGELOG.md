@@ -6,6 +6,21 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **Job liveness and progress metadata.** Status, result and `GET /requests`
+  records now carry `progress_supported`, `progress_source`
+  (`frames` / `report` / `none`), `last_activity_at` and, while the job is
+  active, `idle_ms`. Activity comes from job start, frame boundaries,
+  report-file writes (so `{"type":"heartbeat"}` keeps a long step alive),
+  printed lines on Studio 4, and completion. New `/capabilities` flags:
+  `job_activity`, `animation_frame_progress`.
+- **Per-frame progress for `/render/animation` on Studio 6.** Studio 6 shims
+  `print()`, so the `[DAZPY_FRAME]` marker never reached the server and
+  animation renders reported no progress until they finished. The animation
+  script now also writes a server-owned frame report that polling workers read
+  live. On both SDKs `observation.progress` reports frame N of M (`frame`,
+  `current`, `total`, `phase`, `message`). The SSE frame events are still
+  Studio 4 only.
+
 - **Live smoke-test matrix: `tests/smoke_live.py`.** A scoped check against a
   running DAZ Studio covering API basics, async jobs, both SSE streams, one
   64×64 render per engine (Iray / Filament / viewport), and optionally the
