@@ -25,6 +25,12 @@ class RecordTests(unittest.TestCase):
         m2 = man("r1", [])
         self.assertEqual(Manifest.from_json(m2.to_json()), m2)
 
+    def test_manifest_deleted_round_trips_and_defaults_empty(self):
+        m = Manifest("r1", ("a",), None, ("cameras.cu",))
+        self.assertEqual(Manifest.from_json(m.to_json()), m)
+        legacy = json.dumps({"recipe_id": "r1", "entities": ["a"], "environment": None})
+        self.assertEqual(Manifest.from_json(legacy).deleted, ())
+
 
 class ReadLiveTests(unittest.TestCase):
     def test_read_live_filters_by_recipe_id(self):

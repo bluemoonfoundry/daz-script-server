@@ -7,10 +7,12 @@ from canned poses.  Build the canned data with ``rec``, ``man`` and ``node``.
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 from unittest.mock import MagicMock
 
-from dazpy._recipe_store import EntityRecord, Manifest
+from dazpy._recipe_desired import DesiredEntity
+from dazpy._recipe_store import EntityRecord, LiveEntity, LiveState, Manifest
 from dazpy._result import ExecutionResult
 
 
@@ -68,3 +70,146 @@ def fake_client(nodes: list[dict] | None = None, manifest: Manifest | None = Non
     client = MagicMock()
     client.execute.side_effect = execute
     return client
+
+
+# ── pure-diff helpers (Task 6; reused by later tasks) ────────────────────────
+
+RID = "r1"
+ENV_PATH = "lighting.environment"
+_EMPTY_POSE = {"figure": "Genesis 9", "bones": {}, "morphs": {}, "props": {}}
+
+
+def d_actor(name: str, position=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0),
+            pose_path: str | None = None) -> DesiredEntity:
+    return DesiredEntity(f"actors.{name}", "actor", f"{RID}:{name}", {"asset_path": "/g9.duf"},
+                         {"transform": {"position": tuple(position), "rotation": tuple(rotation)},
+                          "pose": {"pose_path": pose_path}})
+
+
+def d_prop(name: str, position=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0)) -> DesiredEntity:
+    return DesiredEntity(f"props.{name}", "prop", f"{RID}:{name}", {"asset_path": "/ball.duf"},
+                         {"transform": {"position": tuple(position), "rotation": tuple(rotation)}})
+
+
+def d_camera(name: str, position=(0.0, 150.0, 300.0), aim=(0.0, 150.0, 0.0),
+             focal_length: float = 65.0) -> DesiredEntity:
+    return DesiredEntity(f"cameras.{name}", "camera", f"{RID}:{name}", {},
+                         {"transform": {"position": tuple(position), "aim": tuple(aim), "rotation": None},
+                          "optics": {"focal_length": float(focal_length), "depth_of_field": False,
+                                     "focal_distance": None}})
+
+
+def d_light(name: str, position=(100.0, 200.0, 100.0), rotation=(-30.0, 45.0, 0.0),
+            intensity: float = 1.0, color=(255, 255, 255)) -> DesiredEntity:
+    return DesiredEntity(f"lighting.lights.{name}", "light", f"{RID}:{name}", {"light_type": "spot"},
+                         {"transform": {"position": tuple(position), "rotation": tuple(rotation)},
+                          "output": {"intensity": float(intensity), "color": tuple(color)}})
+
+
+def d_environment(intensity: float = 1.0, rotation_deg: float = 0.0, mode: str = "dome_and_scene",
+                  image_path: str | None = "/hdri/sky.hdr", draw_dome: bool = True) -> DesiredEntity:
+    return DesiredEntity(ENV_PATH, "environment", f"{RID}:environment", {},
+                         {"environment": {"type": "hdri", "image_path": image_path,
+                                          "intensity": float(intensity),
+                                          "rotation_deg": float(rotation_deg), "mode": mode,
+                                          "draw_dome": bool(draw_dome)}})
+
+
+def ds(*entities: DesiredEntity) -> dict:
+    """A desired-state dict (as compute_desired returns) from DesiredEntity values."""
+    return {e.path: e for e in entities}
+
+
+def observed_for(e: DesiredEntity) -> dict:
+    """What readback would report right after a faithful apply of *e*."""
+    ch = e.channels
+    out: dict = {}
+    if "transform" in ch:
+        rot = ch["transform"].get("rotation")
+        out["transform"] = {"position": list(ch["transform"]["position"]),
+                            "rotation": list(rot) if rot is not None else [0.0, 0.0, 0.0]}
+    if "optics" in ch:
+        out["optics"] = dict(ch["optics"])
+    if "output" in ch:
+        out["output"] = {"intensity": ch["output"]["intensity"], "color": list(ch["output"]["color"])}
+    if "pose" in ch:
+        out["pose"] = {"snapshot": _copy.deepcopy(_EMPTY_POSE)}
+    if "environment" in ch:
+        env = ch["environment"]
+        out["environment"] = {"intensity": env["intensity"], "rotation_deg": env["rotation_deg"],
+                              "mode": 0, "draw_dome": env["draw_dome"], "image_path": env["image_path"]}
+    return out
+
+
+def live_matching(D: dict, *, deleted: tuple = ()) -> LiveState:
+    """LiveState as if *D* was applied and nothing has changed since."""
+    entities: dict = {}
+    env_rec = None
+    env_obs = None
+    for path, e in D.items():
+        obs = observed_for(e)
+        r = rec(RID, path, _copy.deepcopy(e.channels), _copy.deepcopy(obs))
+        if e.kind == "environment":
+            env_rec, env_obs = r, _copy.deepcopy(obs["environment"])
+            continue
+        entities[path] = LiveEntity(path=path, node_name=e.label, kind=e.kind, record=r,
+                                    observed=_copy.deepcopy(obs), foreign_children=())
+    paths = [p for p in D if p != ENV_PATH]
+    return LiveState(manifest=Manifest(RID, tuple(paths), env_rec, tuple(deleted)),
+                     entities=entities, environment_observed=env_obs)
+
+
+def tweak_value(channel: str, value: dict) -> dict:
+    """*value* (an observed channel) with an unmistakable hand edit applied."""
+    v = _copy.deepcopy(value)
+    if channel == "transform":
+        v["position"][0] += 25.0
+    elif channel == "pose":
+        v["snapshot"]["bones"]["rForeArm"] = [0.0, 0.0, -45.0]
+    elif channel == "optics":
+        v["focal_length"] += 20.0
+    elif channel == "output":
+        v["intensity"] += 0.5
+    elif channel == "environment":
+        v["intensity"] += 1.0
+    else:
+        raise ValueError(channel)
+    return v
+
+
+def with_observed(live: LiveState, path: str, channel: str, value) -> LiveState:
+    """*live* with entity *path*'s observed *channel* replaced by *value*."""
+    if path == ENV_PATH:
+        return LiveState(live.manifest, live.entities, value)
+    ents = dict(live.entities)
+    e = ents[path]
+    obs = _copy.deepcopy(e.observed)
+    obs[channel] = value
+    ents[path] = LiveEntity(e.path, e.node_name, e.kind, e.record, obs, e.foreign_children,
+                            e.element_id)
+    return LiveState(live.manifest, ents, live.environment_observed)
+
+
+def live_tweaked(D: dict, path: str, channel: str, *, live: LiveState | None = None) -> LiveState:
+    """``live_matching(D)`` (or *live*) with one hand edit on *path*.*channel*."""
+    live = live or live_matching(D)
+    current = (live.environment_observed if path == ENV_PATH
+               else live.entities[path].observed[channel])
+    return with_observed(live, path, channel, tweak_value(channel, current))
+
+
+def live_without(live: LiveState, path: str) -> LiveState:
+    """*live* with entity *path*'s node deleted by hand (still in the manifest)."""
+    ents = {p: e for p, e in live.entities.items() if p != path}
+    return LiveState(live.manifest, ents, live.environment_observed)
+
+
+def live_with_children(D: dict, path: str = "actors.anna", names=("Shirt",),
+                       *, live: LiveState | None = None) -> LiveState:
+    """``live_matching(D)`` (or *live*) where the user parented *names* under *path*."""
+    live = live or live_matching(D)
+    ents = dict(live.entities)
+    e = ents[path]
+    ents[path] = LiveEntity(e.path, e.node_name, e.kind, e.record, e.observed, tuple(names),
+                            e.element_id)
+    return LiveState(live.manifest, ents, live.environment_observed)

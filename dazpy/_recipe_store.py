@@ -66,17 +66,23 @@ class EntityRecord:
 
 @dataclass(frozen=True)
 class Manifest:
-    """Every entity path a recipe owns (including ones whose node is gone)."""
+    """Every entity path a recipe owns (including ones whose node is gone).
+
+    ``deleted`` lists paths whose hand deletion was accepted (``scene_wins`` or a
+    ``"scene"`` resolution), so later applies don't recreate them.
+    """
 
     recipe_id: str
     entities: tuple[str, ...]
     environment: EntityRecord | None
+    deleted: tuple[str, ...] = ()
 
     def to_json(self) -> str:
         return json.dumps({
             "recipe_id": self.recipe_id,
             "entities": list(self.entities),
             "environment": json.loads(self.environment.to_json()) if self.environment else None,
+            "deleted": list(self.deleted),
         }, sort_keys=True)
 
     @classmethod
@@ -84,7 +90,8 @@ class Manifest:
         d = json.loads(s)
         env = d.get("environment")
         return cls(recipe_id=d["recipe_id"], entities=tuple(d.get("entities") or ()),
-                   environment=EntityRecord.from_json(json.dumps(env)) if env else None)
+                   environment=EntityRecord.from_json(json.dumps(env)) if env else None,
+                   deleted=tuple(d.get("deleted") or ()))
 
 
 @dataclass(frozen=True)
