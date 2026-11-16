@@ -210,6 +210,86 @@ value afterwards. The job result shows what was applied:
 Invalid values, or `iray_samples` with the viewport or Filament engine, return
 400.
 
+### 🧱 One error format everywhere
+
+Every failure now returns `{"success": false, "error_code", "error",
+"retryable", "detail"?}`, including the responses that used to be a bare
+`{"success": false, "error": "…"}` (unknown request IDs, render-cancel misuse,
+registry deletes, companion-plugin 404/503) and httplib's own empty-body errors.
+Script failures keep HTTP 200 and add `error_code: "SCRIPT_ERROR"` (or
+`JOB_CANCELLED` / `JOB_STALE` for jobs). See
+[Request identity, idempotency and errors](#request-identity-idempotency-and-errors).
+
+**If you upgrade:** the `error` text for unknown request IDs changed. Branch on
+`error_code`, not on the message.
+
+### 🔒 Limits and auth on every route
+
+The Max Request Body Size now applies to every route (413 `BODY_TOO_LARGE`),
+and every authenticated route checks the IP whitelist. POST and DELETE routes
+are rate limited; polling and streaming GETs are not. Companion-plugin routes
+registered with `registerPluginRoute()` now go through the IP whitelist and
+token check, plus the rate limit and body limit for non-GET methods, like
+built-in routes.
+
+**If you upgrade:** clients of companion-plugin routes must now send the API
+token.
+
+### 🔎 `GET /capabilities`, idempotency and server identity
+
+- [`GET /capabilities`](#get-capabilities) reports the plugin, Studio, SDK and
+  Qt versions, every route, feature flags, limits and the render engines, plus
+  a `compatibility_hash` that changes only when routes, flags or the schema do.
+  Companion plugins can name themselves with `registerCompanionPlugin()` and
+  appear under `companion_plugins`.
+- Job submission routes accept an `Idempotency-Key` header: a retry with the
+  same key and body within an hour returns the original job instead of queueing
+  a second one.
+- Every response carries `X-Server-Instance-Id` (new on each server start), job
+  routes accept and echo `X-Correlation-Id`, and status and job responses
+  report `scene_revision`.
+
+### 📦 Artifact downloads and thumbnails
+
+Clients no longer need a filesystem shared with Studio to fetch job outputs.
+[`GET /artifacts/:id`](#-artifacts-job-output-downloads) lists the files a job
+declared (report outputs and rendered images) and
+`GET /artifacts/:id/:artifact_id` downloads one, with byte ranges and `HEAD`.
+`?thumbnail=<px>` returns a scaled PNG or JPEG of an image artifact.
+
+### 📈 Job progress you can watch
+
+Job status, results and `GET /requests` carry `progress_supported`,
+`progress_source`, `last_activity_at` and `idle_ms`. `/render/animation` reports
+frame N of M on both Studio 4 and Studio 6, and `GET /render/{id}/progress` now
+streams frame events on Studio 6 too.
+
+### 🐍 dazpy
+
+- Covers every documented operation: `capabilities()`, artifact listing,
+  download and thumbnails, `list_scripts()`, `delete_script()` and
+  `export_geometry_frames()`, on `DazClient` and `AsyncDazClient`.
+- Every `*_submit` method takes `idempotency_key=` and `correlation_id=`, and
+  `ServerResponseError` gains `.retryable`.
+- `DazSceneState.apply()` reports `skipped`, `complete` and `backup`, and
+  `capture(scene, backup_path=...)` can write a full-scene backup first. See
+  [Pose Checkpoints vs. Full Scene Backups](#pose-checkpoints-vs-full-scene-backups).
+- Iray render settings are found by class instead of by position.
+
+### 🍎 Daz Studio 6.26 on macOS
+
+Releases ship `libdsp_DazScriptServer-ds6.26-macos.dylib`, one x86_64 build
+for both Intel and Apple Silicon Macs (Studio 6 runs under Rosetta 2).
+
+### 🗑️ Removed: USD export routes
+
+`POST /export/usd` and `GET /export/usd/{id}` are no longer documented in
+`openapi.yaml`, and dazpy's `export_usd_submit()` / `get_usd_export_status()`
+are gone from `DazClient` and `AsyncDazClient`, until the daz-bridge-usd
+companion plugin is ready.
+
+**If you upgrade:** remove calls to those two dazpy methods.
+
 ## What's New in v2.10.1
 
 ### 🔌 dazpy owns the whole automation protocol
