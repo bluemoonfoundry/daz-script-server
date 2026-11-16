@@ -1,5 +1,6 @@
 """Unit tests for the public scene-recipe facade (validate / plan / apply / observe)."""
 
+import copy
 import json
 import os
 import sys
@@ -423,6 +424,28 @@ class RoundTripTests(unittest.TestCase):
         self.assertIn(("modify", "actors.ben"), [(s.op, s.path) for s in result.steps])
         self.assertEqual(self.assert_no_op(moved).warnings, ())
         self.assertTrue(observe(moved, self.sim).in_sync)
+
+    def test_parts_an_asset_loads_with_are_not_foreign_children(self):
+        # Genesis 9 loads Eyes/Mouth as child figures: removing the actor deletes it
+        # with no has_foreign_children conflict, while a hand-added item still counts.
+        self.sim = SimStudio(asset_parts=("Eyes", "Mouth"))
+        self.assertTrue(apply(two_actor_recipe(), self.sim).applied)
+        self.assert_no_op(two_actor_recipe())
+        ben = self.sim.by_label(f"{RID}:ben")["name"]
+        no_ben = two_actor_recipe()
+        del no_ben["actors"]["ben"]
+        result = apply(no_ben, self.sim)
+        self.assertTrue(result.applied, result.conflicts)
+        self.assertNotIn(ben, self.sim.nodes)
+        self.assertNotIn(ben + "Eyes", self.sim.nodes)
+        anna = self.sim.by_label(f"{RID}:anna")["name"]
+        self.sim.add_node("Hat", parent=anna)
+        no_anna = copy.deepcopy(no_ben)
+        del no_anna["actors"]["anna"]
+        del no_anna["cameras"]
+        conflicts = plan(no_anna, self.sim).conflicts
+        self.assertEqual([(c.path, c.kind, c.live) for c in conflicts],
+                         [("actors.anna", "has_foreign_children", {"foreign_children": ["Hat"]})])
 
     def test_kept_removal_releases_ownership_and_round_trips_to_a_no_op(self):
         r = two_actor_recipe()

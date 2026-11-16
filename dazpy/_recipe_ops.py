@@ -42,7 +42,8 @@ from ._light import DazLight
 from ._node import DazNode, NodeIdentifier
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity, EntityKind
-from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest, foreign_descendants,
+from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest, owned_by,
+                            foreign_descendants,
                             observe_environment_script, observe_node_script, observed_channels,
                             remove_record_script, subtree_script, write_manifest_script,
                             write_record_script)
@@ -67,6 +68,10 @@ class SceneOps(Protocol):
 
     def observe(self, node_name: str, kind: EntityKind) -> dict[str, dict]:
         """Read the node's observed channels (the shapes ``read_live`` reports)."""
+
+    def native_descendants(self, node_name: str) -> tuple[str, ...]:
+        """Names of the node's non-bone descendants (called right after create, so
+        everything below a fresh node came with its asset)."""
 
     def set_environment(self, values: dict) -> None:
         """Write a desired- or observed-shaped environment."""
@@ -355,10 +360,12 @@ class DazSceneOps:
 
     def delete(self, node_name: str, owner_recipe: str | None = None) -> None:
         if owner_recipe is not None:
-            tree = self._client.execute(subtree_script(node_name)).value
-            if tree is None:
+            sub = self._client.execute(subtree_script(node_name)).value
+            if sub is None:
                 raise NodeNotFoundError(f"Cannot delete, node not found: {node_name!r}")
-            foreign = foreign_descendants(tree, owner_recipe)
+            own = owned_by(sub.get("record"), owner_recipe)
+            foreign = foreign_descendants(sub.get("children") or [], owner_recipe,
+                                          own.native if own else ())
             if foreign:
                 raise DazError(f"Refusing to delete {node_name!r}: it still has descendants the "
                                f"recipe does not own ({', '.join(foreign)})")
@@ -446,6 +453,13 @@ class DazSceneOps:
             node.aim_at(*t["aim"])
         elif t.get("rotation") is not None:
             node.set_rotation(*t["rotation"])
+
+    def native_descendants(self, node_name: str) -> tuple[str, ...]:
+        sub = self._client.execute(subtree_script(node_name)).value
+        if sub is None:
+            raise NodeNotFoundError(f"Node not found: {node_name!r}")
+        # Nothing below a fresh node is owned by anyone: every non-bone name.
+        return tuple(foreign_descendants(sub.get("children") or [], ""))
 
     def observe(self, node_name: str, kind: EntityKind) -> dict[str, dict]:
         info = self._client.execute(observe_node_script(node_name)).value

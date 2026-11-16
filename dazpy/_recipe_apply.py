@@ -152,8 +152,9 @@ class _Run:
 
     # ── records / manifest ────────────────────────────────────────────────────
 
-    def record(self, path: str, desired: dict, observed: dict) -> EntityRecord:
-        return EntityRecord(self.recipe_id, path, self.recipe_version, desired, observed)
+    def record(self, path: str, desired: dict, observed: dict,
+               native: tuple[str, ...] = ()) -> EntityRecord:
+        return EntityRecord(self.recipe_id, path, self.recipe_version, desired, observed, native)
 
     def write_records(self, steps: list[Step]) -> None:
         by_path: dict[str, list[Step]] = {}
@@ -180,7 +181,8 @@ class _Run:
         node = self.created[path][0]
         desired = copy.deepcopy(d.channels)
         desired[CREATE_KEY] = copy.deepcopy(d.create)
-        self.ops.write_record(node, self.record(path, desired, self.ops.observe(node, d.kind)))
+        self.ops.write_record(node, self.record(path, desired, self.ops.observe(node, d.kind),
+                                                self.ops.native_descendants(node)))
 
     def merged(self, path: str, steps: list[Step], prev: EntityRecord | None,
                node: str | None) -> EntityRecord:
@@ -199,7 +201,7 @@ class _Run:
                     if fresh is None:
                         fresh = self.ops.observe(node, self.desired[path].kind)
                     observed[ch] = fresh.get(ch)
-        return self.record(path, desired, observed)
+        return self.record(path, desired, observed, prev.native if prev else ())
 
     def write_manifest(self) -> None:
         gone = {s.path for s in self.deleted_steps} | self.released

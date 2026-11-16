@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from ._node import NodeIdentifier
@@ -71,6 +72,9 @@ class EntityRecord:
     recipe_version: int
     desired: dict[str, dict]
     observed: dict[str, dict]
+    # Names of the non-bone descendants the asset loaded with (Genesis 9's eyes,
+    # mouth, lashes...): part of the entity, never the user's foreign children.
+    native: tuple[str, ...] = ()
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -80,7 +84,8 @@ class EntityRecord:
         d = json.loads(s)
         return cls(recipe_id=d["recipe_id"], path=d["path"],
                    recipe_version=int(d["recipe_version"]),
-                   desired=d.get("desired") or {}, observed=d.get("observed") or {})
+                   desired=d.get("desired") or {}, observed=d.get("observed") or {},
+                   native=tuple(d.get("native") or ()))
 
 
 @dataclass(frozen=True)
@@ -262,10 +267,11 @@ function _tree(n) {{
 
 
 def subtree_script(node_name: str) -> str:
-    """Script returning the node's descendant tree (null if the node is missing)."""
+    """Script returning ``{record, children}`` for the node: its own record JSON and
+    its descendant tree (null if the node is missing)."""
     return ScriptBuilder.iife(f"""// recipe:subtree{_TREE_JS}
 var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
-return _n ? _tree(_n) : null;""")
+return _n ? {{record: _rec(_n), children: _tree(_n)}} : null;""")
 
 
 def _read_script(recipe_id: str, environment_holder: str) -> str:
@@ -311,7 +317,7 @@ def observed_channels(client: "DazClient", node_name: str, kind: str, info: dict
 
 # ── readback ──────────────────────────────────────────────────────────────────
 
-def _owned_by(record_json: str | None, recipe_id: str) -> EntityRecord | None:
+def owned_by(record_json: str | None, recipe_id: str) -> EntityRecord | None:
     if not record_json:
         return None
     try:
@@ -332,20 +338,23 @@ def _kind_from_path(path: str) -> str | None:
     return None
 
 
-def foreign_descendants(children: list, recipe_id: str) -> list[str]:
+def foreign_descendants(children: list, recipe_id: str,
+                        native: Iterable[str] = ()) -> list[str]:
     """Descendant names not owned by *recipe_id*.
 
-    Bones are never candidates but are walked (items parented to a bone count).
-    A descendant owned by this recipe is not foreign and owns its own subtree,
-    so it is not descended into.
+    Bones and *native* descendants (the ones the asset loaded with, see
+    :attr:`EntityRecord.native`) are never candidates but are walked: an item
+    parented to a bone or to a figure's eyes counts.  A descendant owned by this
+    recipe is not foreign and owns its own subtree, so it is not descended into.
     """
+    native = frozenset(native)
     out: list[str] = []
     for c in children:
-        if c.get("bone"):
-            out += foreign_descendants(c.get("children") or [], recipe_id)
-        elif _owned_by(c.get("record"), recipe_id) is None:
+        if c.get("bone") or c.get("name") in native:
+            out += foreign_descendants(c.get("children") or [], recipe_id, native)
+        elif owned_by(c.get("record"), recipe_id) is None:
             out.append(c["name"])
-            out += foreign_descendants(c.get("children") or [], recipe_id)
+            out += foreign_descendants(c.get("children") or [], recipe_id, native)
     return out
 
 
@@ -374,7 +383,7 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
     entities: dict[str, LiveEntity] = {}
     copies: dict[str, list[dict]] = {}
     for n in payload.get("nodes") or []:
-        rec = _owned_by(n.get("record"), recipe_id)
+        rec = owned_by(n.get("record"), recipe_id)
         if rec is None:
             continue
         kind = _kind_from_path(rec.path)
@@ -384,7 +393,7 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
             copies.setdefault(rec.path, []).append(n)
             continue
         observed = observed_channels(client, n["name"], kind, n)
-        foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id))
+        foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id, rec.native))
         entities[rec.path] = LiveEntity(
             path=rec.path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"),

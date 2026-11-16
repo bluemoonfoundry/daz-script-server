@@ -216,7 +216,9 @@ the last apply recorded) and **live** (the scene now):
      - conflict ``deleted_in_scene``
 
 A node to be deleted that has children the recipe does not own (clothing or
-props you parented to it) is a ``has_foreign_children`` conflict. If the recipe
+props you parented to it) is a ``has_foreign_children`` conflict. Bones and the
+parts the asset loaded with (a Genesis 9 figure's eyes, mouth, tear, lashes and
+eyebrow cards) never count; an item parented to one of them does. If the recipe
 wins, those children are unparented to the scene root (keeping their world
 transform) and then the node is deleted. Apply never deletes a node it did not
 create.

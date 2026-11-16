@@ -76,6 +76,20 @@ class ExecuteSuccessTests(unittest.TestCase):
         self.assertEqual(r.desired, dict(D_CREATE_MODIFY["cameras.new"].channels, _create={}))
         self.assertEqual(r.observed, FAKE_OBSERVED)
 
+    def test_create_record_lists_the_descendants_the_asset_brought(self):
+        ops = FakeOps(create_names=NAMES, native={"cam_new": ("Eyes", "Mouth")})
+        run(D_CREATE_MODIFY, L_OLD, ops)
+        self.assertEqual(written_records(ops)["cam_new"].native, ("Eyes", "Mouth"))
+
+    def test_modified_record_keeps_its_native_descendants(self):
+        import dataclasses
+        one = L_OLD.entities["cameras.one"]
+        live = LiveState(L_OLD.manifest, dict(L_OLD.entities, **{"cameras.one": dataclasses.replace(
+            one, record=dataclasses.replace(one.record, native=("Lens",)))}), L_OLD.environment_observed)
+        ops = FakeOps(create_names=NAMES)
+        run(D_CREATE_MODIFY, live, ops)
+        self.assertEqual(written_records(ops)[one.node_name].native, ("Lens",))
+
     def test_create_applies_every_desired_channel_to_the_owned_root(self):
         ops = FakeOps(create_names={"cameras.new": ["cam_new", "cam_extra"]})
         run(D_CREATE_MODIFY, L_OLD, ops)
@@ -687,7 +701,8 @@ class DazSceneOpsChannelTests(unittest.TestCase):
     def test_checked_delete_refuses_when_foreign_descendants_remain(self):
         tree = [{"name": "hip", "record": None, "bone": True,
                  "children": [{"name": "Sword", "record": None, "bone": False, "children": []}]}]
-        self.client = scripted_client(("recipe:subtree", tree), ("Scene.removeNode", True))
+        self.client = scripted_client(("recipe:subtree", {"record": None, "children": tree}),
+                                      ("Scene.removeNode", True))
         self.ops = DazSceneOps(DazScene(self.client))
         with self.assertRaisesRegex(DazError, "Sword"):
             self.ops.delete("Genesis 9", owner_recipe="r1")
@@ -697,10 +712,29 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         owned = EntityRecord("r1", "props.hat", 1, {}, {}).to_json()
         tree = [{"name": "hip", "record": None, "bone": True, "children": []},
                 {"name": "Hat", "record": owned, "bone": False, "children": []}]
+        self.client = scripted_client(("recipe:subtree", {"record": None, "children": tree}),
+                                      ("Scene.removeNode", True))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.ops.delete("Genesis 9", owner_recipe="r1")
+        self.assertIn("Scene.removeNode", self.client.scripts[-1])
+
+    def test_checked_delete_ignores_descendants_the_asset_brought(self):
+        own = EntityRecord("r1", "actors.anna", 1, {}, {}, native=("Genesis9Eyes",)).to_json()
+        tree = {"record": own, "children": [
+            {"name": "Genesis9Eyes", "record": None, "bone": False, "children": []}]}
         self.client = scripted_client(("recipe:subtree", tree), ("Scene.removeNode", True))
         self.ops = DazSceneOps(DazScene(self.client))
         self.ops.delete("Genesis 9", owner_recipe="r1")
         self.assertIn("Scene.removeNode", self.client.scripts[-1])
+
+    def test_native_descendants_lists_non_bone_descendants(self):
+        tree = {"record": None, "children": [
+            {"name": "hip", "record": None, "bone": True, "children": [
+                {"name": "Genesis9Eyes", "record": None, "bone": False, "children": []}]},
+            {"name": "Genesis9Mouth", "record": None, "bone": False, "children": []}]}
+        self.client = scripted_client(("recipe:subtree", tree))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.assertEqual(self.ops.native_descendants("Genesis 9"), ("Genesis9Eyes", "Genesis9Mouth"))
 
     def test_checked_delete_of_missing_node_raises(self):
         self.client = scripted_client(("recipe:subtree", None))

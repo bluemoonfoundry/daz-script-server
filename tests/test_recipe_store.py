@@ -20,6 +20,13 @@ class RecordTests(unittest.TestCase):
                          {"pose": {"snapshot": {"bones": {}}}})
         self.assertEqual(EntityRecord.from_json(r.to_json()), r)
 
+    def test_record_native_round_trips_and_defaults_empty(self):
+        r = EntityRecord("r1", "actors.anna", 1, {}, {}, native=("Genesis9Eyes", "Genesis9Mouth"))
+        self.assertEqual(EntityRecord.from_json(r.to_json()), r)
+        legacy = json.dumps({"recipe_id": "r1", "path": "actors.anna", "recipe_version": 1,
+                             "desired": {}, "observed": {}})
+        self.assertEqual(EntityRecord.from_json(legacy).native, ())
+
     def test_manifest_json_round_trip(self):
         m = man("r1", ["a", "b"], rec("r1", "lighting.environment", {"environment": {"x": 1}}))
         self.assertEqual(Manifest.from_json(m.to_json()), m)
@@ -61,6 +68,20 @@ class ReadLiveTests(unittest.TestCase):
         bones = node("hip", None, bone=True, children=[node("rHand", None, bone=True, children=[hand_prop])])
         client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), kind="actor", children=[bones])])
         self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Sword",))
+
+    def test_native_descendants_are_not_foreign(self):
+        # Genesis 9 loads Eyes/Mouth/... as DzFigure children of the root: they came
+        # with the asset, so they are not the user's items.
+        r = EntityRecord("r1", "actors.anna", 1, {}, {}, native=("Genesis9Eyes", "Genesis9Mouth"))
+        client = fake_client(nodes=[node("A", r, kind="actor", children=[
+            node("Genesis9Eyes", None), node("Genesis9Mouth", None), node("Shirt", None)])])
+        self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Shirt",))
+
+    def test_item_parented_under_a_native_descendant_is_foreign(self):
+        r = EntityRecord("r1", "actors.anna", 1, {}, {}, native=("Genesis9Eyes",))
+        client = fake_client(nodes=[node("A", r, kind="actor", children=[
+            node("Genesis9Eyes", None, children=[node("Monocle", None)])])])
+        self.assertEqual(read_live(client, "r1").entities["actors.anna"].foreign_children, ("Monocle",))
 
     def test_owned_child_subtree_not_attributed_to_ancestor(self):
         owned = node("P", rec("r1", "props.hat"), children=[node("Grand", None)])

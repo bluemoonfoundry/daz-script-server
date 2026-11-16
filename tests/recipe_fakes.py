@@ -238,12 +238,13 @@ class FakeOps:
     ``(method,)`` for argument-less calls); ``calls_with_args`` holds every
     argument, deep-copied.  ``create`` returns ``create_names[path]`` (default
     ``[entity.label]``); ``observe`` returns ``observed[node]`` (default
-    :data:`FAKE_OBSERVED`); ``observe_environment`` returns *environment*.
+    :data:`FAKE_OBSERVED`); ``observe_environment`` returns *environment*;
+    ``native_descendants`` returns ``native[node]`` (default ``()``).
     """
 
     def __init__(self, fail_on=None, exc: Exception | None = None, *,
                  create_names: dict | None = None, observed: dict | None = None,
-                 environment: dict | None = None) -> None:
+                 environment: dict | None = None, native: dict | None = None) -> None:
         if fail_on is None:
             fail_on = []
         elif isinstance(fail_on, tuple):
@@ -253,6 +254,7 @@ class FakeOps:
         self.create_names = create_names or {}
         self.observed = observed or {}
         self.environment = environment
+        self.native = native or {}
         self.calls: list[tuple] = []
         self.calls_with_args: list[tuple] = []
         self._counts: dict[str, int] = {}
@@ -277,6 +279,10 @@ class FakeOps:
     def observe(self, node_name, kind):
         self._call("observe", node_name, kind)
         return _copy.deepcopy(self.observed.get(node_name, FAKE_OBSERVED))
+
+    def native_descendants(self, node_name):
+        self._call("native_descendants", node_name)
+        return tuple(self.native.get(node_name, ()))
 
     def set_environment(self, values):
         self._call("set_environment", values)
@@ -402,7 +408,10 @@ class SimStudio:
     reports its node transform as XTranslate/.../Scale props, like Studio.
     """
 
-    def __init__(self, missing_files=()) -> None:
+    def __init__(self, missing_files=(), asset_parts=()) -> None:
+        # asset_parts: suffixes of the child nodes every created actor loads with
+        # (Genesis 9's eyes, mouth...), named "<root><suffix>".
+        self.asset_parts = tuple(asset_parts)
         self.nodes: dict[str, dict] = {}
         self.items: dict[str, str] = {}
         self.environment: dict | None = None
@@ -497,6 +506,9 @@ class SimStudio:
         self._maybe_fail("create")
         n = self.add_node(self._unique(_SIM_NAMES[entity.kind]), label=entity.label,
                           kind=entity.kind)
+        if entity.kind == "actor":
+            for part in self.asset_parts:
+                self.add_node(n["name"] + part, parent=n["name"])
         return [n["name"]]
 
     def set_channels(self, node_name, kind, channels):
@@ -527,6 +539,10 @@ class SimStudio:
     def observe(self, node_name, kind):
         from dazpy._recipe_store import observed_channels
         return observed_channels(self._client, node_name, kind, self._info(self.nodes[node_name]))
+
+    def native_descendants(self, node_name):
+        from dazpy._recipe_store import foreign_descendants
+        return tuple(foreign_descendants(self._tree(node_name), ""))
 
     def set_environment(self, values):
         self._maybe_fail("set_environment")
