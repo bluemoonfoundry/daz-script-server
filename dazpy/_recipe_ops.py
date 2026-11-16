@@ -129,16 +129,52 @@ Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);
 return true;""")
 
 
+# Nodes are removed with Studio's own "Delete Selected Item(s)" action on an
+# exact selection, never Scene.removeNode: on DS4, Scene.removeNode on a Genesis 9
+# figure hangs Studio while unfollowing its eyebrow cards (the action does not).
+# The action removes each selected node's whole subtree.
+_DELETE_SELECTED_JS = """
+function _deleteSelected(_nodes) {
+    var _a = MainWindow.getActionMgr().findAction("DzDeleteAction");
+    if (!_a) throw new Error("Daz Studio's DzDeleteAction is not available");
+    Scene.selectAllNodes(false);
+    for (var _s = 0; _s < _nodes.length; _s++) _nodes[_s].select(true);
+    if (!_nodes.length) return 0;
+    Scene.setPrimarySelection(_nodes[0]);
+    var _n0 = Scene.getNumNodes();
+    _a.trigger();
+    return _n0 - Scene.getNumNodes();
+}"""
+
+
+def _delete_script(node_name: str) -> str:
+    """Delete *node_name* and its subtree; true when a node of that name went away."""
+    name = ScriptBuilder.escape_string(node_name)
+    return ScriptBuilder.iife(f"""// recipe:delete{_DELETE_SELECTED_JS}
+function _count() {{
+    var _l = Scene.getNodeList(), _c = 0;
+    for (var _i = 0; _i < _l.length; _i++) if (_l[_i].getName() === {name}) _c++;
+    return _c;
+}}
+var _n = Scene.findNode({name});
+if (!_n) return false;
+var _was = _count();
+_deleteSelected([_n]);
+return _count() < _was;""")
+
+
 def _cleanup_script(before: list[str]) -> str:
     """Remove every node whose key is not in *before*; return how many were removed."""
-    return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}
+    return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}{_DELETE_SELECTED_JS}
 var _before = {{}}, _keys = {json.dumps(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
-var _nodes = Scene.getNodeList(), _new = [];
-for (var _i = 0; _i < _nodes.length; _i++) if (!_before[_key(_nodes[_i])]) _new.push(_nodes[_i]);
-var _removed = 0;
-for (var _j = _new.length - 1; _j >= 0; _j--) if (Scene.removeNode(_new[_j])) _removed++;
-return _removed;""")
+var _nodes = Scene.getNodeList(), _tops = [];
+for (var _i = 0; _i < _nodes.length; _i++) {{
+    var _n = _nodes[_i], _p = _n.getNodeParent();
+    // the top of each added subtree: new, under nothing or under a pre-existing node
+    if (!_before[_key(_n)] && (!_p || _before[_key(_p)])) _tops.push(_n);
+}}
+return _deleteSelected(_tops);""")
 
 
 def _pose_preset_script(node_name: str, path: str) -> str:
@@ -375,7 +411,7 @@ class DazSceneOps:
             if foreign:
                 raise DazError(f"Refusing to delete {node_name!r}: it still has descendants the "
                                f"recipe does not own ({', '.join(foreign)})")
-        if not DazNode(self._client, NodeIdentifier(node_name)).delete():
+        if not self._client.execute(_delete_script(node_name)).value:
             raise DazError(f"Could not delete node {node_name!r} (not found or not removed)")
 
     def unparent(self, owner_name: str, child_names: list[str]) -> None:

@@ -508,7 +508,8 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         cleanup = [s for s in client.scripts if "recipe:cleanup" in s]
         self.assertEqual(len(cleanup), 1)
         self.assertIn('["1", "2"]', cleanup[0])  # all pre-load nodes, not just roots
-        self.assertIn("Scene.removeNode", cleanup[0])
+        self.assertIn('findAction("DzDeleteAction")', cleanup[0])  # never Scene.removeNode:
+        self.assertNotIn("Scene.removeNode", cleanup[0])          # it hangs DS4 on a G9 figure
         self.assertLess(client.scripts.index(next(s for s in client.scripts if "loadScene" in s)),
                         client.scripts.index(cleanup[0]))
 
@@ -693,7 +694,7 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertIn("setValue(2)", self.joined())
 
     def test_unparent_reparent_delete_scripts(self):
-        self.client = scripted_client(("Scene.removeNode", True), ("recipe:unparent", []),
+        self.client = scripted_client(("recipe:delete", True), ("recipe:unparent", []),
                                       ("recipe:reparent", []))
         self.ops = DazSceneOps(DazScene(self.client))
         self.ops.unparent("Genesis 9", ["Shirt"])
@@ -707,7 +708,10 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.ops.reparent(["Shirt"], "Genesis 9")
         self.assertIn("addNodeChild(", self.client.scripts[-1])
         self.ops.delete("Genesis 9")
-        self.assertIn("Scene.removeNode", self.client.scripts[-1])
+        d = self.client.scripts[-1]
+        self.assertIn('findAction("DzDeleteAction")', d)
+        self.assertNotIn("Scene.removeNode", d)
+        self.assertLess(d.index("Scene.selectAllNodes(false);"), d.index("_a.trigger()"))
 
     def test_unparent_reports_children_missing_from_the_owner_subtree(self):
         self.client = scripted_client(("recipe:unparent", ["Shirt: not found under 'Genesis 9'"]))
@@ -719,30 +723,30 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         tree = [{"name": "hip", "record": None, "bone": True,
                  "children": [{"name": "Sword", "record": None, "bone": False, "children": []}]}]
         self.client = scripted_client(("recipe:subtree", {"record": None, "children": tree}),
-                                      ("Scene.removeNode", True))
+                                      ("recipe:delete", True))
         self.ops = DazSceneOps(DazScene(self.client))
         with self.assertRaisesRegex(DazError, "Sword"):
             self.ops.delete("Genesis 9", owner_recipe="r1")
-        self.assertFalse(any("Scene.removeNode" in s for s in self.client.scripts))
+        self.assertFalse(any("recipe:delete" in s for s in self.client.scripts))
 
     def test_checked_delete_removes_when_only_bones_and_owned_nodes_remain(self):
         owned = EntityRecord("r1", "props.hat", 1, {}, {}).to_json()
         tree = [{"name": "hip", "record": None, "bone": True, "children": []},
                 {"name": "Hat", "record": owned, "bone": False, "children": []}]
         self.client = scripted_client(("recipe:subtree", {"record": None, "children": tree}),
-                                      ("Scene.removeNode", True))
+                                      ("recipe:delete", True))
         self.ops = DazSceneOps(DazScene(self.client))
         self.ops.delete("Genesis 9", owner_recipe="r1")
-        self.assertIn("Scene.removeNode", self.client.scripts[-1])
+        self.assertIn("recipe:delete", self.client.scripts[-1])
 
     def test_checked_delete_ignores_descendants_the_asset_brought(self):
         own = EntityRecord("r1", "actors.anna", 1, {}, {}, native=("Genesis9Eyes",)).to_json()
         tree = {"record": own, "children": [
             {"name": "Genesis9Eyes", "record": None, "bone": False, "children": []}]}
-        self.client = scripted_client(("recipe:subtree", tree), ("Scene.removeNode", True))
+        self.client = scripted_client(("recipe:subtree", tree), ("recipe:delete", True))
         self.ops = DazSceneOps(DazScene(self.client))
         self.ops.delete("Genesis 9", owner_recipe="r1")
-        self.assertIn("Scene.removeNode", self.client.scripts[-1])
+        self.assertIn("recipe:delete", self.client.scripts[-1])
 
     def test_native_descendants_lists_non_bone_descendants(self):
         tree = {"record": None, "children": [
