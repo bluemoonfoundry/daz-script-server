@@ -13,7 +13,6 @@ from typing import Any, Literal, Optional
 
 from ._recipe_model import RecipeCamera, RecipeLight, SceneRecipe
 from ._shot_geometry import look_at_euler, spherical_offset
-from .cinematics import _SHOT_DISTANCES, _SHOT_TARGET_OFFSETS_CM
 from .lighting import _DEFAULT_FILL, _DEFAULT_KEY, _DEFAULT_RIM, _resolve_light_position
 from .math3 import Vec3
 
@@ -44,6 +43,29 @@ def _recipe_position(recipe: SceneRecipe, key: str) -> Vec3:
     return _v(spec.position)
 
 
+# Framing.  An actor's recipe position is its root, on the floor, so framing aims
+# at a height above it, assuming a standing human (Genesis-scale, ~175 cm).  The
+# camera stands back so that _FIT_HEIGHT_CM of subject fills the frame vertically
+# at the recipe's focal length.  Props have no known size: aim at their position.
+_FRAME_WIDTH_MM = 36.0  # Daz camera "Frame Width" default (verified on DS4)
+_DEFAULT_ASPECT = 3 / 4  # height / width when the recipe sets no resolution
+_ACTOR_ANCHOR_CM = {"full_body": 90.0, "medium": 130.0, "close_up": 160.0}
+_FIT_HEIGHT_CM = {"full_body": 210.0, "medium": 100.0, "close_up": 40.0}
+_RIG_ANCHOR_CM = _ACTOR_ANCHOR_CM["medium"]  # rig lights light the chest, not the feet
+
+
+def _subject_point(recipe: SceneRecipe, key: str, anchor_cm: float) -> Vec3:
+    """The point a camera or rig aims at for subject *key*: actors are raised by *anchor_cm*."""
+    p = _recipe_position(recipe, key)
+    return Vec3(p.x, p.y + anchor_cm, p.z) if key in recipe.actors else p
+
+
+def _framing_distance(recipe: SceneRecipe, shot_type: str, focal_length: float) -> float:
+    res = recipe.render.resolution if recipe.render is not None else None
+    aspect = res[1] / res[0] if res else _DEFAULT_ASPECT
+    return _FIT_HEIGHT_CM[shot_type] * focal_length / (_FRAME_WIDTH_MM * aspect)
+
+
 def _resolve(recipe: SceneRecipe, ref: Any) -> Vec3:
     """Resolve an actor/prop key or an [x, y, z] literal to a recipe position."""
     return _v(ref) if not isinstance(ref, str) else _recipe_position(recipe, ref)
@@ -67,12 +89,11 @@ def _actor_rotation(recipe: SceneRecipe, key: str) -> tuple:
 def _camera(recipe: SceneRecipe, name: str, cam: RecipeCamera) -> DesiredEntity:
     if cam.frame is not None:
         subjects = [cam.frame] if isinstance(cam.frame, str) else list(cam.frame)
-        pts = [_recipe_position(recipe, s) for s in subjects]
+        pts = [_subject_point(recipe, s, _ACTOR_ANCHOR_CM[cam.shot_type]) for s in subjects]
         n = len(pts)
-        aim = Vec3(sum(p.x for p in pts) / n,
-                   sum(p.y for p in pts) / n + _SHOT_TARGET_OFFSETS_CM[cam.shot_type],
-                   sum(p.z for p in pts) / n)
-        pos = spherical_offset(aim, cam.azimuth_deg, cam.elevation_deg, _SHOT_DISTANCES[cam.shot_type])
+        aim = Vec3(sum(p.x for p in pts) / n, sum(p.y for p in pts) / n, sum(p.z for p in pts) / n)
+        pos = spherical_offset(aim, cam.azimuth_deg, cam.elevation_deg,
+                               _framing_distance(recipe, cam.shot_type, cam.focal_length))
         transform = {"position": _t((pos.x, pos.y, pos.z)), "aim": _t((aim.x, aim.y, aim.z)),
                      "rotation": None}
     else:
@@ -130,7 +151,7 @@ def compute_desired(recipe: SceneRecipe) -> "dict[str, DesiredEntity]":
     for name, light in recipe.lights.items():
         add(_recipe_light(recipe, name, light))
     for name, rig in recipe.rigs.items():
-        target = _recipe_position(recipe, rig.target)
+        target = _subject_point(recipe, rig.target, _RIG_ANCHOR_CM)
         for role, default in _RIG_DEFAULTS:
             ov = getattr(rig, role)
 

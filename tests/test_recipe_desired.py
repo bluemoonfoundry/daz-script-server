@@ -48,21 +48,56 @@ class DesiredTests(unittest.TestCase):
         self.assertEqual(d["actors.a"].create, {"asset_path": "/People/G.duf"})
         self.assertEqual(d["actors.a"].label, "r:a")
 
-    def test_framing_camera_uses_recipe_position_and_shot_tables(self):
+    def test_framing_camera_aims_at_the_actors_face_for_a_close_up(self):
+        # Actor positions are on the floor: a close-up aims at face height (160 cm)
+        # and stands back far enough that 40 cm of subject fills a 4:3 frame
+        # (Daz frame width 36 mm, so 27 mm vertical) at the recipe's focal length.
         d = compute_desired(recipe_with(actors={"anna": {"asset": "g", "position": [-60, 0, 0]}},
-                                        cameras={"cu": {"frame": "anna", "shot_type": "close_up"}}))
+                                        cameras={"cu": {"frame": "anna", "shot_type": "close_up",
+                                                        "focal_length": 85}}))
         t = d["cameras.cu"].channels["transform"]
-        self.assertEqual(t["aim"], (-60.0, 45.0, 0.0))
-        self.assertAlmostEqual(dist(t["position"], t["aim"]), 60.0, places=4)
+        self.assertEqual(t["aim"], (-60.0, 160.0, 0.0))
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 40 * 85 / 27, places=4)
         self.assertIsNone(t["rotation"])
+
+    def test_full_body_fits_a_standing_figure(self):
+        d = compute_desired(recipe_with(actors={"anna": {"asset": "g"}},
+                                        cameras={"w": {"frame": "anna", "shot_type": "full_body"}}))
+        t = d["cameras.w"].channels["transform"]
+        self.assertEqual(t["aim"], (0.0, 90.0, 0.0))
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 210 * 50 / 27, places=4)
+
+    def test_framing_distance_follows_the_render_aspect(self):
+        r = recipe_with(actors={"anna": {"asset": "g"}},
+                        cameras={"m": {"frame": "anna", "shot_type": "medium"}}).to_dict()
+        r["render"] = {"resolution": [600, 900]}  # portrait: 36 * 900/600 = 54 mm vertical
+        t = compute_desired(SceneRecipe.from_dict(r))["cameras.m"].channels["transform"]
+        self.assertEqual(t["aim"], (0.0, 130.0, 0.0))
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 100 * 50 / 54, places=4)
+
+    def test_framing_a_prop_aims_at_its_position(self):
+        d = compute_desired(recipe_with(props={"chair": {"asset": "chair", "position": [5, 0, 7]}},
+                                        cameras={"c": {"frame": "chair", "shot_type": "close_up"}}))
+        self.assertEqual(d["cameras.c"].channels["transform"]["aim"], (5.0, 0.0, 7.0))
 
     def test_multi_subject_frames_centroid(self):
         d = compute_desired(recipe_with(
             actors={"a": {"asset": "g", "position": [0, 0, 0]}, "b": {"asset": "g", "position": [100, 0, 40]}},
             cameras={"w": {"frame": ["a", "b"], "shot_type": "full_body"}}))
         t = d["cameras.w"].channels["transform"]
-        self.assertEqual(t["aim"], (50.0, 0.0, 20.0))
-        self.assertAlmostEqual(dist(t["position"], t["aim"]), 300.0, places=4)
+        self.assertEqual(t["aim"], (50.0, 90.0, 20.0))
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 210 * 50 / 27, places=4)
+
+    def test_rig_lights_aim_at_the_actors_chest(self):
+        d = compute_desired(recipe_with(actors={"anna": {"asset": "g", "position": [0, 0, 0]}},
+                                        rigs={"main": {"type": "three_point", "target": "anna"}}))
+        key = d["lighting.rigs.main.key"].channels["transform"]
+        from dazpy._shot_geometry import look_at_euler
+        from dazpy.math3 import Vec3
+        self.assertGreater(key["position"][1], 130.0)
+        expected = look_at_euler(Vec3(*key["position"]), Vec3(0.0, 130.0, 0.0))
+        for got, want in zip(key["rotation"], expected):
+            self.assertAlmostEqual(got, want, places=4)
 
     def test_explicit_camera_look_at_actor_has_no_offset(self):
         d = compute_desired(recipe_with(
