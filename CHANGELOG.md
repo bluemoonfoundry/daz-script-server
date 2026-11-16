@@ -19,6 +19,12 @@ All notable changes to DazScript Server are documented here.
   variants. Includes `docs/examples/recipes/g9-portrait.json`, live tests
   (`tests/test_recipe_live.py`) and `docs/scene_recipes.rst`.
 
+- **`DazClient.waiting_out_busy(max_wait)`.** A context manager: within it,
+  this client's calls on the current thread (including those the node and
+  scene proxies make) retry a busy Studio as if passed `retry_on_busy=True`.
+  Studio 6 reports busy briefly after a load or clear; the recipe functions
+  use it (up to 120 s per call).
+
 - **Companion-plugin discovery registry.** Plugins can name themselves with
   `registerCompanionPlugin(name, version, description)` and attribute routes
   with a 5th `pluginName` argument to `registerPluginRoute()` (the 4-argument

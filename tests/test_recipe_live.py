@@ -67,9 +67,16 @@ def _example(test: str) -> dict:
     return data
 
 
+# One client for the whole module, waiting out busy replies: Studio 6 reports
+# busy for a moment after a clear or load, and the tests' own calls (clear,
+# find, move, save, load) are not recipe calls, which wait by themselves.
+_CLIENT = DazClient() if _SERVER_UP else None
+_BUSY_WAIT_S = 120.0
+
+
 def _new_scene() -> DazScene:
     """File > New equivalent: an empty scene (no save prompt)."""
-    scene = DazScene()
+    scene = DazScene(_CLIENT)
     scene._client.execute("(function(){ Scene.clear(); return true; })()")
     return scene
 
@@ -77,10 +84,13 @@ def _new_scene() -> DazScene:
 @skip_if_down
 @skip_no_daz
 class TestSceneRecipeLive(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(_CLIENT.waiting_out_busy(_BUSY_WAIT_S))
+
     def tearDown(self):
         # Leave Studio with an empty scene, whatever the test did.
         try:
-            DazScene()._client.execute("(function(){ Scene.clear(); return true; })()")
+            _CLIENT.execute("(function(){ Scene.clear(); return true; })()")
         except Exception:
             pass
 
