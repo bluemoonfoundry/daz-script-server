@@ -3634,7 +3634,8 @@ class TestDazSceneIO(unittest.TestCase):
         script = scene._client.execute.call_args[0][0]
         self.assertIn("loadScene", script)
         self.assertIn("/path/to/scene.duf", script)
-        self.assertIn(", 0", script)
+        # 0 is DzScene.OpenNew (replaces the scene; Studio logs "asset load (open)").
+        self.assertIn("/path/to/scene.duf\", 1)", script)
 
     def test_save_calls_saveScene_with_path(self):
         scene = self._scene(None)

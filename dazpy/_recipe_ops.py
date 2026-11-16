@@ -125,7 +125,7 @@ def _load_asset_script(path: str) -> str:
     """
     return ScriptBuilder.iife(f"""// recipe:load
 Scene.selectAllNodes(false);
-Scene.loadScene({ScriptBuilder.escape_string(path)}, 0);
+Scene.loadScene({ScriptBuilder.escape_string(path)}, 1);  // 1 = DzScene.MergeFile (0 opens a new scene)
 return true;""")
 
 
@@ -181,6 +181,12 @@ function _count(name) {{
 var _names = [];
 for (var _m = 0; _m < _new.length; _m++) {{
     var nm = _new[_m].getName();
+    if (!nm) {{
+        // DS4 gives a new camera/light a label but no name; later steps find nodes by name.
+        nm = {esc(label)}.replace(/[^A-Za-z0-9_]/g, "_");
+        _new[_m].setName(nm);
+        _nodes = Scene.getNodeList();
+    }}
     if (_count(nm) > 1) {{
         var r = 1;
         while (Scene.findNode(nm + "_r" + r)) r++;
@@ -329,9 +335,9 @@ class DazSceneOps:
         except Exception as e:
             self._remove_added(before, entity.path, e)
             raise
-        if not names:
-            err = DazError(f"{entity.path}: creating it added no root node to the scene; "
-                           "every node it added was removed")
+        if not names or not all(names):
+            what = "added no root node to the scene" if not names else "left a root node with no name"
+            err = DazError(f"{entity.path}: creating it {what}; every node it added was removed")
             self._remove_added(before, entity.path, err)
             raise err
         if len(names) > 1:

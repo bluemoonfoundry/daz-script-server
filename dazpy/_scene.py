@@ -694,7 +694,8 @@ class DazScene:
                 host.
         """
         script = ScriptBuilder.iife(
-            f"Scene.loadScene({ScriptBuilder.escape_string(path)}, 0);"
+            # 1 = DzScene.MergeFile; 0 (OpenNew) would replace the scene.
+            f"Scene.loadScene({ScriptBuilder.escape_string(path)}, 1);"
         )
         self._client.execute(script)
 

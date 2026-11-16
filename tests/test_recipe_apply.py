@@ -418,6 +418,23 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         load = next(s for s in client.scripts if "loadScene" in s)
         self.assertIn("Scene.selectAllNodes(false);", load)
         self.assertLess(load.index("Scene.selectAllNodes(false);"), load.index("loadScene"))
+        self.assertIn('C:/Lib/g9.duf", 1)', load)  # merge, never 0 (OpenNew)
+
+    def test_claim_names_a_root_created_without_a_name(self):
+        # DS4: a new DzBasicCamera / DzSpotLight has a label but an empty name,
+        # and every later step finds nodes by name.
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", ""),
+                               ("recipe:claim", ["live_main_key"]))
+        ops.create(d_light("key"))
+        claim = next(s for s in client.scripts if "recipe:claim" in s)
+        self.assertIn('if (!nm) {', claim)
+        self.assertLess(claim.index('if (!nm) {'), claim.index("_count(nm) > 1"))
+
+    def test_create_raises_when_claim_reports_an_empty_name(self):
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", ""),
+                               ("recipe:claim", [""]), ("recipe:cleanup", 1))
+        with self.assertRaisesRegex(DazError, "no name"):
+            ops.create(d_light("key"))
 
     def test_missing_content_path_raises_before_load(self):
         client, ops = self.ops(("recipe:resolve", {"/g9.duf": ""}))
