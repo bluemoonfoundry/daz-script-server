@@ -395,6 +395,16 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertEqual(len(load), 1)
         self.assertIn(json.dumps("C:/Lib/g9.duf"), load[0])
 
+    def test_asset_load_clears_selection_first(self):
+        # A figure loaded while another figure is selected pops Studio's modal
+        # "replace or add" dialog, which hangs the server: deselect in the same script.
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", ["Genesis 9"]))
+        ops.create(d_actor("anna"))
+        load = next(s for s in client.scripts if "loadScene" in s)
+        self.assertIn("Scene.selectAllNodes(false);", load)
+        self.assertLess(load.index("Scene.selectAllNodes(false);"), load.index("loadScene"))
+
     def test_missing_content_path_raises_before_load(self):
         client, ops = self.ops(("recipe:resolve", {"/g9.duf": ""}))
         with patch("dazpy._recipe_ops.os.path.isfile", return_value=False):

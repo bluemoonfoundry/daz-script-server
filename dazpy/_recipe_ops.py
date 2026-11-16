@@ -110,6 +110,20 @@ for (var _i = 0; _i < _nodes.length; _i++) _out.push(_key(_nodes[_i]));
 return _out;""")
 
 
+def _load_asset_script(path: str) -> str:
+    """Merge-load *path* with nothing selected.
+
+    Loading a figure while another figure is selected makes Studio pop a modal
+    "replace the selected figure or add a new one" dialog, which blocks the main
+    thread (and the server) until someone clicks it.  The previous selection is
+    not restored: a recipe apply rewrites the scene anyway.
+    """
+    return ScriptBuilder.iife(f"""// recipe:load
+Scene.selectAllNodes(false);
+Scene.loadScene({ScriptBuilder.escape_string(path)}, 0);
+return true;""")
+
+
 def _cleanup_script(before: list[str]) -> str:
     """Remove every node whose key is not in *before*; return how many were removed."""
     return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}
@@ -294,7 +308,7 @@ class DazSceneOps:
     def create(self, entity: DesiredEntity) -> list[str]:
         if entity.kind in ("actor", "prop"):
             path = self._resolve_asset(entity.create["asset_path"])
-            make = lambda: self._scene.load(path)  # noqa: E731
+            make = lambda: self._client.execute(_load_asset_script(path))  # noqa: E731
         elif entity.kind == "camera":
             make = self._scene.create_camera
         elif entity.kind == "light":
