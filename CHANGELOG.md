@@ -4,6 +4,8 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-15
+
 ### Added
 
 - **Companion-plugin discovery registry.** Plugins can name themselves with
@@ -30,26 +32,6 @@ All notable changes to DazScript Server are documented here.
   `_max_source_mb`. dazpy adds `get_artifact_thumbnail()` on `DazClient` and
   `AsyncDazClient`.
 
-### Changed
-
-- **`GET /render/{id}/progress` streams animation frame events on Studio 6.**
-  Studio 6 shims `print()`, so the `[DAZPY_FRAME]` marker never reached the
-  stream there. The SSE handler now polls the job's server-owned frame report,
-  every 0.5 s, the same source job status uses, and emits `progress` events
-  (`percent`, `frame`, `total_frames`) as Studio 4 already did. Frames faster
-  than 0.5 s are merged into an event for the latest frame. Frame events
-  are never duplicated or reordered, and a subscriber that joins mid-render
-  first gets the latest frame. The OpenAPI example payloads for this stream now
-  match what the server sends.
-
-### Removed
-
-- **USD export routes and their dazpy methods**, until the daz-bridge-usd
-  companion plugin is ready. `POST /export/usd` and `GET /export/usd/{id}` are
-  no longer documented in `openapi.yaml` or declared in
-  `companion_plugins.json`, and `export_usd_submit()` /
-  `get_usd_export_status()` are gone from `DazClient` and `AsyncDazClient`.
-
 - **Job liveness and progress metadata.** Status, result and `GET /requests`
   records now carry `progress_supported`, `progress_source`
   (`frames` / `report` / `none`), `last_activity_at` and, while the job is
@@ -57,6 +39,7 @@ All notable changes to DazScript Server are documented here.
   report-file writes (so `{"type":"heartbeat"}` keeps a long step alive),
   printed lines on Studio 4, and completion. New `/capabilities` flags:
   `job_activity`, `animation_frame_progress`.
+
 - **Per-frame progress for `/render/animation` on Studio 6.** Studio 6 shims
   `print()`, so the `[DAZPY_FRAME]` marker never reached the server and
   animation renders reported no progress until they finished. The animation
@@ -73,6 +56,7 @@ All notable changes to DazScript Server are documented here.
   writes a per-release × SDK report to `docs/smoke-results/`. A
   `workflow_dispatch` workflow (`live-smoke.yml`) runs it on a self-hosted
   runner. See `docs/LIVE_SMOKE.md`.
+
 - **dazpy covers every documented operation.** `DazClient` and
   `AsyncDazClient` add `list_scripts()` (`GET /scripts`),
   `delete_script(name, missing_ok=False)` (`DELETE /scripts/{id}`) and
@@ -80,6 +64,7 @@ All notable changes to DazScript Server are documented here.
   the binary DZGF payload into a `GeometryFrames` object (`frame(n)`,
   `bone(name)`, `raw` bytes for numpy). `parse_geometry_frames()` is exported
   for callers that fetch the payload themselves.
+
 - **Artifact downloads: `GET /artifacts/{id}` and
   `GET /artifacts/{id}/{artifact_id}`.** Clients no longer need to share a
   filesystem with DAZ Studio to fetch job outputs. Only files the job declared
@@ -90,6 +75,7 @@ All notable changes to DazScript Server are documented here.
   `404 ARTIFACT_NOT_FOUND` and `410 ARTIFACT_UNAVAILABLE`. dazpy adds
   `list_artifacts()`, `download_artifact()` and `download_artifacts()` to
   `DazClient` and `AsyncDazClient`.
+
 - **`GET /capabilities` discovery endpoint.** Returns the plugin, DAZ Studio,
   SDK and Qt versions, every route (including companion-plugin routes), feature
   flags, the current body/script/batch/animation/queue limits, rate limit and
@@ -98,6 +84,7 @@ All notable changes to DazScript Server are documented here.
   change. While DAZ Studio is busy the server returns its last snapshot instead
   of 503. dazpy adds `DazClient.capabilities()` and
   `AsyncDazClient.capabilities()`.
+
 - **`Idempotency-Key` on job submission.** `/execute/async`,
   `/scripts/{id}/async`, `/render`, `/render/batch` and `/render/animation`
   accept the header. A retry with the same route, body and key within an hour
@@ -105,6 +92,7 @@ All notable changes to DazScript Server are documented here.
   a second job. Reusing a key with a different body returns
   `422 IDEMPOTENCY_KEY_REUSED`. A retry while the first request is still being
   handled returns `409 IDEMPOTENCY_KEY_IN_FLIGHT`.
+
 - **Server identity and correlation IDs.** Every response carries an
   `X-Server-Instance-Id` header, a new random ID on each server start. It is
   also reported on `/status`, `/health`, `/capabilities` and every job
@@ -112,9 +100,12 @@ All notable changes to DazScript Server are documented here.
   `X-Correlation-Id` (or generate one) and echo it, and async job records store
   it. `/status`, `/health` and job responses also report `scene_revision`, a
   counter of observed scene changes and executed scripts.
+
 - **Retry safety documented per operation** in the README and `openapi.yaml`.
+
 - dazpy: every `*_submit` method takes `idempotency_key=` and
   `correlation_id=`, and `ServerResponseError` gains `.retryable`.
+
 - **`DazSceneState` restore report and optional full-scene backup.**
   `DazSceneState.apply()` now also returns `skipped` (one
   `{"kind", "name", "reason"}` entry per figure, camera, light or fit target
@@ -126,7 +117,29 @@ All notable changes to DazScript Server are documented here.
   Full Scene Backups" section lists what a checkpoint does and does not
   cover.
 
+- **Configurable stuck job timeout.** A new **Stuck Job Timeout** setting under
+  Advanced Limits (5–1440 minutes, default 30) sets how long an async job can
+  run before it is reported as `stale`. It applies immediately, without
+  restarting the server.
+
+- **Daz Studio 6.26 on macOS.** Releases ship
+  `libdsp_DazScriptServer-ds6.26-macos.dylib`, built against the 6.26 macOS SDK.
+  The single x86_64 build serves both Intel and Apple Silicon Macs, since
+  Studio 6 runs under Rosetta 2. The macOS DS6 output now keeps the `lib`
+  prefix (`libdsp_DazScriptServer.dylib`), matching the SDK samples
+  ([#51](https://github.com/bluemoonfoundry/daz-script-server/issues/51)).
+
 ### Changed
+
+- **`GET /render/{id}/progress` streams animation frame events on Studio 6.**
+  Studio 6 shims `print()`, so the `[DAZPY_FRAME]` marker never reached the
+  stream there. The SSE handler now polls the job's server-owned frame report,
+  every 0.5 s, the same source job status uses, and emits `progress` events
+  (`percent`, `frame`, `total_frames`) as Studio 4 already did. Frames faster
+  than 0.5 s are merged into an event for the latest frame. Frame events
+  are never duplicated or reordered, and a subscriber that joins mid-render
+  first gets the latest frame. The OpenAPI example payloads for this stream now
+  match what the server sends.
 
 - **`DazSceneState.apply()` treats only `NodeNotFoundError` as a missing
   skeleton.** Any other lookup failure is now reported as
@@ -145,9 +158,11 @@ All notable changes to DazScript Server are documented here.
   `IDEMPOTENCY_KEY_REUSED`, `SCRIPT_ERROR`, `JOB_CANCELLED`, `JOB_STALE`. The
   `error` text for unknown request IDs changed, so clients should branch on
   `error_code` instead.
+
 - `/capabilities` `compatibility_hash` changes, because new feature flags
   were added (`idempotency_key`, `correlation_id`, `server_instance_id`,
   `scene_revision`, `error_envelope`).
+
 - **dazpy finds Iray render settings by class, not by position.** Iray
   Canvases and the HDRI/environment helpers used to read
   `getRenderElementObjects()[1]` and `[3]`. They now look for
@@ -157,48 +172,6 @@ All notable changes to DazScript Server are documented here.
   exist while the render type is Software (Iray); in viewport mode they are
   absent, the canvas/environment calls return `None` or do nothing as before,
   and the error messages now say to switch to Iray.
-
-## [2.11.0] - 2026-11-14
-
-### Added
-
-- **Configurable stuck job timeout.** A new **Stuck Job Timeout** setting under
-  Advanced Limits (5–1440 minutes, default 30) sets how long an async job can
-  run before it is reported as `stale`. It applies immediately, without
-  restarting the server.
-- **Daz Studio 6.26 on macOS.** Releases ship
-  `libdsp_DazScriptServer-ds6.26-macos.dylib`, built against the 6.26 macOS SDK.
-  The single x86_64 build serves both Intel and Apple Silicon Macs, since
-  Studio 6 runs under Rosetta 2. The macOS DS6 output now keeps the `lib`
-  prefix (`libdsp_DazScriptServer.dylib`), matching the SDK samples
-  ([#51](https://github.com/bluemoonfoundry/daz-script-server/issues/51)).
-
-### Fixed
-
-- **Request body limit on every route.** The configured Max Request Body Size
-  was only checked on `POST /execute`, after httplib had already buffered up to
-  100 MB. The server now passes the limit to httplib, which stops reading at the
-  cap and returns 413 `BODY_TOO_LARGE` on every route.
-- **IP whitelist and rate limiter on every authenticated route.**
-  `/scripts/register`, `DELETE /scripts/:id`, `/requests/*`,
-  `/render/:id/cancel`, `/render/:id/progress`, `/scene/save-copy`,
-  `/geometry/frames` and `/scene/events` only checked the token. They now run
-  the IP whitelist too, and the POST/DELETE routes are rate limited. Polling and
-  streaming GETs are not rate limited.
-- **Companion-plugin routes now require authentication.** Routes registered via
-  `registerPluginRoute()` used to run no checks at all, so they were reachable
-  without a token. They now go through the same IP whitelist, token check and
-  (for non-GET methods) rate limit and body limit as built-in routes.
-  Unregistered paths still return 404.
-- **`iray_samples` is applied instead of ignored.** `/render` and
-  `/render/batch` accepted `iray_samples` but never used it. It now sets Iray's
-  Max Samples for that render only (the previous value is restored afterwards),
-  and the job result reports `requested`, `applied`, `previous` and
-  `restored`. Invalid values, or `iray_samples` with a viewport or Filament
-  engine, return 400; a job whose render isn't actually Iray fails instead of
-  rendering at the scene default.
-
-### Changed
 
 - **Cancelling a running job no longer claims it was cancelled.** A running
   script can't be interrupted, so cancelling it now returns
@@ -210,7 +183,41 @@ All notable changes to DazScript Server are documented here.
   `cancel_requested_at` and `stale_at` stay in responses. Clients that treated
   the cancel response's `"cancelled"` as final should poll for the outcome.
 
+### Fixed
+
+- **Request body limit on every route.** The configured Max Request Body Size
+  was only checked on `POST /execute`, after httplib had already buffered up to
+  100 MB. The server now passes the limit to httplib, which stops reading at the
+  cap and returns 413 `BODY_TOO_LARGE` on every route.
+
+- **IP whitelist and rate limiter on every authenticated route.**
+  `/scripts/register`, `DELETE /scripts/:id`, `/requests/*`,
+  `/render/:id/cancel`, `/render/:id/progress`, `/scene/save-copy`,
+  `/geometry/frames` and `/scene/events` only checked the token. They now run
+  the IP whitelist too, and the POST/DELETE routes are rate limited. Polling and
+  streaming GETs are not rate limited.
+
+- **Companion-plugin routes now require authentication.** Routes registered via
+  `registerPluginRoute()` used to run no checks at all, so they were reachable
+  without a token. They now go through the same IP whitelist, token check and
+  (for non-GET methods) rate limit and body limit as built-in routes.
+  Unregistered paths still return 404.
+
+- **`iray_samples` is applied instead of ignored.** `/render` and
+  `/render/batch` accepted `iray_samples` but never used it. It now sets Iray's
+  Max Samples for that render only (the previous value is restored afterwards),
+  and the job result reports `requested`, `applied`, `previous` and
+  `restored`. Invalid values, or `iray_samples` with a viewport or Filament
+  engine, return 400; a job whose render isn't actually Iray fails instead of
+  rendering at the scene default.
+
 ### Removed
+
+- **USD export routes and their dazpy methods**, until the daz-bridge-usd
+  companion plugin is ready. `POST /export/usd` and `GET /export/usd/{id}` are
+  no longer documented in `openapi.yaml` or declared in
+  `companion_plugins.json`, and `export_usd_submit()` /
+  `get_usd_export_status()` are gone from `DazClient` and `AsyncDazClient`.
 
 - The `DS6_MACOS_ENABLED` repository variable gate on macOS DS6 release builds.
 
