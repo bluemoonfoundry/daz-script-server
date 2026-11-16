@@ -168,3 +168,35 @@ class ServerVersionWarning(UserWarning):
     Silence with ``DazClient(check_version=False)`` or the standard
     :mod:`warnings` filters.
     """
+
+
+class RecipeValidationError(DazError):
+    """Raised when a scene recipe fails offline validation.
+
+    Attributes:
+        report: The :class:`dazpy._recipe_validate.ValidationReport` with every
+            error found (path, code, message, allowed values, suggestion).
+    """
+
+    def __init__(self, report):
+        self.report = report
+        lines = []
+        for e in report.errors:
+            line = f"{e.path}: [{e.code}] {e.message}"
+            if e.suggestion:
+                line += f" (did you mean {e.suggestion!r}?)"
+            lines.append(line)
+        super().__init__(
+            f"scene recipe is invalid ({len(report.errors)} error(s)):\n" + "\n".join(lines))
+
+
+class RecipeNotAppliedError(DazError):
+    """Raised by ``dazpy.recipe.render`` when the scene does not match the recipe.
+
+    Attributes:
+        report: The :class:`dazpy.recipe.ObserveReport` that caused the refusal.
+    """
+
+    def __init__(self, message, report):
+        self.report = report
+        super().__init__(message)

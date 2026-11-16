@@ -1,0 +1,27 @@
+{
+  "recipe_version": 1,
+  "id": "dup-key",
+  "assets": {
+    "g9": {
+      "path": "/People/Genesis 9/Genesis 9.duf"
+    },
+    "ball": {
+      "path": "/Props/Ball.duf"
+    }
+  },
+  "actors": {
+    "anna": {
+      "asset": "g9"
+    }
+  },
+  "props": {
+    "anna": {
+      "asset": "ball",
+      "position": [
+        0,
+        0,
+        50
+      ]
+    }
+  }
+}

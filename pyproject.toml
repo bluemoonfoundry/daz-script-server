@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dazpy"
-version = "2.11.0"
+version = "2.12.0"
 description = "Python SDK for the DAZ Studio Script Server"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,4 +31,4 @@ aio = [
 include = ["dazpy*"]
 
 [tool.setuptools.package-data]
-dazpy = ["py.typed"]
+dazpy = ["py.typed", "schemas/*.json"]

@@ -1,0 +1,131 @@
+{
+  "recipe_version": 1,
+  "id": "cafe-conversation",
+  "assets": {
+    "set": {
+      "path": "/Environments/Cafe/Cafe Interior.duf"
+    },
+    "g9": {
+      "path": "/People/Genesis 9/Genesis 9.duf"
+    }
+  },
+  "actors": {
+    "anna": {
+      "asset": "g9",
+      "position": [
+        -60,
+        0,
+        0
+      ],
+      "facing": "ben",
+      "pose": "/Poses/Seated Talking 01.duf"
+    },
+    "ben": {
+      "asset": "g9",
+      "position": [
+        60,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        -90,
+        0
+      ],
+      "pose": "/Poses/Seated Listening 02.duf"
+    }
+  },
+  "props": {
+    "cafe": {
+      "asset": "set"
+    }
+  },
+  "lighting": {
+    "rigs": {
+      "main": {
+        "type": "three_point",
+        "target": "anna",
+        "light_type": "spot",
+        "key": {
+          "intensity": 120
+        }
+      }
+    },
+    "lights": {
+      "practical": {
+        "type": "point",
+        "position": [
+          0,
+          180,
+          -100
+        ],
+        "intensity": 40,
+        "color": [
+          255,
+          200,
+          150
+        ]
+      }
+    },
+    "environment": {
+      "type": "hdri",
+      "image_path": "C:/HDRI/cafe.hdr",
+      "intensity": 1.0
+    }
+  },
+  "cameras": {
+    "wide": {
+      "frame": [
+        "anna",
+        "ben"
+      ],
+      "shot_type": "full_body",
+      "focal_length": 35
+    },
+    "anna_cu": {
+      "frame": "anna",
+      "shot_type": "close_up",
+      "azimuth_deg": 30,
+      "focal_length": 85
+    },
+    "manual": {
+      "position": [
+        0,
+        160,
+        400
+      ],
+      "look_at": [
+        0,
+        120,
+        0
+      ],
+      "focal_length": 50
+    }
+  },
+  "shots": [
+    {
+      "id": "wide",
+      "camera": "wide",
+      "output": "C:/renders/cafe/wide.png"
+    },
+    {
+      "id": "wide",
+      "camera": "anna_cu",
+      "output": "C:/renders/cafe/anna_cu.png",
+      "render": {
+        "resolution": [
+          1080,
+          1350
+        ]
+      }
+    }
+  ],
+  "render": {
+    "engine": "iray",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "iray_samples": 200
+  }
+}

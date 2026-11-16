@@ -279,8 +279,8 @@ Add to `DazScene`:
 **File:** `dazpy/_scene.py`
 
 Add:
-- `load(path: str) -> None` — `Scene.loadScene(path, 0)`  
-  (second arg is `DzOpenMethod`; 0 = merge/default)
+- `load(path: str) -> None` — `Scene.loadScene(path, DzScene.MergeFile)`  
+  (second arg is `DzOpenMethod`; MergeFile = 2, while 0 and OpenNew = 1 replace the scene)
 - `save(path: str) -> None` — `Scene.saveScene(path)`
 - `filename() -> str` — `Scene.getFilename()`
 - `needs_save() -> bool` — `Scene.needsSave()`
@@ -400,6 +400,12 @@ Section 7 — Geometry
 
 Section 8 — Node queries
 [x] 8a  is_in_scene, is_root, render/viewport visibility, bounding_box (duplicate removed — deadlocks)
+
+Section 9 — Scene recipes (5d6f.18)
+[x] 9a  dazpy.recipe: validate, plan, apply, observe, render over a versioned JSON SceneRecipe
+[x] 9b  Three-way diff (desired / last applied / live), caller-chosen conflict policy, compensating rollback
+[x] 9c  Schema at schemas/scene-recipe.v1.schema.json, example recipe, live tests, docs/scene_recipes.rst
+        (sync only: no dazpy.aio variants; async callers run it in a thread)
 ```
 
 ---

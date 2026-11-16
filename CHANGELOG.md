@@ -4,6 +4,34 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-11-15
+
+### Added
+
+- **Scene recipes (5d6f.18).** New `dazpy.recipe` module: `validate`, `plan`,
+  `apply`, `observe` and `render` over a versioned JSON scene description
+  (`schemas/scene-recipe.v1.schema.json`, also shipped as dazpy package data and
+  returned by `recipe_schema()`). Apply is incremental and three-way: it
+  compares the recipe, the last-applied state and the live scene, keeps hand
+  tweaks with a `hand_tweak_kept` warning, and reports conflicts
+  (`on_conflict="ask" | "recipe_wins" | "scene_wins"`, per-path `resolutions`).
+  A failed apply rolls back by compensation. Sync only; no `dazpy.aio`
+  variants. Includes `docs/examples/recipes/g9-portrait.json`, live tests
+  (`tests/test_recipe_live.py`) and `docs/scene_recipes.rst`.
+
+- **`DazClient.waiting_out_busy(max_wait)`.** A context manager: within it,
+  this client's calls on the current thread (including those the node and
+  scene proxies make) retry a busy Studio as if passed `retry_on_busy=True`.
+  Studio 6 reports busy briefly after a load or clear; the recipe functions
+  use it (up to 120 s per call).
+
+### Fixed
+
+- **`DazScene.load` now merges, as documented.** It passed load mode `0`
+  which Studio treats as open (it replaced the current scene); it now passes
+  `DzScene.MergeFile`. Callers that relied on it clearing the scene should
+  clear first.
+
 ## [2.11.0] - 2026-11-15
 
 ### Added

@@ -1,0 +1,336 @@
+{
+  "schema": 1,
+  "started_at": "2026-11-16T04:54:49+00:00",
+  "finished_at": "2026-11-16T04:54:50+00:00",
+  "target": "http://127.0.0.1:18811",
+  "host_os": "Windows 11",
+  "server_version": "2.12.0",
+  "studio_version": "6.26",
+  "sdk_major": 6,
+  "engines_requested": [
+    "iray",
+    "filament",
+    "viewport"
+  ],
+  "engines_selectable": [
+    "viewport",
+    "iray"
+  ],
+  "stages": [
+    "api",
+    "async",
+    "render",
+    "mcp"
+  ],
+  "summary": {
+    "pass": 29,
+    "fail": 0,
+    "skip": 2
+  },
+  "checks": [
+    {
+      "stage": "api",
+      "name": "status",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "version": "2.12.0"
+      }
+    },
+    {
+      "stage": "api",
+      "name": "health",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "capabilities",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "selectable": [
+          "viewport",
+          "iray"
+        ],
+        "active_class": "DzIrayRenderer",
+        "source": "live"
+      }
+    },
+    {
+      "stage": "api",
+      "name": "execute_basic",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "execute_args",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "daz_globals",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "app": "object",
+        "nodes": 2
+      }
+    },
+    {
+      "stage": "api",
+      "name": "script_error_envelope",
+      "status": "pass",
+      "duration_ms": 18,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "auth_rejects_bad_token",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": null
+    },
+    {
+      "stage": "async",
+      "name": "submit_and_wait",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "request_id": "execute-7dd87ce5"
+      }
+    },
+    {
+      "stage": "async",
+      "name": "status_endpoint",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "async",
+      "name": "activity_fields",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "last_activity_at": "2026-11-15T23:54:49"
+      }
+    },
+    {
+      "stage": "async",
+      "name": "idempotency_replay",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": null
+    },
+    {
+      "stage": "render",
+      "name": "snapshot_settings",
+      "status": "pass",
+      "duration_ms": 2,
+      "detail": {
+        "render_type": 2,
+        "renderer_class": "DzIrayRenderer",
+        "resolution": {
+          "height": 480,
+          "width": 640
+        }
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.submit",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "request_id": "rnd-12f7d6e2"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.progress_sse",
+      "status": "pass",
+      "duration_ms": 274,
+      "detail": {
+        "events": [
+          "complete"
+        ]
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.result",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "duration_ms": 274
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.engine_readback",
+      "status": "pass",
+      "duration_ms": 114,
+      "detail": {
+        "render_type": 2,
+        "renderer": "DzIrayRenderer"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.iray_samples_readback",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "applied": 4,
+        "previous": 5000,
+        "provenance": {
+          "kind": "live_readback",
+          "source": "DzIrayRenderer.getPropertyHolder().findProperty('Max Samples')"
+        },
+        "requested": 4,
+        "restored": true
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.artifact",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "bytes": 117
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.thumbnail",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "size": [
+          32,
+          32
+        ],
+        "bytes": 104
+      }
+    },
+    {
+      "stage": "render",
+      "name": "scene_events_sse",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "events": [
+          "render.started",
+          "render.finished"
+        ]
+      }
+    },
+    {
+      "stage": "render",
+      "name": "filament.render",
+      "status": "skip",
+      "duration_ms": 0,
+      "detail": "filament not registered (selectable: ['iray', 'viewport'])"
+    },
+    {
+      "stage": "render",
+      "name": "viewport.submit",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "request_id": "rnd-72473ef5"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.progress_sse",
+      "status": "pass",
+      "duration_ms": 122,
+      "detail": {
+        "events": [
+          "complete"
+        ]
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.result",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "duration_ms": 120
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.engine_readback",
+      "status": "pass",
+      "duration_ms": 27,
+      "detail": {
+        "render_type": 0,
+        "renderer": "DzIrayRenderer"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.artifact",
+      "status": "pass",
+      "duration_ms": 12,
+      "detail": {
+        "bytes": 117
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.thumbnail",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "size": [
+          32,
+          32
+        ],
+        "bytes": 104
+      }
+    },
+    {
+      "stage": "render",
+      "name": "animation.frame_progress",
+      "status": "pass",
+      "duration_ms": 365,
+      "detail": {
+        "frames_seen_running": [
+          1,
+          2,
+          3
+        ],
+        "sse_frames": []
+      }
+    },
+    {
+      "stage": "render",
+      "name": "restore_settings",
+      "status": "pass",
+      "duration_ms": 75,
+      "detail": {
+        "engine": [
+          2,
+          "DzIrayRenderer"
+        ]
+      }
+    },
+    {
+      "stage": "mcp",
+      "name": "tools",
+      "status": "skip",
+      "duration_ms": 0,
+      "detail": "pass --mcp-dir <daz-mcp-server checkout> to enable"
+    }
+  ]
+}

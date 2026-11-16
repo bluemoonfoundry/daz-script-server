@@ -1,0 +1,28 @@
+{
+  "recipe_version": 1,
+  "id": "g9-portrait",
+  "assets": {
+    "g9": { "path": "/People/Genesis 9/Genesis 9.duf" }
+  },
+  "actors": {
+    "model": {
+      "asset": "g9",
+      "position": [0, 0, 0],
+      "pose": "/People/Genesis 9/Poses/Daz Originals/Base Poses/Base/G9 Base Pose 12 Standing G9B.duf"
+    }
+  },
+  "lighting": {
+    "rigs": {
+      "main": { "type": "three_point", "target": "model", "light_type": "spot" }
+    }
+  },
+  "cameras": {
+    "full_body": { "frame": "model", "shot_type": "full_body", "focal_length": 50 },
+    "close_up":  { "frame": "model", "shot_type": "close_up", "azimuth_deg": 20, "focal_length": 85 }
+  },
+  "shots": [
+    { "id": "full_body", "camera": "full_body", "output": "C:/temp/recipe_example/full_body.png" },
+    { "id": "close_up",  "camera": "close_up",  "output": "C:/temp/recipe_example/close_up.png" }
+  ],
+  "render": { "engine": "iray", "resolution": [640, 480], "iray_samples": 50 }
+}

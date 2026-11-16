@@ -13,7 +13,7 @@ Typical usage::
     figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 """
 
-__version__ = "2.11.0"
+__version__ = "2.12.0"
 
 from ._client import DazClient
 from ._scene import DazScene
@@ -118,7 +118,12 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import RenderError, MaterialError
+from .exceptions import RenderError, MaterialError, RecipeValidationError, RecipeNotAppliedError
+from ._recipe_model import SceneRecipe
+from ._recipe_validate import RecipeIssue, ValidationReport
+from ._recipe_diff import Conflict, RecipePlan
+from ._recipe_apply import ApplyResult
+from .recipe import ObserveReport, ShotRender
 from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
@@ -227,6 +232,16 @@ __all__ = [
     "RenderResult",
     "RenderError",
     "MaterialError",
+    "RecipeValidationError",
+    "SceneRecipe",
+    "RecipeIssue",
+    "ValidationReport",
+    "RecipePlan",
+    "Conflict",
+    "ApplyResult",
+    "ObserveReport",
+    "ShotRender",
+    "RecipeNotAppliedError",
     "render",
     "render_variants",
     "SceneEvent",

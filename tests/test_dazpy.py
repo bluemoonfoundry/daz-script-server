@@ -1475,6 +1475,49 @@ class TestErrorMapping(unittest.TestCase):
                 with self.assertRaises(exceptions.StudioBusyError):
                     client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
 
+    def test_waiting_out_busy_retries_plain_execute_calls_inside_the_block(self):
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = [self._busy_resp(), self._success_resp()]
+        with patch("dazpy._client.time.sleep"):
+            with client.waiting_out_busy(60.0):
+                self.assertEqual(client.execute("1+1;").value, 2)
+        self.assertEqual(mock_session.post.call_count, 2)
+
+    def test_waiting_out_busy_ends_with_the_block(self):
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._busy_resp()
+        with client.waiting_out_busy(60.0):
+            pass
+        with self.assertRaises(exceptions.StudioBusyError):
+            client.execute("1+1;")
+        self.assertEqual(mock_session.post.call_count, 1)
+
+    def test_nested_waiting_out_busy_keeps_the_longer_wait(self):
+        client, _ = self._client_with_mock_session()
+        with client.waiting_out_busy(600.0):
+            with client.waiting_out_busy(120.0):
+                self.assertEqual(client.__dict__["_busy_wait"].max_wait, 600.0)
+            self.assertEqual(client.__dict__["_busy_wait"].max_wait, 600.0)
+        self.assertIsNone(client.__dict__["_busy_wait"].max_wait)
+
+    def test_waiting_out_busy_is_per_thread(self):
+        import threading
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._busy_resp()
+        errors = []
+
+        def other():
+            try:
+                client.execute("1+1;")
+            except exceptions.StudioBusyError as e:
+                errors.append(e)
+
+        with client.waiting_out_busy(60.0):
+            t = threading.Thread(target=other)
+            t.start()
+            t.join()
+        self.assertEqual(len(errors), 1)  # the other thread did not wait
+
     def test_connection_error(self):
         import requests as req
         client, mock_session = self._client_with_mock_session()
@@ -3634,7 +3677,8 @@ class TestDazSceneIO(unittest.TestCase):
         script = scene._client.execute.call_args[0][0]
         self.assertIn("loadScene", script)
         self.assertIn("/path/to/scene.duf", script)
-        self.assertIn(", 0", script)
+        # 0 and DzScene.OpenNew replace the scene (Studio logs "asset load (open)").
+        self.assertIn("/path/to/scene.duf\", DzScene.MergeFile)", script)
 
     def test_save_calls_saveScene_with_path(self):
         scene = self._scene(None)
