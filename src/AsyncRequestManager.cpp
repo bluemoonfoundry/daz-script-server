@@ -1,6 +1,7 @@
 #include "AsyncRequestManager.h"
 #include "JsonStd.h"
 #include "MetricsCollector.h"
+#include "ErrorResponse.h"
 #include <QtCore/qdir.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
@@ -28,11 +29,18 @@ AsyncRequestManager::AsyncRequestManager(QObject* notifyTarget)
     , m_maxTrackedRequests(DEFAULT_MAX_TRACKED_REQUESTS)
 {}
 
+void AsyncRequestManager::setServerInstanceId(const QString& id)
+{
+    QMutexLocker locker(&m_mutex);
+    m_serverInstanceId = id;
+}
+
 // ─── HTTP-thread API ──────────────────────────────────────────────────────────
 
 AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
     const QString& scriptText, const QString& scriptFile,
-    const QString& reportFile, const QVariantMap& args, const QString& idPrefix)
+    const QString& reportFile, const QVariantMap& args, const QString& idPrefix,
+    const QString& correlationId)
 {
     SubmitResult r;
     r.accepted    = false;
@@ -73,12 +81,16 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
 
         AsyncRequest req;
         req.id          = MetricsCollector::generateAsyncId(idPrefix);
+        req.correlationId    = correlationId;
+        req.serverInstanceId = m_serverInstanceId;
         req.scriptText  = scriptText;
         req.scriptFile  = scriptFile;
         req.reportFile  = reportFile;
         req.args        = args;
-        if (!reportFile.isEmpty())
+        if (!reportFile.isEmpty()) {
             req.args.insert("__dssReportFile", reportFile);
+            req.progressSource = PROGRESS_REPORT;
+        }
         req.submittedAt = QDateTime::currentMSecsSinceEpoch();
 
         m_requests.insert(req.id, req);
@@ -96,7 +108,8 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
 }
 
 AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
-    const QString& scriptText, const QString& idPrefix)
+    const QString& scriptText, const QString& idPrefix, const QString& correlationId,
+    const QString& frameReportFile)
 {
     SubmitResult r;
     r.accepted    = false;
@@ -116,9 +129,28 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
             return r;
         }
 
+        // Start the frame report empty so the job never sees another run's
+        // events. If it can't be created the render still runs; Studio 4's
+        // print marker still reports frames, Studio 6 just reports none.
+        bool frameReportReady = false;
+        if (!frameReportFile.isEmpty()) {
+            QFile report(frameReportFile);
+            frameReportReady = report.open(QIODevice::WriteOnly | QIODevice::Truncate);
+            report.close();
+        }
+
         AsyncRequest req;
         req.id          = MetricsCollector::generateAsyncId(idPrefix);
         req.requestType = REQUEST_TYPE_RENDER;
+        if (!frameReportFile.isEmpty()) {
+            req.progressSource = PROGRESS_FRAMES;
+            if (frameReportReady) {
+                req.reportFile     = frameReportFile;
+                req.ownsReportFile = true;
+            }
+        }
+        req.correlationId    = correlationId;
+        req.serverInstanceId = m_serverInstanceId;
         req.scriptText  = scriptText;
         req.submittedAt = QDateTime::currentMSecsSinceEpoch();
 
@@ -167,6 +199,7 @@ void AsyncRequestManager::applyReportEventLocked(AsyncRequest& req, const QVaria
         detail.insert("value", value);
         if (event.contains("current")) detail.insert("current", event.value("current"));
         if (event.contains("total"))   detail.insert("total", event.value("total"));
+        if (event.contains("frame"))   detail.insert("frame", event.value("frame"));
         if (event.contains("phase"))   detail.insert("phase", event.value("phase"));
         if (event.contains("message")) detail.insert("message", event.value("message"));
         if (event.contains("at"))      detail.insert("at", event.value("at"));
@@ -196,13 +229,22 @@ void AsyncRequestManager::applyReportEventLocked(AsyncRequest& req, const QVaria
         if (event.contains("label"))    output.insert("label", event.value("label"));
         if (event.contains("metadata")) output.insert("metadata", event.value("metadata"));
 
+        // Re-declaring a path updates its entry in place, so an artifact_id
+        // (the entry's position) never changes once a client has seen it.
+        int index = req.outputManifest.size();
         for (int i = 0; i < req.outputManifest.size(); ++i) {
             if (req.outputManifest[i].toMap().value("path").toString() == path) {
-                req.outputManifest[i] = output;
-                return;
+                index = i;
+                break;
             }
         }
-        req.outputManifest.append(output);
+        const QString artifactId = QString::number(index);
+        output.insert("artifact_id", artifactId);
+        output.insert("url", QString("/artifacts/%1/%2").arg(req.id, artifactId));
+        if (index < req.outputManifest.size())
+            req.outputManifest[index] = output;
+        else
+            req.outputManifest.append(output);
         return;
     }
 
@@ -232,15 +274,24 @@ void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
     if (!report.open(QIODevice::ReadOnly)) return;
 
     if (report.size() < req.reportOffset) {
+        // The file was rewritten (scripts commonly rewrite the whole event
+        // list each time). Replay it from the start. Progress is kept rather
+        // than cleared: a poll that lands between the truncate and the write
+        // would otherwise briefly report no progress at all.
         req.reportOffset = 0;
         req.reportRemainder.clear();
-        req.progress = 0.0;
-        req.progressDetail.clear();
         req.logTail.clear();
         req.logTotal = 0;
         req.outputManifest.clear();
     }
     if (!report.seek(req.reportOffset)) return;
+    if (!report.atEnd()) {
+        // New events mean the job wrote recently. Use the file's mtime, not
+        // the time of this poll, since ingestion happens lazily on request.
+        const QDateTime modified = QFileInfo(req.reportFile).lastModified();
+        if (modified.isValid())
+            touchLocked(req, modified.toMSecsSinceEpoch());
+    }
 
     while (!report.atEnd()) {
         QByteArray chunk = report.read(64 * 1024);
@@ -307,6 +358,71 @@ void AsyncRequestManager::ingestReportFromWorkerLocked(AsyncRequest& req)
 #endif
 }
 
+// Render jobs don't write a report file; the paths their generated script
+// returns (output_path for /render, output_paths for /render/animation) are
+// the job's declared outputs, so they become downloadable artifacts too.
+void AsyncRequestManager::declareRenderOutputsLocked(AsyncRequest& req, const QVariant& result)
+{
+    if (result.type() != QVariant::Map) return;
+    const QVariantMap map = result.toMap();
+    // A failed or aborted render may have left no file (or a partial one).
+    if (map.contains("success") && !map.value("success").toBool()) return;
+
+    const QString single = map.value("output_path").toString();
+    if (!single.isEmpty()) {
+        QVariantMap event;
+        event.insert("type", "output");
+        event.insert("path", single);
+        event.insert("kind", "render");
+        applyReportEventLocked(req, event);
+    }
+    const QVariantList frames = map.value("output_paths").toList();
+    for (int i = 0; i < frames.size(); ++i) {
+        const QString path = frames[i].toString();
+        if (path.isEmpty()) continue;
+        QVariantMap event;
+        event.insert("type", "output");
+        event.insert("path", path);
+        event.insert("kind", "frame");
+        QVariantMap metadata;
+        metadata.insert("index", i);
+        event.insert("metadata", metadata);
+        applyReportEventLocked(req, event);
+    }
+}
+
+AsyncRequestManager::ArtifactLookup AsyncRequestManager::findArtifact(
+    const std::string& requestId, const std::string& artifactId, QString& outPath)
+{
+    const QString qid = QString::fromStdString(requestId);
+    const QString aid = QString::fromStdString(artifactId);
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(qid)) return ARTIFACT_JOB_NOT_FOUND;
+    AsyncRequest& req = m_requests[qid];
+    ingestReportFromWorkerLocked(req);
+    for (int i = 0; i < req.outputManifest.size(); ++i) {
+        const QVariantMap entry = req.outputManifest[i].toMap();
+        if (entry.value("artifact_id").toString() == aid) {
+            outPath = entry.value("path").toString();
+            return ARTIFACT_FOUND;
+        }
+    }
+    return ARTIFACT_NOT_DECLARED;
+}
+
+bool AsyncRequestManager::artifactManifest(const std::string& requestId,
+                                           QVariantList& outEntries, QString& outStatus)
+{
+    const QString qid = QString::fromStdString(requestId);
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(qid)) return false;
+    AsyncRequest& req = m_requests[qid];
+    ingestReportFromWorkerLocked(req);
+    outEntries = req.outputManifest;
+    outStatus  = QString::fromStdString(statusToString(req.status));
+    return true;
+}
+
 std::string AsyncRequestManager::observationJson(const AsyncRequest& req) const
 {
     QVariantMap manifest;
@@ -322,7 +438,7 @@ std::string AsyncRequestManager::observationJson(const AsyncRequest& req) const
     s += ",\"log_truncated\":";
     s += (req.logTotal > req.logTail.size()) ? "true" : "false";
     s += ",\"output_manifest\":" + JsonStd::variantToJson(QVariant(manifest));
-    if (!req.reportFile.isEmpty()) {
+    if (!req.reportFile.isEmpty() && !req.ownsReportFile) {
         s += ",\"report_file\":\"";
         s += JsonStd::escape(JsonStd::qstrToStd(req.reportFile));
         s += "\"";
@@ -336,7 +452,7 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
     QString qid = QString::fromStdString(requestId);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid))
-        return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+        return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
     AsyncRequest& req = m_requests[qid];
     ingestReportFromWorkerLocked(req);
@@ -348,10 +464,14 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
     std::string s = "{\"request_id\":\"";
     s += JsonStd::escape(JsonStd::qstrToStd(req.id));
     s += "\",\"status\":\"" + status + "\"";
+    s += identityJson(req);
     s += ",\"progress\":" + std::string(progBuf);
+    s += activityJson(req);
     s += ",\"observation\":" + observationJson(req);
 
-    if (req.status == REQUEST_RUNNING && req.startedAt > 0) {
+    s += lifecycleTimesJson(req);
+
+    if (isActive(req.status) && req.startedAt > 0) {
         long long elapsed = (long long)(QDateTime::currentMSecsSinceEpoch() - req.startedAt);
         s += ",\"elapsed_ms\":" + std::to_string(elapsed);
     }
@@ -380,10 +500,12 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
             {
                 QMutexLocker locker(&m_mutex);
                 if (!m_requests.contains(qid))
-                    return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+                    return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
                 s = m_requests.value(qid).status;
             }
-            if (s == REQUEST_COMPLETED || s == REQUEST_FAILED || s == REQUEST_CANCELLED)
+            // STALE isn't final, but the server has given up waiting on it,
+            // so long-pollers get its success:false answer instead of hanging.
+            if (isTerminal(s) || s == REQUEST_STALE)
                 break;
             SleepThread::msleep(RESULT_POLL_INTERVAL_MS);
         }
@@ -391,7 +513,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
 
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid))
-        return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+        return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
     AsyncRequest& mutableReq = m_requests[qid];
     ingestReportFromWorkerLocked(mutableReq);
@@ -401,8 +523,12 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
     std::string s = "{\"request_id\":\"";
     s += JsonStd::escape(JsonStd::qstrToStd(observedReq.id));
     s += "\",\"status\":\"" + status + "\"";
+    s += identityJson(observedReq);
+    s += activityJson(observedReq);
 
-    if (observedReq.status == REQUEST_COMPLETED) {
+    if (observedReq.status == REQUEST_COMPLETED ||
+        observedReq.status == REQUEST_COMPLETED_AFTER_CANCEL_REQUEST ||
+        observedReq.status == REQUEST_COMPLETED_AFTER_STALE) {
         s += ",\"success\":true";
         s += ",\"result\":" + JsonStd::variantToJson(observedReq.scriptResult);
         s += ",\"output\":[";
@@ -411,12 +537,18 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
             s += "\"" + JsonStd::escape(JsonStd::qstrToStd(observedReq.outputLines[i])) + "\"";
         }
         s += "],\"error\":null";
-    } else if (observedReq.status == REQUEST_FAILED) {
-        s += ",\"success\":false,\"result\":null,\"output\":[]";
-        s += ",\"error\":\"" + JsonStd::escape(JsonStd::qstrToStd(observedReq.error)) + "\"";
+    } else if (observedReq.status == REQUEST_FAILED || observedReq.status == REQUEST_STALE) {
+        s += ",\"success\":false,\"result\":null,\"output\":[],";
+        s += ErrorResponse::fields(
+            observedReq.status == REQUEST_STALE ? ErrorCode::JOB_STALE : ErrorCode::SCRIPT_ERROR,
+            JsonStd::qstrToStd(observedReq.error));
     } else if (observedReq.status == REQUEST_CANCELLED) {
-        s += ",\"success\":false,\"result\":null,\"output\":[]";
-        s += ",\"error\":\"Cancelled\"";
+        // A render aborted by killRender() still returns a result object;
+        // keep it so the history shows what actually happened.
+        s += ",\"success\":false,\"result\":";
+        s += observedReq.scriptExecuted ? JsonStd::variantToJson(observedReq.scriptResult) : "null";
+        s += ",\"output\":[],";
+        s += ErrorResponse::fields(ErrorCode::JOB_CANCELLED);
     } else {
         char progBuf[32];
         std::snprintf(progBuf, sizeof(progBuf), "%.15g", observedReq.progress);
@@ -428,6 +560,7 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
         }
     }
 
+    s += lifecycleTimesJson(observedReq);
     s += ",\"observation\":" + observationJson(observedReq);
 
     if (observedReq.completedAt > 0 && observedReq.startedAt > 0) {
@@ -442,110 +575,64 @@ std::pair<int, std::string> AsyncRequestManager::cancelJson(
     const std::string& requestId, const std::string& clientIP)
 {
     (void)clientIP;
-    QString qid = QString::fromStdString(requestId);
-
-    RequestStatus statusBefore = REQUEST_QUEUED;
-    bool needKillRender = false;
-    {
-        QMutexLocker locker(&m_mutex);
-        if (!m_requests.contains(qid))
-            return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
-
-        AsyncRequest& req = m_requests[qid];
-        statusBefore = req.status;
-
-        if (statusBefore == REQUEST_COMPLETED ||
-            statusBefore == REQUEST_FAILED    ||
-            statusBefore == REQUEST_CANCELLED) {
-            return {400, "{\"success\":false,\"error\":\"Request already finished\"}"};
-        }
-
-        req.cancelRequested = 1;
-
-        if (statusBefore == REQUEST_QUEUED) {
-            QQueue<QString> newQueue;
-            while (!m_queue.isEmpty()) {
-                QString id = m_queue.dequeue();
-                if (id != qid) newQueue.enqueue(id);
-            }
-            m_queue = newQueue;
-        } else {
-            needKillRender = (req.requestType == REQUEST_TYPE_RENDER);
-        }
-
-        // Mark cancelled immediately regardless of whether we can actually
-        // interrupt a RUNNING request's underlying operation (killRender()
-        // may find nothing to kill, e.g. a renderer already wedged behind a
-        // modal). The tracker's status must match the "cancelled" response
-        // we're about to return, not silently stay "running" forever. If the
-        // underlying call does complete later, markCompleted() no-ops for a
-        // request already in a terminal state (see markCompleted).
-        req.status      = REQUEST_CANCELLED;
-        req.error       = "Cancelled by client";
-        req.completedAt = QDateTime::currentMSecsSinceEpoch();
-    }
-
-    if (needKillRender) {
-        QMetaObject::invokeMethod(m_notifyTarget, "killRenderOnMainThread",
-                                  Qt::QueuedConnection);
-    }
-
-    long long nowMs = (long long)QDateTime::currentMSecsSinceEpoch();
-    std::string s = "{\"request_id\":\"";
-    s += JsonStd::escape(requestId);
-    s += "\",\"status\":\"cancelled\"";
-    s += ",\"message\":\"Cancellation requested\"";
-    s += ",\"cancelled_at\":\"" + JsonStd::msecToIso(nowMs) + "\"";
-    s += "}";
-    return {200, s};
+    return cancelImpl(requestId, false);
 }
 
 std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
     const std::string& requestId, const std::string& clientIP)
 {
     (void)clientIP;
+    return cancelImpl(requestId, true);
+}
+
+// QUEUED requests are removed from the queue and become CANCELLED at once.
+// Anything already on the main thread can't be interrupted: the request
+// becomes CANCEL_REQUESTED (STALE stays STALE), render jobs get a best-effort
+// killRender(), and markCompleted() later records what really happened.
+std::pair<int, std::string> AsyncRequestManager::cancelImpl(
+    const std::string& requestId, bool renderOnly)
+{
     QString qid = QString::fromStdString(requestId);
 
     bool needKillRender = false;
+    RequestStatus statusAfter = REQUEST_QUEUED;
+    qint64 cancelAt = 0;
     {
         QMutexLocker locker(&m_mutex);
         if (!m_requests.contains(qid))
-            return {404, "{\"success\":false,\"error\":\"Request not found\"}"};
+            return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
         AsyncRequest& req = m_requests[qid];
 
-        if (req.requestType != REQUEST_TYPE_RENDER)
-            return {400, "{\"success\":false,\"error\":\"Not a render request\"}"};
+        if (renderOnly && req.requestType != REQUEST_TYPE_RENDER)
+            return {400, ErrorResponse::build(ErrorCode::NOT_A_RENDER_REQUEST, requestId)};
 
-        RequestStatus statusBefore = req.status;
+        if (isTerminal(req.status))
+            return {400, ErrorResponse::build(ErrorCode::REQUEST_ALREADY_FINISHED, requestId)};
 
-        if (statusBefore == REQUEST_COMPLETED ||
-            statusBefore == REQUEST_FAILED    ||
-            statusBefore == REQUEST_CANCELLED) {
-            return {400, "{\"success\":false,\"error\":\"Request already finished\"}"};
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (!req.cancelRequested) {
+            req.cancelRequested   = 1;
+            req.cancelRequestedAt = now;
         }
+        cancelAt = req.cancelRequestedAt;
 
-        req.cancelRequested = 1;
-
-        if (statusBefore == REQUEST_QUEUED) {
+        if (req.status == REQUEST_QUEUED) {
             QQueue<QString> newQueue;
             while (!m_queue.isEmpty()) {
                 QString id = m_queue.dequeue();
                 if (id != qid) newQueue.enqueue(id);
             }
             m_queue = newQueue;
+            req.status      = REQUEST_CANCELLED;
+            req.error       = "Cancelled by client before it started";
+            req.completedAt = now;
         } else {
-            needKillRender = true;
+            if (req.status == REQUEST_RUNNING)
+                req.status = REQUEST_CANCEL_REQUESTED;
+            needKillRender = (req.requestType == REQUEST_TYPE_RENDER);
         }
-
-        // See the matching comment in cancelJson(): mark cancelled
-        // immediately even though killRender() is best-effort and may find
-        // nothing to kill (renderer already wedged behind a modal), so the
-        // tracker's status can't be left stuck at "running" forever while
-        // the HTTP response already claims "cancelled".
-        req.status      = REQUEST_CANCELLED;
-        req.error       = "Cancelled by client";
-        req.completedAt = QDateTime::currentMSecsSinceEpoch();
+        statusAfter = req.status;
     }
 
     if (needKillRender) {
@@ -553,12 +640,20 @@ std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
                                   Qt::QueuedConnection);
     }
 
-    long long nowMs = (long long)QDateTime::currentMSecsSinceEpoch();
     std::string s = "{\"request_id\":\"";
     s += JsonStd::escape(requestId);
-    s += "\",\"status\":\"cancelled\"";
-    s += ",\"message\":\"Cancellation requested\"";
-    s += ",\"cancelled_at\":\"" + JsonStd::msecToIso(nowMs) + "\"";
+    s += "\",\"status\":\"" + statusToString(statusAfter) + "\"";
+    if (statusAfter == REQUEST_CANCELLED) {
+        s += ",\"message\":\"Cancelled before execution started\"";
+        s += ",\"cancelled_at\":\"" + JsonStd::msecToIso((long long)cancelAt) + "\"";
+    } else {
+        s += needKillRender
+            ? ",\"message\":\"Cancellation requested; the render is being aborted. Poll the "
+              "request for the final outcome.\""
+            : ",\"message\":\"Cancellation requested; a running script cannot be interrupted "
+              "and will finish on its own. Poll the request for the final outcome.\"";
+    }
+    s += ",\"cancel_requested_at\":\"" + JsonStd::msecToIso((long long)cancelAt) + "\"";
     s += "}";
     return {200, s};
 }
@@ -568,6 +663,7 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
     QMutexLocker locker(&m_mutex);
 
     int nQueued = 0, nRunning = 0, nCompleted = 0, nFailed = 0, nCancelled = 0;
+    int nCancelRequested = 0, nStale = 0, nCompletedAfterCancel = 0, nCompletedAfterStale = 0;
     std::string items;
 
     for (QMap<QString, AsyncRequest>::iterator it = m_requests.begin();
@@ -585,7 +681,9 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
         if (!items.empty()) items += ",";
         items += "{\"request_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.id)) + "\"";
         items += ",\"status\":\"" + statusStr + "\"";
+        items += identityJson(req);
         items += ",\"progress\":" + std::string(progBuf);
+        items += activityJson(req);
         items += ",\"observation_summary\":{";
         items += "\"log_total\":" + std::to_string(req.logTotal);
         items += ",\"log_truncated\":";
@@ -604,6 +702,10 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
             case REQUEST_COMPLETED: ++nCompleted; break;
             case REQUEST_FAILED:    ++nFailed;    break;
             case REQUEST_CANCELLED: ++nCancelled; break;
+            case REQUEST_CANCEL_REQUESTED: ++nCancelRequested; break;
+            case REQUEST_STALE:            ++nStale;           break;
+            case REQUEST_COMPLETED_AFTER_CANCEL_REQUEST: ++nCompletedAfterCancel; break;
+            case REQUEST_COMPLETED_AFTER_STALE:          ++nCompletedAfterStale;  break;
         }
     }
 
@@ -614,6 +716,10 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
     s += ",\"completed\":" + std::to_string(nCompleted);
     s += ",\"failed\":"    + std::to_string(nFailed);
     s += ",\"cancelled\":" + std::to_string(nCancelled);
+    s += ",\"cancel_requested\":" + std::to_string(nCancelRequested);
+    s += ",\"stale\":" + std::to_string(nStale);
+    s += ",\"completed_after_cancel_request\":" + std::to_string(nCompletedAfterCancel);
+    s += ",\"completed_after_stale\":" + std::to_string(nCompletedAfterStale);
     s += "}";
     return s;
 }
@@ -658,15 +764,60 @@ void AsyncRequestManager::markRunning(const QString& id)
     req.status    = REQUEST_RUNNING;
     req.startedAt = QDateTime::currentMSecsSinceEpoch();
     req.progress  = 0.0;
+    touchLocked(req, req.startedAt);
 }
 
-void AsyncRequestManager::updateProgress(const QString& id, double progress)
+void AsyncRequestManager::updateFrameProgress(const QString& id, int frame, int total)
 {
+    if (total <= 0 || frame < 1) return;
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(id)) return;
     AsyncRequest& req = m_requests[id];
     if (req.status != REQUEST_RUNNING) return;
-    req.progress = progress;
+    if (frame > total) frame = total;
+
+    // Same shape as the events the animation script writes to its frame
+    // report, so Studio 4 (print marker) and Studio 6 (report) agree.
+    QVariantMap detail;
+    detail.insert("value", double(frame - 1) / double(total));
+    detail.insert("current", frame - 1);
+    detail.insert("total", total);
+    detail.insert("frame", frame);
+    detail.insert("phase", "rendering");
+    detail.insert("message", QString("Rendering frame %1 of %2").arg(frame).arg(total));
+    req.progress       = detail.value("value").toDouble();
+    req.progressDetail = detail;
+    touchLocked(req, QDateTime::currentMSecsSinceEpoch());
+}
+
+bool AsyncRequestManager::frameProgress(const QString& id, int* frame, int* total)
+{
+    QMutexLocker locker(&m_mutex);
+    if (!m_requests.contains(id)) return false;
+    AsyncRequest& req = m_requests[id];
+    if (req.progressSource != PROGRESS_FRAMES) return false;
+    ingestReportFromWorkerLocked(req);
+    const int f = req.progressDetail.value("frame").toInt();
+    const int t = req.progressDetail.value("total").toInt();
+    if (f < 1 || t < 1) return false;
+    if (frame) *frame = f;
+    if (total) *total = t;
+    return true;
+}
+
+void AsyncRequestManager::touchCurrent()
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_currentId.isEmpty() || !m_requests.contains(m_currentId)) return;
+    AsyncRequest& req = m_requests[m_currentId];
+    if (isActive(req.status))
+        touchLocked(req, QDateTime::currentMSecsSinceEpoch());
+}
+
+void AsyncRequestManager::touchLocked(AsyncRequest& req, qint64 at)
+{
+    if (at > req.lastActivityAt)
+        req.lastActivityAt = at;
 }
 
 void AsyncRequestManager::markCompleted(const QString& id, bool executed,
@@ -688,16 +839,24 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
     // still publish its final observation safely.
     ingestReportLocked(req, true);
 
-    // If failStaleRunning() already timed this request out (RUNNING -> FAILED)
-    // while the underlying DazScript call was blocked, that terminal state
-    // sticks -- a late, real completion must not flip it back to
-    // COMPLETED/CANCELLED after a client may have already acted on "failed".
-    if (req.status != REQUEST_RUNNING) return;
+    // Only work the main thread still owns is updated. CANCEL_REQUESTED and
+    // STALE are deliberately not final: the script has now returned, so record
+    // its real outcome rather than discarding it.
+    if (!isActive(req.status)) return;
+    const bool wasStale = (req.status == REQUEST_STALE);
 
     req.completedAt    = QDateTime::currentMSecsSinceEpoch();
+    touchLocked(req, req.completedAt);
     req.progress       = 1.0;
-    if (executed && !req.cancelRequested && !req.progressDetail.isEmpty())
+    if (executed && !req.cancelRequested && !req.progressDetail.isEmpty()) {
         req.progressDetail.insert("value", 1.0);
+        // All frames are done; the last frame event said "frame N starting".
+        if (req.progressSource == PROGRESS_FRAMES && req.progressDetail.contains("total")) {
+            req.progressDetail.insert("current", req.progressDetail.value("total"));
+            req.progressDetail.insert("phase", "done");
+            req.progressDetail.remove("message");
+        }
+    }
     req.outputLines    = output;
     for (int i = 0; i < output.size(); ++i) {
         QVariantMap entry;
@@ -707,14 +866,29 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
         appendLogLocked(req, entry);
     }
 
-    if (req.cancelRequested) {
-        req.status       = REQUEST_CANCELLED;
-        req.error        = "Cancelled by client";
-        outWasCancelled  = true;
-    } else if (executed) {
-        req.status         = REQUEST_COMPLETED;
+    if (executed) {
         req.scriptResult   = result;
         req.scriptExecuted = true;
+        if (req.requestType == REQUEST_TYPE_RENDER)
+            declareRenderOutputsLocked(req, result);
+    }
+
+    // A render whose script reports success:false after a cancel request was
+    // aborted by killRender() -- the only kind of running work that can
+    // actually be stopped.
+    const bool renderAborted = executed && req.requestType == REQUEST_TYPE_RENDER
+        && result.type() == QVariant::Map
+        && result.toMap().contains("success") && !result.toMap().value("success").toBool();
+
+    if (req.cancelRequested && renderAborted) {
+        req.status      = REQUEST_CANCELLED;
+        req.error       = "Cancelled by client";
+        outWasCancelled = true;
+    } else if (executed) {
+        req.status = req.cancelRequested ? REQUEST_COMPLETED_AFTER_CANCEL_REQUEST
+                   : wasStale            ? REQUEST_COMPLETED_AFTER_STALE
+                                         : REQUEST_COMPLETED;
+        req.error.clear();
     } else {
         req.status = REQUEST_FAILED;
         req.error  = error;
@@ -754,14 +928,18 @@ int AsyncRequestManager::cleanupExpired(qint64 ttlMs)
         for (QMap<QString, AsyncRequest>::const_iterator it = m_requests.constBegin();
              it != m_requests.constEnd(); ++it) {
             const AsyncRequest& req = it.value();
-            bool terminal = (req.status == REQUEST_COMPLETED ||
-                             req.status == REQUEST_FAILED    ||
-                             req.status == REQUEST_CANCELLED);
+            // STALE entries are purged too: if Daz never unblocks they would
+            // otherwise leak, and a late markCompleted() on a purged id no-ops.
+            bool terminal = isTerminal(req.status) || req.status == REQUEST_STALE;
             if (terminal && req.completedAt > 0 && (now - req.completedAt) > ttlMs)
                 toRemove.append(it.key());
         }
-        for (const QString& expired : toRemove)
+        for (const QString& expired : toRemove) {
+            const AsyncRequest& req = m_requests[expired];
+            if (req.ownsReportFile && !req.reportFile.isEmpty())
+                QFile::remove(req.reportFile);
             m_requests.remove(expired);
+        }
     }
     return toRemove.size();
 }
@@ -775,14 +953,15 @@ int AsyncRequestManager::failStaleRunning(qint64 staleMs)
     for (QMap<QString, AsyncRequest>::iterator it = m_requests.begin();
          it != m_requests.end(); ++it) {
         AsyncRequest& req = it.value();
-        if (req.status == REQUEST_RUNNING && req.startedAt > 0 &&
-            (now - req.startedAt) > staleMs) {
-            req.status      = REQUEST_FAILED;
-            req.error       = "Request timed out after running for longer than expected; "
+        if ((req.status == REQUEST_RUNNING || req.status == REQUEST_CANCEL_REQUESTED) &&
+            req.startedAt > 0 && (now - req.startedAt) > staleMs) {
+            req.status      = REQUEST_STALE;
+            req.error       = "Request has been running for longer than expected; "
                                "DAZ Studio's main thread may be blocked behind a dialog "
-                               "(e.g. a failed render's error prompt). This request's script "
-                               "may still complete in the background, but its result will no "
-                               "longer be tracked -- check DAZ Studio directly.";
+                               "(e.g. a failed render's error prompt). If the script does "
+                               "finish later, this request's status changes to its real "
+                               "outcome (e.g. completed_after_stale).";
+            req.staleAt     = now;
             req.completedAt = now;
             ++failedCount;
         }
@@ -797,7 +976,7 @@ void AsyncRequestManager::cancelAllPending(const QString& reason)
     for (QMap<QString, AsyncRequest>::iterator it = m_requests.begin();
          it != m_requests.end(); ++it) {
         AsyncRequest& req = it.value();
-        if (req.status == REQUEST_QUEUED || req.status == REQUEST_RUNNING) {
+        if (req.status == REQUEST_QUEUED || isActive(req.status)) {
             req.status      = REQUEST_CANCELLED;
             req.error       = reason;
             req.completedAt = now;
@@ -817,6 +996,79 @@ std::string AsyncRequestManager::statusToString(RequestStatus s) const
         case REQUEST_COMPLETED: return "completed";
         case REQUEST_FAILED:    return "failed";
         case REQUEST_CANCELLED: return "cancelled";
+        case REQUEST_CANCEL_REQUESTED: return "cancel_requested";
+        case REQUEST_STALE:            return "stale";
+        case REQUEST_COMPLETED_AFTER_CANCEL_REQUEST: return "completed_after_cancel_request";
+        case REQUEST_COMPLETED_AFTER_STALE:          return "completed_after_stale";
         default:                return "unknown";
     }
+}
+
+bool AsyncRequestManager::isTerminal(RequestStatus s)
+{
+    return s == REQUEST_COMPLETED || s == REQUEST_FAILED || s == REQUEST_CANCELLED
+        || s == REQUEST_COMPLETED_AFTER_CANCEL_REQUEST || s == REQUEST_COMPLETED_AFTER_STALE;
+}
+
+// History fields kept even after the real outcome lands, so a client can see
+// that a cancel was requested or the job went stale before it finished.
+// ,"correlation_id":"..","server_instance_id":".." -- empty fields omitted.
+std::string AsyncRequestManager::identityJson(const AsyncRequest& req)
+{
+    std::string s;
+    if (!req.correlationId.isEmpty())
+        s += ",\"correlation_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.correlationId)) + "\"";
+    if (!req.serverInstanceId.isEmpty())
+        s += ",\"server_instance_id\":\"" + JsonStd::escape(JsonStd::qstrToStd(req.serverInstanceId)) + "\"";
+    return s;
+}
+
+// ,"progress_supported":..,"progress_source":"..","last_activity_at":..|null
+// and, while the main thread still owns the job, "idle_ms" since that activity.
+std::string AsyncRequestManager::activityJson(const AsyncRequest& req)
+{
+    // progress_supported means progress can change *while the job runs*.
+    // Studio 4 only parses a report after the script returns, so a
+    // report-driven job there gets its progress at the end, not live.
+    bool supported = false;
+    const char* source = "none";
+    switch (req.progressSource) {
+        case PROGRESS_FRAMES:
+            source = "frames";
+            supported = true;
+            break;
+        case PROGRESS_REPORT:
+            source = "report";
+#if DAZ_SDK_MAJOR_VERSION >= 6
+            supported = true;
+#endif
+            break;
+        case PROGRESS_NONE:
+            break;
+    }
+    std::string s = ",\"progress_supported\":";
+    s += supported ? "true" : "false";
+    s += ",\"progress_source\":\"";
+    s += source;
+    s += "\",\"last_activity_at\":";
+    if (req.lastActivityAt > 0)
+        s += "\"" + JsonStd::msecToIso((long long)req.lastActivityAt) + "\"";
+    else
+        s += "null";
+    if (isActive(req.status) && req.lastActivityAt > 0) {
+        long long idle = (long long)(QDateTime::currentMSecsSinceEpoch() - req.lastActivityAt);
+        if (idle < 0) idle = 0;
+        s += ",\"idle_ms\":" + std::to_string(idle);
+    }
+    return s;
+}
+
+std::string AsyncRequestManager::lifecycleTimesJson(const AsyncRequest& req)
+{
+    std::string s;
+    if (req.cancelRequestedAt > 0)
+        s += ",\"cancel_requested_at\":\"" + JsonStd::msecToIso((long long)req.cancelRequestedAt) + "\"";
+    if (req.staleAt > 0)
+        s += ",\"stale_at\":\"" + JsonStd::msecToIso((long long)req.staleAt) + "\"";
+    return s;
 }

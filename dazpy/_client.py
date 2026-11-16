@@ -18,6 +18,7 @@ from .exceptions import (
     ServerResponseError,
     TimeoutError,
 )
+from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
 from ._version import server_version_from_status, warn_if_server_older
 
@@ -40,6 +41,30 @@ def _parse_retry_after(resp: _requests.Response) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return 2.0
+
+
+def _job_headers(idempotency_key: str | None, correlation_id: str | None) -> dict:
+    """Optional request-identity headers for job submission routes.
+
+    ``Idempotency-Key`` makes a retried submission (same route, same body)
+    return the original ``request_id`` instead of queueing a second job, for
+    as long as the server keeps the record (``limits.idempotency_ttl_seconds``
+    in :meth:`DazClient.capabilities`; lost on a server restart, which shows
+    as a changed ``server_instance_id``). ``X-Correlation-Id`` is echoed in
+    the response and stored on the job record.
+    """
+    headers = {}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    if correlation_id:
+        headers["X-Correlation-Id"] = correlation_id
+    return headers
+
+
+def _safe_artifact_filename(name: str) -> str:
+    """Base name safe to join under a download directory (no separators, no '..')."""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", os.path.basename(name.replace("\\", "/")))
+    return name if name.strip(". ") else "artifact"
 
 
 def _raise_for_error(resp: _requests.Response) -> None:
@@ -70,6 +95,7 @@ def _raise_for_error(resp: _requests.Response) -> None:
         status_code=status,
         error_code=error_code,
         detail=str(data.get("detail", "")),
+        retryable=bool(data.get("retryable", False)),
     )
 
 
@@ -186,14 +212,16 @@ class DazClient:
                 return None
         return self._server_version
 
-    def _post(self, path: str, payload: dict) -> _requests.Response:
+    def _post(
+        self, path: str, payload: dict, headers: dict | None = None, timeout: float | None = None
+    ) -> _requests.Response:
         self._check_server_version()
         try:
             return self._session.post(
                 f"{self._base}{path}",
                 json=payload,
-                headers=self._headers,
-                timeout=self._timeout,
+                headers={**self._headers, **headers} if headers else self._headers,
+                timeout=self._timeout if timeout is None else timeout,
             )
         except _requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
@@ -332,7 +360,8 @@ class DazClient:
 
     def execute_async_submit(
         self, script: str, args: object = None, *, report_file: str | None = None,
-        retry_on_busy: bool = False, max_wait: float = 30.0
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a script for asynchronous execution and return immediately.
 
@@ -346,6 +375,13 @@ class DazClient:
                 instead of raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
+            idempotency_key: Optional ``Idempotency-Key``. Resubmitting the
+                same body with the same key returns the original
+                ``request_id`` instead of queueing a second job, which makes
+                retries after a timeout safe. Accepted by every ``*_submit``
+                method.
+            correlation_id: Optional ``X-Correlation-Id`` stored on the job
+                and echoed in its status/result records.
 
         Returns:
             The server-assigned ``request_id`` string.  Use it with
@@ -368,7 +404,7 @@ class DazClient:
             payload["reportFile"] = report_file
 
         def _do():
-            resp = self._post("/execute/async", payload)
+            resp = self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -376,7 +412,8 @@ class DazClient:
 
     def execute_file_async_submit(
         self, script_file: str, args: object = None, *, report_file: str | None = None,
-        retry_on_busy: bool = False, max_wait: float = 30.0
+        retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a host-side ``.dsa`` file for asynchronous execution.
 
@@ -392,7 +429,7 @@ class DazClient:
             payload["reportFile"] = report_file
 
         def _do():
-            resp = self._post("/execute/async", payload)
+            resp = self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -430,6 +467,79 @@ class DazClient:
         _raise_for_error(resp)
         return resp.json()
 
+    def list_scripts(self) -> list[dict]:
+        """Return the registered scripts.
+
+        Returns:
+            One dict per script with ``"name"``, ``"registered_at"`` and,
+            when given at registration, ``"description"``. The registry is
+            in-memory, so it is empty after a server restart.
+        """
+        resp = self._get("/scripts")
+        _raise_for_error(resp)
+        return resp.json().get("scripts", [])
+
+    def delete_script(self, name: str, *, missing_ok: bool = False) -> bool:
+        """Remove a registered script.
+
+        Args:
+            name: The script's registered name.
+            missing_ok: Return ``False`` instead of raising when no script
+                has that name.
+
+        Returns:
+            ``True`` if the script was removed, ``False`` if it was not
+            registered and *missing_ok* is true.
+
+        Raises:
+            ServerResponseError: ``error_code == "SCRIPT_NOT_FOUND"`` when
+                the name is unknown and *missing_ok* is false.
+        """
+        resp = self._delete(f"/scripts/{name}")
+        if resp.status_code == 404 and missing_ok:
+            return False
+        _raise_for_error(resp)
+        return True
+
+    def export_geometry_frames(
+        self,
+        frames,
+        *,
+        node: str | None = None,
+        indices=None,
+        surfaces=None,
+        bones=None,
+        resolution: str = "base",
+        scene_update: bool = True,
+        timeout: float | None = None,
+    ) -> GeometryFrames:
+        """Export the deformed figure mesh and bone origins for several frames.
+
+        One native call (``POST /geometry/frames``), about 25x faster than a
+        DazScript loop. Only the figure is re-evaluated per frame; the
+        original frame and resolution level are restored afterwards.
+
+        Args:
+            frames: Frame numbers to evaluate (at least one).
+            node: Figure name or label. Default: the first figure.
+            indices: Vertex subset to return.
+            surfaces: Surface names whose vertices are added to the subset.
+            bones: Bones whose world-space origins are returned per frame.
+            resolution: ``"base"`` (base cage, default) or ``"current"``.
+            scene_update: ``False`` skips the final Scene update (about
+                130 ms). For back-to-back calls, let only the last update.
+            timeout: HTTP timeout for this call; defaults to the client's.
+                Raise it for long frame lists on heavy figures.
+
+        Returns:
+            A :class:`~dazpy.GeometryFrames`.
+        """
+        payload = geometry_frames_payload(
+            frames, node, indices, surfaces, bones, resolution, scene_update)
+        resp = self._post("/geometry/frames", payload, timeout=timeout)
+        _raise_for_error(resp)
+        return parse_geometry_frames(resp.content, payload.get("bones", []))
+
     def execute_registered(
         self, name: str, args: object = None, *, retry_on_busy: bool = False,
         max_wait: float = 30.0,
@@ -447,6 +557,7 @@ class DazClient:
     def execute_registered_async_submit(
         self, name: str, args: object = None, *, report_file: str | None = None,
         retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a registered script and return its async request id."""
         payload: dict = {}
@@ -456,7 +567,7 @@ class DazClient:
             payload["reportFile"] = report_file
 
         def _do():
-            resp = self._post(f"/scripts/{name}/async", payload)
+            resp = self._post(f"/scripts/{name}/async", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json().get("request_id", "")
 
@@ -472,8 +583,14 @@ class DazClient:
             A dict with at least ``"status"`` and ``"observation"`` keys.
             Observation contains structured progress, the bounded log tail,
             and the output manifest. Possible status values:
-            ``"queued"``, ``"running"``, ``"completed"``, ``"failed"``,
-            ``"cancelled"``, or ``"not_found"``.
+            ``"queued"``, ``"running"``, ``"cancel_requested"``,
+            ``"stale"``, ``"completed"``, ``"failed"``, ``"cancelled"``,
+            ``"completed_after_cancel_request"``,
+            ``"completed_after_stale"``, or ``"not_found"``.
+            ``cancel_requested`` and ``stale`` are not final: a running
+            script can't be interrupted, so once it returns the status
+            changes to its real outcome. ``cancelled`` means the work
+            really stopped (it never started, or a render was aborted).
         """
         resp = self._get(f"/requests/{request_id}/status")
         if resp.status_code == 404:
@@ -514,8 +631,9 @@ class DazClient:
         """List all tracked async requests (script and render) with their status.
 
         Args:
-            status: Optional filter, one of ``"queued"``, ``"running"``,
-                ``"completed"``, ``"failed"``, ``"cancelled"``. Omit to list
+            status: Optional filter: any status value listed in
+                :meth:`get_request_status` (e.g. ``"running"``,
+                ``"cancel_requested"``, ``"completed"``). Omit to list
                 requests in every status.
 
         Returns:
@@ -544,13 +662,182 @@ class DazClient:
             request_id: The ID returned by :meth:`execute_async_submit`.
 
         Returns:
-            ``True`` if the server confirmed cancellation, ``False`` otherwise.
+            ``True`` if the server accepted the cancel, ``False`` otherwise.
+            A queued request is cancelled at once; a running one only
+            becomes ``cancel_requested`` (scripts can't be interrupted), so
+            poll the request for its real outcome.
         """
         try:
             self.cancel_request_detail(request_id)
             return True
         except DazError:
             return False
+
+    # ── Artifacts ─────────────────────────────────────────────────────────────
+
+    def list_artifacts(self, request_id: str) -> dict:
+        """List the files an async job declared (GET /artifacts/{request_id}).
+
+        A job's artifacts are its output manifest: outputs declared in its
+        ``reportFile`` (``output``/``manifest`` events), plus the image(s) a
+        render job wrote. Use them to fetch results from a DAZ Studio host
+        whose filesystem the client can't see.
+
+        Returns:
+            A dict with ``request_id``, ``status``, ``count`` and an
+            ``artifacts`` list. Each entry has ``artifact_id``, ``url``,
+            ``path``, ``filename``, ``content_type``, ``size`` (``None`` when
+            unavailable), ``available`` and any ``kind``/``label``/``metadata``
+            the job declared.
+
+        Raises:
+            ServerResponseError: ``REQUEST_NOT_FOUND`` for an unknown or
+                expired job.
+        """
+        resp = self._get(f"/artifacts/{request_id}")
+        _raise_for_error(resp)
+        return resp.json()
+
+    def download_artifact(
+        self,
+        request_id: str,
+        artifact_id: str | int,
+        dest: "str | os.PathLike[str] | None" = None,
+        *,
+        byte_range: "tuple[int, int | None] | None" = None,
+        chunk_size: int = 1 << 20,
+        timeout: float | None = None,
+    ) -> "bytes | str":
+        """Download one declared artifact (GET /artifacts/{request_id}/{artifact_id}).
+
+        Args:
+            request_id: The async job's id.
+            artifact_id: The manifest entry's ``artifact_id``.
+            dest: Local file to stream the content into. When omitted the
+                content is returned as ``bytes``.
+            byte_range: ``(start, end)`` inclusive byte offsets, or
+                ``(start, None)`` for "from *start* to the end". Sent as an
+                HTTP ``Range`` header; the server answers 206.
+            chunk_size: Streaming chunk size when writing to *dest*.
+            timeout: Socket timeout; defaults to the client's timeout.
+
+        Returns:
+            The content as ``bytes``, or the path written when *dest* is given.
+
+        Raises:
+            ServerResponseError: ``ARTIFACT_NOT_FOUND`` (404) when the job
+                declared no such artifact, ``ARTIFACT_UNAVAILABLE`` (410) when
+                the declared file is gone, ``REQUEST_NOT_FOUND`` for an unknown
+                job, or HTTP 416 for a range outside the file.
+        """
+        headers = dict(self._headers)
+        if byte_range is not None:
+            start, end = byte_range
+            if start < 0 or (end is not None and end < start):
+                raise ValueError(f"invalid byte_range {byte_range!r}")
+            headers["Range"] = f"bytes={start}-{'' if end is None else end}"
+
+        self._check_server_version()
+        try:
+            resp = self._session.get(
+                f"{self._base}/artifacts/{request_id}/{artifact_id}",
+                headers=headers,
+                stream=True,
+                timeout=self._timeout if timeout is None else timeout,
+            )
+        except _requests.exceptions.ConnectionError as e:
+            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
+        except _requests.exceptions.Timeout as e:
+            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+        except _requests.exceptions.RequestException as e:
+            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
+
+        try:
+            _raise_for_error(resp)
+            if dest is None:
+                return resp.content
+            path = os.fspath(dest)
+            with open(path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+            return path
+        finally:
+            resp.close()
+
+    def get_artifact_thumbnail(
+        self,
+        request_id: str,
+        artifact_id: str | int,
+        size: int = 256,
+        *,
+        format: str = "png",
+        dest: "str | os.PathLike[str] | None" = None,
+        timeout: float | None = None,
+    ) -> "bytes | str":
+        """Fetch a scaled preview of an image artifact
+        (GET /artifacts/{request_id}/{artifact_id}?thumbnail=<size>).
+
+        The longest edge fits in *size* pixels, the aspect ratio is kept and
+        the image is never upscaled. Check ``thumbnail_supported`` on
+        :meth:`list_artifacts` entries first; ``/capabilities`` lists the
+        decodable types under ``thumbnail_source_formats``.
+
+        Args:
+            request_id: The async job's id.
+            artifact_id: The manifest entry's ``artifact_id``.
+            size: Longest edge in pixels, 16-1024.
+            format: ``"png"`` (keeps alpha) or ``"jpeg"`` (alpha flattened
+                onto white).
+            dest: Local file to write the thumbnail to. When omitted the
+                encoded image is returned as ``bytes``.
+            timeout: Socket timeout; defaults to the client's timeout.
+
+        Returns:
+            The encoded image as ``bytes``, or the path written when *dest*
+            is given.
+
+        Raises:
+            ServerResponseError: ``THUMBNAIL_UNSUPPORTED`` (422) when the
+                artifact isn't a decodable image or is too large,
+                ``INVALID_FIELD`` (400) for a bad *size*/*format*, plus the
+                :meth:`download_artifact` errors.
+            StudioBusyError: Studio's main thread is busy (rendering, loading
+                a scene, running a long job); retry after ``retry_after``.
+                Cached thumbnails are still served while busy.
+        """
+        resp = self._get(
+            f"/artifacts/{request_id}/{artifact_id}",
+            params={"thumbnail": int(size), "format": format},
+            timeout=timeout,
+        )
+        _raise_for_error(resp)
+        if dest is None:
+            return resp.content
+        path = os.fspath(dest)
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
+
+    def download_artifacts(
+        self, request_id: str, dest_dir: "str | os.PathLike[str]"
+    ) -> "list[str]":
+        """Download every available artifact of a job into *dest_dir*.
+
+        Files are named ``<artifact_id>_<filename>`` so two outputs with the
+        same base name can't overwrite each other. Unavailable entries are
+        skipped. Returns the paths written, in manifest order.
+        """
+        os.makedirs(dest_dir, exist_ok=True)
+        written: list[str] = []
+        for entry in self.list_artifacts(request_id).get("artifacts", []):
+            if not entry.get("available"):
+                continue
+            aid = str(entry["artifact_id"])
+            name = _safe_artifact_filename(entry.get("filename") or "artifact")
+            written.append(self.download_artifact(
+                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}")))
+        return written
 
     # ── Render ────────────────────────────────────────────────────────────────
 
@@ -569,6 +856,7 @@ class DazClient:
         reset_morphs: bool = False,
         retry_on_busy: bool = False,
         max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit a render job and return immediately.
 
@@ -622,14 +910,15 @@ class DazClient:
                 payload["morphs"] = morphs
 
         def _do():
-            resp = self._post("/render", payload)
+            resp = self._post("/render", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
     def render_batch_submit(
-        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, variants: list, base: dict | None = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit a batch render job and return immediately.
 
@@ -660,7 +949,7 @@ class DazClient:
             payload["base"] = base
 
         def _do():
-            resp = self._post("/render/batch", payload)
+            resp = self._post("/render/batch", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
@@ -679,6 +968,7 @@ class DazClient:
         engine: str = "",
         retry_on_busy: bool = False,
         max_wait: float = 30.0,
+        idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> dict:
         """Submit an animation render job spanning a frame range and return immediately.
 
@@ -732,7 +1022,7 @@ class DazClient:
             payload["engine"] = engine
 
         def _do():
-            resp = self._post("/render/animation", payload)
+            resp = self._post("/render/animation", payload, _job_headers(idempotency_key, correlation_id))
             _raise_for_error(resp)
             return resp.json()
 
@@ -746,8 +1036,9 @@ class DazClient:
                 :class:`~dazpy._render_api.RenderResult` with ``wait=False``.
 
         Returns:
-            ``True`` if the server confirmed cancellation, ``False`` otherwise
-            (already finished, not found, or connection error).
+            ``True`` if the server accepted the cancel, ``False`` otherwise
+            (already finished, not found, or connection error). A running
+            render is aborted via ``killRender()``; poll for the final status.
         """
         if not request_id.startswith("rnd-"):
             return False
@@ -804,72 +1095,6 @@ class DazClient:
         except _requests.exceptions.RequestException:
             return None
 
-    # ── USD export ────────────────────────────────────────────────────────────
-
-    def export_usd_submit(
-        self,
-        output_path: str,
-        *,
-        include_geometry: bool = True,
-        include_materials: bool = True,
-        include_skeleton: bool = False,
-        include_morphs: bool = False,
-        include_lights: bool = False,
-        include_camera: bool = False,
-    ) -> dict:
-        """Submit a USD export job and return immediately.
-
-        Args:
-            output_path: Absolute path on the DAZ Studio host where the
-                ``.usda`` file should be written.
-            include_geometry: Export mesh geometry (default ``True``).
-            include_materials: Export PBR material prims (default ``True``).
-            include_skeleton: Export UsdSkel armature and skin weights.
-            include_morphs: Export active morphs as UsdSkelBlendShape prims.
-            include_lights: Export scene lights using UsdLux prims.
-            include_camera: Export the active render camera as UsdGeomCamera.
-
-        Returns:
-            A dict with ``job_id``, ``status`` (``"queued"``), and
-            ``submittedAt`` keys.
-
-        Raises:
-            ConnectionError: If the server cannot be reached.
-            AuthenticationError: On HTTP 401/403.
-        """
-        payload = {
-            "outputPath": output_path,
-            "includeGeometry": include_geometry,
-            "includeMaterials": include_materials,
-            "includeSkeleton": include_skeleton,
-            "includeMorphs": include_morphs,
-            "includeLights": include_lights,
-            "includeCamera": include_camera,
-        }
-        resp = self._post("/export/usd", payload)
-        _raise_for_error(resp)
-        return resp.json()
-
-    def get_usd_export_status(self, job_id: str) -> dict:
-        """Poll the status of a USD export job.
-
-        Args:
-            job_id: The ID returned by :meth:`export_usd_submit`.
-
-        Returns:
-            A dict with ``job_id``, ``status``, and (on completion)
-            ``outputPath`` or ``error`` keys.
-
-        Raises:
-            ConnectionError: If the server cannot be reached.
-            AuthenticationError: On HTTP 401/403.
-        """
-        resp = self._get(f"/export/usd/{job_id}")
-        if resp.status_code == 404:
-            return {"job_id": job_id, "status": "not_found"}
-        _raise_for_error(resp)
-        return resp.json()
-
     # ── Server health ─────────────────────────────────────────────────────────
 
     def status(self) -> dict:
@@ -899,5 +1124,28 @@ class DazClient:
             AuthenticationError: On HTTP 401/403.
         """
         resp = self._get("/metrics")
+        _raise_for_error(resp)
+        return resp.json()
+
+    def capabilities(self) -> dict:
+        """Return the server's capabilities document from ``GET /capabilities``.
+
+        Describes the server/DAZ Studio/SDK versions, routes (including
+        companion-plugin routes), feature flags, current limits, and the
+        render engines registered right now (``render_engines.selectable``
+        lists the values ``render(engine=...)`` accepts). While DAZ Studio is
+        busy the server returns its last snapshot, marked
+        ``render_engines.source == "snapshot"``. ``compatibility_hash`` changes
+        only when routes, feature flags or the schema change.
+
+        Servers that predate this endpoint answer 404.
+
+        Raises:
+            AuthenticationError: On HTTP 401/403.
+            ServerResponseError: On HTTP 404 from a server without
+                ``/capabilities`` (``status_code == 404``).
+            StudioBusyError: On HTTP 503 before the server has a snapshot.
+        """
+        resp = self._get("/capabilities")
         _raise_for_error(resp)
         return resp.json()

@@ -49,6 +49,10 @@ reuses a stale CMake cache from the other SDK.
 
 **Test clients:** `test-simple.py`, `tests.py`, `test-client.js`, `test-client.ps1`
 
+**Live smoke matrix:** `python tests/smoke_live.py` (DS4/DS6 × Iray/Filament/viewport,
+engine readback after every change, `--record` per release). Use it instead of
+the full live integration suite. See `docs/LIVE_SMOKE.md`.
+
 ## Architecture
 
 ### Threading Model (CRITICAL)
@@ -87,7 +91,7 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 10. Capture output via `onMessagePosted()`
 11. Execute via `DzScript`, measure duration
 12. Update metrics, log request
-13. Return `{ success, result, output[], error, request_id }`
+13. Return `{ success, result, output[], error, request_id }` (+ `error_code`/`retryable` on failure; `runJobRoute()` stamps `server_instance_id`, `correlation_id`, `scene_revision`)
 
 ### Key Classes
 
@@ -103,10 +107,20 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 
 **Sync:** `/status`, `/health`, `/metrics`, `/execute`, `/scripts/*`
 **Async:** `/execute/async`, `/scripts/:id/async`, `/requests/*`
+**Artifacts:** `/artifacts/:id`, `/artifacts/:id/:artifact_id` (read chain; serves only files in the job's output manifest, Range/HEAD via httplib content provider)
 
 Default: `127.0.0.1:18811`
 
-**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 413 (Body too large), 429 (Rate limit/concurrent limit)
+**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 404 (Unknown script/request/route/artifact), 409 (Idempotency key in flight), 413 (Body too large), 410 (Declared artifact file gone), 422 (Idempotency key reused), 429 (Rate limit/concurrent limit), 503 (Studio busy/queue full)
+
+**Errors:** every failure body is `ErrorResponse` (`include/ErrorResponse.h`):
+`{success:false, error_code, error, retryable, detail?}`. Never hand-build an
+error body; add an `ErrorCode` instead. Script/job failures stay HTTP 200 with
+`error_code` `SCRIPT_ERROR` / `JOB_CANCELLED` / `JOB_STALE`.
+
+**Job routes** (`/execute`, `/scripts/:id/execute`, async + render submission)
+go through `runJobRoute()`: write chain → `X-Correlation-Id` → `Idempotency-Key`
+(`IdempotencyCache`, async/render submission only) → handler → identity stamp.
 
 **Authentication:** Token via `X-API-Token` header or `Authorization: Bearer <token>`. Auto-generated securely, stored in `~/.daz3d/dazscriptserver_token.txt` (chmod 600).
 
@@ -134,12 +148,29 @@ Default: `127.0.0.1:18811`
 
 **Authentication:** 32-byte hex tokens (128-bit) via `SecureRandom` (OS crypto APIs). Stored in `~/.daz3d/dazscriptserver_token.txt` (chmod 600). Thread-safe (loaded once, read-only).
 
-**IP Whitelist:** Exact match, comma-separated list. Default disabled. Checked after concurrent limit, before rate limiting/auth.
+**IP Whitelist:** Exact match, comma-separated list. Default disabled. Checked after concurrent limit, before rate limiting/auth, on every authenticated route.
+
+**Middleware chains:** every authenticated route runs exactly one of two chains
+(`setupRoutes()`): `m_pWriteChain` (IP whitelist → rate limit → body size → auth)
+for all POST/DELETE routes, `m_pReadChain` (IP whitelist → auth) for polling GETs
+and SSE streams. Companion-plugin routes (`applyPluginRoutes()` catch-alls) pick
+the chain by method after route matching. `tests/test_route_security.py` (unit
+suite) enforces this. New routes must use one of them.
+
+**OpenAPI parity:** every route in `setupRoutes()` must have a matching path +
+method in `openapi.yaml`, and vice versa. Companion-plugin routes are declared in
+`companion_plugins.json` (read by `scripts/check_openapi_parity.py`; `--live URL`
+checks a running server's `/capabilities` against it) and documented with tag
+`CompanionPlugins`. SDK calls (dazpy, daz-ts) to endpoints the spec
+doesn't document also fail. CI runs the script (`openapi-parity` job, which
+posts SDK coverage to the job summary), as does `tests/test_openapi_parity.py`.
 
 **Rate Limiting:** Per-IP sliding window (default: 60 req/60s). QMutex-protected. Periodic cleanup (every 100 requests).
 
 **Input Validation:**
-- Body size: 1-50 MB (default 5MB) → HTTP 413
+- Body size: 1-50 MB (default 5MB) → HTTP 413. Enforced on every route by
+  httplib `set_payload_max_length` while the body is read (JSON body via
+  `set_error_handler`), plus `BodySizeMiddleware` in the write chain
 - Script length: 100-10240 KB (default 1MB) → HTTP 400
 - JSON parsing with line numbers
 - Script file: absolute path, exists, is file
@@ -156,6 +187,7 @@ Default: `127.0.0.1:18811`
 
 **Limits:** 10 concurrent requests, 5MB body, 1MB script, 60 req/60s rate limit
 **Constants:** 1000 log lines, 10000 captured lines, cleanup every 100 requests
+**Stuck job timeout:** 30 min (UI-configurable 5–1440, applied live) → async job reported `stale`
 **Auth:** Enabled by default, token auto-generated
 **Whitelist/Rate limit:** Disabled by default
 

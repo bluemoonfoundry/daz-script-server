@@ -209,7 +209,14 @@ else
     [ -n "$DAZ_SDK_DIR" ] && CMAKE_FLAGS+=("-DDAZ_SDK_DIR=$DAZ_SDK_DIR")
 fi
 [ -n "$DAZ_STUDIO_EXE_DIR" ] && CMAKE_FLAGS+=("-DDAZ_STUDIO_EXE_DIR=$DAZ_STUDIO_EXE_DIR")
-[ "$COMMAND" = "install" ]   && CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=ON")
+# INSTALL_TO_DAZ is a cached option: pass it explicitly on every configure so
+# a previous `install` can't leave build/release linking into the DAZ plugins
+# folder (LNK1104 while Studio is running, missing $ARTIFACT for release).
+if [ "$COMMAND" = "install" ]; then
+    CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=ON")
+else
+    CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=OFF")
+fi
 
 if [ "$PLATFORM" = "win" ]; then
     STALE_CHECK="$BUILD_DIR/ALL_BUILD.vcxproj"
@@ -224,6 +231,12 @@ fi
 # install changes the output directory at configure time, so always reconfigure
 [ "$OPT_RECONFIGURE" = 1 ]   && NEEDS_CONFIGURE=1
 [ "$COMMAND" = "install" ]   && NEEDS_CONFIGURE=1
+# ...and reconfigure a non-install build whose cache still has it ON
+if [ "$COMMAND" != "install" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ] \
+    && grep -qE '^INSTALL_TO_DAZ:BOOL=(ON|TRUE|1|YES)$' "$BUILD_DIR/CMakeCache.txt"; then
+    echo "CMake cache has INSTALL_TO_DAZ=ON from a previous install; reconfiguring with it OFF."
+    NEEDS_CONFIGURE=1
+fi
 
 if [ "$NEEDS_CONFIGURE" = 1 ]; then
     echo "Running CMake configure..."

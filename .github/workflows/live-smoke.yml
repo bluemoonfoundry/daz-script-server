@@ -1,0 +1,52 @@
+name: Live smoke (self-hosted DAZ Studio)
+
+# Manual only: needs a machine with DAZ Studio running and the plugin's server
+# started. See docs/LIVE_SMOKE.md.
+on:
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: "Comma list: iray,filament,viewport"
+        default: "iray,filament,viewport"
+      stages:
+        description: "Comma list: api,async,render,mcp"
+        default: "api,async,render"
+      require_engines:
+        description: "Fail (not skip) when a requested engine isn't registered"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, windows, daz-studio]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dazpy
+        run: python -m pip install -e . requests
+
+      - name: Run live smoke
+        shell: bash
+        env:
+          SMOKE_ENGINES: ${{ inputs.engines }}
+          SMOKE_STAGES: ${{ inputs.stages }}
+          SMOKE_REQUIRE: ${{ inputs.require_engines }}
+        run: |
+          extra=""
+          if [ "$SMOKE_REQUIRE" = "true" ]; then extra="--require-engines"; fi
+          python tests/smoke_live.py \
+            --engines "$SMOKE_ENGINES" \
+            --stages "$SMOKE_STAGES" \
+            --report smoke-report.json $extra
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-smoke-report
+          path: smoke-report.json
+          if-no-files-found: ignore

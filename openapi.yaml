@@ -22,7 +22,47 @@ info:
     queue behind each other. The `/execute/async` family lets callers submit
     work without blocking their HTTP connection.
 
-  version: 2.10.1
+    ## Request identity and retry safety
+
+    - Every response carries `X-Server-Instance-Id`, a random ID generated each
+      time the server starts. `/status`, `/health`, `/capabilities` and every
+      job response report it too. A changed value means the server restarted:
+      in-memory jobs, registered scripts and idempotency records are gone.
+    - Job routes (`/execute`, `/scripts/{id}/execute`, `/execute/async`,
+      `/scripts/{id}/async`, `/render`, `/render/batch`, `/render/animation`)
+      accept `X-Correlation-Id` (generated as `cor-...` when absent), echo it in
+      the response header and body, and store it on async job records.
+    - The async submission routes accept `Idempotency-Key`. Resubmitting the
+      same body to the same route with the same key, within
+      `limits.idempotency_ttl_seconds` (1 h), returns the original response
+      (`idempotent_replay: true`, header `Idempotent-Replayed: true`) without
+      queueing a second job. Only 2xx responses are remembered. Reusing a key
+      with a different body returns 422 `IDEMPOTENCY_KEY_REUSED`; retrying while
+      the first request is still being handled returns 409
+      `IDEMPOTENCY_KEY_IN_FLIGHT` (retryable).
+    - `scene_revision` is a counter (reset on restart) that advances on every
+      structural scene change and after every executed script or job. Equal
+      values within one `server_instance_id` mean no change was observed.
+
+    | Operation | Retry safe? |
+    |---|---|
+    | GET routes, `DELETE /requests/{id}`, `POST /render/{id}/cancel` | Yes |
+    | `/execute/async`, `/scripts/{id}/async`, `/render`, `/render/batch`, `/render/animation` | Yes with `Idempotency-Key`; otherwise a retry queues a second job |
+    | `/execute`, `/scripts/{id}/execute` | No: a retry runs the script again. Use the async route + key |
+    | `/scripts/register`, `DELETE /scripts/{id}` | Yes (overwrite / delete by name) |
+    | `/scene/save-copy` | Yes (same output path is overwritten) |
+    | `/geometry/frames` | Yes (read-only scene evaluation) |
+
+    ## Errors
+
+    Every failure uses one envelope (`ErrorResponse`):
+    `{"success": false, "error_code": "...", "error": "...", "retryable": bool, "detail"?: "..."}`.
+    HTTP-level failures use 4xx/5xx statuses. Script and job failures keep
+    HTTP 200 (the exchange succeeded) and put the same fields in the execute or
+    job-result body with `error_code` `SCRIPT_ERROR`, `JOB_CANCELLED` or
+    `JOB_STALE`. Branch on `error_code`, not on the message text.
+
+  version: 2.11.0
   contact:
     name: Blue Moon Foundry
     url: https://github.com/bluemoonfoundry/daz-script-server/issues
@@ -49,6 +89,16 @@ tags:
     description: Deformed-mesh export for animation frames
   - name: Render
     description: Render job submission, progress streaming, and cancellation (v2.6.0+)
+  - name: Artifacts
+    description: Authenticated downloads of the files a job declared
+  - name: Scene
+    description: Scene file I/O
+  - name: CompanionPlugins
+    description: |
+      Routes registered at runtime by optional companion plugins through
+      `registerPluginRoute()`. They return 404 `ROUTE_NOT_FOUND` when the
+      plugin is not installed. POST routes run the write chain and GET routes
+      the read chain, like built-in routes; the response body is the plugin's own.
 
 paths:
   /status:
@@ -111,6 +161,43 @@ paths:
                 uptime_seconds: 86400
                 success_rate_percent: 97.77
 
+  /capabilities:
+    get:
+      tags: [Server]
+      summary: Machine-readable feature, route and limit discovery
+      description: |
+        Lets clients (MCP servers, SDKs) adapt to the running server instead of
+        hard-coding versions. Built on the DAZ Studio main thread so
+        `render_engines` is read live from DzRenderMgr. While the main thread
+        is busy (render, scene load) the server returns the last document it
+        built instead, with `render_engines.source: snapshot`.
+
+        `compatibility_hash` fingerprints the schema version, route table
+        (including companion-plugin routes) and feature flags. It does not
+        change with limits, settings or render engines, so clients can cache
+        route/feature decisions by it.
+      operationId: getCapabilities
+      security:
+        - apiToken: []
+        - bearerToken: []
+      responses:
+        '200':
+          description: Capabilities document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilitiesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: Main thread busy and no snapshot built yet (Retry-After header set)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /execute:
     post:
       tags: [Execute]
@@ -119,6 +206,8 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -218,6 +307,7 @@ paths:
         - apiToken: []
         - bearerToken: []
       parameters:
+        - $ref: '#/components/parameters/CorrelationId'
         - $ref: '#/components/parameters/ScriptId'
       requestBody:
         required: false
@@ -278,6 +368,9 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -299,6 +392,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '413':
           $ref: '#/components/responses/TooLarge'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -311,6 +408,8 @@ paths:
         - apiToken: []
         - bearerToken: []
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
         - $ref: '#/components/parameters/ScriptId'
       requestBody:
         required: false
@@ -331,6 +430,10 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -426,9 +529,13 @@ paths:
       tags: [Async]
       summary: Cancel a queued or running async request
       description: |
-        - `queued` requests are removed from the queue immediately.
-        - `running` requests have a cancel flag set and `killRender()` called;
-          DAZ Studio honours the flag when the script returns.
+        - `queued` requests are removed from the queue and become `cancelled`.
+        - `running` requests become `cancel_requested`. A running script can't
+          be interrupted; render jobs get a best-effort `killRender()`. Once the
+          script returns, the status changes to its real outcome: `cancelled`
+          (render aborted), `completed_after_cancel_request` (result kept) or
+          `failed`. Repeating the cancel while `cancel_requested` is a no-op.
+        - Finished requests return 400.
       operationId: cancelRequest
       security:
         - apiToken: []
@@ -437,7 +544,7 @@ paths:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Request cancelled
+          description: Request cancelled (queued) or cancel requested (running)
           content:
             application/json:
               schema:
@@ -448,6 +555,158 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /artifacts/{id}:
+    get:
+      tags: [Artifacts]
+      summary: List the files an async job declared
+      description: |
+        A job's artifacts are its output manifest: outputs declared in its
+        `reportFile` (`output` / `manifest` events) and, for render jobs, the
+        `output_path` / `output_paths` the render wrote (failed renders declare
+        nothing). Each entry gets file metadata read at request time.
+        Records expire with the job (1 hour TTL).
+      operationId: listArtifacts
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ArtifactJobId'
+      responses:
+        '200':
+          description: The job's artifacts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /artifacts/{id}/{artifact_id}:
+    get:
+      tags: [Artifacts]
+      summary: Download one declared artifact
+      description: |
+        Streams a file the job declared, so clients don't need to share a
+        filesystem with DAZ Studio. URL segments are IDs looked up in the job's
+        output manifest, never paths: an undeclared file can't be requested.
+        The declared path must be absolute and a regular file at download time.
+
+        Supports single and multiple byte ranges (`Range: bytes=0-1023`,
+        `bytes=-512`, `bytes=1024-`), answered with 206 + `Content-Range`, and
+        `HEAD` for size/type without the body. Uses the read middleware chain
+        (IP whitelist, then auth), so it is not rate limited.
+
+        **Thumbnails.** With `?thumbnail=<px>` the response is a scaled copy of
+        an image artifact instead of the file: the longest edge fits in `px`
+        (16-1024), the aspect ratio is kept, and the image is never upscaled.
+        `format=png` (default, keeps alpha) or `format=jpeg` (alpha flattened
+        onto white). The source must have an extension in `/capabilities`
+        `thumbnail_source_formats` (the Qt image plugins this Studio loaded;
+        EXR/HDR usually aren't) and be at most `limits.thumbnail_max_source_mb`
+        and 100 megapixels, otherwise 422 `THUMBNAIL_UNSUPPORTED`.
+        `thumbnail_supported` on `GET /artifacts/{id}` entries predicts this.
+        Decoding runs on Studio's main thread: while it is busy (render, scene
+        load, a long job), or doesn't get to the request within 10 s, the
+        answer is 503 `STUDIO_BUSY` with `Retry-After`. Results are cached per
+        file size/mtime, px and format (`X-Thumbnail-Cache: hit|miss`), and a
+        cache hit is served even while Studio is busy. Range requests are not
+        meaningful for thumbnails.
+      operationId: downloadArtifact
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/ArtifactJobId'
+        - name: artifact_id
+          in: path
+          required: true
+          description: The manifest entry's `artifact_id`
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,64}$'
+        - name: thumbnail
+          in: query
+          required: false
+          description: Return a thumbnail whose longest edge fits in this many pixels (image artifacts only)
+          schema:
+            type: integer
+            minimum: 16
+            maximum: 1024
+        - name: format
+          in: query
+          required: false
+          description: Thumbnail encoding (only with `thumbnail`)
+          schema:
+            type: string
+            enum: [png, jpeg, jpg]
+            default: png
+        - name: Range
+          in: header
+          required: false
+          description: RFC 9110 byte range(s)
+          schema:
+            type: string
+            example: bytes=0-1023
+      responses:
+        '200':
+          description: Full file content
+          headers:
+            Content-Length: {schema: {type: integer}}
+            Accept-Ranges: {schema: {type: string, enum: [bytes]}}
+            Content-Disposition:
+              description: '`inline; filename="..."; filename*=UTF-8''''...`'
+              schema: {type: string}
+            X-Thumbnail-Cache:
+              description: '`hit` or `miss`; only on `?thumbnail` responses'
+              schema: {type: string, enum: [hit, miss]}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+            image/jpeg:
+              schema: {type: string, format: binary}
+        '206':
+          description: Requested byte range(s)
+          headers:
+            Content-Range: {schema: {type: string, example: bytes 0-1023/52344}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Unknown job (`REQUEST_NOT_FOUND`) or undeclared artifact (`ARTIFACT_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          $ref: '#/components/responses/ArtifactUnavailable'
+        '416':
+          description: Range outside the file
+        '422':
+          description: |
+            `?thumbnail` on an artifact that can't be thumbnailed
+            (`THUMBNAIL_UNSUPPORTED`): no Qt decoder for its type, undecodable
+            content, or over the size limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /scene/events:
     get:
@@ -501,6 +760,9 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -520,6 +782,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -534,6 +800,9 @@ paths:
       security:
         - apiToken: []
         - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
       requestBody:
         required: true
         content:
@@ -546,30 +815,99 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [request_ids]
-                properties:
-                  request_ids:
-                    type: array
-                    items:
-                      type: string
-                    description: One `request_id` per variant, in submission order
+                allOf:
+                  - $ref: '#/components/schemas/JobIdentity'
+                  - type: object
+                    required: [request_ids]
+                    properties:
+                      batch_id:
+                        type: string
+                      request_ids:
+                        type: array
+                        items:
+                          type: string
+                        description: One `request_id` per variant, in submission order
+                      total:
+                        type: integer
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+
+  /render/animation:
+    post:
+      tags: [Render]
+      summary: Submit a per-frame animation render job
+      description: |
+        Renders each frame from `start_frame` to `end_frame` inclusive as its own
+        image and returns a `request_id` immediately. The `{frame}` token in
+        `output_path` is replaced by the zero-padded frame number. Progress
+        advances at frame boundaries: the job status reports frame N of M
+        (`progress_source: frames`, `observation.progress.frame` / `total`) on
+        Studio 4 and 6, and `GET /render/{id}/progress` streams it as SSE
+        `progress` events on both.
+        The completed job's output manifest lists every frame written (`kind: "frame"`).
+        If `camera` is given, the server checks that it exists in the scene before queueing.
+      operationId: submitRenderAnimation
+      security:
+        - apiToken: []
+        - bearerToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderAnimationRequest'
+      responses:
+        '200':
+          description: Animation render job submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncSubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInFlight'
+        '422':
+          $ref: '#/components/responses/IdempotencyKeyReused'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /render/{id}/progress:
     get:
       tags: [Render]
       summary: Stream render progress via SSE
       description: |
-        Opens an SSE connection for the given render job and delivers real-time
-        progress events until the render completes or fails.
+        Opens an SSE connection for the given render job and delivers progress
+        events until the render completes or fails. The SDK exposes no
+        intra-frame percent, so a single-frame render gets a 0% event when it
+        starts and then a terminal event. An animation render
+        (`POST /render/animation`) also gets `progress` events at frame
+        boundaries. Studio 4 sends one per frame. Studio 6 checks the frame
+        report every 0.5 s, so frames faster than that are merged into an event
+        for the latest frame. Frame numbers only ever increase. A subscriber
+        that joins mid-render first
+        receives the latest frame event. If the render already finished, the
+        stored terminal event is sent and the stream closes. `:keepalive`
+        comments are sent about every 3 s while idle.
       operationId: renderProgress
       security:
         - apiToken: []
@@ -584,10 +922,14 @@ paths:
               schema:
                 type: string
                 description: |
-                  Progress events:
-                  `data: {"stage":"rendering","progress":0.42,"elapsed_ms":4200}`
-                  Completion event:
-                  `data: {"stage":"complete","progress":1.0,"output_path":"/path/render.png","elapsed_ms":9800}`
+                  Start (`event: progress`):
+                  `data: {"request_id":"rnd-1a2b3c4d","percent":0}`
+                  Frame boundary, animation renders (`event: progress`; frame N of M about to start):
+                  `data: {"request_id":"rnd-1a2b3c4d","percent":25.00,"frame":2,"total_frames":8}`
+                  Completion (`event: complete`):
+                  `data: {"request_id":"rnd-1a2b3c4d","output_path":"/path/render.png","file_size_bytes":123456,"duration_ms":9800}`
+                  Failure or cancellation (`event: error`):
+                  `data: {"request_id":"rnd-1a2b3c4d","error":"...","duration_ms":1200}`
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -610,7 +952,7 @@ paths:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
-          description: Render job cancelled
+          description: Render cancelled (queued) or abort requested (running)
           content:
             application/json:
               schema:
@@ -700,6 +1042,53 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /scene/save-copy:
+    post:
+      tags: [Scene]
+      summary: Save a copy of the current scene
+      description: |
+        Writes the current scene to `path` without changing the scene's
+        filename or dirty flag ("Save a Copy As…"). A clean scene that already
+        has a file on disk is copied byte for byte (`method: "copy"`). A dirty
+        scene is serialized with `Scene.saveScene()` (`"serialize"`); if that
+        changes the scene's filename, the original file is saved again to
+        restore it (`"serialize+restore"`), which also writes the unsaved
+        changes to the original file. An existing file at `path` is overwritten,
+        so retries are safe.
+      operationId: saveSceneCopy
+      security:
+        - apiToken: []
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveCopyRequest'
+      responses:
+        '200':
+          description: Copy written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaveCopyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: File copy or `saveScene()` failed (`INTERNAL_ERROR`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     apiToken:
@@ -711,6 +1100,29 @@ components:
       scheme: bearer
 
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Client-chosen key (1-255 printable ASCII, no spaces). A repeat of the
+        same route + body + key within the TTL returns the original response
+        instead of submitting a second job.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[!-~]{1,255}$'
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Client trace ID (1-255 printable ASCII, no spaces). Generated when absent.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[!-~]{1,255}$'
     ScriptId:
       name: id
       in: path
@@ -719,6 +1131,15 @@ components:
       schema:
         type: string
         pattern: '^[A-Za-z0-9_-]{1,64}$'
+    ArtifactJobId:
+      name: id
+      in: path
+      required: true
+      description: Async request ID whose artifacts to access
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,64}$'
+
     RequestId:
       name: id
       in: path
@@ -766,11 +1187,99 @@ components:
           type: string
           description: Scene-panel label of the camera to use
           example: "Camera 1"
+        engine:
+          type: string
+          enum: [iray, viewport, filament]
+          description: Render engine; omitted keeps the scene's current selection
+        iray_samples:
+          type: integer
+          minimum: 0
+          description: |
+            Per-render Iray "Max Samples" override (0 or omitted = scene setting).
+            Applied through the Iray renderer's property holder, read back, and
+            restored after the render; the job result's `iray_samples` object
+            reports `requested`, `applied`, `previous` and `restored`. Rejected
+            with 400 when `engine` is `viewport`/`filament`, and the job fails if
+            the effective render is not Iray or the value is outside the
+            property's range (1..25000 on DS 6.26).
+          example: 500
         figure_morphs:
           type: array
           items:
             $ref: '#/components/schemas/FigureMorphs'
           description: Per-figure morph overrides applied before rendering
+
+    RenderAnimationRequest:
+      type: object
+      required: [output_path, start_frame, end_frame]
+      properties:
+        output_path:
+          type: string
+          description: Absolute output path; must contain the literal token `{frame}`
+          example: "C:/renders/walk_{frame}.png"
+        start_frame:
+          type: integer
+          minimum: 0
+          description: First frame to render
+          example: 0
+        end_frame:
+          type: integer
+          minimum: 0
+          description: |
+            Last frame to render, inclusive; must be >= `start_frame`. At most
+            1000 frames per job.
+          example: 47
+        frame_padding:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 4
+          description: Zero-padded width of the number substituted for `{frame}`
+        width:
+          type: integer
+          minimum: 1
+          description: Render width in pixels; must be given together with `height`
+          example: 1920
+        height:
+          type: integer
+          minimum: 1
+          description: Render height in pixels; must be given together with `width`
+          example: 1080
+        camera:
+          type: string
+          description: Scene-panel label of the camera to use (400 if not found)
+          example: "Camera 1"
+        engine:
+          type: string
+          enum: [iray, viewport, filament]
+          description: Render engine; omitted keeps the scene's current selection
+
+    SaveCopyRequest:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Destination `.duf` path; overwritten if it exists
+          example: "C:/backups/scene_v2.duf"
+
+    SaveCopyResponse:
+      type: object
+      required: [ok, path, source, method]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        path:
+          type: string
+          description: Destination path written
+        source:
+          type: string
+          description: The scene's own filename (empty for a never-saved scene)
+        method:
+          type: string
+          enum: [copy, serialize, serialize+restore]
+          description: How the copy was produced (see the route description)
 
     RenderVariant:
       type: object
@@ -852,6 +1361,38 @@ components:
           type: string
           description: 8-character ID for log correlation
           example: "a3f2b891"
+        error_code:
+          type: string
+          enum: [SCRIPT_ERROR]
+          description: Present only when `success` is false
+        retryable:
+          type: boolean
+          description: Present only when `success` is false
+        server_instance_id:
+          type: string
+        correlation_id:
+          type: string
+        scene_revision:
+          type: integer
+
+    JobIdentity:
+      type: object
+      description: Identity fields stamped on job route responses (success and error).
+      properties:
+        server_instance_id:
+          type: string
+          description: Random per-run server ID; changes on every server start
+          example: "srv-3f9a1c0b7d2e4a55"
+        correlation_id:
+          type: string
+          description: Client `X-Correlation-Id`, or a generated `cor-...` ID
+          example: "cor-1b2c3d4e"
+        scene_revision:
+          type: integer
+          description: Scene change counter at response time (reset on restart)
+        idempotent_replay:
+          type: boolean
+          description: Present (true) only when this is a replay of an earlier response
 
     RegisterRequest:
       type: object
@@ -894,10 +1435,11 @@ components:
           type: array
           items:
             type: object
-            required: [id, registered_at]
+            required: [name, registered_at]
             properties:
-              id:
+              name:
                 type: string
+                description: Registered script name (the `{id}` in `/scripts/{id}/...`)
               description:
                 type: string
               registered_at:
@@ -949,18 +1491,20 @@ components:
           type: string
 
     AsyncSubmitResponse:
-      type: object
-      required: [request_id, status, submitted_at]
-      properties:
-        request_id:
-          type: string
-          example: "a3f2b891"
-        status:
-          type: string
-          enum: [queued]
-        submitted_at:
-          type: string
-          format: date-time
+      allOf:
+        - $ref: '#/components/schemas/JobIdentity'
+        - type: object
+          required: [request_id, status, submitted_at]
+          properties:
+            request_id:
+              type: string
+              example: "execute-a3f2b891"
+            status:
+              type: string
+              enum: [queued]
+            submitted_at:
+              type: string
+              format: date-time
 
     RequestListResponse:
       type: object
@@ -987,11 +1531,47 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/RequestStatus'
+        correlation_id:
+          type: string
+          description: Correlation ID the job was submitted with
+        server_instance_id:
+          type: string
+          description: Server run that accepted the job
         submitted_at:
           type: string
           format: date-time
         elapsed_ms:
           type: integer
+        progress:
+          type: number
+          format: float
+        progress_supported:
+          type: boolean
+          description: |
+            Whether `progress` can change while the job runs. True for
+            animation renders and, on Studio 6, for script jobs with a
+            `reportFile`. False for single-frame renders (start and finish
+            only) and scripts without a report file.
+        progress_source:
+          type: string
+          enum: [frames, report, none]
+          description: |
+            `frames`: animation render, one step per frame. `report`: the
+            job's `reportFile` progress events (Studio 4 parses them only
+            after the script returns). `none`: no progress until it finishes.
+        last_activity_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Latest sign of life: job start, a frame boundary, a report-file
+            write (any event, including `heartbeat`), a printed line (Studio 4
+            only), or completion. Null while queued.
+        idle_ms:
+          type: integer
+          description: |
+            Milliseconds since `last_activity_at`. Present only while the job
+            is running, `cancel_requested` or `stale`.
 
     RequestStatusResponse:
       type: object
@@ -1001,11 +1581,44 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/RequestStatus'
+        correlation_id:
+          type: string
+          description: Correlation ID the job was submitted with
+        server_instance_id:
+          type: string
+          description: Server run that accepted the job
         progress:
           type: number
           format: float
           minimum: 0
           maximum: 1
+        progress_supported:
+          type: boolean
+          description: |
+            Whether `progress` can change while the job runs. True for
+            animation renders and, on Studio 6, for script jobs with a
+            `reportFile`. False for single-frame renders (start and finish
+            only) and scripts without a report file.
+        progress_source:
+          type: string
+          enum: [frames, report, none]
+          description: |
+            `frames`: animation render, one step per frame. `report`: the
+            job's `reportFile` progress events (Studio 4 parses them only
+            after the script returns). `none`: no progress until it finishes.
+        last_activity_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Latest sign of life: job start, a frame boundary, a report-file
+            write (any event, including `heartbeat`), a printed line (Studio 4
+            only), or completion. Null while queued.
+        idle_ms:
+          type: integer
+          description: |
+            Milliseconds since `last_activity_at`. Present only while the job
+            is running, `cancel_requested` or `stale`.
         observation:
           $ref: '#/components/schemas/JobObservation'
         elapsed_ms:
@@ -1029,6 +1642,43 @@ components:
               $ref: '#/components/schemas/RequestStatus'
             observation:
               $ref: '#/components/schemas/JobObservation'
+            error_code:
+              type: string
+              enum: [SCRIPT_ERROR, JOB_CANCELLED, JOB_STALE]
+              description: Present when `success` is false
+            retryable:
+              type: boolean
+            correlation_id:
+              type: string
+            server_instance_id:
+              type: string
+            progress_supported:
+              type: boolean
+              description: |
+                Whether `progress` can change while the job runs. True for
+                animation renders and, on Studio 6, for script jobs with a
+                `reportFile`. False for single-frame renders (start and finish
+                only) and scripts without a report file.
+            progress_source:
+              type: string
+              enum: [frames, report, none]
+              description: |
+                `frames`: animation render, one step per frame. `report`: the
+                job's `reportFile` progress events (Studio 4 parses them only
+                after the script returns). `none`: no progress until it finishes.
+            last_activity_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: |
+                Latest sign of life: job start, a frame boundary, a report-file
+                write (any event, including `heartbeat`), a printed line (Studio 4
+                only), or completion. Null while queued.
+            idle_ms:
+              type: integer
+              description: |
+                Milliseconds since `last_activity_at`. Present only while the job
+                is running, `cancel_requested` or `stale`.
 
     JobObservation:
       type: object
@@ -1051,6 +1701,7 @@ components:
           $ref: '#/components/schemas/JobOutputManifest'
         report_file:
           type: string
+          description: The client's `reportFile`. Omitted for server-owned reports (animation renders).
 
     JobProgress:
       type: object
@@ -1064,8 +1715,12 @@ components:
           type: number
         total:
           type: number
+        frame:
+          type: integer
+          description: Animation renders only; the 1-based frame now rendering (`current` counts finished frames)
         phase:
           type: string
+          description: Animation renders use `rendering`, then `done`
         message:
           type: string
         at:
@@ -1097,43 +1752,125 @@ components:
 
     JobOutput:
       type: object
-      required: [path]
+      required: [path, artifact_id, url]
       properties:
         path:
           type: string
+          description: Host filesystem path as declared by the job
+        artifact_id:
+          type: string
+          description: Stable ID (position in the manifest); re-declaring a path keeps it
+        url:
+          type: string
+          description: Download path, `/artifacts/{id}/{artifact_id}`
         kind:
           type: string
+          description: Declared kind; render jobs use `render` (/render) and `frame` (/render/animation)
         label:
           type: string
         metadata:
           type: object
           additionalProperties: true
 
+    ArtifactEntry:
+      allOf:
+        - $ref: '#/components/schemas/JobOutput'
+        - type: object
+          required: [available, size, content_type, filename]
+          properties:
+            available:
+              type: boolean
+              description: The declared path is an absolute, existing regular file
+            size:
+              type: integer
+              nullable: true
+              description: Size in bytes, or null when unavailable
+            content_type:
+              type: string
+              description: MIME type by extension (application/octet-stream if unknown)
+            filename:
+              type: string
+            thumbnail_supported:
+              type: boolean
+              description: |
+                `?thumbnail` should work: available, within the size limit, and
+                an extension Qt can decode here. The content is only checked
+                when a thumbnail is requested.
+
+    ArtifactListResponse:
+      type: object
+      required: [success, request_id, status, count, artifacts]
+      properties:
+        success:
+          type: boolean
+        request_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        count:
+          type: integer
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactEntry'
+
     CancelResponse:
       type: object
-      required: [request_id, status, cancelled_at]
+      required: [request_id, status, cancel_requested_at, message]
       properties:
         request_id:
           type: string
         status:
           type: string
-          enum: [cancelled]
+          enum: [cancelled, cancel_requested, stale]
+          description: |
+            `cancelled` only when the request was still queued. Otherwise the
+            request's current status; poll it for the real outcome.
+        message:
+          type: string
+        cancel_requested_at:
+          type: string
+          format: date-time
         cancelled_at:
           type: string
           format: date-time
+          description: Present only when `status` is `cancelled`
 
     RequestStatus:
       type: string
-      enum: [queued, running, completed, failed, cancelled]
+      enum:
+        - queued
+        - running
+        - cancel_requested
+        - stale
+        - completed
+        - failed
+        - cancelled
+        - completed_after_cancel_request
+        - completed_after_stale
+      description: |
+        Final: `completed`, `failed`, `cancelled`,
+        `completed_after_cancel_request`, `completed_after_stale`.
+        Not final: `cancel_requested` (cancel asked while the script was
+        running) and `stale` (running past the pane's Stuck Job Timeout, default 30 min;
+        reported with `success: false` and ends long-polls, but changes to the
+        real outcome if the script returns). `cancelled` means the work
+        really stopped: it never started, or a render was aborted. Results
+        keep `cancel_requested_at` / `stale_at` once set.
 
     StatusResponse:
       type: object
-      required: [running, version]
+      required: [running, version, server_instance_id, scene_revision]
       properties:
         running:
           type: boolean
         version:
           type: string
+        server_instance_id:
+          type: string
+          example: "srv-3f9a1c0b7d2e4a55"
+        scene_revision:
+          type: integer
 
     HealthResponse:
       type: object
@@ -1151,6 +1888,10 @@ components:
         active_requests:
           type: integer
         uptime_seconds:
+          type: integer
+        server_instance_id:
+          type: string
+        scene_revision:
           type: integer
 
     MetricsResponse:
@@ -1173,14 +1914,289 @@ components:
           type: number
           format: float
 
+    CapabilitiesResponse:
+      type: object
+      required: [schema_version, compatibility_hash, server, studio, routes, plugin_routes,
+                 features, limits, rate_limit, security, render_engines]
+      properties:
+        schema_version:
+          type: integer
+          description: Bumped on breaking changes to this document's shape
+          example: 1
+        compatibility_hash:
+          type: string
+          description: 16-hex-char fingerprint of schema + routes + feature flags
+          example: "3f9a1c0b7d2e4a55"
+        server:
+          type: object
+          required: [name, version]
+          properties:
+            name:
+              type: string
+              example: DazScriptServer
+            version:
+              type: string
+              example: "2.11.0"
+            instance_id:
+              type: string
+              description: Same value as `server_instance_id` on `/status`
+        studio:
+          type: object
+          required: [version, sdk_version, sdk_major, qt_version, qt_build_version]
+          properties:
+            version:
+              type: string
+              description: Running DAZ Studio version
+              example: "4.24.0.3"
+            sdk_version:
+              type: string
+              description: DAZ SDK the plugin was built against
+              example: "4.5.0.100"
+            sdk_major:
+              type: integer
+              enum: [4, 6]
+            qt_version:
+              type: string
+              description: Qt runtime version
+            qt_build_version:
+              type: string
+              description: Qt version the plugin was compiled against
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CapabilityRoute'
+        plugin_routes:
+          type: array
+          description: Routes registered by companion plugins
+          items:
+            type: object
+            required: [method, path, auth]
+            properties:
+              method:
+                type: string
+              path:
+                type: string
+              auth:
+                type: boolean
+              owner:
+                type: string
+                description: Class name of the registering QObject
+              plugin:
+                type: string
+                description: Companion plugin name, when the route was registered with one
+        companion_plugins:
+          type: array
+          description: |
+            Companion plugins and their routes. Plugins name themselves with
+            registerCompanionPlugin(); routes registered without a plugin name
+            are grouped by handler class with `registered: false`.
+          items:
+            type: object
+            required: [name, registered, version, routes]
+            properties:
+              name:
+                type: string
+                description: Plugin name, or the handler class name when `registered` is false
+                example: my-exporter
+              registered:
+                type: boolean
+              version:
+                type: string
+                nullable: true
+                example: "1.0.0"
+              description:
+                type: string
+              routes:
+                type: array
+                items:
+                  type: object
+                  required: [method, path, auth]
+                  properties:
+                    method:
+                      type: string
+                    path:
+                      type: string
+                    auth:
+                      type: boolean
+        features:
+          type: object
+          description: Feature flags. Unknown keys must be ignored by clients.
+          additionalProperties:
+            type: boolean
+          properties:
+            async: {type: boolean}
+            async_cancel: {type: boolean}
+            async_long_poll: {type: boolean}
+            report_file: {type: boolean}
+            script_registry: {type: boolean}
+            sse_scene_events: {type: boolean}
+            sse_render_progress: {type: boolean}
+            render: {type: boolean}
+            render_batch: {type: boolean}
+            render_animation: {type: boolean}
+            render_cancel: {type: boolean}
+            scene_save_copy: {type: boolean}
+            geometry_frames: {type: boolean}
+            companion_plugins:
+              type: boolean
+              description: True when at least one companion-plugin route is registered
+            idempotency_key: {type: boolean}
+            correlation_id: {type: boolean}
+            server_instance_id: {type: boolean}
+            scene_revision: {type: boolean}
+            error_envelope: {type: boolean}
+            artifacts:
+              type: boolean
+              description: GET /artifacts/{id} and /artifacts/{id}/{artifact_id}
+            job_activity:
+              type: boolean
+              description: Job records carry progress_supported, progress_source, last_activity_at and idle_ms
+            animation_frame_progress:
+              type: boolean
+              description: Animation render job status reports frame N of M (Studio 4 and 6)
+            artifact_thumbnails:
+              type: boolean
+              description: GET /artifacts/{id}/{artifact_id}?thumbnail=<px>
+        thumbnail_source_formats:
+          type: array
+          items: {type: string}
+          description: Lower-case file extensions ?thumbnail can decode (Qt image plugins loaded in this Studio)
+        limits:
+          type: object
+          description: Current settings (not compiled defaults)
+          properties:
+            max_body_size_mb: {type: integer}
+            max_script_length_kb: {type: integer}
+            max_concurrent_requests: {type: integer}
+            max_batch_variants: {type: integer}
+            max_animation_frames: {type: integer}
+            async_max_queue_depth: {type: integer}
+            async_result_ttl_seconds: {type: integer}
+            idempotency_ttl_seconds: {type: integer}
+            stale_job_timeout_minutes: {type: integer}
+            thumbnail_min_px: {type: integer}
+            thumbnail_max_px: {type: integer}
+            thumbnail_max_source_mb: {type: integer}
+        rate_limit:
+          type: object
+          properties:
+            enabled: {type: boolean}
+            max_requests: {type: integer}
+            window_seconds: {type: integer}
+            applies_to:
+              type: string
+              enum: [write]
+              description: Only POST/DELETE routes are rate limited
+        security:
+          type: object
+          properties:
+            auth_enabled: {type: boolean}
+            auth_headers:
+              type: array
+              items: {type: string}
+            ip_whitelist_enabled: {type: boolean}
+        render_engines:
+          type: object
+          required: [registered, selectable, active_class, source, read_at]
+          properties:
+            registered:
+              type: array
+              items:
+                type: object
+                required: [class_name, name, active]
+                properties:
+                  class_name: {type: string, example: DzIrayRenderer}
+                  name: {type: string, example: NVIDIA Iray}
+                  active: {type: boolean}
+            selectable:
+              type: array
+              description: Values POST /render currently accepts for "engine"
+              items:
+                type: string
+                enum: [viewport, iray, filament]
+            active_class:
+              type: string
+              nullable: true
+            source:
+              type: string
+              enum: [live, snapshot]
+            read_at:
+              type: string
+              format: date-time
+              description: When render engines were read (UTC)
+
+    CapabilityRoute:
+      type: object
+      required: [method, path, auth, kind]
+      properties:
+        method:
+          type: string
+          enum: [GET, POST, DELETE]
+        path:
+          type: string
+          description: Path with {id} placeholders
+          example: /requests/{id}/status
+        auth:
+          type: boolean
+        kind:
+          type: string
+          enum: [json, sse, binary]
+
     ErrorResponse:
       type: object
-      required: [success, error]
+      description: |
+        The one error envelope used by every failure. Job routes also stamp
+        `JobIdentity` fields into it. Unknown `error_code` values must be
+        treated as non-retryable failures.
+      required: [success, error_code, error, retryable]
       properties:
         success:
           type: boolean
           enum: [false]
+        error_code:
+          type: string
+          description: Stable, machine-readable code
+          enum:
+            - AUTH_MISSING_TOKEN
+            - AUTH_INVALID_TOKEN
+            - IP_NOT_WHITELISTED
+            - SCRIPT_NOT_FOUND
+            - REQUEST_NOT_FOUND
+            - ROUTE_NOT_FOUND
+            - ARTIFACT_NOT_FOUND
+            - ARTIFACT_UNAVAILABLE
+            - IDEMPOTENCY_KEY_IN_FLIGHT
+            - IDEMPOTENCY_KEY_REUSED
+            - THUMBNAIL_UNSUPPORTED
+            - BODY_TOO_LARGE
+            - RATE_LIMIT_EXCEEDED
+            - CONCURRENT_LIMIT_EXCEEDED
+            - BAD_REQUEST
+            - INVALID_JSON
+            - MISSING_FIELD
+            - INVALID_FIELD
+            - SCRIPT_TOO_LARGE
+            - SCRIPT_FILE_NOT_FOUND
+            - SCRIPT_FILE_NOT_FILE
+            - SCRIPT_FILE_NOT_ABSOLUTE
+            - SCRIPT_FILE_LOAD_FAILED
+            - NOT_A_RENDER_REQUEST
+            - REQUEST_ALREADY_FINISHED
+            - SERVER_UNAVAILABLE
+            - STUDIO_BUSY
+            - INTERNAL_ERROR
         error:
+          type: string
+          description: Human-readable message (may change between versions)
+        retryable:
+          type: boolean
+          description: True when an identical retry may succeed (busy, rate limited, queue full, key in flight)
+        detail:
+          type: string
+          description: Optional context, e.g. the offending field or ID
+        server_instance_id:
+          type: string
+        correlation_id:
           type: string
 
   responses:
@@ -1192,7 +2208,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "JSON parse error at line 3: unexpected token"
+            error_code: INVALID_JSON
+            error: "Invalid JSON in request body"
+            retryable: false
     Unauthorized:
       description: Missing or invalid API token
       content:
@@ -1201,7 +2219,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Invalid or missing authentication token"
+            error_code: AUTH_INVALID_TOKEN
+            error: "Authentication failed: invalid or missing API token"
+            retryable: false
     Forbidden:
       description: IP address not in whitelist
       content:
@@ -1210,7 +2230,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "IP not whitelisted: 192.168.1.50"
+            error_code: IP_NOT_WHITELISTED
+            error: "Access denied: IP address is not in the whitelist"
+            retryable: false
     NotFound:
       description: Script or request ID not found
       content:
@@ -1219,7 +2241,21 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Script not found: 'scene-info'"
+            error_code: SCRIPT_NOT_FOUND
+            error: "Script not found in registry"
+            retryable: false
+    ArtifactUnavailable:
+      description: Declared artifact whose file is missing, not a regular file, or not an absolute path
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: ARTIFACT_UNAVAILABLE
+            error: "Artifact was declared but its file is missing, not a regular file, or not an absolute path"
+            retryable: false
+            detail: "declared file does not exist or cannot be read"
     TooLarge:
       description: Request body exceeds configured maximum
       content:
@@ -1228,7 +2264,9 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Request body too large (max 5 MB)"
+            error_code: BODY_TOO_LARGE
+            error: "Request body exceeds maximum allowed size"
+            retryable: false
     TooManyRequests:
       description: Concurrent request limit or per-IP rate limit exceeded
       content:
@@ -1237,4 +2275,39 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Maximum concurrent requests limit reached"
+            error_code: CONCURRENT_LIMIT_EXCEEDED
+            error: "Server busy: maximum concurrent requests reached, please retry"
+            retryable: true
+    ServiceUnavailable:
+      description: Studio main thread busy, or the job queue is full (retry; `Retry-After` may be set)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: STUDIO_BUSY
+            error: "DAZ Studio's main thread is busy; please retry shortly"
+            retryable: true
+    IdempotencyInFlight:
+      description: A request with this Idempotency-Key is still being processed (retry after `Retry-After`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: IDEMPOTENCY_KEY_IN_FLIGHT
+            error: "A request with this Idempotency-Key is still being processed; retry shortly"
+            retryable: true
+    IdempotencyKeyReused:
+      description: The Idempotency-Key was already used on this route with a different body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error_code: IDEMPOTENCY_KEY_REUSED
+            error: "This Idempotency-Key was already used on this route with a different request body"
+            retryable: false

@@ -39,17 +39,19 @@
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
+#include "IdempotencyCache.h"
 #include "SettingsService.h"
 #include "ServerSettings.h"
 #include "SceneEventBroker.h"
 #include "RenderProgressBroker.h"
+#include "ArtifactThumbnail.h"
 
 // Required for BlockingQueuedConnection return from execute/register handlers.
 typedef QPair<int, QByteArray> HttpResult;
 Q_DECLARE_METATYPE(HttpResult)
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
-namespace httplib { class Server; }
+namespace httplib { class Server; struct Request; struct Response; }
 
 // ─── Configuration Constants ──────────────────────────────────────────────────
 
@@ -74,10 +76,23 @@ namespace ServerConfig {
 
     // Async request management
     const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
-    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;  // A RUNNING request older than this is presumed
-                                                      // blocked (e.g. behind a DAZ Studio modal) and
-                                                      // reported as FAILED so it doesn't poll as
-                                                      // "running" forever. See failStaleRunning().
+    // Default for the "Stuck job timeout" setting (ServerSettings::staleJobTimeoutMin):
+    // a running request older than this is presumed blocked (e.g. behind a DAZ
+    // Studio modal) and reported as "stale" so it doesn't poll as "running"
+    // forever. See failStaleRunning(). Checked every ASYNC_CLEANUP_INTERVAL_MIN,
+    // so the UI minimum matches that interval.
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN_MIN = 5;
+    const int ASYNC_STALE_RUNNING_TIMEOUT_MAX_MIN = 1440;
+    // Finished async requests are kept this long (AsyncRequestManager::cleanupExpired()).
+    const int ASYNC_RESULT_TTL_SEC = 3600;
+
+    // Per-request limits on the render endpoints (also reported by GET /capabilities)
+    const int MAX_BATCH_VARIANTS = 100;     // POST /render/batch "variants"
+    const int MAX_ANIMATION_FRAMES = 1000;  // POST /render/animation frame range
+
+    // GET /capabilities document schema. Bump on any breaking change to its shape.
+    const int CAPABILITIES_SCHEMA_VERSION = 1;
 }
 
 class DzScript;
@@ -105,7 +120,24 @@ public:
 	// receiver must expose slotName as Q_INVOKABLE with signature HttpResult(QByteArray,QByteArray).
 	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
 	                                     QObject* receiver, const QString& slotName);
+	// Same, attributing the route to a companion plugin (see
+	// registerCompanionPlugin). A plugin name not yet registered is added
+	// with no version. Returns false (and registers nothing) if pluginName is
+	// not a valid plugin name.
+	Q_INVOKABLE bool registerPluginRoute(const QString& method, const QString& path,
+	                                     QObject* receiver, const QString& slotName,
+	                                     const QString& pluginName);
 	Q_INVOKABLE void unregisterPluginRoute(const QString& method, const QString& path);
+
+	// Companion-plugin discovery registry, listed in GET /capabilities under
+	// "companion_plugins" with each plugin's routes. name: 1-64 chars of
+	// [A-Za-z0-9._-] (e.g. "daz-bridge-usd"); version: 1-64 printable chars.
+	// Re-registering a name updates its version/description. Returns false on
+	// an invalid name or version.
+	Q_INVOKABLE bool registerCompanionPlugin(const QString& name, const QString& version,
+	                                         const QString& description);
+	// Removes the plugin and every route attributed to it.
+	Q_INVOKABLE void unregisterCompanionPlugin(const QString& name);
 
 public slots:
 	Q_INVOKABLE void startServer();
@@ -122,20 +154,35 @@ public slots:
 	// through BlockingQueuedConnection because its JSON parser uses QScriptEngine.
 	// Neither path touches GUI, DzScript, or DAZ SDK state off the main thread.
 	// The script limit is an immutable snapshot captured before server start.
+	// correlationId is the job route's resolved X-Correlation-Id, stored on the job.
 	Q_INVOKABLE HttpResult handleAsyncExecuteEnqueue(const QByteArray& jsonBody,
 	                                                const QByteArray& clientIP,
-	                                                int maxScriptLengthKB);
+	                                                int maxScriptLengthKB,
+	                                                const QByteArray& correlationId);
 	Q_INVOKABLE HttpResult handleAsyncScriptEnqueue(const QByteArray& scriptBytes,
 	                                                const QByteArray& scriptIdBytes,
-	                                                const QByteArray& bodyBytes);
+	                                                const QByteArray& bodyBytes,
+	                                                const QByteArray& correlationId);
 
 	// Render enqueue still builds Daz/Qt render work on the main thread.
-	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody);
-	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody);
-	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody);
+	Q_INVOKABLE HttpResult handleAsyncRenderEnqueue(const QByteArray& jsonBody,
+	                                               const QByteArray& correlationId);
+	Q_INVOKABLE HttpResult handleAsyncRenderBatchEnqueue(const QByteArray& jsonBody,
+	                                                    const QByteArray& correlationId);
+	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody,
+	                                                        const QByteArray& correlationId);
 
 	// Scene I/O helpers — called on main thread via BlockingQueuedConnection.
 	Q_INVOKABLE HttpResult handleSaveCopy(const QByteArray& jsonBody);
+
+	// GET /capabilities — main thread (reads render engines live from DzRenderMgr).
+	// Also refreshes the snapshot served while the main thread is busy.
+	Q_INVOKABLE HttpResult handleCapabilitiesRequest();
+
+	// GET /artifacts/{id}/{artifact_id}?thumbnail=<px> — main thread. job is an
+	// ArtifactThumbnail::Job* posted with Qt::QueuedConnection by the HTTP worker,
+	// which waits on job->done with a timeout (see serveArtifactThumbnail()).
+	Q_INVOKABLE void handleThumbnailJob(qulonglong job);
 
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
@@ -153,6 +200,22 @@ public:
 	bool        isMainThreadBusy() const;
 	std::string mainThreadBusyMessage() const;
 
+	// Last capabilities document built on the main thread, with render engines
+	// marked source "snapshot". Served by GET /capabilities while the main thread
+	// is busy. Mutex-protected; empty until the server has started.
+	QByteArray  capabilitiesSnapshot() const;
+
+	// Identity of this server run: a fresh random ID on every startServer(),
+	// so clients can tell a restart (and the loss of in-memory jobs and
+	// idempotency records) from a slow response. Written on the main thread
+	// before the listen thread starts; read-only while the server runs.
+	QByteArray  serverInstanceId() const { return m_serverInstanceId; }
+
+	// Monotonic counter, reset on each server start, bumped on every structural
+	// scene change (SceneEventBroker) and after every executed script or job
+	// (scripts may mutate anything). Equal values => no observed change.
+	int         sceneRevision() const { return m_sceneRevision.fetchAndAddOrdered(0); }
+
 	// Script Registry operations — called from HTTP threads (mutex-protected, no Qt string ops)
 	std::string                 listScriptsJson() const;
 	std::pair<int, std::string> deleteRegistryScriptJson(const std::string& id, const std::string& clientIP);
@@ -163,8 +226,8 @@ public:
 	// only called directly from documented reentrant Studio 6 worker paths.
 	QString              enqueueAsyncRequest(const QString& scriptText, const QString& scriptFile,
 	                                         const QString& reportFile, const QVariantMap& args,
-	                                         const QString& idPrefix, qint64& outSubmittedAt,
-	                                         QString& outError);
+	                                         const QString& idPrefix, const QString& correlationId,
+	                                         qint64& outSubmittedAt, QString& outError);
 	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId);
 	std::pair<int, std::string> getAsyncResultJson(const std::string& requestId, bool doWait, int timeoutSec);
 	std::pair<int, std::string> cancelAsyncRequestJson(const std::string& requestId, const std::string& clientIP);
@@ -182,6 +245,7 @@ private slots:
 	void onIpWhitelistEnabledChanged(int state);
 	void onRateLimitEnabledChanged(int state);
 	void onAutoStartChanged(int state);
+	void onStaleTimeoutChanged(int minutes);
 
 	// Async execution (runs on main thread via Qt event loop)
 	void processNextAsyncRequest();
@@ -190,7 +254,15 @@ private slots:
 
 private:
 	void   setupRoutes();
+	// Job routes (execute, async submit, render submit): write chain, then
+	// X-Correlation-Id / Idempotency-Key handling, then the handler, then the
+	// identity stamp (server_instance_id, correlation_id, scene_revision).
+	void   runJobRoute(const httplib::Request& req, httplib::Response& res,
+	                   IRequestHandler* handler, bool idempotent);
 	void   applyPluginRoutes();
+	// HTTP worker: GET /artifacts/:job_id/:artifact_id?thumbnail=<px>[&format=].
+	// Decoding happens on the main thread via handleThumbnailJob().
+	void   serveArtifactThumbnail(const httplib::Request& req, httplib::Response& res);
 	void   updateUI();
 	DzScript* ensurePersistentScript();
 	QString buildResponseJson(bool success,
@@ -202,6 +274,8 @@ private:
 	void    loadSettings();
 	void    saveSettings();
 	void    applySettings(const ServerSettings& s);
+	QByteArray  buildCapabilitiesJson(const QString& engineSource) const;   // main thread only
+	void        refreshCapabilitiesSnapshot();
 
 	// Server state
 	httplib::Server* m_pServer;
@@ -217,6 +291,7 @@ private:
 	int              m_nMaxConcurrentRequests;
 	int              m_nMaxBodySizeMB;
 	int              m_nMaxScriptLengthKB;
+	int              m_nStaleJobTimeoutMin;   // main thread only; applied live
 
 	// Log capture during script execution
 	QStringList m_aCapturedLogLines;
@@ -283,9 +358,32 @@ private:
 		QString          path;
 		QPointer<QObject> receiver;
 		QString          slotName;  // Q_INVOKABLE: HttpResult slotName(QByteArray, QByteArray)
+		QString          plugin;    // companion plugin name; empty if unattributed
 	};
 	QList<PluginRoute> m_pluginRoutes;
+	// Guarded by m_pluginRoutesMutex too.
+	struct CompanionPlugin {
+		QString name;
+		QString version;      // empty when only routes named it
+		QString description;
+	};
+	QList<CompanionPlugin> m_companionPlugins;
+	void refreshCapabilitiesIfRunning();
+	bool registerPluginRouteImpl(const QString& method, const QString& path,
+	                             QObject* receiver, const QString& slotName,
+	                             const QString& pluginName);
 	mutable QMutex     m_pluginRoutesMutex;
+
+	QByteArray         m_serverInstanceId;       // see serverInstanceId()
+	mutable QAtomicInt m_sceneRevision;          // see sceneRevision()
+	IdempotencyCache   m_idempotency;            // Idempotency-Key replay records (cleared per run)
+
+	QByteArray         m_capabilitiesSnapshot;   // see capabilitiesSnapshot()
+	// Image extensions Qt can decode, read on the main thread before the HTTP
+	// server starts and read-only while it runs (thumbnail_supported, 422s).
+	QStringList        m_thumbnailExtensions;
+	ArtifactThumbnail::Cache m_thumbnailCache;   // encoded thumbnails, LRU, mutex-protected
+	mutable QMutex     m_capabilitiesMutex;
 
 	AsyncRequestManager*  m_pAsyncMgr;
 	QTimer*               m_pCleanupTimer;    // Fires every 5 min to purge TTL-expired requests
@@ -293,14 +391,16 @@ private:
 	RenderProgressBroker* m_pRenderProgress;  // SSE render progress notification broker
 
 	// ── Middleware chains (created in setupRoutes) ────────────────────────────
-	std::unique_ptr<MiddlewareChain> m_pAuthChain;         // auth only
-	std::unique_ptr<MiddlewareChain> m_pExecuteSyncChain;  // IP + rate + body_size + auth
-	std::unique_ptr<MiddlewareChain> m_pBaseExecuteChain;  // IP + rate + auth
+	// Every authenticated route uses exactly one of these two chains, so the IP
+	// whitelist always runs before auth (tests/test_route_security.py checks this).
+	std::unique_ptr<MiddlewareChain> m_pWriteChain;  // IP + rate + body_size + auth (POST/DELETE)
+	std::unique_ptr<MiddlewareChain> m_pReadChain;   // IP + auth (GET polling / SSE streams)
 
 	// ── Request handlers (created in setupRoutes) ─────────────────────────────
 	std::unique_ptr<StatusHandler>        m_pStatusHandler;
 	std::unique_ptr<HealthHandler>        m_pHealthHandler;
 	std::unique_ptr<MetricsHandler>       m_pMetricsHandler;
+	std::unique_ptr<CapabilitiesHandler>  m_pCapabilitiesHandler;
 	std::unique_ptr<ExecuteScriptHandler> m_pExecuteHandler;
 	std::unique_ptr<ScriptRegisterHandler> m_pRegisterHandler;
 	std::unique_ptr<ScriptListHandler>    m_pScriptListHandler;
@@ -351,4 +451,5 @@ private:
 	QSpinBox*    m_pMaxConcurrentSpin;
 	QSpinBox*    m_pMaxBodySizeSpin;
 	QSpinBox*    m_pMaxScriptLengthSpin;
+	QSpinBox*    m_pStaleTimeoutSpin;
 };

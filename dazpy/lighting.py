@@ -176,12 +176,11 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
         RenderError: If a post-apply readback of "Environment Intensity"
             doesn't match *env.intensity*. All of this module's environment
             writes go through ``DazRenderSettings._environment_holder()``,
-            which assumes ``getRenderElementObjects()[3]`` is always the
-            Environment property holder -- confirmed on one live DAZ Studio
-            4.x instance only. If that index is wrong on a different DAZ
-            Studio version, every write above silently no-ops (matching the
-            existing ``if (!holder) return;`` pattern) with no exception, so
-            this readback is what actually catches it.
+            which finds the ``DzEnvironmentNode`` render-element group by
+            class. DAZ Studio only exposes that group while the render type
+            is Software (Iray); otherwise every write above silently no-ops
+            (matching the existing ``if (!holder) return;`` pattern) with no
+            exception, so this readback is what actually catches it.
     """
     if not os.path.isfile(env.image_path):
         raise FileNotFoundError(f"HDRI/environment map not found: {env.image_path}")
@@ -202,10 +201,11 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
         raise RenderError(
             "HDRI environment apply failed verification: 'Environment Intensity' "
             f"readback ({readback!r}) does not match the requested value "
-            f"({env.intensity!r}). The environment property holder "
-            "(getRenderElementObjects()[3]) may be unavailable or at a "
-            "different index on this DAZ Studio version/build -- the HDRI "
-            "was likely never applied."
+            f"({env.intensity!r}). The Environment Options render-element "
+            "group (DzEnvironmentNode) was not available -- DAZ Studio only "
+            "exposes it when the render type is Software (Iray), e.g. "
+            "DazRenderSettings.set_active_engine('iray') -- so the HDRI was likely "
+            "never applied."
         )
 
 

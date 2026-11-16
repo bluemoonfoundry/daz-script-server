@@ -121,11 +121,16 @@ bool AuthMiddleware::process(HttpContext& ctx)
 
 // ─── Concrete Handlers ────────────────────────────────────────────────────────
 
-StatusHandler::StatusHandler(const std::string& version) : m_version(version) {}
+StatusHandler::StatusHandler(const std::string& version, DzScriptServerPane* pane)
+    : m_version(version), m_pPane(pane) {}
 
 void StatusHandler::handle(HttpContext& ctx)
 {
-    ctx.responseBody = "{\"running\":true,\"version\":\"" + m_version + "\"}";
+    const QByteArray instanceId = m_pPane->serverInstanceId();
+    ctx.responseBody = "{\"running\":true,\"version\":\"" + m_version + "\"";
+    ctx.responseBody += ",\"server_instance_id\":\"";
+    ctx.responseBody.append(instanceId.constData(), instanceId.size());
+    ctx.responseBody += "\",\"scene_revision\":" + std::to_string(m_pPane->sceneRevision()) + "}";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,6 +149,29 @@ MetricsHandler::MetricsHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 void MetricsHandler::handle(HttpContext& ctx)
 {
     ctx.responseBody = m_pPane->getMetricsJson();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+CapabilitiesHandler::CapabilitiesHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
+
+void CapabilitiesHandler::handle(HttpContext& ctx)
+{
+    if (m_pPane->isMainThreadBusy()) {
+        // Discovery should not fail just because a render is running: serve the
+        // last document built on the main thread (render_engines.source = "snapshot").
+        QByteArray snapshot = m_pPane->capabilitiesSnapshot();
+        if (!snapshot.isEmpty()) {
+            ctx.respond(200, std::string(snapshot.constData(), snapshot.size()));
+            return;
+        }
+        if (respondIfMainThreadBusy(m_pPane, ctx)) return;
+    }
+    HttpResult result;
+    QMetaObject::invokeMethod(m_pPane, "handleCapabilitiesRequest",
+        Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(HttpResult, result));
+    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,6 +266,7 @@ AsyncExecuteHandler::AsyncExecuteHandler(DzScriptServerPane* pane, int maxScript
 void AsyncExecuteHandler::handle(HttpContext& ctx)
 {
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
 #if DAZ_SDK_MAJOR_VERSION >= 6
     // Enqueue is deliberately worker-thread-safe. Sending this through a
     // BlockingQueuedConnection makes an "async" submit wait behind the very
@@ -245,7 +274,7 @@ void AsyncExecuteHandler::handle(HttpContext& ctx)
     // cancellation impossible while Daz is busy.
     QByteArray clientIPBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
     HttpResult result = m_pPane->handleAsyncExecuteEnqueue(
-        bodyBytes, clientIPBytes, m_maxScriptLengthKB);
+        bodyBytes, clientIPBytes, m_maxScriptLengthKB, corrBytes);
 #else
     // Qt 4's JsonStd parser uses QScriptEngine, so Studio 4 must retain the
     // main-thread crossing even though Studio 6 can enqueue directly.
@@ -257,7 +286,8 @@ void AsyncExecuteHandler::handle(HttpContext& ctx)
         Q_RETURN_ARG(HttpResult, result),
         Q_ARG(QByteArray, bodyBytes),
         Q_ARG(QByteArray, clientIPBytes),
-        Q_ARG(int, m_maxScriptLengthKB));
+        Q_ARG(int, m_maxScriptLengthKB),
+        Q_ARG(QByteArray, corrBytes));
 #endif
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
@@ -277,9 +307,10 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
     QByteArray scriptBytes(scriptText.c_str(), (int)scriptText.size());
     QByteArray scriptIdBytes(ctx.urlMatch.c_str(), (int)ctx.urlMatch.size());
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
 #if DAZ_SDK_MAJOR_VERSION >= 6
     HttpResult result = m_pPane->handleAsyncScriptEnqueue(
-        scriptBytes, scriptIdBytes, bodyBytes);
+        scriptBytes, scriptIdBytes, bodyBytes, corrBytes);
 #else
     if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     HttpResult result;
@@ -288,7 +319,8 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
         Q_RETURN_ARG(HttpResult, result),
         Q_ARG(QByteArray, scriptBytes),
         Q_ARG(QByteArray, scriptIdBytes),
-        Q_ARG(QByteArray, bodyBytes));
+        Q_ARG(QByteArray, bodyBytes),
+        Q_ARG(QByteArray, corrBytes));
 #endif
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
@@ -349,11 +381,13 @@ void RenderHandler::handle(HttpContext& ctx)
 {
     if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderEnqueue",
         Qt::BlockingQueuedConnection,
         Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes));
+        Q_ARG(QByteArray, bodyBytes),
+        Q_ARG(QByteArray, corrBytes));
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
@@ -363,11 +397,13 @@ void RenderBatchHandler::handle(HttpContext& ctx)
 {
     if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderBatchEnqueue",
         Qt::BlockingQueuedConnection,
         Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes));
+        Q_ARG(QByteArray, bodyBytes),
+        Q_ARG(QByteArray, corrBytes));
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
@@ -377,11 +413,13 @@ void RenderAnimationHandler::handle(HttpContext& ctx)
 {
     if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
     HttpResult result;
     QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderAnimationEnqueue",
         Qt::BlockingQueuedConnection,
         Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes));
+        Q_ARG(QByteArray, bodyBytes),
+        Q_ARG(QByteArray, corrBytes));
     ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 

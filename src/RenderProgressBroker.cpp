@@ -22,6 +22,8 @@ bool RenderProgressBroker::watchRequest(const QString& requestId, SubscriberQueu
         queue->close();
         return true;
     }
+    if (!w.lastProgressEvent.isEmpty())
+        queue->push(w.lastProgressEvent);
     w.queues.append(queue);
     return true;
 }
@@ -41,12 +43,24 @@ void RenderProgressBroker::notifyStarted(const QString& requestId)
 
 void RenderProgressBroker::notifyProgress(const QString& requestId, int frame, int totalFrames)
 {
-    double percent = totalFrames > 0 ? (100.0 * (frame - 1) / totalFrames) : 0.0;
+    if (frame < 1 || totalFrames < 1) return;
+    double percent = 100.0 * (frame - 1) / totalFrames;
     QString data = "{\"request_id\":\"" + requestId
         + "\",\"percent\":" + QString::number(percent, 'f', 2)
         + ",\"frame\":" + QString::number(frame)
         + ",\"total_frames\":" + QString::number(totalFrames) + "}";
-    pushEvent(requestId, makeEvent("progress", data));
+    QString event = makeEvent("progress", data);
+
+    // Check-and-push under one lock so two callers reporting the same frame
+    // can't both pass the check, and events reach queues in frame order.
+    QMutexLocker lock(&m_mutex);
+    if (!m_watches.contains(requestId)) return;
+    RequestWatch& w = m_watches[requestId];
+    if (!w.terminalEvent.isEmpty() || frame <= w.lastFrame) return;
+    w.lastFrame         = frame;
+    w.lastProgressEvent = event;
+    for (int i = 0; i < w.queues.size(); ++i)
+        w.queues[i]->push(event);
 }
 
 void RenderProgressBroker::notifyCompleted(const QString& requestId, int durationMs)

@@ -60,6 +60,7 @@ SceneEventBroker::SceneEventBroker(QObject* parent)
     , m_renderBusy(false)
     , m_busyDepth(0)
     , m_busyReason(MainThreadBusy::Idle)
+    , m_pRevision(nullptr)
 {
     m_pTimeDebounce = new QTimer(this);
     m_pTimeDebounce->setSingleShot(true);
@@ -204,6 +205,7 @@ void SceneEventBroker::onSceneLoadStarting() {
 
 void SceneEventBroker::onSceneLoaded() {
     exitBusy();
+    bumpRevision();
     dispatch(SceneEventFilter::Scene, makeEvent("scene.loaded", "{}"));
 }
 
@@ -232,46 +234,55 @@ void SceneEventBroker::onSceneClearStarting() {
 
 void SceneEventBroker::onSceneCleared() {
     exitBusy();
+    bumpRevision();
     dispatch(SceneEventFilter::Scene, makeEvent("scene.cleared", "{}"));
 }
 
 // ─── Nodes ────────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onNodeAdded(DzNode* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Node, makeEvent("node.added", nodeInfoJson(node)));
 }
 
 void SceneEventBroker::onNodeRemoved(DzNode* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Node, makeEvent("node.removed", nodeInfoJson(node)));
 }
 
 // ─── Skeletons ────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onSkeletonAdded(DzSkeleton* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Skeleton, makeEvent("skeleton.added", nodeInfoJson(node)));
 }
 
 void SceneEventBroker::onSkeletonRemoved(DzSkeleton* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Skeleton, makeEvent("skeleton.removed", nodeInfoJson(node)));
 }
 
 // ─── Lights ───────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onLightAdded(DzLight* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Light, makeEvent("light.added", nodeInfoJson(node)));
 }
 
 void SceneEventBroker::onLightRemoved(DzLight* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Light, makeEvent("light.removed", nodeInfoJson(node)));
 }
 
 // ─── Cameras ──────────────────────────────────────────────────────────────────
 
 void SceneEventBroker::onCameraAdded(DzCamera* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Camera, makeEvent("camera.added", nodeInfoJson(node)));
 }
 
 void SceneEventBroker::onCameraRemoved(DzCamera* node) {
+    bumpRevision();
     dispatch(SceneEventFilter::Camera, makeEvent("camera.removed", nodeInfoJson(node)));
 }
 

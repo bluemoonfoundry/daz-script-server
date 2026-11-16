@@ -58,6 +58,7 @@ from dazpy import (
     apply_interaction_recipe_to_scene,
     resolve_interaction_target,
 )
+from dazpy import GeometryFrames, parse_geometry_frames
 from dazpy._node import DazNode, NodeIdentifier
 from dazpy._scene import DazScene
 from dazpy._client import DazClient
@@ -95,6 +96,178 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
             headers={},
             timeout=30.0,
         )
+
+
+class TestDazClientRequestIdentity(unittest.TestCase):
+    """Idempotency-Key / X-Correlation-Id headers and the error envelope (5d6f.8)."""
+
+    def _client(self, status_code=200, response_json=None):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.json.return_value = response_json or {"request_id": "execute-1"}
+        response.text = ""
+        client._session.post.return_value = response
+        return client
+
+    def test_no_identity_headers_by_default(self):
+        client = self._client()
+        client.execute_async_submit("1;")
+        self.assertEqual(client._session.post.call_args.kwargs["headers"], {})
+
+    def test_submit_methods_send_identity_headers(self):
+        calls = [
+            ("/execute/async", lambda c, kw: c.execute_async_submit("1;", **kw)),
+            ("/execute/async", lambda c, kw: c.execute_file_async_submit("C:/a.dsa", **kw)),
+            ("/scripts/s/async", lambda c, kw: c.execute_registered_async_submit("s", **kw)),
+            ("/render", lambda c, kw: c.render_submit("C:/o.png", **kw)),
+            ("/render/batch", lambda c, kw: c.render_batch_submit([{"output_path": "C:/o.png"}], **kw)),
+            ("/render/animation", lambda c, kw: c.render_animation_submit("C:/o.png", 1, 2, **kw)),
+        ]
+        for path, call in calls:
+            with self.subTest(path=path):
+                client = self._client()
+                call(client, {"idempotency_key": "job-42", "correlation_id": "trace-7"})
+                args, kwargs = client._session.post.call_args
+                self.assertTrue(args[0].endswith(path))
+                self.assertEqual(kwargs["headers"],
+                                 {"Idempotency-Key": "job-42", "X-Correlation-Id": "trace-7"})
+
+    def test_error_envelope_retryable_is_exposed(self):
+        client = self._client(409, {
+            "success": False, "error_code": "IDEMPOTENCY_KEY_IN_FLIGHT",
+            "error": "still processing", "retryable": True,
+        })
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.execute_async_submit("1;", idempotency_key="k")
+        self.assertEqual(cm.exception.error_code, "IDEMPOTENCY_KEY_IN_FLIGHT")
+        self.assertTrue(cm.exception.retryable)
+
+    def test_error_envelope_retryable_defaults_false(self):
+        client = self._client(422, {"success": False, "error_code": "IDEMPOTENCY_KEY_REUSED",
+                                    "error": "different body"})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.execute_async_submit("1;", idempotency_key="k")
+        self.assertFalse(cm.exception.retryable)
+
+
+class TestDazClientArtifacts(unittest.TestCase):
+    """GET /artifacts/{id}[/{artifact_id}] helpers (5d6f.7)."""
+
+    def _client(self, status_code=200, json_data=None, content=b""):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.json.return_value = json_data or {}
+        response.text = json.dumps(json_data or {})
+        response.content = content
+        response.iter_content.return_value = [content[:3], content[3:]]
+        client._session.get.return_value = response
+        return client, response
+
+    def test_list_artifacts(self):
+        body = {"success": True, "request_id": "rnd-1", "count": 1,
+                "artifacts": [{"artifact_id": "0", "available": True, "filename": "a.png"}]}
+        client, _ = self._client(json_data=body)
+        self.assertEqual(client.list_artifacts("rnd-1"), body)
+        self.assertEqual(client._session.get.call_args.args[0],
+                         "http://127.0.0.1:18811/artifacts/rnd-1")
+
+    def test_download_returns_bytes_and_closes(self):
+        client, resp = self._client(content=b"PNGDATA")
+        self.assertEqual(client.download_artifact("rnd-1", 0), b"PNGDATA")
+        call = client._session.get.call_args
+        self.assertEqual(call.args[0], "http://127.0.0.1:18811/artifacts/rnd-1/0")
+        self.assertTrue(call.kwargs["stream"])
+        self.assertNotIn("Range", call.kwargs["headers"])
+        resp.close.assert_called_once()
+
+    def test_download_range_header(self):
+        for byte_range, header in (((0, 99), "bytes=0-99"), ((100, None), "bytes=100-")):
+            with self.subTest(byte_range=byte_range):
+                client, _ = self._client(status_code=206, content=b"x")
+                client.download_artifact("rnd-1", "0", byte_range=byte_range)
+                self.assertEqual(client._session.get.call_args.kwargs["headers"]["Range"], header)
+
+    def test_download_rejects_bad_range(self):
+        client, _ = self._client()
+        for bad in ((-1, 5), (10, 2)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                client.download_artifact("rnd-1", "0", byte_range=bad)
+        client._session.get.assert_not_called()
+
+    def test_download_to_file(self):
+        import tempfile
+        client, _ = self._client(content=b"PNGDATA")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "out.png")
+            self.assertEqual(client.download_artifact("rnd-1", "0", dest), dest)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), b"PNGDATA")
+
+    def test_undeclared_artifact_raises_typed_error(self):
+        client, resp = self._client(status_code=404, json_data={
+            "success": False, "error_code": "ARTIFACT_NOT_FOUND",
+            "error": "Artifact not found", "retryable": False})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.download_artifact("rnd-1", "7")
+        self.assertEqual(cm.exception.error_code, "ARTIFACT_NOT_FOUND")
+        self.assertEqual(cm.exception.status_code, 404)
+        resp.close.assert_called_once()
+
+    def test_thumbnail_sends_params(self):
+        client, _ = self._client(content=b"\x89PNG")
+        self.assertEqual(client.get_artifact_thumbnail("rnd-1", 0, 128, format="jpeg"), b"\x89PNG")
+        call = client._session.get.call_args
+        self.assertEqual(call.args[0], "http://127.0.0.1:18811/artifacts/rnd-1/0")
+        self.assertEqual(call.kwargs["params"], {"thumbnail": 128, "format": "jpeg"})
+
+    def test_thumbnail_defaults_and_dest(self):
+        import tempfile
+        client, _ = self._client(content=b"\x89PNG")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "t.png")
+            self.assertEqual(client.get_artifact_thumbnail("rnd-1", "0", dest=dest), dest)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), b"\x89PNG")
+        self.assertEqual(client._session.get.call_args.kwargs["params"],
+                         {"thumbnail": 256, "format": "png"})
+
+    def test_thumbnail_unsupported_is_typed(self):
+        client, _ = self._client(status_code=422, json_data={
+            "success": False, "error_code": "THUMBNAIL_UNSUPPORTED", "error": "x",
+            "retryable": False})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.get_artifact_thumbnail("rnd-1", "0")
+        self.assertEqual(cm.exception.error_code, "THUMBNAIL_UNSUPPORTED")
+        self.assertEqual(cm.exception.status_code, 422)
+        self.assertFalse(cm.exception.retryable)
+
+    def test_thumbnail_busy_raises_studio_busy(self):
+        client, resp = self._client(status_code=503, json_data={
+            "success": False, "error_code": "STUDIO_BUSY", "error": "rendering",
+            "retryable": True})
+        resp.headers = {"Retry-After": "2"}
+        with self.assertRaises(exceptions.StudioBusyError):
+            client.get_artifact_thumbnail("rnd-1", "0")
+
+    def test_download_artifacts_skips_unavailable_and_sanitizes_names(self):
+        import tempfile
+        client = DazClient(token="")
+        manifest = {"artifacts": [
+            {"artifact_id": "0", "available": True, "filename": "../../evil.png"},
+            {"artifact_id": "1", "available": False, "filename": "gone.png"},
+            {"artifact_id": "2", "available": True, "filename": "frame.png"},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(client, "list_artifacts", return_value=manifest), \
+                patch.object(client, "download_artifact", side_effect=lambda r, a, d: d) as dl:
+            paths = client.download_artifacts("rnd-1", tmp)
+        self.assertEqual([os.path.basename(p) for p in paths], ["0_evil.png", "2_frame.png"])
+        self.assertTrue(all(os.path.dirname(p) == tmp for p in paths))
+        self.assertEqual([c.args[1] for c in dl.call_args_list], ["0", "2"])
 
 
 class TestDazClientRegisteredScripts(unittest.TestCase):
@@ -137,6 +310,157 @@ class TestDazClientRegisteredScripts(unittest.TestCase):
         self.assertFalse(client.cancel_render("script-1"))
         client._session.post.assert_not_called()
         client._session.delete.assert_not_called()
+
+
+
+def _dzgf(frames, verts, bones, indices=None, version=1, magic=b"DZGF"):
+    """Build a DZGF payload: verts[f][v] / bones[f][b] are (x, y, z) tuples."""
+    import struct
+    n_verts = len(verts[0]) if verts else 0
+    n_bones = len(bones[0]) if bones else 0
+    out = struct.pack("<4s7I", magic, version, len(frames), n_verts, n_bones,
+                      1 if indices is not None else 0, 0, 0)
+    out += struct.pack(f"<{len(frames)}i", *frames)
+    if indices is not None:
+        out += struct.pack(f"<{len(indices)}I", *indices)
+    for per_frame in verts:
+        for p in per_frame:
+            out += struct.pack("<3f", *p)
+    for per_frame in bones:
+        for p in per_frame:
+            out += struct.pack("<3f", *p)
+    return out
+
+
+class TestScriptRegistryManagement(unittest.TestCase):
+    """GET /scripts and DELETE /scripts/{id} (5d6f.25)."""
+
+    def _client(self, status_code=200, json_data=None):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.json.return_value = json_data or {}
+        response.text = json.dumps(json_data or {})
+        client._session.get.return_value = response
+        client._session.delete.return_value = response
+        return client
+
+    def test_list_scripts_returns_script_list(self):
+        scripts = [{"name": "scene-info", "description": "d", "registered_at": "2026-11-14T10:00:00"}]
+        client = self._client(json_data={"scripts": scripts, "count": 1})
+        self.assertEqual(client.list_scripts(), scripts)
+        self.assertEqual(client._session.get.call_args.args[0], "http://127.0.0.1:18811/scripts")
+
+    def test_list_scripts_empty_registry(self):
+        self.assertEqual(self._client(json_data={"scripts": [], "count": 0}).list_scripts(), [])
+
+    def test_delete_script(self):
+        client = self._client(json_data={"success": True, "id": "scene-info"})
+        self.assertTrue(client.delete_script("scene-info"))
+        self.assertEqual(client._session.delete.call_args.args[0],
+                         "http://127.0.0.1:18811/scripts/scene-info")
+
+    def test_delete_unknown_script_raises(self):
+        body = {"success": False, "error_code": "SCRIPT_NOT_FOUND", "error": "Unknown script",
+                "retryable": False, "detail": "nope"}
+        client = self._client(status_code=404, json_data=body)
+        with self.assertRaises(exceptions.ServerResponseError) as ctx:
+            client.delete_script("nope")
+        self.assertEqual(ctx.exception.error_code, "SCRIPT_NOT_FOUND")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_delete_unknown_script_missing_ok(self):
+        client = self._client(status_code=404, json_data={"error_code": "SCRIPT_NOT_FOUND"})
+        self.assertFalse(client.delete_script("nope", missing_ok=True))
+
+    def test_delete_missing_ok_still_raises_auth_errors(self):
+        client = self._client(status_code=401, json_data={"error": "Unauthorized"})
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.delete_script("nope", missing_ok=True)
+
+
+class TestGeometryFrames(unittest.TestCase):
+    """POST /geometry/frames client + DZGF parser (5d6f.25)."""
+
+    VERTS = [[(0.0, 1.0, 2.0), (3.0, 4.0, 5.0)], [(0.5, 1.5, 2.5), (3.5, 4.5, 5.5)]]
+    BONES = [[(10.0, 20.0, 30.0)], [(11.0, 21.0, 31.0)]]
+
+    def _client(self, content=b"", status_code=200, json_data=None):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        response.content = content
+        response.json.return_value = json_data or {}
+        response.text = json.dumps(json_data or {})
+        client._session.post.return_value = response
+        return client
+
+    def test_export_sends_minimal_payload_and_parses(self):
+        client = self._client(_dzgf([0, 10], self.VERTS, self.BONES))
+        gf = client.export_geometry_frames([0, 10], bones=["lHand"])
+        call = client._session.post.call_args
+        self.assertEqual(call.args[0], "http://127.0.0.1:18811/geometry/frames")
+        self.assertEqual(call.kwargs["json"], {"frames": [0, 10], "bones": ["lHand"]})
+        self.assertEqual(call.kwargs["timeout"], 30.0)
+        self.assertIsInstance(gf, GeometryFrames)
+        self.assertEqual(gf.frames, [0, 10])
+        self.assertEqual(gf.num_frames, 2)
+        self.assertEqual(gf.num_vertices, 2)
+        self.assertIsNone(gf.indices)
+        self.assertEqual(gf.frame(10), [(0.5, 1.5, 2.5), (3.5, 4.5, 5.5)])
+        self.assertEqual(gf.bone("lHand"), [(10.0, 20.0, 30.0), (11.0, 21.0, 31.0)])
+
+    def test_export_full_payload_and_timeout(self):
+        client = self._client(_dzgf([5], [[(1.0, 2.0, 3.0)]], [[]], indices=[42]))
+        gf = client.export_geometry_frames(
+            (5,), node="Genesis 9", indices=[42], surfaces=["Face"],
+            resolution="current", scene_update=False, timeout=120)
+        call = client._session.post.call_args
+        self.assertEqual(call.kwargs["json"], {
+            "frames": [5], "node": "Genesis 9", "indices": [42], "surfaces": ["Face"],
+            "resolution": "current", "sceneUpdate": False})
+        self.assertEqual(call.kwargs["timeout"], 120)
+        self.assertEqual(gf.indices, [42])
+        self.assertEqual(gf.bones, [[]])
+
+    def test_export_rejects_bad_arguments_without_request(self):
+        client = self._client()
+        with self.assertRaises(ValueError):
+            client.export_geometry_frames([])
+        with self.assertRaises(ValueError):
+            client.export_geometry_frames([0], resolution="high")
+        client._session.post.assert_not_called()
+
+    def test_export_server_error_raises(self):
+        body = {"success": False, "error_code": "BAD_REQUEST", "error": "figure not found",
+                "retryable": False}
+        client = self._client(status_code=400, json_data=body)
+        with self.assertRaises(exceptions.ServerResponseError) as ctx:
+            client.export_geometry_frames([0], node="Nobody")
+        self.assertIn("figure not found", str(ctx.exception))
+
+    def test_parse_rejects_malformed_payloads(self):
+        good = _dzgf([0, 10], self.VERTS, self.BONES)
+        cases = {
+            "short": good[:10],
+            "truncated": good[:-4],
+            "magic": _dzgf([0], [[(0.0, 0.0, 0.0)]], [[]], magic=b"XXXX"),
+            "version": _dzgf([0], [[(0.0, 0.0, 0.0)]], [[]], version=2),
+        }
+        for name, data in cases.items():
+            with self.subTest(name), self.assertRaises(exceptions.ServerResponseError):
+                parse_geometry_frames(data)
+        with self.assertRaises(exceptions.ServerResponseError):
+            parse_geometry_frames(good, bone_names=["a", "b"])
+
+    def test_lookup_errors(self):
+        gf = parse_geometry_frames(_dzgf([0, 10], self.VERTS, self.BONES), ["lHand"])
+        with self.assertRaises(KeyError):
+            gf.frame(3)
+        with self.assertRaises(KeyError):
+            gf.bone("rHand")
 
 
 def _make_client(return_value=None, output=None):
@@ -1427,8 +1751,8 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         from dazpy._render import DazRenderSettings
         self.DazRenderSettings = DazRenderSettings
 
-    def _make_render(self, return_value=None):
-        client = _make_client(return_value)
+    def _make_render(self, return_value=None, output=None):
+        client = _make_client(return_value, output=output)
         return self.DazRenderSettings(client), client
 
     def test_resolution_getter_uses_imageSize(self):
@@ -1907,8 +2231,44 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         val = rs.canvases_enabled
         self.assertTrue(val)
         script = client.execute.call_args[0][0]
-        self.assertIn("getRenderElementObjects()[1]", script)
+        self.assertIn('inherits("DzIrayPropertyHolder")', script)
+        self.assertNotIn("getRenderElementObjects()[1]", script)
         self.assertIn("renderToCanvases", script)
+
+    def test_iray_holder_lookup_order_class_then_label_then_index(self):
+        rs, _ = self._make_render(None)
+        expr = rs._iray_render_options_holder()
+        cls_pos = expr.index('inherits("DzIrayPropertyHolder")')
+        label_pos = expr.index('"NVIDIA Iray Render Options"')
+        index_pos = expr.index("_objs[1]")
+        self.assertLess(cls_pos, label_pos)
+        self.assertLess(label_pos, index_pos)
+        self.assertIn("_objs.length > 1", expr)
+
+    def test_holder_fallback_output_becomes_runtime_warning(self):
+        from dazpy._render import _HOLDER_FALLBACK_MARKER
+        rs, _ = self._make_render(
+            True,
+            output=[f"{_HOLDER_FALLBACK_MARKER} DzIrayPropertyHolder not found; using index 1"],
+        )
+        with self.assertWarnsRegex(RuntimeWarning, "DzIrayPropertyHolder not found"):
+            self.assertTrue(rs.canvases_enabled)
+
+    def test_holder_lookup_without_fallback_emits_no_warning(self):
+        import warnings as _w
+        rs, _ = self._make_render(True, output=["unrelated log line"])
+        with _w.catch_warnings():
+            _w.simplefilter("error")
+            self.assertTrue(rs.canvases_enabled)
+
+    def test_render_uses_class_based_canvas_holder_lookup(self):
+        rs, client = self._make_render({"success": True, "output_path": "C:/x.png"})
+        try:
+            rs.render()
+        except Exception:
+            pass
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertTrue(any('inherits("DzIrayPropertyHolder")' in s for s in scripts))
 
     def test_canvases_enabled_setter_refreshes_pane(self):
         rs, client = self._make_render(None)
@@ -1993,11 +2353,14 @@ class TestDazRenderSettingsEnvironment(unittest.TestCase):
         client = _make_client(return_value)
         return self.DazRenderSettings(client), client
 
-    def test_environment_holder_uses_render_element_objects_index_3(self):
+    def test_environment_holder_looks_up_by_class_with_index_3_fallback(self):
         rs, client = self._make_render(1.0)
         rs._get_environment_property("Environment Intensity")
         script = client.execute.call_args[0][0]
-        self.assertIn("getRenderElementObjects()[3]", script)
+        self.assertIn('inherits("DzEnvironmentNode")', script)
+        self.assertIn('"Environment Options"', script)
+        self.assertIn("_objs[3]", script)
+        self.assertNotIn("getRenderElementObjects()[3]", script)
 
     def test_get_environment_property_reads_named_property(self):
         rs, client = self._make_render(1.0)
@@ -5031,8 +5394,9 @@ class TestDazSceneStateApply(unittest.TestCase):
         scene = MagicMock()
 
         def _find_skeleton(name):
+            from dazpy.exceptions import NodeNotFoundError
             if name == "Missing":
-                raise LookupError("not found")
+                raise NodeNotFoundError("not found")
             return skel_good
 
         scene.find_skeleton.side_effect = _find_skeleton
@@ -5050,6 +5414,153 @@ class TestDazSceneStateApply(unittest.TestCase):
         good_pose.apply_full.assert_called_once_with(skel_good)
         self.assertIn("Good", result["restored"])
         self.assertTrue(any("Missing" in e for e in result["errors"]))
+        self.assertEqual(
+            result["skipped"], [{"kind": "skeleton", "name": "Missing", "reason": "not_found"}]
+        )
+        self.assertFalse(result["complete"])
+
+    def test_apply_lookup_failure_other_than_not_found_is_an_error_not_a_skip(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = RuntimeError("socket closed")
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+        )
+        result = state.apply(scene)
+
+        self.assertEqual(result["skipped"], [])
+        self.assertTrue(any("Failed to look up skeleton Genesis9" in e for e in result["errors"]))
+        self.assertFalse(result["complete"])
+
+    def test_apply_report_for_nodes_deleted_between_capture_and_restore(self):
+        # A skeleton, a camera and a light that were captured are deleted
+        # before restore. apply() must restore what is still there and list
+        # each missing node in "skipped" with its kind.
+        from dazpy.exceptions import NodeNotFoundError
+        from dazpy._scene_state import DazSceneState
+
+        skel_kept = MagicMock()
+        skel_kept._identifier.value = "Kept"
+        skel_kept._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        skel_kept.follow_target.return_value = None
+
+        def _find_skeleton(name):
+            if name == "Kept":
+                return skel_kept
+            raise NodeNotFoundError(f"Skeleton not found: {name!r}")
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = _find_skeleton
+        # What the camera/light restore script returns when CamGone and
+        # LightGone no longer exist.
+        scene._client.execute.return_value = ExecutionResult(
+            value={
+                "restored": ["CamKept"],
+                "skipped": [
+                    {"kind": "camera", "name": "CamGone", "reason": "not_found"},
+                    {"kind": "light", "name": "LightGone", "reason": "not_found"},
+                ],
+                "errors": ["Camera not found: CamGone", "Light not found: LightGone"],
+            },
+            output=[], request_id="x",
+        )
+
+        state = DazSceneState(
+            skeleton_poses={"Kept": MagicMock(), "Deleted": MagicMock()},
+            camera_transforms={"CamKept": {"XTranslate": 1.0}, "CamGone": {"XTranslate": 2.0}},
+            light_transforms={"LightGone": {"XTranslate": 3.0}},
+            light_extra={"LightGone": {}},
+            follow_targets={"Kept": None, "Deleted": None},
+        )
+        result = state.apply(scene)
+
+        self.assertEqual(result["restored"], ["Kept", "CamKept"])
+        self.assertEqual(
+            result["skipped"],
+            [
+                {"kind": "skeleton", "name": "Deleted", "reason": "not_found"},
+                {"kind": "camera", "name": "CamGone", "reason": "not_found"},
+                {"kind": "light", "name": "LightGone", "reason": "not_found"},
+            ],
+        )
+        self.assertEqual(len(result["errors"]), 3)
+        self.assertFalse(result["complete"])
+        self.assertIsNone(result["backup"])
+
+        # The restore script itself must report missing cameras/lights as skips.
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn('kind: "camera"', script)
+        self.assertIn('kind: "light"', script)
+
+    def test_apply_skips_follow_target_whose_target_figure_was_deleted(self):
+        from dazpy.exceptions import NodeNotFoundError
+        from dazpy._scene_state import DazSceneState
+
+        boots = MagicMock()
+        boots._identifier.value = "Boots"
+        boots._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        boots.follow_target.return_value = None
+
+        def _find_skeleton(name):
+            if name == "Boots":
+                return boots
+            raise NodeNotFoundError(name)
+
+        scene = MagicMock()
+        scene.find_skeleton.side_effect = _find_skeleton
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        # Genesis9 was captured as Boots' fit target but is not part of this
+        # checkpoint's skeleton set any more (deleted before restore).
+        state = DazSceneState(
+            skeleton_poses={"Boots": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Boots": "Genesis9"},
+        )
+        result = state.apply(scene)
+
+        boots.fit_to.assert_not_called()
+        self.assertIn("Boots", result["restored"])
+        self.assertEqual(
+            result["skipped"], [{"kind": "follow_target", "name": "Boots", "reason": "not_found"}]
+        )
+        self.assertFalse(result["complete"])
+
+    def test_apply_clean_restore_is_complete(self):
+        from dazpy._scene_state import DazSceneState
+
+        skel = MagicMock()
+        skel._identifier.value = "Genesis9"
+        skel._client.execute.return_value = ExecutionResult(
+            value={"bones": {}, "morphs": {}, "props": {}}, output=[], request_id="x",
+        )
+        skel.follow_target.return_value = None
+        scene = MagicMock()
+        scene.find_skeleton.return_value = skel
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        state = DazSceneState(
+            skeleton_poses={"Genesis9": MagicMock()},
+            camera_transforms={}, light_transforms={}, light_extra={},
+            follow_targets={"Genesis9": None},
+        )
+        result = state.apply(scene)
+
+        self.assertEqual(result["restored"], ["Genesis9"])
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(result["errors"], [])
+        self.assertTrue(result["complete"])
 
     def test_apply_does_not_trust_apply_full_success_without_verifying(self):
         # Regression for dpi-mxq: apply_full() can return normally (no
@@ -5295,6 +5806,70 @@ class TestDazSceneStateApply(unittest.TestCase):
         self.assertEqual(boots_skel.follow_target.call_count, 2)
         boots_skel.fit_to.assert_called_once_with(base_skel)
         self.assertEqual(result["errors"], [])
+
+
+class TestDazSceneStateBackup(unittest.TestCase):
+    """capture(backup_path=...) takes a full-scene save-copy before the pose checkpoint."""
+
+    def _scene(self):
+        scene = MagicMock()
+        scene.skeletons.return_value = []
+        scene._client.execute.return_value = ExecutionResult(value={}, output=[], request_id="x")
+        scene.save_copy.return_value = {
+            "ok": True, "path": "C:/backups/pre.duf", "source": "C:/scenes/a.duf", "method": "copy",
+        }
+        return scene
+
+    def test_capture_without_backup_path_does_not_save_copy(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        state = DazSceneState.capture(scene)
+
+        scene.save_copy.assert_not_called()
+        self.assertIsNone(state.backup)
+
+    def test_capture_with_backup_path_saves_copy_before_capturing(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        order = []
+        scene.save_copy.side_effect = lambda p: order.append("save_copy") or {"ok": True, "path": p}
+        scene.skeletons.side_effect = lambda: order.append("skeletons") or []
+
+        state = DazSceneState.capture(scene, backup_path="C:/backups/pre.duf")
+
+        scene.save_copy.assert_called_once_with("C:/backups/pre.duf")
+        self.assertEqual(order[0], "save_copy")
+        self.assertEqual(state.backup, {"ok": True, "path": "C:/backups/pre.duf"})
+
+    def test_capture_backup_failure_propagates(self):
+        from dazpy.exceptions import DazError
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        scene.save_copy.side_effect = DazError("disk full")
+
+        with self.assertRaises(DazError):
+            DazSceneState.capture(scene, backup_path="C:/backups/pre.duf")
+        scene.skeletons.assert_not_called()
+
+    def test_backup_round_trips_and_is_reported_by_apply(self):
+        from dazpy._scene_state import DazSceneState
+
+        scene = self._scene()
+        state = DazSceneState.capture(scene, backup_path="C:/backups/pre.duf")
+
+        restored = DazSceneState.from_dict(json.loads(json.dumps(state.to_dict())))
+        self.assertEqual(restored.backup, state.backup)
+        self.assertIsNone(DazSceneState.from_dict({}).backup)
+
+        scene._client.execute.return_value = ExecutionResult(
+            value={"restored": [], "errors": []}, output=[], request_id="x",
+        )
+        result = restored.apply(scene)
+        self.assertEqual(result["backup"]["path"], "C:/backups/pre.duf")
+        self.assertTrue(result["complete"])
 
 
 class TestSceneSnapshot(unittest.TestCase):
@@ -6379,8 +6954,8 @@ class TestHDRIEnvironment(unittest.TestCase):
                 self.assertIn(label, mode_script)
 
     def test_apply_raises_render_error_when_environment_holder_unavailable(self):
-        """Simulates getRenderElementObjects()[3] being wrong on this DAZ Studio
-        version/build: every write silently no-ops and the readback returns None."""
+        """Simulates the Environment Options group being absent (render type not
+        Software): every write silently no-ops and the readback returns None."""
         from dazpy._render import DazRenderSettings
         from dazpy.lighting import HDRIEnvironment, apply_hdri_environment
         from dazpy.exceptions import RenderError
@@ -7613,12 +8188,63 @@ class TestObservationThreadingContract(unittest.TestCase):
 
         self.assertLess(
             completion.index("ingestReportLocked(req, true);"),
-            completion.index("if (req.status != REQUEST_RUNNING) return;"),
+            completion.index("if (!isActive(req.status)) return;"),
         )
+
+    def test_late_completion_keeps_real_outcome(self):
+        # ASSESSMENT #2: a cancel request or stale timeout must not discard
+        # the outcome of a script that returns afterwards.
+        start = self.source.index("void AsyncRequestManager::markCompleted")
+        end = self.source.index("void AsyncRequestManager::markCancelled", start)
+        completion = self.source[start:end]
+        self.assertIn("REQUEST_COMPLETED_AFTER_CANCEL_REQUEST", completion)
+        self.assertIn("REQUEST_COMPLETED_AFTER_STALE", completion)
+
+        cancel = self.source[self.source.index("AsyncRequestManager::cancelImpl("):]
+        cancel = cancel[:cancel.index("std::string AsyncRequestManager::listJson")]
+        self.assertIn("req.status = REQUEST_CANCEL_REQUESTED;", cancel)
+        # Only a still-queued request may be marked CANCELLED synchronously.
+        self.assertEqual(cancel.count("req.status      = REQUEST_CANCELLED;"), 1)
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCapabilities(unittest.TestCase):
+    """DazClient.capabilities() wraps GET /capabilities."""
+
+    def _client(self, status_code=200, json_data=None):
+        import requests as req
+
+        client = DazClient(token="", check_version=False)
+        client._session.close()
+        session = MagicMock()
+        resp = MagicMock(spec=req.Response)
+        resp.status_code = status_code
+        resp.json.return_value = json_data or {}
+        resp.text = str(json_data)
+        resp.headers = {}
+        session.get.return_value = resp
+        client._session = session
+        return client, session
+
+    def test_returns_document(self):
+        doc = {"schema_version": 1, "render_engines": {"selectable": ["viewport", "iray"]}}
+        client, session = self._client(json_data=doc)
+        self.assertEqual(client.capabilities(), doc)
+        self.assertTrue(session.get.call_args[0][0].endswith("/capabilities"))
+
+    def test_old_server_404_raises(self):
+        client, _ = self._client(status_code=404, json_data={"error": "not found"})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.capabilities()
+        self.assertEqual(cm.exception.status_code, 404)
+
+    def test_auth_failure_raises(self):
+        client, _ = self._client(status_code=401, json_data={"error": "bad token"})
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.capabilities()
 
 
 class TestServerVersionCheck(unittest.TestCase):

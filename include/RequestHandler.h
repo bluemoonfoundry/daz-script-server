@@ -19,6 +19,7 @@ struct HttpContext {
     std::string body;
     std::string remoteAddr;
     std::string urlMatch;    // first regex capture group from the URL pattern
+    std::string correlationId; // resolved X-Correlation-Id (job routes only; see runJobRoute)
     std::map<std::string, std::string> headers;
     std::map<std::string, std::string> queryParams;
     std::map<std::string, std::string> responseHeaders;
@@ -117,10 +118,11 @@ private:
 
 class StatusHandler : public IRequestHandler {
 public:
-    explicit StatusHandler(const std::string& version);
+    StatusHandler(const std::string& version, DzScriptServerPane* pane);
     void handle(HttpContext& ctx) override;
 private:
-    std::string m_version;
+    std::string         m_version;
+    DzScriptServerPane* m_pPane;
 };
 
 class HealthHandler : public IRequestHandler {
@@ -134,6 +136,16 @@ private:
 class MetricsHandler : public IRequestHandler {
 public:
     explicit MetricsHandler(DzScriptServerPane* pane);
+    void handle(HttpContext& ctx) override;
+private:
+    DzScriptServerPane* m_pPane;
+};
+
+// GET /capabilities. Builds the document on the main thread (render engines are
+// read live); while the main thread is busy, serves the last snapshot instead.
+class CapabilitiesHandler : public IRequestHandler {
+public:
+    explicit CapabilitiesHandler(DzScriptServerPane* pane);
     void handle(HttpContext& ctx) override;
 private:
     DzScriptServerPane* m_pPane;

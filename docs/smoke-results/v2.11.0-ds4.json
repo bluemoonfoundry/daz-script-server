@@ -1,0 +1,302 @@
+{
+  "schema": 1,
+  "started_at": "2026-11-15T04:09:36+00:00",
+  "finished_at": "2026-11-15T04:09:40+00:00",
+  "target": "http://127.0.0.1:18811",
+  "host_os": "Windows 11",
+  "server_version": "2.11.0",
+  "studio_version": "4.24",
+  "sdk_major": 4,
+  "engines_requested": [
+    "iray",
+    "viewport"
+  ],
+  "engines_selectable": [
+    "viewport",
+    "iray"
+  ],
+  "stages": [
+    "api",
+    "async",
+    "render",
+    "mcp"
+  ],
+  "summary": {
+    "pass": 29,
+    "fail": 0,
+    "skip": 0
+  },
+  "checks": [
+    {
+      "stage": "api",
+      "name": "status",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "version": "2.11.0"
+      }
+    },
+    {
+      "stage": "api",
+      "name": "health",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "capabilities",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "selectable": [
+          "viewport",
+          "iray"
+        ],
+        "active_class": "DzIrayRenderer",
+        "source": "live"
+      }
+    },
+    {
+      "stage": "api",
+      "name": "execute_basic",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "execute_args",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "daz_globals",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "app": "object",
+        "nodes": 174
+      }
+    },
+    {
+      "stage": "api",
+      "name": "script_error_envelope",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": null
+    },
+    {
+      "stage": "api",
+      "name": "auth_rejects_bad_token",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "async",
+      "name": "submit_and_wait",
+      "status": "pass",
+      "duration_ms": 511,
+      "detail": {
+        "request_id": "execute-5ccd8c55"
+      }
+    },
+    {
+      "stage": "async",
+      "name": "status_endpoint",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "async",
+      "name": "idempotency_replay",
+      "status": "pass",
+      "duration_ms": 2,
+      "detail": null
+    },
+    {
+      "stage": "render",
+      "name": "snapshot_settings",
+      "status": "pass",
+      "duration_ms": 4,
+      "detail": {
+        "render_type": 2,
+        "renderer_class": "DzIrayRenderer",
+        "resolution": {
+          "height": 2330,
+          "width": 1440
+        }
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.submit",
+      "status": "pass",
+      "duration_ms": 2,
+      "detail": {
+        "request_id": "rnd-4e827502"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.progress_sse",
+      "status": "pass",
+      "duration_ms": 1026,
+      "detail": {
+        "events": [
+          "complete"
+        ]
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.result",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "duration_ms": 1026
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.engine_readback",
+      "status": "pass",
+      "duration_ms": 29,
+      "detail": {
+        "render_type": 2,
+        "renderer": "DzIrayRenderer"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.iray_samples_readback",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "applied": 4,
+        "previous": 5000,
+        "provenance": {
+          "kind": "live_readback",
+          "source": "DzIrayRenderer.getPropertyHolder().findProperty('Max Samples')"
+        },
+        "requested": 4,
+        "restored": true
+      }
+    },
+    {
+      "stage": "render",
+      "name": "iray.artifact",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "bytes": 3312
+      }
+    },
+    {
+      "stage": "render",
+      "name": "scene_events_sse",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": {
+        "events": [
+          "render.started",
+          "render.finished"
+        ]
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.submit",
+      "status": "pass",
+      "duration_ms": 1,
+      "detail": {
+        "request_id": "rnd-e83da8b3"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.progress_sse",
+      "status": "pass",
+      "duration_ms": 59,
+      "detail": {
+        "events": [
+          "complete"
+        ]
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.result",
+      "status": "pass",
+      "duration_ms": 24,
+      "detail": {
+        "duration_ms": 59
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.engine_readback",
+      "status": "pass",
+      "duration_ms": 5,
+      "detail": {
+        "render_type": 0,
+        "renderer": "DzIrayRenderer"
+      }
+    },
+    {
+      "stage": "render",
+      "name": "viewport.artifact",
+      "status": "pass",
+      "duration_ms": 25,
+      "detail": {
+        "bytes": 2305
+      }
+    },
+    {
+      "stage": "render",
+      "name": "restore_settings",
+      "status": "pass",
+      "duration_ms": 68,
+      "detail": {
+        "engine": [
+          2,
+          "DzIrayRenderer"
+        ]
+      }
+    },
+    {
+      "stage": "mcp",
+      "name": "register_scripts",
+      "status": "pass",
+      "duration_ms": 2341,
+      "detail": {
+        "registered": 106
+      }
+    },
+    {
+      "stage": "mcp",
+      "name": "daz_status",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "mcp",
+      "name": "daz_scene_info",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    },
+    {
+      "stage": "mcp",
+      "name": "daz_get_render_settings",
+      "status": "pass",
+      "duration_ms": 0,
+      "detail": null
+    }
+  ]
+}

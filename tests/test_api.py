@@ -20,10 +20,13 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 import requests
 
 BASE_URL = "http://127.0.0.1:18811"
 TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+# Must match "Max Body Size (MB)" in the DAZ Studio pane (default 5).
+MAX_BODY_SIZE_MB = int(os.environ.get("DAZ_MAX_BODY_SIZE_MB", "5"))
 
 
 def load_token():
@@ -294,6 +297,12 @@ def async_execute(script=None, script_file=None, args=None, report_file=None, he
     return requests.post(f"{BASE_URL}/execute/async", headers=h, json=payload, timeout=10)
 
 
+TERMINAL_STATUSES = (
+    "completed", "failed", "cancelled",
+    "completed_after_cancel_request", "completed_after_stale",
+)
+
+
 def poll_status(request_id, timeout=15):
     """Poll /requests/:id/status until terminal or timeout. Returns final body dict."""
     deadline = __import__("time").time() + timeout
@@ -301,7 +310,7 @@ def poll_status(request_id, timeout=15):
         r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
                          headers=auth_headers(), timeout=5)
         body = r.json()
-        if body.get("status") in ("completed", "failed", "cancelled"):
+        if body.get("status") in TERMINAL_STATUSES:
             return body
         __import__("time").sleep(0.2)
     return body
@@ -550,18 +559,13 @@ class TestAsyncExecution(unittest.TestCase):
         if cancel_r.status_code == 200:
             self.assertEqual(cancel_r.json().get("status"), "cancelled")
 
-    def test_async_cancel_running_request_reaches_terminal_status(self):
+    def test_async_cancel_running_script_reports_real_outcome(self):
         # A busy-loop script long enough to still be RUNNING when we cancel it.
-        # killRender()/killRenderOnMainThread() has nothing to kill for a plain
-        # script (not a render), so this exercises the case where the cancel
-        # response says "cancelled" but the underlying call can't actually be
-        # interrupted -- the tracker must still report a terminal status
-        # instead of leaving GET /requests/:id stuck at "running" (GH #34).
-        # ~8s on a live DAZ Studio 4 instance -- long enough to reliably catch
-        # "running" below, short enough not to starve the main thread for
-        # other tests once cancelled (the loop itself can't be interrupted,
-        # only the tracker's reported status can).
-        script = iife("var x = 0; for (var i = 0; i < 500000000; i++) { x += i; } return x;")
+        # A plain script can't be interrupted (killRender() only stops renders),
+        # so the cancel must report cancel_requested -- not a "cancelled" that
+        # isn't true -- and the script's real result must be kept once it
+        # returns (ASSESSMENT #2, GH #34). ~8s on a live DAZ Studio 4 instance.
+        script = iife("var x = 0; for (var i = 0; i < 500000000; i++) { x += i; } return 'done';")
         r = async_execute(script=script)
         request_id = r.json()["request_id"]
 
@@ -580,13 +584,24 @@ class TestAsyncExecution(unittest.TestCase):
         cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
                                    headers=auth_headers(), timeout=5)
         self.assertEqual(cancel_r.status_code, 200)
-        self.assertEqual(cancel_r.json().get("status"), "cancelled")
+        self.assertEqual(cancel_r.json().get("status"), "cancel_requested")
+        self.assertIn("cancel_requested_at", cancel_r.json())
 
-        # GET status must not stay "running" forever -- it should already
-        # reflect the terminal status the cancel response promised.
         status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
                                 headers=auth_headers(), timeout=5)
-        self.assertEqual(status_r.json().get("status"), "cancelled")
+        self.assertEqual(status_r.json().get("status"), "cancel_requested")
+
+        # Cancelling again is idempotent while the script is still running.
+        again = requests.delete(f"{BASE_URL}/requests/{request_id}",
+                                headers=auth_headers(), timeout=5)
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json().get("status"), "cancel_requested")
+
+        body = get_result(request_id, wait=True, timeout=60).json()
+        self.assertEqual(body.get("status"), "completed_after_cancel_request")
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body.get("result"), "done")
+        self.assertIn("cancel_requested_at", body)
 
     def test_async_cancel_already_finished_returns_400(self):
         r = async_execute(script=iife("return 1;"))
@@ -679,9 +694,8 @@ class TestAsyncExecution(unittest.TestCase):
             request_id = r.json()["request_id"]
 
             saw_live_progress = False
-            # A prior cancellation test deliberately leaves a non-render
-            # script finishing on Daz's main thread after its tracker is
-            # already terminal, so this job may remain queued for ~8 seconds.
+            # A prior cancellation test leaves a non-render script finishing
+            # on Daz's main thread, so this job may remain queued for ~8 seconds.
             deadline = time.time() + 20
             while time.time() < deadline:
                 status = requests.get(
@@ -720,6 +734,364 @@ class TestAsyncExecution(unittest.TestCase):
 
 
 # ─── Response shape ───────────────────────────────────────────────────────────
+
+class TestRenderIraySamples(unittest.TestCase):
+    """iray_samples must be applied (and read back) or rejected -- never ignored."""
+
+    def _render(self, payload):
+        return requests.post(f"{BASE_URL}/render", headers=auth_headers(),
+                             json=payload, timeout=10)
+
+    def _out(self, name):
+        return os.path.join(tempfile.gettempdir(), name).replace("\\", "/")
+
+    def test_rejects_non_integer(self):
+        for bad in ("100", 1.5, True, None):
+            r = self._render({"output_path": self._out("x.png"), "iray_samples": bad})
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn("iray_samples", r.text)
+
+    def test_rejects_negative(self):
+        r = self._render({"output_path": self._out("x.png"), "iray_samples": -1})
+        self.assertEqual(r.status_code, 400)
+
+    def test_rejects_non_iray_engine(self):
+        for engine in ("viewport", "filament"):
+            r = self._render({"output_path": self._out("x.png"),
+                              "engine": engine, "iray_samples": 50})
+            self.assertEqual(r.status_code, 400, engine)
+
+    def test_batch_rejects_bad_variant(self):
+        r = requests.post(f"{BASE_URL}/render/batch", headers=auth_headers(), json={
+            "base": {"iray_samples": 10},
+            "variants": [{"output_path": self._out("a.png")},
+                         {"output_path": self._out("b.png"), "iray_samples": "lots"}],
+        }, timeout=10)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("variants[1]", r.text)
+
+    @unittest.skipUnless(os.environ.get("DSS_LIVE_RENDER"),
+                         "set DSS_LIVE_RENDER=1 to run a real Iray render")
+    def test_live_iray_render_applies_and_restores_samples(self):
+        read_max = iife("return Number(App.getRenderMgr().getActiveRenderer()"
+                        ".getPropertyHolder().findProperty('Max Samples').getValue());")
+        before = execute(read_max).json()["result"]
+        out = self._out("dss_iray_samples_test.png")
+        r = self._render({"output_path": out, "engine": "iray",
+                          "width": 64, "height": 64, "iray_samples": 7})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = get_result(r.json()["request_id"], wait=True, timeout=300).json()
+        self.assertEqual(body.get("status"), "completed", body)
+        readback = body["result"]["iray_samples"]
+        self.assertEqual(readback["requested"], 7)
+        self.assertEqual(readback["applied"], 7)
+        self.assertEqual(readback["previous"], before)
+        self.assertTrue(readback["restored"])
+        self.assertEqual(execute(read_max).json()["result"], before)
+
+
+class TestArtifacts(unittest.TestCase):
+    """GET /artifacts/{job_id}[/{artifact_id}] (5d6f.7): authenticated, Range
+    capable downloads of exactly the files a job declared."""
+
+    PAYLOAD = bytes(range(256)) * 4  # 1024 bytes, every offset distinct mod 256
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="dss-artifacts-")
+        cls.image = os.path.join(cls.tmp, "plate.png")
+        with open(cls.image, "wb") as f:
+            f.write(cls.PAYLOAD)
+        # Same directory, never declared: must not be reachable.
+        with open(os.path.join(cls.tmp, "secret.txt"), "w") as f:
+            f.write("not an artifact")
+        cls.report = os.path.join(cls.tmp, "report.jsonl")
+        outputs = [
+            {"path": cls.image, "kind": "image", "label": "plate"},     # 0
+            {"path": os.path.join(cls.tmp, "missing.png")},             # 1
+            {"path": cls.tmp},                                          # 2 directory
+            {"path": "relative/plate.png"},                             # 3
+            {"path": cls.image, "kind": "image", "label": "re-declared"},  # updates 0
+        ]
+        script = iife(
+            "var cfg = getArguments()[0]; "
+            "var f = new DzFile(cfg.__dssReportFile); "
+            "if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+            "f.write(JSON.stringify({type:'manifest', outputs:cfg.outputs}) + '\\n'); "
+            "f.close(); return 'declared';"
+        )
+        r = async_execute(script=script, args={"outputs": outputs}, report_file=cls.report)
+        assert r.status_code == 200, r.text
+        cls.rid = r.json()["request_id"]
+        body = get_result(cls.rid, wait=True, timeout=30).json()
+        assert body.get("status") == "completed", body
+        cls.manifest = body["observation"]["output_manifest"]
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _get(self, path, headers=None, method="GET"):
+        h = auth_headers()
+        h.update(headers or {})
+        return requests.request(method, f"{BASE_URL}{path}", headers=h, timeout=10)
+
+    def assertError(self, r, status, code):
+        self.assertEqual(r.status_code, status, r.text)
+        self.assertFalse(r.json()["success"])
+        self.assertEqual(r.json()["error_code"], code)
+
+    # ── manifest ────────────────────────────────────────────────────────────
+
+    def test_manifest_entries_carry_ids_and_urls(self):
+        outputs = self.manifest["outputs"]
+        self.assertEqual(self.manifest["count"], 4)  # re-declaration updated entry 0
+        self.assertEqual([o["artifact_id"] for o in outputs], ["0", "1", "2", "3"])
+        self.assertEqual(outputs[0]["url"], f"/artifacts/{self.rid}/0")
+        self.assertEqual(outputs[0]["label"], "re-declared")
+
+    def test_list_reports_metadata(self):
+        r = self._get(f"/artifacts/{self.rid}")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["request_id"], self.rid)
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["count"], 4)
+        first, missing, directory, relative = body["artifacts"]
+        self.assertTrue(first["available"])
+        self.assertEqual(first["size"], len(self.PAYLOAD))
+        self.assertEqual(first["content_type"], "image/png")
+        self.assertEqual(first["filename"], "plate.png")
+        for entry in (missing, directory, relative):
+            self.assertFalse(entry["available"], entry)
+            self.assertIsNone(entry["size"])
+
+    # ── downloads ───────────────────────────────────────────────────────────
+
+    def test_full_download(self):
+        r = self._get(f"/artifacts/{self.rid}/0")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content, self.PAYLOAD)
+        self.assertEqual(r.headers["Content-Type"], "image/png")
+        self.assertEqual(r.headers["Content-Length"], str(len(self.PAYLOAD)))
+        self.assertEqual(r.headers["Accept-Ranges"], "bytes")
+        self.assertIn('filename="plate.png"', r.headers["Content-Disposition"])
+
+    def test_range_requests(self):
+        n = len(self.PAYLOAD)
+        cases = [
+            ("bytes=10-19", self.PAYLOAD[10:20], f"bytes 10-19/{n}"),
+            ("bytes=1000-", self.PAYLOAD[1000:], f"bytes 1000-{n - 1}/{n}"),
+            ("bytes=-5", self.PAYLOAD[-5:], f"bytes {n - 5}-{n - 1}/{n}"),
+            ("bytes=0-99999", self.PAYLOAD, f"bytes 0-{n - 1}/{n}"),
+        ]
+        for rng, expected, content_range in cases:
+            with self.subTest(range=rng):
+                r = self._get(f"/artifacts/{self.rid}/0", {"Range": rng})
+                self.assertEqual(r.status_code, 206, r.text)
+                self.assertEqual(r.content, expected)
+                self.assertEqual(r.headers["Content-Range"], content_range)
+
+    def test_unsatisfiable_range(self):
+        r = self._get(f"/artifacts/{self.rid}/0", {"Range": "bytes=5000-6000"})
+        self.assertEqual(r.status_code, 416)
+
+    def test_head_returns_metadata_without_body(self):
+        r = self._get(f"/artifacts/{self.rid}/0", method="HEAD")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Content-Length"], str(len(self.PAYLOAD)))
+        self.assertEqual(r.content, b"")
+
+    # ── rejection ───────────────────────────────────────────────────────────
+
+    def test_declared_but_unusable_paths_are_gone(self):
+        for aid in ("1", "2", "3"):  # missing file, directory, relative path
+            with self.subTest(artifact_id=aid):
+                self.assertError(self._get(f"/artifacts/{self.rid}/{aid}"),
+                                 410, "ARTIFACT_UNAVAILABLE")
+
+    def test_undeclared_artifact(self):
+        self.assertError(self._get(f"/artifacts/{self.rid}/99"), 404, "ARTIFACT_NOT_FOUND")
+
+    def test_unknown_job(self):
+        for path in ("/artifacts/no-such-job", "/artifacts/no-such-job/0"):
+            with self.subTest(path=path):
+                self.assertError(self._get(path), 404, "REQUEST_NOT_FOUND")
+
+    def test_path_like_ids_are_rejected(self):
+        for aid in ("0.png", "secret.txt", "%2e%2e", "..%5csecret.txt"):
+            with self.subTest(artifact_id=aid):
+                self.assertError(self._get(f"/artifacts/{self.rid}/{aid}"),
+                                 400, "INVALID_FIELD")
+        # An encoded slash decodes to a different path, which matches no route.
+        for path in (f"/artifacts/{self.rid}/..%2Fsecret.txt",
+                     f"/artifacts/{self.rid}/0%2F..%2F..%2Fsecret.txt"):
+            with self.subTest(path=path):
+                r = self._get(path)
+                self.assertIn(r.status_code, (400, 404), r.text)
+                self.assertNotIn(b"not an artifact", r.content)
+
+    @unittest.skipUnless(AUTH_ENABLED, "authentication disabled in plugin")
+    def test_requires_token(self):
+        for path in (f"/artifacts/{self.rid}", f"/artifacts/{self.rid}/0"):
+            for headers in ({}, {"X-API-Token": "wrong-token"}):
+                with self.subTest(path=path, headers=headers):
+                    r = requests.get(f"{BASE_URL}{path}", headers=headers, timeout=5)
+                    self.assertEqual(r.status_code, 401)
+                    self.assertNotEqual(r.content, self.PAYLOAD)
+
+    @unittest.skipUnless(os.environ.get("DSS_LIVE_RENDER"),
+                         "set DSS_LIVE_RENDER=1 to run a real viewport render")
+    def test_render_output_is_an_artifact(self):
+        out = os.path.join(self.tmp, "render.png").replace("\\", "/")
+        r = requests.post(f"{BASE_URL}/render", headers=auth_headers(), json={
+            "output_path": out, "engine": "viewport", "width": 64, "height": 64,
+        }, timeout=10)
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["request_id"]
+        body = get_result(rid, wait=True, timeout=120).json()
+        self.assertEqual(body.get("status"), "completed", body)
+        entry = body["observation"]["output_manifest"]["outputs"][0]
+        self.assertEqual(entry["kind"], "render")
+        dl = self._get(entry["url"])
+        self.assertEqual(dl.status_code, 200)
+        with open(out, "rb") as f:
+            self.assertEqual(dl.content, f.read())
+
+
+class TestArtifactThumbnails(unittest.TestCase):
+    """GET /artifacts/{job_id}/{artifact_id}?thumbnail=<px> (5d6f.24): scaled
+    previews of image artifacts, decoded on the main thread."""
+
+    @staticmethod
+    def _png(width, height, rgba=False):
+        import struct, zlib
+        channels = 4 if rgba else 3
+        row = bytes([0]) + bytes((x * 7) % 256 for x in range(width * channels))
+        raw = row * height
+
+        def chunk(tag, data):
+            body = tag + data
+            return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+        ihdr = struct.pack(">IIBBBBB", width, height, 8, 6 if rgba else 2, 0, 0, 0)
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    @staticmethod
+    def _png_size(data):
+        import struct
+        assert data[:8] == b"\x89PNG\r\n\x1a\n", data[:16]
+        return struct.unpack(">II", data[16:24])
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="dss-thumbs-")
+        cls.wide = os.path.join(cls.tmp, "wide.png")       # 300x150 RGB
+        cls.alpha = os.path.join(cls.tmp, "alpha.png")     # 40x80 RGBA
+        cls.fake = os.path.join(cls.tmp, "fake.png")       # .png, not an image
+        cls.text = os.path.join(cls.tmp, "notes.txt")      # no decoder for .txt
+        with open(cls.wide, "wb") as f:
+            f.write(cls._png(300, 150))
+        with open(cls.alpha, "wb") as f:
+            f.write(cls._png(40, 80, rgba=True))
+        with open(cls.fake, "wb") as f:
+            f.write(b"definitely not a png" * 10)
+        with open(cls.text, "w") as f:
+            f.write("hello")
+        outputs = [{"path": p, "kind": "image"} for p in (cls.wide, cls.alpha, cls.fake, cls.text)]
+        outputs.append({"path": os.path.join(cls.tmp, "missing.png")})
+        script = iife(
+            "var cfg = getArguments()[0]; "
+            "var f = new DzFile(cfg.__dssReportFile); "
+            "if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+            "f.write(JSON.stringify({type:'manifest', outputs:cfg.outputs}) + '\\n'); "
+            "f.close(); return 'declared';"
+        )
+        r = async_execute(script=script, args={"outputs": outputs},
+                          report_file=os.path.join(cls.tmp, "report.jsonl"))
+        assert r.status_code == 200, r.text
+        cls.rid = r.json()["request_id"]
+        body = get_result(cls.rid, wait=True, timeout=30).json()
+        assert body.get("status") == "completed", body
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _thumb(self, aid, query, headers=None):
+        h = auth_headers()
+        h.update(headers or {})
+        return requests.get(f"{BASE_URL}/artifacts/{self.rid}/{aid}?{query}", headers=h, timeout=30)
+
+    def assertError(self, r, status, code):
+        self.assertEqual(r.status_code, status, r.text)
+        self.assertFalse(r.json()["success"])
+        self.assertEqual(r.json()["error_code"], code)
+
+    def test_capabilities_advertise_thumbnails(self):
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        self.assertTrue(caps["features"]["artifact_thumbnails"])
+        self.assertEqual(caps["limits"]["thumbnail_min_px"], 16)
+        self.assertEqual(caps["limits"]["thumbnail_max_px"], 1024)
+        self.assertIn("png", caps["thumbnail_source_formats"])
+
+    def test_list_reports_thumbnail_supported(self):
+        r = requests.get(f"{BASE_URL}/artifacts/{self.rid}", headers=auth_headers(), timeout=10)
+        flags = [a["thumbnail_supported"] for a in r.json()["artifacts"]]
+        # wide, alpha, fake (extension only; content is checked on request), text, missing
+        self.assertEqual(flags, [True, True, True, False, False])
+
+    def test_scales_longest_edge_and_caches(self):
+        first = self._thumb(0, "thumbnail=64")
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.headers["Content-Type"], "image/png")
+        self.assertEqual(self._png_size(first.content), (64, 32))
+        self.assertIn("wide.png.thumb.png", first.headers["Content-Disposition"])
+        again = self._thumb(0, "thumbnail=64")
+        self.assertEqual(again.headers["X-Thumbnail-Cache"], "hit")
+        self.assertEqual(again.content, first.content)
+
+    def test_tall_image_and_never_upscales(self):
+        r = self._thumb(1, "thumbnail=20")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self._png_size(r.content), (10, 20))
+        r = self._thumb(0, "thumbnail=1024")
+        self.assertEqual(self._png_size(r.content), (300, 150))
+
+    def test_jpeg_format(self):
+        for fmt in ("jpeg", "jpg"):
+            with self.subTest(format=fmt):
+                r = self._thumb(1, f"thumbnail=32&format={fmt}")
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.headers["Content-Type"], "image/jpeg")
+                self.assertEqual(r.content[:2], b"\xff\xd8")
+
+    def test_bad_params(self):
+        for query in ("thumbnail=", "thumbnail=8", "thumbnail=2000", "thumbnail=abc",
+                      "thumbnail=-64", "thumbnail=64px", "thumbnail=64&format=gif"):
+            with self.subTest(query=query):
+                self.assertError(self._thumb(0, query), 400, "INVALID_FIELD")
+
+    def test_undecodable_and_unsupported(self):
+        self.assertError(self._thumb(2, "thumbnail=64"), 422, "THUMBNAIL_UNSUPPORTED")
+        self.assertError(self._thumb(3, "thumbnail=64"), 422, "THUMBNAIL_UNSUPPORTED")
+        self.assertError(self._thumb(4, "thumbnail=64"), 410, "ARTIFACT_UNAVAILABLE")
+        self.assertError(self._thumb(99, "thumbnail=64"), 404, "ARTIFACT_NOT_FOUND")
+
+    def test_error_bodies_are_not_labelled_as_images(self):
+        r = self._thumb(3, "thumbnail=64")
+        self.assertTrue(r.headers["Content-Type"].startswith("application/json"))
+        self.assertNotIn("Content-Disposition", r.headers)
+
+    def test_requires_auth(self):
+        if not auth_headers():
+            self.skipTest("auth disabled")
+        r = requests.get(f"{BASE_URL}/artifacts/{self.rid}/0?thumbnail=64", timeout=10)
+        self.assertEqual(r.status_code, 401)
+
 
 class TestResponseShape(unittest.TestCase):
 
@@ -767,6 +1139,243 @@ class TestHealthAndMetrics(unittest.TestCase):
     def test_metrics_total_requests_is_non_negative(self):
         r = requests.get(f"{BASE_URL}/metrics", timeout=5)
         self.assertGreaterEqual(r.json().get("total_requests", -1), 0)
+
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+
+class TestCapabilities(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.resp = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10)
+        cls.doc = cls.resp.json() if cls.resp.status_code == 200 else {}
+
+    def test_returns_200(self):
+        self.assertEqual(self.resp.status_code, 200, self.resp.text)
+
+    @unittest.skipUnless(AUTH_ENABLED, "Authentication is disabled in the running plugin")
+    def test_requires_auth(self):
+        r = requests.get(f"{BASE_URL}/capabilities",
+                         headers={"X-API-Token": "invalid-token-xyz"}, timeout=5)
+        self.assertEqual(r.status_code, 401)
+
+    def test_top_level_shape(self):
+        for key in ("schema_version", "compatibility_hash", "server", "studio", "routes",
+                    "plugin_routes", "features", "limits", "rate_limit", "security",
+                    "render_engines"):
+            self.assertIn(key, self.doc)
+        self.assertEqual(self.doc["schema_version"], 1)
+        self.assertRegex(self.doc["compatibility_hash"], r"^[0-9a-f]{16}$")
+
+    def test_versions_match_status(self):
+        status = requests.get(f"{BASE_URL}/status", timeout=5).json()
+        self.assertEqual(self.doc["server"]["version"], status["version"])
+        self.assertIn(self.doc["studio"]["sdk_major"], (4, 6))
+        self.assertTrue(self.doc["studio"]["version"])
+
+    def test_routes_include_core_endpoints(self):
+        routes = {(r["method"], r["path"]) for r in self.doc["routes"]}
+        for key in (("POST", "/execute"), ("GET", "/capabilities"),
+                    ("GET", "/requests/{id}/status"), ("GET", "/scene/events")):
+            self.assertIn(key, routes)
+        public = {(r["method"], r["path"]) for r in self.doc["routes"] if not r["auth"]}
+        self.assertEqual(public, {("GET", "/status"), ("GET", "/health"), ("GET", "/metrics")})
+
+    def test_limits_are_positive(self):
+        for key in ("max_body_size_mb", "max_script_length_kb", "max_concurrent_requests",
+                    "max_batch_variants", "max_animation_frames"):
+            self.assertGreater(self.doc["limits"][key], 0, key)
+
+    def test_render_engines_read_live(self):
+        engines = self.doc["render_engines"]
+        self.assertIn(engines["source"], ("live", "snapshot"))
+        self.assertIn("viewport", engines["selectable"])
+        self.assertTrue(engines["registered"], "DzRenderMgr reported no renderers")
+        active = [e for e in engines["registered"] if e["active"]]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["class_name"], engines["active_class"])
+
+    def test_hash_is_stable_across_calls(self):
+        again = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        self.assertEqual(again["compatibility_hash"], self.doc["compatibility_hash"])
+
+
+# ─── Request identity, idempotency and the error envelope (5d6f.8) ────────────
+
+ERROR_ENVELOPE_KEYS = ("success", "error_code", "error", "retryable")
+
+
+def unique_key(prefix="idem"):
+    return f"{prefix}-{uuid.uuid4().hex}"
+
+
+class TestServerIdentity(unittest.TestCase):
+
+    def test_status_reports_instance_and_revision(self):
+        r = requests.get(f"{BASE_URL}/status", timeout=5)
+        body = r.json()
+        self.assertRegex(body["server_instance_id"], r"^srv-[0-9a-f]{16}$")
+        self.assertIsInstance(body["scene_revision"], int)
+        self.assertEqual(r.headers.get("X-Server-Instance-Id"), body["server_instance_id"])
+
+    def test_instance_id_is_stable_within_a_run(self):
+        a = requests.get(f"{BASE_URL}/status", timeout=5).json()["server_instance_id"]
+        b = requests.get(f"{BASE_URL}/health", timeout=5).json()["server_instance_id"]
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        self.assertEqual(a, b)
+        self.assertEqual(caps["server"]["instance_id"], a)
+        self.assertTrue(caps["features"]["idempotency_key"])
+        self.assertGreater(caps["limits"]["idempotency_ttl_seconds"], 0)
+
+    def test_instance_header_on_error_responses(self):
+        r = requests.get(f"{BASE_URL}/requests/does-not-exist/status",
+                         headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(r.headers.get("X-Server-Instance-Id", "").startswith("srv-"))
+
+    def test_scene_revision_advances_after_execute(self):
+        before = requests.get(f"{BASE_URL}/status", timeout=5).json()["scene_revision"]
+        r = execute(script="1 + 1;")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreater(r.json()["scene_revision"], before)
+
+
+class TestCorrelationId(unittest.TestCase):
+
+    def test_generated_when_absent(self):
+        r = async_execute(script="1;")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["correlation_id"].startswith("cor-"))
+        self.assertEqual(r.headers.get("X-Correlation-Id"), body["correlation_id"])
+        self.assertTrue(body["server_instance_id"].startswith("srv-"))
+
+    def test_client_value_echoed_and_stored_on_job(self):
+        corr = unique_key("trace")
+        r = async_execute(script="1;", headers={**auth_headers(), "X-Correlation-Id": corr})
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["request_id"]
+        self.assertEqual(r.json()["correlation_id"], corr)
+        status = poll_status(rid)
+        self.assertEqual(status["correlation_id"], corr)
+        self.assertEqual(status["server_instance_id"], r.json()["server_instance_id"])
+        result = get_result(rid).json()
+        self.assertEqual(result["correlation_id"], corr)
+        listed = requests.get(f"{BASE_URL}/requests", headers=auth_headers(), timeout=5).json()
+        match = [x for x in listed["requests"] if x["request_id"] == rid]
+        self.assertEqual(match[0]["correlation_id"], corr)
+
+    def test_sync_execute_echoes_correlation_id(self):
+        corr = unique_key("trace")
+        r = execute(script="1;", headers={**auth_headers(), "X-Correlation-Id": corr})
+        self.assertEqual(r.json()["correlation_id"], corr)
+        self.assertEqual(r.headers.get("X-Correlation-Id"), corr)
+
+    def test_invalid_correlation_id_rejected(self):
+        r = async_execute(script="1;", headers={**auth_headers(), "X-Correlation-Id": "has space"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error_code"], "INVALID_FIELD")
+
+
+class TestIdempotencyKey(unittest.TestCase):
+
+    def _submit(self, key, script="1;"):
+        return async_execute(script=script, headers={**auth_headers(), "Idempotency-Key": key})
+
+    def test_repeat_returns_original_request_id(self):
+        key = unique_key()
+        first = self._submit(key)
+        self.assertEqual(first.status_code, 200, first.text)
+        second = self._submit(key)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["request_id"], first.json()["request_id"])
+        self.assertTrue(second.json()["idempotent_replay"])
+        self.assertEqual(second.headers.get("Idempotent-Replayed"), "true")
+        self.assertNotIn("idempotent_replay", first.json())
+        # The replay reports the ORIGINAL correlation id, not a new one.
+        self.assertEqual(second.json()["correlation_id"], first.json()["correlation_id"])
+
+    def test_different_keys_create_different_jobs(self):
+        a = self._submit(unique_key()).json()["request_id"]
+        b = self._submit(unique_key()).json()["request_id"]
+        self.assertNotEqual(a, b)
+
+    def test_same_key_different_body_is_rejected(self):
+        key = unique_key()
+        self.assertEqual(self._submit(key, "1;").status_code, 200)
+        r = self._submit(key, "2;")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.json()["error_code"], "IDEMPOTENCY_KEY_REUSED")
+        self.assertFalse(r.json()["retryable"])
+
+    def test_key_is_scoped_by_route(self):
+        key = unique_key()
+        reg = requests.post(f"{BASE_URL}/scripts/register", headers=auth_headers(),
+                            json={"name": "idem-scope-probe", "script": "1;"}, timeout=5)
+        self.assertEqual(reg.status_code, 200)
+        a = self._submit(key)
+        b = requests.post(f"{BASE_URL}/scripts/idem-scope-probe/async",
+                          headers={**auth_headers(), "Idempotency-Key": key}, json={}, timeout=10)
+        self.assertEqual(b.status_code, 200, b.text)
+        self.assertNotEqual(a.json()["request_id"], b.json()["request_id"])
+
+    def test_failed_submission_is_not_cached(self):
+        key = unique_key()
+        bad = requests.post(f"{BASE_URL}/execute/async",
+                            headers={**auth_headers(), "Idempotency-Key": key},
+                            data="{not json", timeout=5)
+        self.assertEqual(bad.status_code, 400)
+        again = requests.post(f"{BASE_URL}/execute/async",
+                              headers={**auth_headers(), "Idempotency-Key": key},
+                              data="{not json", timeout=5)
+        self.assertEqual(again.status_code, 400)
+        self.assertNotIn("idempotent_replay", again.json())
+
+    def test_invalid_key_rejected(self):
+        r = self._submit("x" * 300)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error_code"], "INVALID_FIELD")
+
+
+class TestErrorEnvelope(unittest.TestCase):
+
+    def assertEnvelope(self, body, code):
+        for key in ERROR_ENVELOPE_KEYS:
+            self.assertIn(key, body)
+        self.assertFalse(body["success"])
+        self.assertEqual(body["error_code"], code)
+        self.assertIsInstance(body["retryable"], bool)
+
+    def test_unknown_request(self):
+        for method, path in (("GET", "/requests/nope/status"), ("GET", "/requests/nope/result"),
+                             ("DELETE", "/requests/nope")):
+            with self.subTest(path=path):
+                r = requests.request(method, f"{BASE_URL}{path}", headers=auth_headers(), timeout=5)
+                self.assertEqual(r.status_code, 404)
+                self.assertEnvelope(r.json(), "REQUEST_NOT_FOUND")
+
+    def test_unknown_route(self):
+        r = requests.get(f"{BASE_URL}/definitely/not/a/route", headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+        self.assertEnvelope(r.json(), "ROUTE_NOT_FOUND")
+
+    def test_unknown_registered_script_delete(self):
+        r = requests.delete(f"{BASE_URL}/scripts/no-such-script-xyz", headers=auth_headers(), timeout=5)
+        self.assertEqual(r.status_code, 404)
+        self.assertEnvelope(r.json(), "SCRIPT_NOT_FOUND")
+
+    def test_sync_script_failure(self):
+        r = execute(script="throw new Error('boom');")
+        self.assertEqual(r.status_code, 200)
+        self.assertEnvelope(r.json(), "SCRIPT_ERROR")
+        self.assertIn("boom", r.json()["error"])
+
+    def test_async_script_failure(self):
+        rid = async_execute(script="throw new Error('boom');").json()["request_id"]
+        poll_status(rid)
+        body = get_result(rid).json()
+        self.assertEqual(body["status"], "failed")
+        self.assertEnvelope(body, "SCRIPT_ERROR")
 
 
 # ─── Script registry ──────────────────────────────────────────────────────────
@@ -962,15 +1571,38 @@ class TestConcurrency(unittest.TestCase):
 
 class TestStress(unittest.TestCase):
 
-    def test_oversized_body_returns_413(self):
-        padding = "x" * (6 * 1024 * 1024)
-        r = requests.post(
-            f"{BASE_URL}/execute",
-            headers={**auth_headers(), "Content-Type": "application/json"},
-            data=f'{{"script": "{padding}"}}',
-            timeout=30,
-        )
-        self.assertEqual(r.status_code, 413)
+    # Every POST route family must reject bodies over the configured limit
+    # (daz-script-server-5d6f.1). The body is only slightly over the limit:
+    # httplib stops reading once it passes the cap, and a large unread tail
+    # makes the server's close send a TCP RST that can hide the 413 from
+    # the client.
+    OVERSIZE_ROUTES = (
+        "/execute",
+        "/execute/async",
+        "/scripts/register",
+        "/scripts/size-limit-probe/execute",
+        "/scripts/size-limit-probe/async",
+        "/render",
+        "/render/batch",
+        "/render/animation",
+        "/scene/save-copy",
+        "/geometry/frames",
+    )
+
+    def test_oversized_body_returns_413_on_every_post_route(self):
+        limit = MAX_BODY_SIZE_MB * 1024 * 1024
+        padding = "x" * (limit + 1024)
+        body = f'{{"script": "{padding}"}}'.encode("ascii")
+        for path in self.OVERSIZE_ROUTES:
+            with self.subTest(path=path):
+                r = requests.post(
+                    f"{BASE_URL}{path}",
+                    headers={**auth_headers(), "Content-Type": "application/json"},
+                    data=body,
+                    timeout=30,
+                )
+                self.assertEqual(r.status_code, 413)
+                self.assertEqual(r.json().get("error_code"), "BODY_TOO_LARGE")
 
     def test_unknown_endpoint_returns_404(self):
         r = requests.get(f"{BASE_URL}/completely/unknown/path", timeout=5)

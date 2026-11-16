@@ -111,6 +111,12 @@ public:
     // Returns the current number of registered SSE clients.  Thread-safe.
     int subscriberCount() const;
 
+    // Scene revision: the broker bumps *counter on every structural scene
+    // change it observes (load, clear, node/skeleton/light/camera add/remove).
+    // The counter is owned by the pane so worker threads can read it without
+    // racing the broker's construction/destruction. Main thread only.
+    void setRevisionCounter(QAtomicInt* counter) { m_pRevision = counter; }
+
     // Thread-safe (QAtomicInt) — safe to call from any HTTP worker thread.
     bool isBusy() const {
         return m_busyDepth.fetchAndAddOrdered(0) > 0;
@@ -205,4 +211,6 @@ private:
     bool     m_renderBusy;            // guards against double enterBusy()/exitBusy() from the two render-finished signals
     mutable QAtomicInt m_busyDepth;   // count of active nested busy operations; written on main thread only
     mutable QAtomicInt m_busyReason;  // MainThreadBusy::Reason of the outermost active operation
+    QAtomicInt*        m_pRevision;   // pane-owned scene revision counter (may be null)
+    void bumpRevision() { if (m_pRevision) m_pRevision->fetchAndAddOrdered(1); }
 };

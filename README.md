@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.10.1** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.11.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.11.0](#whats-new-in-v2110)
 - [What's New in v2.10.1](#whats-new-in-v2101)
 - [What's New in v2.10.0](#whats-new-in-v2100)
 - [What's New in v2.9.1 – v2.9.3](#whats-new-in-v291--v293)
@@ -173,6 +174,41 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - CI/CD pipelines for 3D content validation
 
 ---
+
+## What's New in v2.11.0
+
+### 🛑 Cancellation reports what really happened
+
+A running script can't be interrupted, so cancelling one now answers
+`cancel_requested` instead of `cancelled`. Render jobs also get `killRender()`.
+When the script returns, the status becomes its real outcome: `cancelled` (the
+render was aborted), `completed_after_cancel_request` (the script finished and
+its result is kept) or `failed`. Jobs stuck past the timeout become `stale`
+and change to `completed_after_stale` if they finish later. See the status
+table under [`GET /requests/:id/status`](#get-requestsidstatus).
+
+**If you upgrade:** code that treated the cancel response's `"cancelled"` as
+final should poll the request for its outcome. dazpy's polling helpers already
+handle the new statuses.
+
+### ⏱️ Configurable stuck job timeout
+
+**Stuck Job Timeout** under Advanced Limits (5–1440 minutes, default 30) sets
+how long a job can run before it is reported as `stale`. Raise it if long
+renders get flagged. It applies immediately, without restarting the server.
+
+### 🎯 `iray_samples` now works
+
+`/render` and `/render/batch` used to accept `iray_samples` and ignore it. It
+now sets Iray's Max Samples for that render only and restores the previous
+value afterwards. The job result shows what was applied:
+
+```json
+"iray_samples": {"requested": 500, "applied": 500, "previous": 5000, "restored": true}
+```
+
+Invalid values, or `iray_samples` with the viewport or Filament engine, return
+400.
 
 ## What's New in v2.10.1
 
@@ -323,6 +359,12 @@ The `GET /render/:id/progress` SSE stream now emits a progress event at
 each frame boundary during an animation render, instead of only start/
 terminal events — the DAZ SDK exposes no per-percent render progress
 signal, so this frame-level marker is the most granular progress available.
+The frame events arrive on Studio 4 and Studio 6. Studio 6 shims `print()`,
+so its SSE handler reads the job's frame report every 0.5 s instead of using
+the print marker. Frames faster than that are merged into an event for the
+latest frame.
+`GET /requests/:id/status` reports the same frame N of M
+(`observation.progress.frame` / `total`, `progress_source: "frames"`).
 
 ### ⚡ Async client — `dazpy.aio.AsyncDazClient`
 
@@ -475,21 +517,22 @@ print(rs.canvas_output_paths("C:/renders/shot01.png"))
 
 ### 📸 Scene Checkpoints — `DazSceneState`
 
-A full scene checkpoint in one call: every skeleton's complete pose
+A pose checkpoint in one call: every skeleton's complete pose
 (bone-level, via `DazPose`) plus camera and light transforms/key
 properties, captured and restored via raw property values so repeated
 capture/apply cycles are idempotent — no more creeping drift on a
-character's morph dials across repeated pose save/restore.
+character's morph dials across repeated pose save/restore. It does not
+cover materials, environment, render settings or added/deleted nodes; see
+[Pose Checkpoints vs. Full Scene Backups](#pose-checkpoints-vs-full-scene-backups).
 
 ```python
-from dazpy import DazClient, DazSceneState
+from dazpy import DazClient, DazScene, DazSceneState
 
-client = DazClient()
-state = DazSceneState(client)
+scene = DazScene(DazClient())
 
-snapshot = state.capture()
+checkpoint = DazSceneState.capture(scene)
 # ... pose the scene for a render ...
-state.apply(snapshot)   # back to exactly where you started
+checkpoint.apply(scene)   # poses, cameras and lights back where you started
 ```
 
 ### 🧱 Scene Editing — Node Creation, Deletion, Reparenting
@@ -653,7 +696,9 @@ client.cancel_render(job.request_id)
 ```
 
 Returns 400 if the `request_id` belongs to a non-render job, so you get a clear
-error rather than silently cancelling the wrong request.
+error rather than silently cancelling the wrong request. A running render
+answers `cancel_requested`; the job becomes `cancelled` once the render has
+actually been aborted.
 
 ### 🎥 Scene Camera and Light Discovery
 
@@ -694,6 +739,34 @@ Third-party plugins can now register their own HTTP routes into the DazScript
 Server. Routes are resolved via a `DzScriptServerPane` pointer published on
 `qApp`, so companion plugins discovered at DAZ Studio startup are automatically
 wired in. Registered routes support path parameters (e.g. `/export/:id/status`).
+
+Plugin routes get the same security checks as built-in routes: GET routes
+require the API token and honour the IP whitelist; POST/PUT/DELETE/PATCH routes
+are also rate limited and body-size limited. Requests to unregistered paths
+return 404.
+
+To make its routes discoverable in `GET /capabilities` (`companion_plugins`),
+a plugin names itself first and passes that name with each route. Both calls
+are `Q_INVOKABLE` on the pane; use `Qt::BlockingQueuedConnection` from another
+thread:
+
+```cpp
+QMetaObject::invokeMethod(pane, "registerCompanionPlugin", Qt::BlockingQueuedConnection,
+    Q_RETURN_ARG(bool, ok), Q_ARG(QString, "my-exporter"),
+    Q_ARG(QString, "1.0.0"), Q_ARG(QString, "Scene export"));
+QMetaObject::invokeMethod(pane, "registerPluginRoute", Qt::BlockingQueuedConnection,
+    Q_RETURN_ARG(bool, ok), Q_ARG(QString, "POST"), Q_ARG(QString, "/my-exporter/export"),
+    receiverArg, Q_ARG(QString, "handleExport"), Q_ARG(QString, "my-exporter"));
+```
+
+Names are 1–64 characters of `A-Z a-z 0-9 . _ -`; versions are 1–64 printable
+ASCII characters. The 4-argument `registerPluginRoute` still works, but its
+routes are listed as unattributed. On a server without the registry (2.11.0 and
+earlier) the 5-argument call fails (`invokeMethod` returns false), so fall back
+to 4 arguments.
+`unregisterCompanionPlugin(name)` removes a plugin and its routes. Declare a
+new plugin's routes in `companion_plugins.json` and document them in
+`openapi.yaml` (tag `CompanionPlugins`); the parity check enforces both.
 
 ### 🐛 Bug Fixes
 
@@ -878,14 +951,16 @@ Long-running operations (renders, exports, batch jobs) no longer need to block t
 
 - **`POST /execute/async`** — Submit inline `script` or host-side `scriptFile` work asynchronously; returns a `request_id` immediately
 - **`POST /scripts/:id/async`** — Submit a registered script asynchronously
-- **`GET /requests/:id/status`** — Poll for progress (`queued`, `running`, `completed`, `failed`, `cancelled`)
+- **`GET /requests/:id/status`** — Poll for progress (see status values below)
 - **`GET /requests/:id/result`** — Fetch the final result; supports `?wait=true` to long-poll until complete
 - **`DELETE /requests/:id`** — Cancel a queued or running request
 - **`GET /requests`** — List all active and recently completed requests
 
-**Cancellation:** Queued requests are cancelled immediately. Running requests set a cancel flag and call `killRender()` — DAZ Studio honours the flag when the script returns.
+**Cancellation:** Queued requests are cancelled immediately. A running script can't be interrupted: cancelling it sets the status to `cancel_requested`, and render jobs also get a `killRender()` call to abort the render. When the script returns, the status changes to what really happened: `cancelled` (the render was aborted), `completed_after_cancel_request` (the script finished anyway and its result is kept) or `failed`.
 
-**TTL:** Completed, failed, and cancelled requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
+**Stale requests:** a request still running after the **Stuck Job Timeout** (Advanced Limits in the pane; default 30 minutes, 5–1440, applies immediately) becomes `stale`. This usually means DAZ Studio is blocked behind a dialog; raise the timeout if long renders get flagged. It answers with `success: false` and ends long-polls. If the script returns later, the status changes to `completed_after_stale` (or `failed`).
+
+**TTL:** Finished and stale requests are automatically purged after 1 hour (cleanup timer fires every 5 minutes).
 
 **Stale running requests:** If a request has been `running` for more than 30 minutes without completing — e.g. a render blocked behind a DAZ Studio modal dialog — it's automatically marked `failed` so polling clients aren't left waiting forever. The underlying DAZ Studio operation may still be stuck; check the DAZ Studio window directly if this happens.
 
@@ -1256,6 +1331,49 @@ scene.loop_playback(True)
 
 ---
 
+### Pose Checkpoints vs. Full Scene Backups
+
+dazpy has two ways to get back to an earlier state. They are not
+interchangeable:
+
+| | Pose checkpoint — `DazSceneState` | Full scene backup — `scene.save_copy()` |
+|---|---|---|
+| Lives | In memory (or `to_dict()` JSON) | A `.duf` file on the DAZ Studio host |
+| Captures | Every figure's bone rotations, morphs and figure-level numeric properties; each figure's fit-to target; camera and light transforms; light Flux / Shadow Softness / Spread Angle | The whole scene |
+| Does **not** capture | Materials and surfaces; HDRI / environment and render settings; nodes added or deleted after capture; props and other non-figure, non-camera, non-light nodes; bone translations; keyframes; any other camera or light property (e.g. focal length, color) | — |
+| Restore | `state.apply(scene)`: fast, in place, verified, best effort | Reload the file (`scene.load()` merges; clear the scene first for a clean restore) |
+| Use for | Resetting poses/cameras/lights between renders or experiments | Anything destructive, before it happens |
+
+```python
+from dazpy import DazClient, DazScene, DazSceneState
+
+scene = DazScene(DazClient())
+
+# Pose checkpoint, plus a full-scene backup written first (optional).
+checkpoint = DazSceneState.capture(scene, backup_path="C:/backups/pre_shot.duf")
+# ... experiment ...
+report = checkpoint.apply(scene)
+if not report["complete"]:
+    for s in report["skipped"]:          # nodes deleted since capture
+        print(f"skipped {s['kind']} {s['name']} ({s['reason']})")
+    print("full backup at", report["backup"]["path"])
+```
+
+`apply()` returns a verification report:
+
+- `restored`: every node that was restored. Each figure was read back and
+  compared against the checkpoint, and retried if it didn't match.
+- `skipped`: one `{"kind", "name", "reason"}` entry for each figure, camera
+  or light that no longer exists (`reason: "not_found"`). A `follow_target`
+  entry means the figure was restored but the figure it was fitted to is
+  gone. Missing nodes are never recreated.
+- `errors`: human-readable messages for every problem, skips included.
+- `complete`: `True` only when nothing was skipped or failed.
+- `backup`: the `save_copy()` result from `capture(backup_path=...)`, or
+  `None`.
+
+---
+
 ### Geometry
 
 `DazGeometry` provides access to the raw mesh data of a node's shape.
@@ -1551,7 +1669,9 @@ All settings are persisted via QSettings and restored between DAZ Studio session
 
 - Exact match only (wildcards not supported in v1.2.0)
 - Blocked IPs receive HTTP 403 Forbidden
-- Checked before authentication (efficient)
+- Checked before authentication on every authenticated route (execute, script
+  registry, async requests, render, scene I/O, SSE streams). `/status`,
+  `/health` and `/metrics` are public and skip it
 - Essential for network-exposed deployments
 
 ### ⏱️ Rate Limiting
@@ -1566,13 +1686,16 @@ All settings are persisted via QSettings and restored between DAZ Studio session
 - Separate tracking per IP address
 - Exceeded IPs receive HTTP 429 Too Many Requests
 - Logs violations with timestamp and client IP
+- Applies to every POST/DELETE route. Polling and streaming GETs
+  (`/requests/*`, `GET /scripts`, `/render/:id/progress`, `/scene/events`)
+  aren't rate limited, so a client watching a job isn't throttled
 
 ### 🎛️ Advanced Limits
 
 | Setting | Default | Range | Description |
 |---------|---------|-------|-------------|
 | **Max Concurrent Requests** | `10` | 5-50 | Maximum simultaneous requests |
-| **Max Request Body Size** | `5` MB | 1-50 | Maximum request body size |
+| **Max Request Body Size** | `5` MB | 1-50 | Maximum request body size, enforced on every route while the body is read (HTTP 413, `BODY_TOO_LARGE`) |
 | **Max Script Text Length** | `1024` KB (1 MB) | 100-10240 | Maximum inline script size |
 
 **Protection:**
@@ -1677,6 +1800,166 @@ All endpoints except `/status`, `/health`, and `/metrics` require authentication
 ```
 
 **Note:** Counters persist across DAZ Studio restarts (saved to QSettings).
+
+---
+
+### `GET /capabilities`
+
+**Purpose:** Machine-readable discovery of versions, routes, feature flags,
+limits and render engines, so clients can adapt instead of hard-coding them
+**Authentication:** Required (if enabled). Uses the read chain (IP whitelist +
+auth, not rate limited)
+
+**Response** (abridged):
+```json
+{
+  "schema_version": 1,
+  "compatibility_hash": "3f9a1c0b7d2e4a55",
+  "server": { "name": "DazScriptServer", "version": "2.11.0" },
+  "studio": { "version": "4.24.0.3", "sdk_version": "4.5.0.100", "sdk_major": 4,
+              "qt_version": "4.8.7", "qt_build_version": "4.8.7" },
+  "routes": [ { "method": "POST", "path": "/execute", "auth": true, "kind": "json" } ],
+  "plugin_routes": [ { "method": "POST", "path": "/my-exporter/export", "auth": true,
+                       "owner": "MyExportServer", "plugin": "my-exporter" } ],
+  "companion_plugins": [
+    { "name": "my-exporter", "registered": true, "version": "1.0.0",
+      "description": "Scene export",
+      "routes": [ { "method": "POST", "path": "/my-exporter/export", "auth": true },
+                  { "method": "GET", "path": "/my-exporter/export/:id", "auth": true } ] }
+  ],
+  "features": { "async": true, "report_file": true, "sse_scene_events": true,
+                "render_animation": true, "companion_plugins": false },
+  "limits": { "max_body_size_mb": 5, "max_script_length_kb": 1024,
+              "max_concurrent_requests": 10, "max_batch_variants": 100,
+              "max_animation_frames": 1000, "async_max_queue_depth": 100,
+              "async_result_ttl_seconds": 3600, "stale_job_timeout_minutes": 30 },
+  "rate_limit": { "enabled": false, "max_requests": 60, "window_seconds": 60,
+                  "applies_to": "write" },
+  "security": { "auth_enabled": true, "ip_whitelist_enabled": false,
+                "auth_headers": ["X-API-Token", "Authorization: Bearer"] },
+  "render_engines": {
+    "registered": [ { "class_name": "DzIrayRenderer", "name": "NVIDIA Iray", "active": true } ],
+    "selectable": ["viewport", "iray"],
+    "active_class": "DzIrayRenderer",
+    "source": "live",
+    "read_at": "2026-11-14T18:02:11Z"
+  }
+}
+```
+
+- `limits` reports the current settings, not the compiled defaults.
+- `render_engines` is read from `DzRenderMgr` on the main thread.
+  `selectable` lists the values `POST /render` accepts for `engine` right now.
+  While DAZ Studio is busy (rendering, loading a scene), the server returns the
+  last document it built instead of blocking, with `"source": "snapshot"`.
+- `compatibility_hash` fingerprints the schema version, the route table
+  (including companion-plugin routes) and the feature flags. It doesn't change
+  with limits, settings or render engines, so clients can cache their
+  route/feature decisions by it.
+- `companion_plugins` lists each companion plugin with its version and routes.
+  Routes a plugin registered without naming itself (older plugins) are grouped
+  by the class of their handler object, with `"registered": false` and
+  `"version": null`. `plugin_routes` is the same routes as a flat list.
+- Clients must ignore unknown keys. `schema_version` goes up only on breaking
+  changes to the document's shape.
+- dazpy: `DazClient.capabilities()` / `AsyncDazClient.capabilities()`.
+
+---
+
+### Request identity, idempotency and errors
+
+MCP servers and other automated clients retry after timeouts and DAZ Studio
+restarts. These headers and fields make those retries safe and let you tell a
+slow server from a restarted one.
+
+**`server_instance_id`**: a random `srv-…` ID generated each time the server
+starts. It's sent as the `X-Server-Instance-Id` header on every response
+(errors included) and in the body of `/status`, `/health`, `/capabilities`
+(`server.instance_id`) and every job response. If it changes, the server has
+restarted, and its in-memory jobs, registered scripts and idempotency records
+are gone. Async job records keep the ID of the run that accepted them.
+
+**`X-Correlation-Id`**: send any 1–255 printable-ASCII trace ID (no spaces)
+to a job route: `/execute`, `/scripts/{id}/execute`, `/execute/async`,
+`/scripts/{id}/async`, `/render`, `/render/batch` or `/render/animation`. The
+server echoes it in the response header and as `correlation_id` in the body,
+and stores it on the async job, so `GET /requests/{id}/status`, `…/result` and
+`GET /requests` return it too. If you don't send one, the server generates a
+`cor-…` ID.
+
+**`Idempotency-Key`**: accepted on the async submission routes
+(`/execute/async`, `/scripts/{id}/async`, `/render`, `/render/batch`,
+`/render/animation`). The rules:
+
+| Situation | Response |
+|---|---|
+| First request with this key | Handled normally; a 2xx response is remembered for `limits.idempotency_ttl_seconds` (1 h) |
+| Same route + same body + same key | The original response, with `"idempotent_replay": true` and header `Idempotent-Replayed: true`. No second job is queued |
+| Same key, first request still being handled | `409 IDEMPOTENCY_KEY_IN_FLIGHT` (`retryable: true`, `Retry-After: 1`) |
+| Same route + same key, different body | `422 IDEMPOTENCY_KEY_REUSED` |
+| Same key on a different route | Independent: keys are scoped per route, so it is a new submission |
+| First request failed (4xx/5xx) | Nothing remembered, so a retry runs normally |
+
+The records live in memory only: after a
+restart (new `server_instance_id`) the same key submits a new job.
+
+```bash
+curl -s -X POST http://127.0.0.1:18811/execute/async \
+  -H "X-API-Token: $TOKEN" -H "Idempotency-Key: render-shot-12" \
+  -H "X-Correlation-Id: mcp-call-8841" \
+  -d '{"script":"Scene.getNumNodes()"}'
+# {"request_id":"execute-1b2c3d4e","status":"queued","submitted_at":"…",
+#  "server_instance_id":"srv-3f9a1c0b7d2e4a55","correlation_id":"mcp-call-8841",
+#  "scene_revision":17}
+```
+
+```python
+rid = client.execute_async_submit(script, idempotency_key="render-shot-12",
+                                  correlation_id="mcp-call-8841")
+```
+
+**`scene_revision`**: a counter that starts at 0 on each server start and goes
+up on every structural scene change (scene load/clear, node, skeleton, light or
+camera added or removed) and after every executed script or job, since a script
+can change anything. It's reported on `/status`, `/health` and job responses.
+Within one `server_instance_id`, an unchanged value means no change was
+observed. Property edits made by hand in the DAZ UI are not counted.
+
+**Retry safety by operation:**
+
+| Operation | Safe to retry? |
+|---|---|
+| `GET` routes, `DELETE /requests/{id}`, `POST /render/{id}/cancel` | Yes |
+| `/execute/async`, `/scripts/{id}/async`, `/render`, `/render/batch`, `/render/animation` | Yes, with `Idempotency-Key`. Without one, a retry queues a second job |
+| `/execute`, `/scripts/{id}/execute` | **No.** A retry runs the script again. Use the async route with a key |
+| `POST /scripts/register`, `DELETE /scripts/{id}` | Yes (overwrite or delete by name) |
+| `POST /scene/save-copy` | Yes (overwrites the same output path) |
+| `POST /geometry/frames` | Yes (read-only evaluation) |
+
+**One error format.** Every failure has the same envelope:
+
+```json
+{ "success": false, "error_code": "REQUEST_NOT_FOUND",
+  "error": "Request not found (unknown ID, expired after its TTL, or submitted to a previous server instance)",
+  "retryable": false, "detail": "execute-1b2c3d4e" }
+```
+
+- HTTP-level failures (auth, validation, limits, unknown IDs or routes) use
+  4xx/5xx statuses. Job routes add `server_instance_id` and `correlation_id` to
+  the error body.
+- Script and job failures keep HTTP 200, because the HTTP exchange succeeded,
+  and put the same fields in the body: `error_code` is `SCRIPT_ERROR` (the
+  script threw), `JOB_CANCELLED` or `JOB_STALE` (stuck-job timeout), and
+  `error` holds the script's own message.
+- `retryable` is `true` only when an identical retry may succeed:
+  `STUDIO_BUSY`, `CONCURRENT_LIMIT_EXCEEDED`, `RATE_LIMIT_EXCEEDED`,
+  `SERVER_UNAVAILABLE` (e.g. queue full) and `IDEMPOTENCY_KEY_IN_FLIGHT`.
+- Branch on `error_code`, never on `error`, which may be reworded. The full code
+  list is in `openapi.yaml` (`ErrorResponse`). dazpy raises
+  `ServerResponseError` with `.error_code`, `.detail` and `.retryable`.
+- Companion-plugin routes return whatever body their plugin writes. The server
+  uses the envelope only for its own errors on those paths (unknown route,
+  auth, plugin unloaded).
 
 ---
 
@@ -1803,7 +2086,7 @@ The script registry allows you to register scripts once and execute them by name
 {
   "scripts": [
     {
-      "id": "scene-info",
+      "name": "scene-info",
       "description": "Return scene node count",
       "registered_at": "2026-03-27T10:15:00"
     }
@@ -1922,9 +2205,13 @@ duplicate it inside `args`:
 ```
 
 Progress events require either `value` (0–1) or `current` plus `total`. Log
-events require `message`. Output events require `path`; repeating a path updates
+events require `message`. Every write to the file updates the job's
+`last_activity_at` (taken from the file's modification time), so a long step
+with nothing else to report can write `{"type":"heartbeat"}` to show it is
+still alive; unknown event types are otherwise ignored. Output events require `path`; repeating a path updates
 that manifest entry. A `manifest` event may provide an `outputs` array. Use a
-unique report file for every job.
+unique report file for every job. Declared outputs can be downloaded over HTTP;
+see [Artifacts](#-artifacts-job-output-downloads).
 `reportFile` may not be the submitted `scriptFile`, because the server owns and
 truncates the former before the job is queued.
 
@@ -1967,6 +2254,10 @@ is still running.
   "request_id": "a3f2b891",
   "status": "running",
   "progress": 0.25,
+  "progress_supported": true,
+  "progress_source": "report",
+  "last_activity_at": "2026-04-09T10:15:01",
+  "idle_ms": 320,
   "observation": {
     "progress": {"value": 0.25, "current": 1, "total": 4, "phase": "render"},
     "log_tail": [{"level": "info", "source": "script", "message": "Loaded scene"}],
@@ -1980,9 +2271,40 @@ is still running.
 }
 ```
 
-**Status values:** `queued`, `running`, `completed`, `failed`, `cancelled`
+**Status values:**
+
+| Status | Final? | Meaning |
+|---|---|---|
+| `queued` | no | Waiting for the main thread |
+| `running` | no | Executing |
+| `cancel_requested` | no | Cancel asked while running; waiting for the script to return |
+| `stale` | no | Running past the stale timeout; `success: false`, but can still change to its real outcome |
+| `completed` | yes | Finished successfully |
+| `failed` | yes | Script error |
+| `cancelled` | yes | Work really stopped: cancelled while queued, or a render aborted after a cancel |
+| `completed_after_cancel_request` | yes | Cancel was asked but the script finished; result kept |
+| `completed_after_stale` | yes | Finished after being marked stale; result kept |
+
+Once set, `cancel_requested_at` and `stale_at` stay in status and result responses.
 
 `queue_position` is only meaningful when `status` is `queued`.
+
+**Progress and liveness fields** (status, result and `GET /requests` entries):
+
+| Field | Meaning |
+|---|---|
+| `progress_source` | `frames` (animation render: one step per frame), `report` (the job's `reportFile` progress events), or `none` |
+| `progress_supported` | `true` when `progress` can move while the job runs: animation renders, and `report` jobs on Studio 6. Studio 4 parses a report only after the script returns, and a single-frame render has only start and finish, so those are `false` |
+| `last_activity_at` | Latest sign of life: start, a frame boundary, a report-file write, a printed line (Studio 4 only), or completion. `null` while queued |
+| `idle_ms` | Milliseconds since `last_activity_at`; present only while the job is running, `cancel_requested` or `stale` |
+
+A growing `idle_ms` on a job with `progress_supported: true` means it has
+stopped reporting, which tells you more than `elapsed_ms` alone. For
+animation renders, `observation.progress` reads
+`{"value": 0.4, "current": 2, "total": 5, "frame": 3, "phase": "rendering",
+"message": "Rendering frame 3 of 5"}`: `current` counts finished frames and
+`frame` is the one rendering now. On completion it becomes `current == total`
+with `phase: "done"`.
 
 ---
 
@@ -2027,17 +2349,24 @@ Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 **Authentication:** Required (if enabled)
 
 **Cancellation behaviour:**
-- `queued` → removed from queue immediately
-- `running` → cancel flag set + `killRender()` called; DAZ Studio honours the flag when the script returns
+- `queued` → removed from the queue; status `cancelled`
+- `running` → status `cancel_requested`; render jobs also get `killRender()`.
+  A running script can't be interrupted, so poll the request for its real
+  outcome (`cancelled`, `completed_after_cancel_request` or `failed`).
+  Cancelling again while `cancel_requested` is a no-op that returns 200.
+- finished → 400
 
-**Response:**
+**Response (running request):**
 ```json
 {
   "request_id": "a3f2b891",
-  "status": "cancelled",
-  "cancelled_at": "2026-04-09T10:15:05"
+  "status": "cancel_requested",
+  "message": "Cancellation requested; a running script cannot be interrupted and will finish on its own. Poll the request for the final outcome.",
+  "cancel_requested_at": "2026-04-09T10:15:05"
 }
 ```
+
+A queued request answers with `"status": "cancelled"` and also includes `cancelled_at`.
 
 ---
 
@@ -2065,6 +2394,121 @@ Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 ```
 
 **Note:** Completed, failed, and cancelled requests are automatically purged after 1 hour.
+
+---
+
+## 📦 Artifacts (job output downloads)
+
+Clients that don't share a filesystem with DAZ Studio (an MCP sidecar, a
+container, another machine) can download a job's outputs over HTTP. Only files
+the job **declared** can be fetched:
+
+- outputs declared in its `reportFile` (`output` / `manifest` events), and
+- for render jobs, the `output_path` (`/render`, `kind: "render"`) or
+  `output_paths` (`/render/animation`, `kind: "frame"`) it wrote. A render that
+  reports `success: false` declares nothing.
+
+Each `observation.output_manifest.outputs[]` entry carries an `artifact_id`
+(its position in the manifest; re-declaring a path keeps the ID) and a `url`.
+The URL takes IDs only, never paths, so a client can't name an undeclared file.
+Both routes use the read middleware chain (IP whitelist, then auth) and are not
+rate limited. Artifact records expire with the job (1 hour).
+
+### `GET /artifacts/:id`
+
+Lists the job's artifacts with file metadata read at request time:
+
+```json
+{
+  "success": true,
+  "request_id": "rnd-3f2a91c0",
+  "status": "completed",
+  "count": 1,
+  "artifacts": [
+    {
+      "artifact_id": "0",
+      "url": "/artifacts/rnd-3f2a91c0/0",
+      "path": "C:/renders/shot-01.png",
+      "kind": "render",
+      "filename": "shot-01.png",
+      "content_type": "image/png",
+      "size": 482113,
+      "available": true,
+      "thumbnail_supported": true
+    }
+  ]
+}
+```
+
+`available` is false (and `size` null) when the declared path is missing, is a
+directory, or is not absolute. `thumbnail_supported` says whether `?thumbnail`
+should work (see below). It is judged by extension and size only; the content
+is checked when a thumbnail is requested.
+
+### `GET /artifacts/:id/:artifact_id`
+
+Streams the file with `Content-Type` (by extension), `Content-Length`,
+`Accept-Ranges: bytes` and `Content-Disposition: inline; filename=...`.
+
+- `Range: bytes=0-1023`, `bytes=1024-` and `bytes=-512` return `206` with
+  `Content-Range`. A range outside the file returns `416`.
+- `HEAD` returns the headers without the body.
+
+| Situation | Response |
+|---|---|
+| Unknown or expired job | `404 REQUEST_NOT_FOUND` |
+| Job declared no such artifact | `404 ARTIFACT_NOT_FOUND` |
+| ID isn't 1-64 chars of `A-Z a-z 0-9 - _` (e.g. `..`, `a.png`) | `400 INVALID_FIELD` |
+| Declared file is missing, a directory, or a relative path | `410 ARTIFACT_UNAVAILABLE` |
+
+### Thumbnails: `GET /artifacts/:id/:artifact_id?thumbnail=<px>`
+
+Returns a scaled copy of an image artifact instead of the file, for previews
+of renders that may be thousands of pixels across.
+
+- `thumbnail` is the longest edge in pixels, 16-1024. The aspect ratio is kept
+  and the image is never upscaled (a 300×150 render at `thumbnail=1024` stays
+  300×150).
+- `format=png` (default, keeps alpha) or `format=jpeg` (quality 85, alpha
+  flattened onto white).
+- The source needs an extension listed in `/capabilities`
+  `thumbnail_source_formats`, which are the Qt image plugins this Studio has
+  loaded. PNG, JPEG, BMP and TIFF are typical; EXR and HDR usually aren't. It
+  must also be at most 64 MB (`limits.thumbnail_max_source_mb`) and 100
+  megapixels.
+- Decoding runs on Studio's main thread, because Qt's image code isn't proven
+  safe on the server's worker threads under Qt 4.8. The server reads the
+  file on the worker and only hands the decode and scale to the main thread.
+  While the main thread is busy (rendering, loading a scene, running a long
+  job), or if it doesn't get to the request within 10 s, the answer is
+  `503 STUDIO_BUSY` with `Retry-After`.
+- Thumbnails are cached in memory per file size and mtime, size and format
+  (64 entries). `X-Thumbnail-Cache: hit|miss` shows which, and a cached
+  thumbnail is served even while Studio is busy.
+
+| Situation | Response |
+|---|---|
+| `thumbnail` not an integer 16-1024, or `format` not `png`/`jpeg` | `400 INVALID_FIELD` |
+| No Qt decoder for the extension, undecodable content, or over the limits | `422 THUMBNAIL_UNSUPPORTED` |
+| Studio's main thread busy, or no decode within 10 s | `503 STUDIO_BUSY` (retryable) |
+
+```python
+from dazpy import DazClient
+
+client = DazClient()
+rid = client.render_submit("C:/renders/shot-01.png", engine="iray")["request_id"]
+client.get_request_result(rid, wait=True, wait_timeout=600)
+
+client.list_artifacts(rid)                         # metadata
+png = client.download_artifact(rid, 0)             # bytes
+client.download_artifact(rid, 0, "local.png")      # stream to a file
+head = client.download_artifact(rid, 0, byte_range=(0, 1023))
+client.download_artifacts(rid, "out/")             # every available artifact
+thumb = client.get_artifact_thumbnail(rid, 0, 256)  # PNG bytes, longest edge 256
+client.get_artifact_thumbnail(rid, 0, 512, format="jpeg", dest="preview.jpg")
+```
+
+`AsyncDazClient` has the same methods as coroutines.
 
 ---
 
@@ -2122,6 +2566,17 @@ float32 bones[numFrames][numBones][3]
 
 Errors use the usual JSON error body (for example a missing `frames` field, an
 invalid `resolution`, or `figure not found`).
+
+**dazpy:**
+
+```python
+from dazpy import DazClient
+
+with DazClient() as client:
+    gf = client.export_geometry_frames([0, 10, 20], bones=["lHand", "rHand"])
+    print(gf.frame(10)[0])     # (x, y, z) of vertex 0 at frame 10
+    print(gf.bone("lHand"))    # lHand origin for each frame
+```
 
 ---
 

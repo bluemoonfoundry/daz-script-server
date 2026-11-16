@@ -356,6 +356,20 @@ class TestAsyncDazClientRealHttpxWiring:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_submit_sends_identity_headers(self):
+        route = respx.post("http://127.0.0.1:18811/execute/async").mock(
+            return_value=httpx.Response(200, json={"request_id": "execute-1", "status": "queued"})
+        )
+        async with AsyncDazClient() as client:
+            rid = await client.execute_async_submit(
+                "1;", idempotency_key="job-42", correlation_id="trace-7")
+        assert rid == "execute-1"
+        sent = route.calls.last.request.headers
+        assert sent["Idempotency-Key"] == "job-42"
+        assert sent["X-Correlation-Id"] == "trace-7"
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_generic_server_rejection_is_typed(self):
         respx.get("http://127.0.0.1:18811/status").mock(
             return_value=httpx.Response(409, json={"error": "request conflict"})
@@ -514,3 +528,168 @@ class TestAsyncServerVersionCheck:
         async with AsyncDazClient(token="", check_version=False) as client:
             await client.execute("1;")
         assert status.call_count == 0
+
+
+class TestAsyncDazClientCapabilities:
+    @pytest.mark.asyncio
+    async def test_capabilities_gets_endpoint(self):
+        client, mock_http = _client_with_mock_http()
+        doc = {"schema_version": 1, "features": {"async": True}}
+        mock_http.get.return_value = _mock_resp(json_data=doc)
+        assert await client.capabilities() == doc
+        assert mock_http.get.call_args[0][0].endswith("/capabilities")
+
+    @pytest.mark.asyncio
+    async def test_capabilities_404_on_old_server(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.get.return_value = _mock_resp(status_code=404, json_data={"error": "not found"})
+        with pytest.raises(exceptions.ServerResponseError) as ei:
+            await client.capabilities()
+        assert ei.value.status_code == 404
+
+
+class TestAsyncDazClientArtifacts:
+    """GET /artifacts/{id}[/{artifact_id}] over a real httpx transport (5d6f.7)."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_list_artifacts(self):
+        body = {"success": True, "request_id": "rnd-1", "count": 0, "artifacts": []}
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1").mock(
+            return_value=httpx.Response(200, json=body))
+        async with AsyncDazClient() as client:
+            assert await client.list_artifacts("rnd-1") == body
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_download_bytes_with_range(self):
+        route = respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(206, content=b"PNG",
+                                        headers={"Content-Range": "bytes 0-2/10"}))
+        async with AsyncDazClient() as client:
+            data = await client.download_artifact("rnd-1", 0, byte_range=(0, 2))
+        assert data == b"PNG"
+        assert route.calls.last.request.headers["Range"] == "bytes=0-2"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_download_to_file(self, tmp_path):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(200, content=b"PNGDATA"))
+        dest = tmp_path / "out.png"
+        async with AsyncDazClient() as client:
+            assert await client.download_artifact("rnd-1", "0", dest) == str(dest)
+        assert dest.read_bytes() == b"PNGDATA"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_thumbnail(self, tmp_path):
+        route = respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(200, content=b"\x89PNG",
+                                        headers={"Content-Type": "image/png"}))
+        async with AsyncDazClient() as client:
+            assert await client.get_artifact_thumbnail("rnd-1", 0, 64) == b"\x89PNG"
+            dest = tmp_path / "t.jpg"
+            assert await client.get_artifact_thumbnail(
+                "rnd-1", "0", format="jpeg", dest=dest) == str(dest)
+        assert dest.read_bytes() == b"\x89PNG"
+        first, second = route.calls[0].request.url.params, route.calls[1].request.url.params
+        assert (first["thumbnail"], first["format"]) == ("64", "png")
+        assert (second["thumbnail"], second["format"]) == ("256", "jpeg")
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_thumbnail_unsupported_raises_typed_error(self):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(422, json={
+                "success": False, "error_code": "THUMBNAIL_UNSUPPORTED",
+                "error": "no decoder", "retryable": False}))
+        async with AsyncDazClient() as client:
+            with pytest.raises(exceptions.ServerResponseError) as ei:
+                await client.get_artifact_thumbnail("rnd-1", "0")
+        assert ei.value.status_code == 422
+        assert ei.value.error_code == "THUMBNAIL_UNSUPPORTED"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unavailable_artifact_raises_typed_error(self):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(410, json={
+                "success": False, "error_code": "ARTIFACT_UNAVAILABLE",
+                "error": "gone", "retryable": False}))
+        async with AsyncDazClient() as client:
+            with pytest.raises(exceptions.ServerResponseError) as ei:
+                await client.download_artifact("rnd-1", "0")
+        assert ei.value.status_code == 410
+        assert ei.value.error_code == "ARTIFACT_UNAVAILABLE"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_download_artifacts(self, tmp_path):
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1").mock(
+            return_value=httpx.Response(200, json={"artifacts": [
+                {"artifact_id": "0", "available": True, "filename": "a.png"},
+                {"artifact_id": "1", "available": False, "filename": "b.png"},
+            ]}))
+        respx.get("http://127.0.0.1:18811/artifacts/rnd-1/0").mock(
+            return_value=httpx.Response(200, content=b"A"))
+        async with AsyncDazClient() as client:
+            paths = await client.download_artifacts("rnd-1", tmp_path)
+        assert [os.path.basename(p) for p in paths] == ["0_a.png"]
+        assert (tmp_path / "0_a.png").read_bytes() == b"A"
+
+
+class TestAsyncScriptRegistryAndGeometry:
+    """GET /scripts, DELETE /scripts/{id}, POST /geometry/frames (5d6f.25)."""
+
+    @pytest.mark.asyncio
+    async def test_list_scripts(self):
+        client, mock_http = _client_with_mock_http()
+        scripts = [{"name": "scene-info", "registered_at": "2026-11-14T10:00:00"}]
+        mock_http.get.return_value = _mock_resp(json_data={"scripts": scripts, "count": 1})
+        assert await client.list_scripts() == scripts
+        assert mock_http.get.call_args.args[0] == "http://127.0.0.1:18811/scripts"
+
+    @pytest.mark.asyncio
+    async def test_delete_script(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.delete.return_value = _mock_resp(json_data={"success": True, "id": "scene-info"})
+        assert await client.delete_script("scene-info") is True
+        assert mock_http.delete.call_args.args[0] == "http://127.0.0.1:18811/scripts/scene-info"
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_script(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.delete.return_value = _mock_resp(
+            status_code=404, json_data={"error_code": "SCRIPT_NOT_FOUND", "error": "Unknown script"})
+        assert await client.delete_script("nope", missing_ok=True) is False
+        with pytest.raises(exceptions.ServerResponseError) as excinfo:
+            await client.delete_script("nope")
+        assert excinfo.value.error_code == "SCRIPT_NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_export_geometry_frames(self):
+        import struct
+        payload = struct.pack("<4s7I", b"DZGF", 1, 1, 1, 1, 0, 0, 0)
+        payload += struct.pack("<i", 7) + struct.pack("<3f", 1, 2, 3) + struct.pack("<3f", 4, 5, 6)
+        client, mock_http = _client_with_mock_http()
+        resp = _mock_resp()
+        resp.content = payload
+        mock_http.post.return_value = resp
+        gf = await client.export_geometry_frames([7], bones=["head"], scene_update=False)
+        assert mock_http.post.call_args.args[0] == "http://127.0.0.1:18811/geometry/frames"
+        assert mock_http.post.call_args.kwargs["json"] == {
+            "frames": [7], "bones": ["head"], "sceneUpdate": False}
+        assert "timeout" not in mock_http.post.call_args.kwargs
+        assert gf.frame(7) == [(1.0, 2.0, 3.0)]
+        assert gf.bone("head") == [(4.0, 5.0, 6.0)]
+
+    @pytest.mark.asyncio
+    async def test_export_geometry_frames_timeout_override(self):
+        import struct
+        client, mock_http = _client_with_mock_http()
+        resp = _mock_resp()
+        resp.content = struct.pack("<4s7I", b"DZGF", 1, 1, 0, 0, 0, 0, 0) + struct.pack("<i", 0)
+        mock_http.post.return_value = resp
+        await client.export_geometry_frames([0], timeout=90)
+        assert mock_http.post.call_args.kwargs["timeout"] == 90
