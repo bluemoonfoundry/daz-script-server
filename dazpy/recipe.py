@@ -78,12 +78,13 @@ def _patient(fn):
     """Run *fn* with its scene's client waiting out busy replies (see
     :meth:`DazClient.waiting_out_busy`).  The scene is the second argument."""
     @functools.wraps(fn)
-    def wrapper(recipe, scene=None, *args, **kwargs):
+    def wrapper(*args, **kwargs):
+        scene = args[1] if len(args) > 1 else kwargs.get("scene")
         client = getattr(scene, "_client", None)
         if not isinstance(client, DazClient):
-            return fn(recipe, scene, *args, **kwargs)
+            return fn(*args, **kwargs)
         with client.waiting_out_busy(RECIPE_BUSY_WAIT_S):
-            return fn(recipe, scene, *args, **kwargs)
+            return fn(*args, **kwargs)
     return wrapper
 
 

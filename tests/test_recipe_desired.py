@@ -99,6 +99,21 @@ class DesiredTests(unittest.TestCase):
         for got, want in zip(key["rotation"], expected):
             self.assertAlmostEqual(got, want, places=4)
 
+    def test_explicit_light_look_at_actor_aims_at_its_chest(self):
+        from dazpy._shot_geometry import look_at_euler
+        from dazpy.math3 import Vec3
+        d = compute_desired(recipe_with(
+            actors={"a": {"asset": "g", "position": [10, 5, 20]}},
+            lights={"p": {"type": "spot", "position": [0, 200, 300], "look_at": "a"}}))
+        rot = d["lighting.lights.p"].channels["transform"]["rotation"]
+        for got, want in zip(rot, look_at_euler(Vec3(0.0, 200.0, 300.0), Vec3(10.0, 135.0, 20.0))):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_forgotten_scene_is_still_a_type_error(self):
+        import dazpy.recipe
+        with self.assertRaises(TypeError):
+            dazpy.recipe.apply({"recipe_version": 1, "id": "r"})
+
     def test_explicit_camera_look_at_actor_aims_at_its_chest(self):
         d = compute_desired(recipe_with(
             actors={"a": {"asset": "g", "position": [10, 5, 20]}},

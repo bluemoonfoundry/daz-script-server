@@ -108,8 +108,8 @@ share one key namespace: a prop key that is also an actor key is a
        a shot's own ``render`` override does not reframe its camera).
        A framed prop is aimed at its position. Several framed subjects are
        framed at their centroid, without widening to fit them all. Rig lights,
-       and an explicit camera's ``look_at`` of an actor key, aim at the actor's
-       chest (130 cm); a ``look_at`` of ``[x, y, z]`` is used as given.
+       and an explicit camera's or light's ``look_at`` of an actor key, aim at
+       the actor's chest (130 cm); a ``look_at`` of ``[x, y, z]`` is used as given.
    * - ``shots[]``
      - ``id``, ``camera``, ``output`` (absolute path on the Studio host; the
        folder is created), optional ``render`` override.

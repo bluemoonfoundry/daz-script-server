@@ -85,7 +85,9 @@ def _new_scene() -> DazScene:
 @skip_no_daz
 class TestSceneRecipeLive(unittest.TestCase):
     def setUp(self):
-        self.enterContext(_CLIENT.waiting_out_busy(_BUSY_WAIT_S))
+        wait = _CLIENT.waiting_out_busy(_BUSY_WAIT_S)  # enterContext needs 3.11
+        wait.__enter__()
+        self.addCleanup(wait.__exit__, None, None, None)
 
     def tearDown(self):
         # Leave Studio with an empty scene, whatever the test did.

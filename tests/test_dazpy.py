@@ -1492,6 +1492,14 @@ class TestErrorMapping(unittest.TestCase):
             client.execute("1+1;")
         self.assertEqual(mock_session.post.call_count, 1)
 
+    def test_nested_waiting_out_busy_keeps_the_longer_wait(self):
+        client, _ = self._client_with_mock_session()
+        with client.waiting_out_busy(600.0):
+            with client.waiting_out_busy(120.0):
+                self.assertEqual(client.__dict__["_busy_wait"].max_wait, 600.0)
+            self.assertEqual(client.__dict__["_busy_wait"].max_wait, 600.0)
+        self.assertIsNone(client.__dict__["_busy_wait"].max_wait)
+
     def test_waiting_out_busy_is_per_thread(self):
         import threading
         client, mock_session = self._client_with_mock_session()

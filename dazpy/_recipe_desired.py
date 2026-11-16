@@ -60,6 +60,12 @@ def _subject_point(recipe: SceneRecipe, key: str, anchor_cm: float) -> Vec3:
     return Vec3(p.x, p.y + anchor_cm, p.z) if key in recipe.actors else p
 
 
+def _aim_point(recipe: SceneRecipe, ref: Any) -> Vec3:
+    """An explicit ``look_at``: an actor key aims at the chest (like rig lights),
+    a prop key at its position, an ``[x, y, z]`` literal as given."""
+    return _subject_point(recipe, ref, _RIG_ANCHOR_CM) if isinstance(ref, str) else _v(ref)
+
+
 def _framing_distance(recipe: SceneRecipe, shot_type: str, focal_length: float) -> float:
     res = recipe.render.resolution if recipe.render is not None else None
     aspect = res[1] / res[0] if res else _DEFAULT_ASPECT
@@ -97,11 +103,7 @@ def _camera(recipe: SceneRecipe, name: str, cam: RecipeCamera) -> DesiredEntity:
         transform = {"position": _t((pos.x, pos.y, pos.z)), "aim": _t((aim.x, aim.y, aim.z)),
                      "rotation": None}
     else:
-        look = None
-        if isinstance(cam.look_at, str):  # an actor key aims at the chest, like rig lights
-            look = _subject_point(recipe, cam.look_at, _RIG_ANCHOR_CM)
-        elif cam.look_at is not None:  # an [x, y, z] literal is used as given
-            look = _resolve(recipe, cam.look_at)
+        look = _aim_point(recipe, cam.look_at) if cam.look_at is not None else None
         aim = _t((look.x, look.y, look.z)) if look is not None else None
         transform = {"position": _t(cam.position), "aim": aim,
                      "rotation": _t(cam.rotation) if cam.rotation is not None else None}
@@ -122,7 +124,7 @@ def _light(path: str, label: str, light_type: str, pos: Vec3, rotation: tuple,
 def _recipe_light(recipe: SceneRecipe, name: str, spec: RecipeLight) -> DesiredEntity:
     pos = _v(spec.position)
     if spec.look_at is not None:
-        rot = _t(look_at_euler(pos, _resolve(recipe, spec.look_at)))
+        rot = _t(look_at_euler(pos, _aim_point(recipe, spec.look_at)))
     elif spec.rotation is not None:
         rot = _t(spec.rotation)
     else:

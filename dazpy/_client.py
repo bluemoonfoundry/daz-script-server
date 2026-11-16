@@ -266,10 +266,14 @@ class DazClient:
 
     @contextmanager
     def waiting_out_busy(self, max_wait: float) -> Iterator["DazClient"]:
-        """Within the block, calls on this thread retry a busy Studio for up to
-        *max_wait* seconds, as if passed ``retry_on_busy=True`` -- including
-        calls made for you by :class:`~dazpy.DazNode`, :class:`~dazpy.DazScene`
-        and the other proxies.  Other threads are unaffected.
+        """Within the block, this client's script execution and submission calls
+        on this thread (``execute``, ``execute_file``, registered-script and
+        async submits, render submits) retry a busy Studio for up to *max_wait*
+        seconds, as if passed ``retry_on_busy=True`` -- including those made for
+        you by :class:`~dazpy.DazNode`, :class:`~dazpy.DazScene` and the other
+        proxies.  Other threads are unaffected.  A call's own
+        ``retry_on_busy=True, max_wait=...`` takes precedence; nested blocks keep
+        the longer wait.
 
         Use it around a multi-call operation that must not fail halfway because
         Studio briefly reports busy (Studio 6 does after a load or clear, while
@@ -277,7 +281,7 @@ class DazClient:
         """
         local = self.__dict__.setdefault("_busy_wait", threading.local())
         prev = getattr(local, "max_wait", None)
-        local.max_wait = float(max_wait)
+        local.max_wait = float(max_wait) if prev is None else max(prev, float(max_wait))
         try:
             yield self
         finally:
