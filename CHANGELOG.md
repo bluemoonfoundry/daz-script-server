@@ -58,9 +58,9 @@ All notable changes to DazScript Server are documented here.
 ### Fixed
 
 - **`DazScene.load` now merges, as documented.** It passed load mode `0`
-  (`DzScene.OpenNew`), which replaced the current scene; it now passes
-  `1` (`DzScene.MergeFile`). Callers that relied on it clearing the scene
-  should clear first.
+  which Studio treats as open (it replaced the current scene); it now passes
+  `DzScene.MergeFile`. Callers that relied on it clearing the scene should
+  clear first.
 
 ### Removed
 

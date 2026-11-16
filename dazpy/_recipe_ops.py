@@ -125,7 +125,7 @@ def _load_asset_script(path: str) -> str:
     """
     return ScriptBuilder.iife(f"""// recipe:load
 Scene.selectAllNodes(false);
-Scene.loadScene({ScriptBuilder.escape_string(path)}, 1);  // 1 = DzScene.MergeFile (0 opens a new scene)
+Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);
 return true;""")
 
 

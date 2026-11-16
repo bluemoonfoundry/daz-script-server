@@ -418,7 +418,7 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         load = next(s for s in client.scripts if "loadScene" in s)
         self.assertIn("Scene.selectAllNodes(false);", load)
         self.assertLess(load.index("Scene.selectAllNodes(false);"), load.index("loadScene"))
-        self.assertIn('C:/Lib/g9.duf", 1)', load)  # merge, never 0 (OpenNew)
+        self.assertIn('C:/Lib/g9.duf", DzScene.MergeFile)', load)  # never 0 / OpenNew
 
     def test_claim_names_a_root_created_without_a_name(self):
         # DS4: a new DzBasicCamera / DzSpotLight has a label but an empty name,
