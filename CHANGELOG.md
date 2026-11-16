@@ -4,8 +4,6 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
-## [2.11.0] - 2026-11-15
-
 ### Added
 
 - **Scene recipes (5d6f.18).** New `dazpy.recipe` module: `validate`, `plan`,
@@ -24,6 +22,17 @@ All notable changes to DazScript Server are documented here.
   scene proxies make) retry a busy Studio as if passed `retry_on_busy=True`.
   Studio 6 reports busy briefly after a load or clear; the recipe functions
   use it (up to 120 s per call).
+
+### Fixed
+
+- **`DazScene.load` now merges, as documented.** It passed load mode `0`
+  which Studio treats as open (it replaced the current scene); it now passes
+  `DzScene.MergeFile`. Callers that relied on it clearing the scene should
+  clear first.
+
+## [2.11.0] - 2026-11-15
+
+### Added
 
 - **Companion-plugin discovery registry.** Plugins can name themselves with
   `registerCompanionPlugin(name, version, description)` and attribute routes
@@ -48,33 +57,6 @@ All notable changes to DazScript Server are documented here.
   `thumbnail_source_formats` and `limits.thumbnail_min_px` / `_max_px` /
   `_max_source_mb`. dazpy adds `get_artifact_thumbnail()` on `DazClient` and
   `AsyncDazClient`.
-
-### Changed
-
-- **`GET /render/{id}/progress` streams animation frame events on Studio 6.**
-  Studio 6 shims `print()`, so the `[DAZPY_FRAME]` marker never reached the
-  stream there. The SSE handler now polls the job's server-owned frame report,
-  every 0.5 s, the same source job status uses, and emits `progress` events
-  (`percent`, `frame`, `total_frames`) as Studio 4 already did. Frames faster
-  than 0.5 s are merged into an event for the latest frame. Frame events
-  are never duplicated or reordered, and a subscriber that joins mid-render
-  first gets the latest frame. The OpenAPI example payloads for this stream now
-  match what the server sends.
-
-### Fixed
-
-- **`DazScene.load` now merges, as documented.** It passed load mode `0`
-  which Studio treats as open (it replaced the current scene); it now passes
-  `DzScene.MergeFile`. Callers that relied on it clearing the scene should
-  clear first.
-
-### Removed
-
-- **USD export routes and their dazpy methods**, until the daz-bridge-usd
-  companion plugin is ready. `POST /export/usd` and `GET /export/usd/{id}` are
-  no longer documented in `openapi.yaml` or declared in
-  `companion_plugins.json`, and `export_usd_submit()` /
-  `get_usd_export_status()` are gone from `DazClient` and `AsyncDazClient`.
 
 - **Job liveness and progress metadata.** Status, result and `GET /requests`
   records now carry `progress_supported`, `progress_source`
