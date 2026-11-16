@@ -402,6 +402,36 @@ def two_actor_recipe(anna_pos=(0, 0, 0)) -> dict:
     }
 
 
+class BusyWaitTests(unittest.TestCase):
+    """Recipe calls wait out a busy Studio (Studio 6 after a load or clear)."""
+
+    def scene(self):
+        from dazpy import DazClient, DazScene
+        from dazpy.exceptions import DazError
+        client = DazClient(token="t", check_version=False)
+        waits = []
+
+        def execute(script, *a, **kw):
+            waits.append(getattr(client.__dict__.get("_busy_wait"), "max_wait", None))
+            raise DazError("stop")  # one recorded call is enough
+        client.execute = execute
+        return DazScene(client), waits
+
+    def test_each_entry_point_waits_out_busy_and_stops_after(self):
+        from dazpy.exceptions import DazError
+        from dazpy.recipe import RECIPE_BUSY_WAIT_S
+        r = {"recipe_version": 1, "id": "r", "assets": {"g": {"path": "C:/g.duf"}},
+             "actors": {"a": {"asset": "g"}}, "cameras": {"c": {"frame": "a"}},
+             "shots": [{"id": "s", "camera": "c", "output": "C:/o.png"}]}
+        for fn in (dazpy.recipe.validate, dazpy.recipe.plan, dazpy.recipe.apply,
+                   dazpy.recipe.observe, dazpy.recipe.render):
+            scene, waits = self.scene()
+            with self.assertRaises(DazError):
+                fn(r, scene)
+            self.assertEqual(waits, [RECIPE_BUSY_WAIT_S], fn.__name__)
+            self.assertIsNone(scene._client.__dict__["_busy_wait"].max_wait, fn.__name__)
+
+
 class RoundTripTests(unittest.TestCase):
     """apply -> record JSON in the (simulated) scene -> read_live -> diff, end to end."""
 

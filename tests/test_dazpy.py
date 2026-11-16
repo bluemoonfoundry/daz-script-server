@@ -1475,6 +1475,41 @@ class TestErrorMapping(unittest.TestCase):
                 with self.assertRaises(exceptions.StudioBusyError):
                     client.execute("1+1;", retry_on_busy=True, max_wait=10.0)
 
+    def test_waiting_out_busy_retries_plain_execute_calls_inside_the_block(self):
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = [self._busy_resp(), self._success_resp()]
+        with patch("dazpy._client.time.sleep"):
+            with client.waiting_out_busy(60.0):
+                self.assertEqual(client.execute("1+1;").value, 2)
+        self.assertEqual(mock_session.post.call_count, 2)
+
+    def test_waiting_out_busy_ends_with_the_block(self):
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._busy_resp()
+        with client.waiting_out_busy(60.0):
+            pass
+        with self.assertRaises(exceptions.StudioBusyError):
+            client.execute("1+1;")
+        self.assertEqual(mock_session.post.call_count, 1)
+
+    def test_waiting_out_busy_is_per_thread(self):
+        import threading
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._busy_resp()
+        errors = []
+
+        def other():
+            try:
+                client.execute("1+1;")
+            except exceptions.StudioBusyError as e:
+                errors.append(e)
+
+        with client.waiting_out_busy(60.0):
+            t = threading.Thread(target=other)
+            t.start()
+            t.join()
+        self.assertEqual(len(errors), 1)  # the other thread did not wait
+
     def test_connection_error(self):
         import requests as req
         client, mock_session = self._client_with_mock_session()

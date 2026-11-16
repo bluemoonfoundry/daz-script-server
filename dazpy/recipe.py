@@ -16,6 +16,7 @@ Every result type has a JSON-safe ``to_dict()``.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from ._recipe_ops import DazSceneOps, is_local_pose_file, resolve_files
 from ._recipe_store import LiveState, read_live
 from ._recipe_validate import RecipeIssue, ValidationReport, file_not_found, validate_offline
 from ._render_api import RenderResult
+from ._client import DazClient
 from ._script_builder import ScriptBuilder
 from .exceptions import RecipeNotAppliedError, RecipeValidationError
 
@@ -66,6 +68,25 @@ class ObserveReport:
         return to_jsonable(self)
 
 
+# How long one recipe call waits out a busy Studio (Studio 6 reports busy for a
+# moment after a load or clear while it streams in background content; failing
+# there would roll an apply back halfway).
+RECIPE_BUSY_WAIT_S = 120.0
+
+
+def _patient(fn):
+    """Run *fn* with its scene's client waiting out busy replies (see
+    :meth:`DazClient.waiting_out_busy`).  The scene is the second argument."""
+    @functools.wraps(fn)
+    def wrapper(recipe, scene=None, *args, **kwargs):
+        client = getattr(scene, "_client", None)
+        if not isinstance(client, DazClient):
+            return fn(recipe, scene, *args, **kwargs)
+        with client.waiting_out_busy(RECIPE_BUSY_WAIT_S):
+            return fn(recipe, scene, *args, **kwargs)
+    return wrapper
+
+
 def recipe_schema(version: int = 1) -> dict:
     """The JSON Schema for recipe documents of *version* (shipped as package data)."""
     if version not in _SCHEMA_VERSIONS:
@@ -89,6 +110,7 @@ def _file_refs(recipe: SceneRecipe) -> list[tuple[str, str]]:
     return refs
 
 
+@_patient
 def validate(recipe: SceneRecipe | dict, scene: "DazScene | None" = None) -> ValidationReport:
     """Validate *recipe*; with *scene*, also check its files exist (one Studio script).
 
@@ -128,6 +150,7 @@ def _read(model: SceneRecipe, scene: "DazScene") -> tuple[dict, LiveState]:
     return compute_desired(model), read_live(scene._client, model.id)
 
 
+@_patient
 def plan(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConflict = "ask",
          resolutions: Mapping[str, Resolution] | None = None) -> RecipePlan:
     """What :func:`apply` would do now. Reads the scene, changes nothing.
@@ -140,6 +163,7 @@ def plan(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConfli
     return diff(desired, live, on_conflict=on_conflict, resolutions=resolutions)
 
 
+@_patient
 def apply(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConflict = "ask",
           resolutions: Mapping[str, Resolution] | None = None) -> ApplyResult:
     """Apply *recipe* to *scene*, re-planning against the scene's current state.
@@ -166,6 +190,7 @@ def _pending(the_plan: RecipePlan) -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))
 
 
+@_patient
 def observe(recipe: SceneRecipe | dict, scene: "DazScene") -> ObserveReport:
     """Compare *scene* with *recipe* without changing anything.
 
@@ -237,6 +262,7 @@ def _guard(report: ObserveReport, camera_keys: Sequence[str]) -> None:
         raise RecipeNotAppliedError("recipe has unapplied changes; call apply first", report)
 
 
+@_patient
 def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str] | None = None,
            force: bool = False, wait: bool = True, timeout: float = 300.0) -> list[ShotRender]:
     """Render the recipe's shots (all, or the ids in *shots*) in recipe order.

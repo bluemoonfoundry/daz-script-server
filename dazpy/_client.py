@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
+from contextlib import contextmanager
+from typing import Iterator
 
 import requests as _requests
 
@@ -261,11 +264,34 @@ class DazClient:
         except _requests.exceptions.RequestException as e:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
+    @contextmanager
+    def waiting_out_busy(self, max_wait: float) -> Iterator["DazClient"]:
+        """Within the block, calls on this thread retry a busy Studio for up to
+        *max_wait* seconds, as if passed ``retry_on_busy=True`` -- including
+        calls made for you by :class:`~dazpy.DazNode`, :class:`~dazpy.DazScene`
+        and the other proxies.  Other threads are unaffected.
+
+        Use it around a multi-call operation that must not fail halfway because
+        Studio briefly reports busy (Studio 6 does after a load or clear, while
+        it streams in background content).
+        """
+        local = self.__dict__.setdefault("_busy_wait", threading.local())
+        prev = getattr(local, "max_wait", None)
+        local.max_wait = float(max_wait)
+        try:
+            yield self
+        finally:
+            local.max_wait = prev
+
     def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
         """Run *fn* (a zero-arg callable), retrying on DazBusyError while
-        *retry_on_busy* is true, up to *max_wait* seconds total."""
+        *retry_on_busy* is true (or inside :meth:`waiting_out_busy`), up to
+        *max_wait* seconds total."""
         if not retry_on_busy:
-            return fn()
+            waiting = getattr(self.__dict__.get("_busy_wait"), "max_wait", None)
+            if waiting is None:
+                return fn()
+            retry_on_busy, max_wait = True, waiting
         deadline = time.monotonic() + max_wait
         backoff = 1.0
         while True:
