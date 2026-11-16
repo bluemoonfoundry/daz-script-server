@@ -187,7 +187,7 @@ conflict you resolve), and rolls back a failed apply. See
 [docs/scene_recipes.rst](docs/scene_recipes.rst) and the example
 [g9-portrait.json](docs/examples/recipes/g9-portrait.json).
 
-The MCP server exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
+The MCP server (vangard-daz-mcp 0.7.0) exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
 `daz_recipe_apply`, `daz_recipe_observe` and `daz_recipe_render`.
 
 ### ⏳ `DazClient.waiting_out_busy()`

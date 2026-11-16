@@ -68,7 +68,10 @@ share one key namespace: a prop key that is also an actor key is a
      - Meaning
    * - ``recipe_version``, ``id``
      - Required. ``id`` scopes ownership: nodes the recipe creates are labelled
-       ``"<id>:<entity>"`` (rig lights ``"<id>:<rig>.<role>"``).
+       ``"<id>:<entity>"`` (rig lights ``"<id>:<rig>.<role>"``). Studio creates
+       cameras and lights without a node name, so apply also names them after
+       that label, with every character other than letters, digits and ``_``
+       replaced by ``_``.
    * - ``assets.<key>.path``
      - A content-library path (leading ``/``, looked up in every Daz content
        directory, then tried as an absolute path for macOS) or an absolute path
@@ -230,14 +233,18 @@ parts the asset loaded with (a Genesis 9 figure's eyes, mouth, tear, lashes and
 eyebrow cards) never count; an item parented to one of them does. If the recipe
 wins, those children are unparented to the scene root (keeping their world
 transform) and then the node is deleted. Apply never deletes a node it did not
-create.
+create. A node is deleted the way Studio's **Delete** does it, together with
+everything under it, so a node of this recipe that you parented under a deleted
+one goes too (it is recreated on the next apply if the recipe still lists it).
 
 Keeping a removed node (``scene`` on ``removed_from_recipe`` or
 ``has_foreign_children``) **releases** it: apply removes its ownership record
 and drops it from the manifest, so the node stays in the scene as an ordinary,
 unowned node and later applies no longer report it. To bring it back under the
-recipe, delete it and add the entity again. Poses are compared by a full pose capture, so a hand-posed figure is a
-hand tweak, and a pose swap on top of it is a conflict.
+recipe, delete it and add the entity again.
+
+Poses are compared by a full pose capture, so a hand-posed figure is a hand
+tweak, and a pose swap on top of it is a conflict.
 
 If two nodes carry the same recipe record (duplicating a recipe node in Daz
 Studio copies its record), the entity is a ``duplicate_record`` conflict and
@@ -290,6 +297,20 @@ entity removed or replaced in the recipe whose node was kept and released),
 ``unknown_resolution`` and
 ``deleted_not_restored`` (see below).
 
+Selection and a busy Studio
+---------------------------
+
+Apply clears the scene selection while it loads assets and deletes nodes:
+loading a figure while another figure is selected makes Studio ask whether to
+replace it, and deleting goes through Studio's Delete on an exact selection.
+The selection is not restored afterwards.
+
+Studio 6 reports itself busy for a moment after a load or a clear while it
+streams in background content. Every ``dazpy.recipe`` function waits that out,
+up to 120 seconds per call, through
+:meth:`DazClient.waiting_out_busy() <dazpy.DazClient.waiting_out_busy>`; use the
+same context manager around your own calls between recipe steps.
+
 Rollback guarantees
 -------------------
 
@@ -322,8 +343,8 @@ cannot do this: it only drops the undo grouping.
 Example walkthrough
 -------------------
 
-``docs/examples/recipes/g9-portrait.json`` uses only content that ships with
-Daz Studio: the Genesis 9 base figure, a stock standing pose, a three-point
+``docs/examples/recipes/g9-portrait.json`` uses the Genesis 9 base figure, one
+of Daz's stock Genesis 9 base poses (``G9 Base Pose 12 Standing``), a three-point
 rig, a full-body and a close-up camera, two shots and Iray at 640x480 with 50
 samples. It has no ``environment`` block, so it needs no third-party HDRI.
 
@@ -359,12 +380,36 @@ A session against a running Studio:
    apply(recipe, scene)                                  # applied=False
    apply(recipe, scene, on_conflict="recipe_wins")       # applied=True
 
-The preset path of the standing pose depends on the Daz Studio content that is
-installed. ``validate(recipe, scene)`` reports ``file_not_found`` with the path
-if it is not there; point ``actors.model.pose`` at any installed Genesis 9 pose.
+If that pose is not installed, ``validate(recipe, scene)`` reports
+``file_not_found`` with its path; point ``actors.model.pose`` at any installed
+Genesis 9 pose.
 
 API
 ---
 
 .. automodule:: dazpy.recipe
    :members: validate, plan, apply, observe, render, recipe_schema, ObserveReport, ShotRender
+
+Results
+~~~~~~~
+
+.. autoclass:: dazpy._recipe_validate.ValidationReport
+   :members:
+
+.. autoclass:: dazpy._recipe_validate.RecipeIssue
+   :members:
+
+.. autoclass:: dazpy._recipe_diff.RecipePlan
+   :members:
+
+.. autoclass:: dazpy._recipe_diff.Step
+   :members:
+
+.. autoclass:: dazpy._recipe_diff.Conflict
+   :members:
+
+.. autoclass:: dazpy._recipe_apply.ApplyResult
+   :members:
+
+.. autoclass:: dazpy._recipe_model.SceneRecipe
+   :members: from_dict, from_json, to_dict
