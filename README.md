@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.11.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.12.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.12.0](#whats-new-in-v2120)
 - [What's New in v2.11.0](#whats-new-in-v2110)
 - [What's New in v2.10.1](#whats-new-in-v2101)
 - [What's New in v2.10.0](#whats-new-in-v2100)
@@ -172,6 +173,35 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.12.0
+
+### 🧾 Declarative scene recipes (`dazpy.recipe`)
+
+`dazpy.recipe` validates, plans, applies, observes and renders a versioned JSON
+scene description (assets, actors, poses, lighting, cameras, shots). Re-applying
+only changes what the recipe changed, keeps your hand tweaks (warning, or a
+conflict you resolve), and rolls back a failed apply. See
+[docs/scene_recipes.rst](docs/scene_recipes.rst) and the example
+[g9-portrait.json](docs/examples/recipes/g9-portrait.json).
+
+The MCP server exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
+`daz_recipe_apply`, `daz_recipe_observe` and `daz_recipe_render`.
+
+### ⏳ `DazClient.waiting_out_busy()`
+
+Within `with client.waiting_out_busy(120):`, this client's script and submit
+calls on the current thread retry a busy Studio instead of raising, including
+the calls the node and scene proxies make for you. Studio 6 reports busy for a
+moment after a load or clear; the recipe functions use this.
+
+### 🐛 `DazScene.load()` merges
+
+It used to pass load mode `0`, which Studio treats as *open*: it replaced the
+current scene. It now merges, as documented. **If you upgrade:** code that
+relied on `load()` clearing the scene should clear it first.
 
 ---
 
@@ -378,15 +408,6 @@ See [CHANGELOG.md](CHANGELOG.md) for full details.
 ---
 
 ## What's New in v2.9.0
-
-### 🧾 dazpy.recipe — declarative scene recipes
-
-`dazpy.recipe` validates, plans, applies, observes and renders a versioned JSON
-scene description (assets, actors, poses, lighting, cameras, shots). Re-applying
-only changes what the recipe changed, keeps your hand tweaks (warning, or a
-conflict you resolve), and rolls back a failed apply. See
-[docs/scene_recipes.rst](docs/scene_recipes.rst) and the example
-[g9-portrait.json](docs/examples/recipes/g9-portrait.json).
 
 ### 🎬 dazpy.cinematics — camera shot builders
 

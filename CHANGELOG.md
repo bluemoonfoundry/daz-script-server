@@ -4,6 +4,8 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-11-15
+
 ### Added
 
 - **Scene recipes (5d6f.18).** New `dazpy.recipe` module: `validate`, `plan`,
