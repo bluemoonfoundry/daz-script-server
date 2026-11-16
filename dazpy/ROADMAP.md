@@ -279,8 +279,8 @@ Add to `DazScene`:
 **File:** `dazpy/_scene.py`
 
 Add:
-- `load(path: str) -> None` — `Scene.loadScene(path, 0)`  
-  (second arg is `DzOpenMethod`; 0 = merge/default)
+- `load(path: str) -> None` — `Scene.loadScene(path, DzScene.MergeFile)`  
+  (second arg is `DzOpenMethod`; MergeFile = 2, while 0 and OpenNew = 1 replace the scene)
 - `save(path: str) -> None` — `Scene.saveScene(path)`
 - `filename() -> str` — `Scene.getFilename()`
 - `needs_save() -> bool` — `Scene.needsSave()`

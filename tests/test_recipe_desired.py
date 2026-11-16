@@ -99,12 +99,12 @@ class DesiredTests(unittest.TestCase):
         for got, want in zip(key["rotation"], expected):
             self.assertAlmostEqual(got, want, places=4)
 
-    def test_explicit_camera_look_at_actor_has_no_offset(self):
+    def test_explicit_camera_look_at_actor_aims_at_its_chest(self):
         d = compute_desired(recipe_with(
             actors={"a": {"asset": "g", "position": [10, 5, 20]}},
             cameras={"m": {"position": [0, 100, 300], "look_at": "a"}}))
         t = d["cameras.m"].channels["transform"]
-        self.assertEqual(t["aim"], (10.0, 5.0, 20.0))
+        self.assertEqual(t["aim"], (10.0, 135.0, 20.0))
         self.assertEqual(t["position"], (0.0, 100.0, 300.0))
 
     def _r(self, x):

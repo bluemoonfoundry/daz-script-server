@@ -97,7 +97,11 @@ def _camera(recipe: SceneRecipe, name: str, cam: RecipeCamera) -> DesiredEntity:
         transform = {"position": _t((pos.x, pos.y, pos.z)), "aim": _t((aim.x, aim.y, aim.z)),
                      "rotation": None}
     else:
-        look = _resolve(recipe, cam.look_at) if cam.look_at is not None else None
+        look = None
+        if isinstance(cam.look_at, str):  # an actor key aims at the chest, like rig lights
+            look = _subject_point(recipe, cam.look_at, _RIG_ANCHOR_CM)
+        elif cam.look_at is not None:  # an [x, y, z] literal is used as given
+            look = _resolve(recipe, cam.look_at)
         aim = _t((look.x, look.y, look.z)) if look is not None else None
         transform = {"position": _t(cam.position), "aim": aim,
                      "rotation": _t(cam.rotation) if cam.rotation is not None else None}

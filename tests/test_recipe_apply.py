@@ -681,6 +681,12 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertNotIn("setValueFromString", self.joined())
         self.assertIn('setMap("C:/old.hdr")', self.joined())
 
+    def test_delete_raises_when_the_delete_action_left_the_node(self):
+        self.client = scripted_client(("recipe:delete", False))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaisesRegex(DazError, "Could not delete node 'Genesis 9'"):
+            self.ops.delete("Genesis 9")
+
     def test_delete_reports_a_node_that_was_not_removed(self):
         with self.assertRaisesRegex(DazError, "Gone"):
             self.ops.delete("Gone")  # removeNode answered nothing / false

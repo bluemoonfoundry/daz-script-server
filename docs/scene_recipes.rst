@@ -104,10 +104,12 @@ share one key namespace: a prop key that is also an actor key is a
        (``close_up``, 160 cm), chest (``medium``, 130 cm) or hip height
        (``full_body``, 90 cm) above the actor's position, and stands back so
        40 / 100 / 210 cm of subject fills the frame height at the camera's
-       ``focal_length`` and the recipe's ``render.resolution`` (4:3 if unset).
+       ``focal_length`` and the recipe's ``render.resolution`` (4:3 if unset;
+       a shot's own ``render`` override does not reframe its camera).
        A framed prop is aimed at its position. Several framed subjects are
-       framed at their centroid, without widening to fit them all. Rig lights
-       aim at the target actor's chest.
+       framed at their centroid, without widening to fit them all. Rig lights,
+       and an explicit camera's ``look_at`` of an actor key, aim at the actor's
+       chest (130 cm); a ``look_at`` of ``[x, y, z]`` is used as given.
    * - ``shots[]``
      - ``id``, ``camera``, ``output`` (absolute path on the Studio host; the
        folder is created), optional ``render`` override.
