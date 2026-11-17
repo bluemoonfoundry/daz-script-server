@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from typing import Callable
 
 try:
     import httpx
@@ -20,7 +21,13 @@ from .exceptions import (
 )
 from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
-from ._version import server_version_from_status, warn_if_server_older
+from ._version import (
+    VersionCheck,
+    VersionTracker,
+    evaluate_server_version,
+    server_instance_id_from_status,
+    server_version_from_status,
+)
 from ._client import (
     _DEFAULT_HOST, _DEFAULT_PORT, _job_headers, _load_token, _raise_for_error, _map_response,
     _safe_artifact_filename,
@@ -40,10 +47,14 @@ class AsyncDazClient:
             result = await client.execute("1 + 1;")
 
     Or managed manually via :meth:`aclose`.
+
+    ``check_version`` and ``on_version_check`` behave as on
+    :class:`dazpy.DazClient`. The callback must be a plain (sync) callable; it
+    runs on the event loop thread.
     """
 
     # Class defaults keep instances built without __init__ (tests) check-free.
-    _version_checked: bool = True
+    _versions: VersionTracker = VersionTracker(enabled=False)
     _server_version: str | None = None
 
     def __init__(
@@ -53,12 +64,13 @@ class AsyncDazClient:
         token: str | None = None,
         timeout: float = 30.0,
         check_version: bool = True,
+        on_version_check: Callable[[VersionCheck], object] | None = None,
     ):
         self._base = f"http://{host}:{port}"
         self._token = token if token is not None else _load_token()
         self._timeout = timeout
         self._http = httpx.AsyncClient(timeout=timeout)
-        self._version_checked = not check_version
+        self._versions = VersionTracker(enabled=check_version, on_version_check=on_version_check)
         self._server_version: str | None = None
 
     async def __aenter__(self) -> "AsyncDazClient":
@@ -79,19 +91,43 @@ class AsyncDazClient:
         return h
 
     async def _check_server_version(self) -> None:
-        """One-time, best-effort server version check (see ``DazClient``)."""
-        if self._version_checked:
+        """Best-effort plugin version check (see ``DazClient``)."""
+        if not self._versions.claim_check():
             return
-        self._version_checked = True
+        check = None
         try:
             resp = await self._http.get(f"{self._base}/status", headers=self._headers)
-            self._server_version = server_version_from_status(resp.json())
+            data = resp.json()
+            instance = server_instance_id_from_status(data)
+            if instance is None:
+                header = resp.headers.get("X-Server-Instance-Id")
+                instance = header if isinstance(header, str) and header else None
+            version = server_version_from_status(data)
+            check = evaluate_server_version(self._base, version, instance)
+            if version is not None:
+                self._server_version = version
         except Exception:
-            return  # unreachable/odd server: let the real request report it
-        warn_if_server_older(self._server_version, self._base)
+            check = None  # unreachable/odd server: let the real request report it
+        finally:
+            self._versions.finish_check(check)
+
+    def _observe(self, resp: "httpx.Response") -> "httpx.Response":
+        try:
+            self._versions.observe_instance(resp.headers.get("X-Server-Instance-Id"))
+        except Exception:
+            pass
+        return resp
+
+    @property
+    def version_check(self) -> VersionCheck | None:
+        """The latest plugin version check, or ``None`` before one completes."""
+        return self._versions.latest
 
     async def get_server_version(self) -> str | None:
         """The connected server's version string, or ``None`` if unknown."""
+        latest = self._versions.latest
+        if latest is not None and latest.server_version is not None:
+            return latest.server_version
         if self._server_version is None:
             try:
                 self._server_version = server_version_from_status(await self.status())
@@ -106,12 +142,17 @@ class AsyncDazClient:
         merged = {**self._headers, **headers} if headers else self._headers
         extra = {} if timeout is None else {"timeout": timeout}
         try:
-            return await self._http.post(f"{self._base}{path}", json=payload, headers=merged, **extra)
+            return self._observe(
+                await self._http.post(f"{self._base}{path}", json=payload, headers=merged, **extra)
+            )
         except httpx.ConnectError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
+            self._versions.mark_stale()
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
         except httpx.HTTPError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _get(
@@ -119,26 +160,34 @@ class AsyncDazClient:
     ) -> "httpx.Response":
         await self._check_server_version()
         try:
-            return await self._http.get(
+            return self._observe(await self._http.get(
                 f"{self._base}{path}", headers=self._headers, params=params,
                 timeout=self._timeout if timeout is None else timeout,
-            )
+            ))
         except httpx.ConnectError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
+            self._versions.mark_stale()
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
         except httpx.HTTPError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _delete(self, path: str) -> "httpx.Response":
         await self._check_server_version()
         try:
-            return await self._http.delete(f"{self._base}{path}", headers=self._headers)
+            return self._observe(
+                await self._http.delete(f"{self._base}{path}", headers=self._headers)
+            )
         except httpx.ConnectError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
+            self._versions.mark_stale()
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
         except httpx.HTTPError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     async def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):

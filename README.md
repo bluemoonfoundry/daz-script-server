@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.12.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.13.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.13.0](#whats-new-in-v2130)
 - [What's New in v2.12.0](#whats-new-in-v2120)
 - [What's New in v2.11.0](#whats-new-in-v2110)
 - [What's New in v2.10.1](#whats-new-in-v2101)
@@ -176,6 +177,19 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
+## What's New in v2.13.0
+
+### 🔌 Plugin version check that apps can show
+
+dazpy now warns only when the plugin is older than the oldest version it needs
+(`dazpy.MIN_SERVER_VERSION`, currently 2.12), re-checks after a dropped
+connection or a Studio restart, and exposes the result as `client.version_check`
+and through an `on_version_check=` callback. This is a dazpy-only release: the
+plugin is rebuilt with the new number but unchanged, so plugin 2.12.x users need
+not upgrade.
+
+---
+
 ## What's New in v2.12.0
 
 ### 🧾 Declarative scene recipes (`dazpy.recipe`)
@@ -187,7 +201,7 @@ conflict you resolve), and rolls back a failed apply. See
 [docs/scene_recipes.rst](docs/scene_recipes.rst) and the example
 [g9-portrait.json](docs/examples/recipes/g9-portrait.json).
 
-The MCP server (vangard-daz-mcp 0.7.0) exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
+The MCP server (daz-mcp-server, formerly vangard-daz-mcp; 0.7.0) exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
 `daz_recipe_apply`, `daz_recipe_observe` and `daz_recipe_render`.
 
 ### ⏳ `DazClient.waiting_out_busy()`
@@ -366,9 +380,10 @@ status calls still returns `{"status": "not_found"}`.
 
 ### 🔎 Server version check
 
-On its first request each client reads the plugin version from `GET /status`
-and emits `dazpy.exceptions.ServerVersionWarning` if the plugin's major.minor
-is older than dazpy's. See [Connecting to DAZ Studio](#connecting-to-daz-studio) for details and how to
+Before its first request, and again after a dropped connection or a Studio
+restart, each client reads the plugin version from `GET /status` and emits
+`dazpy.exceptions.ServerVersionWarning` if the plugin is older than
+`dazpy.MIN_SERVER_VERSION`. See [Connecting to DAZ Studio](#connecting-to-daz-studio) for details and how to
 turn it off.
 
 ---
@@ -1201,13 +1216,20 @@ scene = DazScene(client)     # or just DazScene() to use a default client
 
 `DazClient` also exposes `status()`, `health()`, and `metrics()` for server introspection.
 
-**Server version check.** On its first request, `DazClient` (and `AsyncDazClient`)
-reads the plugin version from `GET /status` and emits a
-`dazpy.exceptions.ServerVersionWarning` if the server's major.minor is older than
-dazpy's: newer clients may call endpoints an older plugin doesn't have. Upgrade
-the plugin, or pin dazpy to the server's version (Studio 6.25 users:
-`pip install dazpy==2.9.3`). The check is best-effort and never blocks a request;
-disable it with `DazClient(check_version=False)`. `client.server_version`
+**Server version check.** `DazClient` (and `AsyncDazClient`) reads the plugin
+version from `GET /status` before its first request, and again after a dropped
+connection or when the plugin's `X-Server-Instance-Id` changes (Studio
+restarted). If the plugin is older than `dazpy.MIN_SERVER_VERSION` (the oldest
+plugin this dazpy needs, currently 2.12) it emits a
+`dazpy.exceptions.ServerVersionWarning`, once per running plugin: dazpy may call
+endpoints an older plugin doesn't have. Upgrade the plugin in that Daz Studio
+instance, or use a dazpy release matching the plugin (Studio 6.25 users:
+`pip install dazpy==2.9.3`). `client.version_check` holds the latest result as a
+`dazpy.VersionCheck` (plugin and dazpy versions, the minimum, the URL checked,
+`compatible`, and an upgrade `message`), and
+`DazClient(on_version_check=callback)` receives every completed check, so apps
+can show it where their users look. The check is best-effort and never blocks a
+request; disable it with `DazClient(check_version=False)`. `client.server_version`
 (`await client.get_server_version()` on the async client) returns the server's
 version string.
 

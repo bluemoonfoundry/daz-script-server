@@ -4,6 +4,32 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-11-16
+
+dazpy-only release. The plugin binaries are rebuilt with the new version
+number; no plugin code changed, and plugin 2.12.x users need not upgrade.
+
+### Changed
+
+- **dazpy plugin version check.** The check now compares the plugin against
+  `dazpy.MIN_SERVER_VERSION` (the oldest plugin this dazpy needs, currently
+  2.12) instead of dazpy's own version, so a dazpy-only release no longer tells
+  users to upgrade an unchanged plugin. It re-checks after a dropped connection
+  and when the plugin's `X-Server-Instance-Id` changes (Studio restarted), and a
+  check that couldn't reach Studio no longer counts as done. The warning names
+  the plugin's address and puts upgrading the plugin first, and is emitted once
+  per running plugin.
+
+### Added
+
+- `dazpy.VersionCheck` and `client.version_check`: the latest check's plugin
+  and dazpy versions, the minimum, the URL checked, `compatible`, and an upgrade
+  `message`.
+- `on_version_check=` on `DazClient` and `AsyncDazClient`: a callback receiving
+  every completed check, so apps (such as an MCP server) can show it where
+  their users look.
+- `dazpy.MIN_SERVER_VERSION`.
+
 ## [2.12.0] - 2026-11-15
 
 ### Added

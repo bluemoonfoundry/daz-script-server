@@ -8292,26 +8292,47 @@ class TestCapabilities(unittest.TestCase):
 
 
 class TestServerVersionCheck(unittest.TestCase):
-    """DazClient warns once when the server's major.minor is older than dazpy's."""
+    """DazClient checks the plugin against MIN_SERVER_VERSION and re-checks when
+    the target may have changed."""
 
-    def _client(self, status_json=None, status_exc=None, **kwargs):
+    def setUp(self):
+        p1 = patch("dazpy._version.client_version", return_value="2.13.0")
+        p2 = patch("dazpy._version.MIN_SERVER_VERSION", "2.12")
+        p1.start()
+        p2.start()
+        self.addCleanup(p1.stop)
+        self.addCleanup(p2.stop)
+
+    @staticmethod
+    def _status(json_data):
+        import requests as req
+
+        status = MagicMock(spec=req.Response)
+        status.status_code = 200
+        status.json.return_value = json_data
+        status.headers = {}
+        return status
+
+    def _client(self, status_json=None, status_exc=None, status_side_effect=None,
+                execute_headers=None, **kwargs):
         import requests as req
 
         client = DazClient(token="", **kwargs)
         client._session.close()
         session = MagicMock()
-        status = MagicMock(spec=req.Response)
-        status.status_code = 200
-        status.json.return_value = status_json or {}
         execute = MagicMock(spec=req.Response)
         execute.status_code = 200
         execute.json.return_value = {"success": True, "result": 1, "request_id": "r"}
-        session.get.side_effect = status_exc
-        if status_exc is None:
-            session.get.return_value = status
+        execute.headers = execute_headers if execute_headers is not None else {}
+        if status_side_effect is not None:
+            session.get.side_effect = status_side_effect
+        elif status_exc is not None:
+            session.get.side_effect = status_exc
+        else:
+            session.get.return_value = self._status(status_json or {})
         session.post.return_value = execute
         client._session = session
-        return client, session
+        return client, session, execute
 
     def _run(self, client, times=1):
         import warnings
@@ -8322,56 +8343,109 @@ class TestServerVersionCheck(unittest.TestCase):
                 client.execute("1;")
         return [w for w in caught if issubclass(w.category, exceptions.ServerVersionWarning)]
 
-    def test_older_minor_warns_once(self):
-        client, session = self._client({"version": "2.9.3"})
-        with patch("dazpy._version.client_version", return_value="2.10.0"):
-            caught = self._run(client, times=3)
+    def test_older_than_minimum_warns_once(self):
+        client, session, _ = self._client({"version": "2.11.0"})
+        caught = self._run(client, times=3)
         self.assertEqual(len(caught), 1)
-        self.assertIn("2.9.3", str(caught[0].message))
-        self.assertIn("dazpy==2.9.3", str(caught[0].message))
-        self.assertEqual(session.get.call_count, 1)  # /status fetched once
-        self.assertEqual(client.server_version, "2.9.3")
+        self.assertIn("2.11.0", str(caught[0].message))
+        self.assertIn("2.12 or newer", str(caught[0].message))
+        self.assertEqual(session.get.call_count, 1)
+        self.assertIs(client.version_check.compatible, False)
+        self.assertEqual(client.server_version, "2.11.0")
 
-    def test_same_minor_or_newer_does_not_warn(self):
-        for server in ("2.10.0", "2.10.5", "2.11.0", "3.0.0"):
-            client, _ = self._client({"version": server})
-            with patch("dazpy._version.client_version", return_value="2.10.1"):
-                self.assertEqual(self._run(client), [], server)
+    def test_minimum_or_newer_does_not_warn(self):
+        for server in ("2.12.0", "2.12.7", "2.13.0", "3.0.0"):
+            client, _, _ = self._client({"version": server})
+            self.assertEqual(self._run(client), [], server)
+            self.assertIs(client.version_check.compatible, True, server)
 
-    def test_older_major_warns(self):
-        client, _ = self._client({"version": "1.20.0"})
-        with patch("dazpy._version.client_version", return_value="2.0.0"):
-            self.assertEqual(len(self._run(client)), 1)
+    def test_plugin_one_minor_behind_dazpy_does_not_warn(self):
+        client, _, _ = self._client({"version": "2.12.0"})
+        self.assertEqual(self._run(client), [])
 
     def test_check_failures_are_ignored(self):
         import requests as req
 
         for kwargs in ({"status_json": {}}, {"status_json": {"version": "garbage"}},
                        {"status_exc": req.exceptions.ConnectionError("down")}):
-            client, session = self._client(**kwargs)
-            with patch("dazpy._version.client_version", return_value="2.10.0"):
-                self.assertEqual(self._run(client), [], kwargs)
+            client, session, _ = self._client(**kwargs)
+            self.assertEqual(self._run(client), [], kwargs)
             session.post.assert_called_once()  # real request still sent
+
+    def test_unreachable_first_check_retries(self):
+        import requests as req
+
+        client, session, _ = self._client(status_side_effect=[
+            req.exceptions.ConnectionError("down"), self._status({"version": "2.11.0"}),
+        ])
+        caught = self._run(client, times=2)
+        self.assertEqual(session.get.call_count, 2)
+        self.assertEqual(len(caught), 1)
+
+    def test_transport_failure_triggers_recheck(self):
+        import requests as req
+
+        client, session, execute = self._client({"version": "2.12.0"})
+        self._run(client)
+        self.assertEqual(session.get.call_count, 1)
+        session.post.side_effect = req.exceptions.ConnectionError("gone")
+        with self.assertRaises(exceptions.ConnectionError):
+            client.execute("1;")
+        session.post.side_effect = None
+        session.post.return_value = execute
+        self._run(client)
+        self.assertEqual(session.get.call_count, 2)
+
+    def test_instance_change_triggers_recheck(self):
+        client, session, execute = self._client(
+            {"version": "2.12.0", "server_instance_id": "i1"},
+            execute_headers={"X-Server-Instance-Id": "i1"},
+        )
+        self._run(client, times=2)
+        self.assertEqual(session.get.call_count, 1)
+        execute.headers = {"X-Server-Instance-Id": "i2"}
+        self._run(client)  # response reveals the restart
+        self.assertEqual(session.get.call_count, 1)
+        self._run(client)  # next request re-checks
+        self.assertEqual(session.get.call_count, 2)
+
+    def test_no_instance_id_no_loop(self):
+        client, session, _ = self._client({"version": "2.12.0"})
+        self._run(client, times=5)
+        self.assertEqual(session.get.call_count, 1)
+
+    def test_callback_receives_checks(self):
+        seen = []
+        client, _, _ = self._client({"version": "2.12.0"}, on_version_check=seen.append)
+        self._run(client)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].server_url, "http://127.0.0.1:18811")
+
+    def test_callback_exception_does_not_break_request(self):
+        def boom(_check):
+            raise RuntimeError("callback failed")
+
+        client, _, _ = self._client({"version": "2.12.0"}, on_version_check=boom)
+        self.assertEqual(client.execute("1;").value, 1)
 
     def test_delete_as_first_request_checks_version(self):
         import warnings
 
-        client, session = self._client({"version": "2.9.3"})
-        session.delete.return_value = MagicMock(status_code=200)
+        client, session, _ = self._client({"version": "2.11.0"})
+        session.delete.return_value = MagicMock(status_code=200, headers={})
         session.delete.return_value.json.return_value = {"status": "cancelled"}
-        with patch("dazpy._version.client_version", return_value="2.10.0"):
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                client.cancel_request_detail("abcd1234")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            client.cancel_request_detail("abcd1234")
         caught = [w for w in caught if issubclass(w.category, exceptions.ServerVersionWarning)]
         self.assertEqual(len(caught), 1)
         session.get.assert_called_once()
 
     def test_check_version_false_skips_status_call(self):
-        client, session = self._client({"version": "1.0.0"}, check_version=False)
-        with patch("dazpy._version.client_version", return_value="2.10.0"):
-            self.assertEqual(self._run(client), [])
+        client, session, _ = self._client({"version": "1.0.0"}, check_version=False)
+        self.assertEqual(self._run(client), [])
         session.get.assert_not_called()
+        self.assertIsNone(client.version_check)
 
 
 class TestParseVersion(unittest.TestCase):

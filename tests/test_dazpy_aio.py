@@ -482,51 +482,160 @@ class TestAsyncDazClientRealHttpxWiring:
         assert seen == [(1, 2), (2, 2)]
 
 
+_BASE = "http://127.0.0.1:18811"
+
+
+def _ok_execute(headers=None):
+    return httpx.Response(
+        200, json={"success": True, "result": 1, "request_id": "r"}, headers=headers or {}
+    )
+
+
 class TestAsyncServerVersionCheck:
+    @pytest.fixture(autouse=True)
+    def _versions(self, monkeypatch):
+        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.13.0")
+        monkeypatch.setattr("dazpy._version.MIN_SERVER_VERSION", "2.12")
+
+    @staticmethod
+    def _version_warnings(caught):
+        return [w for w in caught if issubclass(w.category, exceptions.ServerVersionWarning)]
+
     @pytest.mark.asyncio
     @respx.mock
-    async def test_older_server_warns_once(self, monkeypatch):
-        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
-        status = respx.get("http://127.0.0.1:18811/status").mock(
-            return_value=httpx.Response(200, json={"running": True, "version": "2.9.3"})
+    async def test_older_than_minimum_warns_once(self):
+        import warnings
+
+        status = respx.get(f"{_BASE}/status").mock(
+            return_value=httpx.Response(200, json={"running": True, "version": "2.11.0"})
         )
-        respx.post("http://127.0.0.1:18811/execute").mock(
-            return_value=httpx.Response(200, json={"success": True, "result": 1, "request_id": "r"})
-        )
+        respx.post(f"{_BASE}/execute").mock(return_value=_ok_execute())
         async with AsyncDazClient(token="") as client:
-            with pytest.warns(exceptions.ServerVersionWarning, match="2.9.3"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
                 await client.execute("1;")
-            await client.execute("1;")
-            assert await client.get_server_version() == "2.9.3"
+                await client.execute("1;")
+            assert len(self._version_warnings(caught)) == 1
+            assert "2.12 or newer" in str(self._version_warnings(caught)[0].message)
+            assert client.version_check.compatible is False
+            assert await client.get_server_version() == "2.11.0"
         assert status.call_count == 1
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_delete_as_first_request_checks_version(self, monkeypatch):
-        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
-        status = respx.get("http://127.0.0.1:18811/status").mock(
-            return_value=httpx.Response(200, json={"running": True, "version": "2.9.3"})
+    async def test_plugin_one_minor_behind_does_not_warn(self):
+        import warnings
+
+        respx.get(f"{_BASE}/status").mock(
+            return_value=httpx.Response(200, json={"version": "2.12.0"})
         )
-        respx.delete("http://127.0.0.1:18811/requests/abcd1234").mock(
+        respx.post(f"{_BASE}/execute").mock(return_value=_ok_execute())
+        async with AsyncDazClient(token="") as client:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                await client.execute("1;")
+            assert self._version_warnings(caught) == []
+            assert client.version_check.compatible is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unreachable_first_check_retries(self):
+        status = respx.get(f"{_BASE}/status").mock(side_effect=[
+            httpx.ConnectError("down"),
+            httpx.Response(200, json={"version": "2.12.0"}),
+        ])
+        respx.post(f"{_BASE}/execute").mock(return_value=_ok_execute())
+        async with AsyncDazClient(token="") as client:
+            await client.execute("1;")
+            await client.execute("1;")
+            assert client.version_check is not None
+        assert status.call_count == 2
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_transport_failure_triggers_recheck(self):
+        status = respx.get(f"{_BASE}/status").mock(
+            return_value=httpx.Response(200, json={"version": "2.12.0"})
+        )
+        execute = respx.post(f"{_BASE}/execute")
+        execute.mock(return_value=_ok_execute())
+        async with AsyncDazClient(token="") as client:
+            await client.execute("1;")
+            execute.mock(side_effect=httpx.ConnectError("gone"))
+            with pytest.raises(exceptions.ConnectionError):
+                await client.execute("1;")
+            execute.mock(side_effect=None, return_value=_ok_execute())
+            await client.execute("1;")
+        assert status.call_count == 2
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_instance_change_triggers_recheck(self):
+        status = respx.get(f"{_BASE}/status").mock(
+            return_value=httpx.Response(200, json={"version": "2.12.0", "server_instance_id": "i1"})
+        )
+        execute = respx.post(f"{_BASE}/execute")
+        execute.mock(return_value=_ok_execute({"X-Server-Instance-Id": "i1"}))
+        async with AsyncDazClient(token="") as client:
+            await client.execute("1;")
+            execute.mock(return_value=_ok_execute({"X-Server-Instance-Id": "i2"}))
+            await client.execute("1;")
+            assert status.call_count == 1
+            await client.execute("1;")
+        assert status.call_count == 2
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_concurrent_first_requests_single_status(self):
+        import asyncio
+
+        async def slow_status(request):
+            await asyncio.sleep(0.05)
+            return httpx.Response(200, json={"version": "2.12.0"})
+
+        status = respx.get(f"{_BASE}/status").mock(side_effect=slow_status)
+        respx.post(f"{_BASE}/execute").mock(return_value=_ok_execute())
+        async with AsyncDazClient(token="") as client:
+            await asyncio.gather(*(client.execute("1;") for _ in range(5)))
+        assert status.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_callback_exception_does_not_break_request(self):
+        def boom(_check):
+            raise RuntimeError("callback failed")
+
+        respx.get(f"{_BASE}/status").mock(
+            return_value=httpx.Response(200, json={"version": "2.12.0"})
+        )
+        respx.post(f"{_BASE}/execute").mock(return_value=_ok_execute())
+        async with AsyncDazClient(token="", on_version_check=boom) as client:
+            assert (await client.execute("1;")).value == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_delete_as_first_request_checks_version(self):
+        status = respx.get(f"{_BASE}/status").mock(
+            return_value=httpx.Response(200, json={"running": True, "version": "2.11.0"})
+        )
+        respx.delete(f"{_BASE}/requests/abcd1234").mock(
             return_value=httpx.Response(200, json={"status": "cancelled"})
         )
         async with AsyncDazClient(token="") as client:
-            with pytest.warns(exceptions.ServerVersionWarning, match="2.9.3"):
+            with pytest.warns(exceptions.ServerVersionWarning, match="2.11.0"):
                 await client.cancel_request_detail("abcd1234")
         assert status.call_count == 1
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_check_version_false_skips_status(self, monkeypatch):
-        monkeypatch.setattr("dazpy._version.client_version", lambda: "2.10.0")
-        status = respx.get("http://127.0.0.1:18811/status").mock(
+    async def test_check_version_false_skips_status(self):
+        status = respx.get(f"{_BASE}/status").mock(
             return_value=httpx.Response(200, json={"version": "1.0.0"})
         )
-        respx.post("http://127.0.0.1:18811/execute").mock(
-            return_value=httpx.Response(200, json={"success": True, "result": 1, "request_id": "r"})
-        )
+        respx.post(f"{_BASE}/execute").mock(return_value=_ok_execute())
         async with AsyncDazClient(token="", check_version=False) as client:
             await client.execute("1;")
+            assert client.version_check is None
         assert status.call_count == 0
 
 
