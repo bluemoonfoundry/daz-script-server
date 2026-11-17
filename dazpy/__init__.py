@@ -119,6 +119,7 @@ from ._render_api import (
     render_variants,
 )
 from .exceptions import RenderError, MaterialError, RecipeValidationError, RecipeNotAppliedError
+from ._version import MIN_SERVER_VERSION, VersionCheck
 from ._recipe_model import SceneRecipe
 from ._recipe_validate import RecipeIssue, ValidationReport
 from ._recipe_diff import Conflict, RecipePlan
@@ -129,6 +130,8 @@ from . import exceptions
 
 __all__ = [
     "DazClient",
+    "VersionCheck",
+    "MIN_SERVER_VERSION",
     "GeometryFrames",
     "parse_geometry_frames",
     "DazScene",

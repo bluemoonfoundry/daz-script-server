@@ -197,3 +197,13 @@ def test_claim_is_atomic_across_threads():
     for th in threads:
         th.join()
     assert results.count(True) == 1
+
+
+def test_public_exports():
+    import dazpy
+    from dazpy import MIN_SERVER_VERSION, VersionCheck  # noqa: F401  (import is the check)
+
+    assert MIN_SERVER_VERSION == "2.12"  # the re-export, unaffected by the fixture
+    assert "VersionCheck" in dazpy.__all__
+    assert "MIN_SERVER_VERSION" in dazpy.__all__
+    assert not hasattr(dazpy._version, "warn_if_server_older")

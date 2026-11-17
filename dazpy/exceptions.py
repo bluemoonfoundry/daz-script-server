@@ -158,12 +158,13 @@ class MaterialError(DazError):
 
 
 class ServerVersionWarning(UserWarning):
-    """Warned when the connected Script Server is older than this dazpy.
+    """Warned when the connected plugin is older than :data:`dazpy.MIN_SERVER_VERSION`.
 
-    Newer dazpy releases may call endpoints an older server doesn't have, which
-    then fail with opaque HTTP errors. Upgrade the DAZ Studio plugin, or pin
-    dazpy to the server's version (e.g. Daz Studio 6.25 users, whose last
-    compatible plugin is v2.9.3: ``pip install dazpy==2.9.3``).
+    dazpy may call endpoints an older plugin doesn't have, which then fail with
+    opaque HTTP errors. Upgrade the DazScriptServer plugin in that Daz Studio
+    instance, or use a dazpy release that matches the plugin. Emitted once per
+    running plugin; the result is also available as ``client.version_check``
+    and through the ``on_version_check`` callback.
 
     Silence with ``DazClient(check_version=False)`` or the standard
     :mod:`warnings` filters.

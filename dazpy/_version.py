@@ -57,14 +57,13 @@ def server_instance_id_from_status(data: object) -> str | None:
 class VersionCheck:
     """Result of one plugin version check.
 
-    Attributes:
-        server_url: Base URL of the checked plugin, e.g. ``"http://127.0.0.1:18811"``.
-        server_version: Plugin version from ``GET /status``; ``None`` if unknown.
-        min_server_version: ``MIN_SERVER_VERSION`` at check time.
-        client_version: This dazpy's version.
-        server_instance_id: The plugin's per-run identity, if it reported one.
-        compatible: ``True``/``False``; ``None`` when a version couldn't be parsed.
-        message: Upgrade advice when ``compatible`` is ``False``, else ``None``.
+    - ``server_url``: base URL of the checked plugin, e.g. ``"http://127.0.0.1:18811"``.
+    - ``server_version``: plugin version from ``GET /status``; ``None`` if unknown.
+    - ``min_server_version``: :data:`MIN_SERVER_VERSION` at check time.
+    - ``client_version``: this dazpy's version.
+    - ``server_instance_id``: the plugin's per-run identity, if it reported one.
+    - ``compatible``: ``True``/``False``; ``None`` when a version couldn't be parsed.
+    - ``message``: upgrade advice when ``compatible`` is ``False``, else ``None``.
     """
 
     server_url: str
@@ -187,34 +186,13 @@ class VersionTracker:
                 self._stale = True
 
 
-def warn_if_server_older(server_version: str | None, base_url: str) -> None:
-    """Warn when the server's major.minor is older than this dazpy's.
-
-    Patch differences are ignored: server and client ship in lockstep, and a
-    plugin one patch behind is normal. Unknown versions are not warned about.
-    """
-    server = parse_version(server_version)
-    client = parse_version(client_version())
-    if server is None or client is None or server >= client:
-        return
-    warnings.warn(
-        f"DAZ Script Server at {base_url} is version {server_version}, older than "
-        f"dazpy {client_version()}. Features added since {server[0]}.{server[1]} may "
-        f"fail. Upgrade the DAZ Studio plugin, or install a matching client "
-        f"(pip install \"dazpy=={server_version}\"). Pass check_version=False to "
-        f"silence this.",
-        ServerVersionWarning,
-        stacklevel=_first_external_stacklevel(),
-    )
-
-
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _first_external_stacklevel() -> int:
     """Stack level of the first frame outside dazpy, so the warning points at
     user code regardless of how deep the triggering client call was."""
-    # stacklevel=1 is warn_if_server_older itself (the warnings.warn caller).
+    # stacklevel=1 is the warnings.warn caller (VersionTracker.finish_check).
     frame, level = sys._getframe(1), 1
     while frame is not None and os.path.abspath(frame.f_code.co_filename).startswith(_PKG_DIR):
         frame, level = frame.f_back, level + 1

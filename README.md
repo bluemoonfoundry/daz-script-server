@@ -366,9 +366,10 @@ status calls still returns `{"status": "not_found"}`.
 
 ### 🔎 Server version check
 
-On its first request each client reads the plugin version from `GET /status`
-and emits `dazpy.exceptions.ServerVersionWarning` if the plugin's major.minor
-is older than dazpy's. See [Connecting to DAZ Studio](#connecting-to-daz-studio) for details and how to
+Before its first request, and again after a dropped connection or a Studio
+restart, each client reads the plugin version from `GET /status` and emits
+`dazpy.exceptions.ServerVersionWarning` if the plugin is older than
+`dazpy.MIN_SERVER_VERSION`. See [Connecting to DAZ Studio](#connecting-to-daz-studio) for details and how to
 turn it off.
 
 ---
@@ -1201,13 +1202,20 @@ scene = DazScene(client)     # or just DazScene() to use a default client
 
 `DazClient` also exposes `status()`, `health()`, and `metrics()` for server introspection.
 
-**Server version check.** On its first request, `DazClient` (and `AsyncDazClient`)
-reads the plugin version from `GET /status` and emits a
-`dazpy.exceptions.ServerVersionWarning` if the server's major.minor is older than
-dazpy's: newer clients may call endpoints an older plugin doesn't have. Upgrade
-the plugin, or pin dazpy to the server's version (Studio 6.25 users:
-`pip install dazpy==2.9.3`). The check is best-effort and never blocks a request;
-disable it with `DazClient(check_version=False)`. `client.server_version`
+**Server version check.** `DazClient` (and `AsyncDazClient`) reads the plugin
+version from `GET /status` before its first request, and again after a dropped
+connection or when the plugin's `X-Server-Instance-Id` changes (Studio
+restarted). If the plugin is older than `dazpy.MIN_SERVER_VERSION` (the oldest
+plugin this dazpy needs, currently 2.12) it emits a
+`dazpy.exceptions.ServerVersionWarning`, once per running plugin: dazpy may call
+endpoints an older plugin doesn't have. Upgrade the plugin in that Daz Studio
+instance, or use a dazpy release matching the plugin (Studio 6.25 users:
+`pip install dazpy==2.9.3`). `client.version_check` holds the latest result as a
+`dazpy.VersionCheck` (plugin and dazpy versions, the minimum, the URL checked,
+`compatible`, and an upgrade `message`), and
+`DazClient(on_version_check=callback)` receives every completed check, so apps
+can show it where their users look. The check is best-effort and never blocks a
+request; disable it with `DazClient(check_version=False)`. `client.server_version`
 (`await client.get_server_version()` on the async client) returns the server's
 version string.
 
