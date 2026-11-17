@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.12.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.13.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.13.0](#whats-new-in-v2130)
 - [What's New in v2.12.0](#whats-new-in-v2120)
 - [What's New in v2.11.0](#whats-new-in-v2110)
 - [What's New in v2.10.1](#whats-new-in-v2101)
@@ -176,6 +177,19 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
+## What's New in v2.13.0
+
+### 🔌 Plugin version check that apps can show
+
+dazpy now warns only when the plugin is older than the oldest version it needs
+(`dazpy.MIN_SERVER_VERSION`, currently 2.12), re-checks after a dropped
+connection or a Studio restart, and exposes the result as `client.version_check`
+and through an `on_version_check=` callback. This is a dazpy-only release: the
+plugin is rebuilt with the new number but unchanged, so plugin 2.12.x users need
+not upgrade.
+
+---
+
 ## What's New in v2.12.0
 
 ### 🧾 Declarative scene recipes (`dazpy.recipe`)
@@ -187,7 +201,7 @@ conflict you resolve), and rolls back a failed apply. See
 [docs/scene_recipes.rst](docs/scene_recipes.rst) and the example
 [g9-portrait.json](docs/examples/recipes/g9-portrait.json).
 
-The MCP server (vangard-daz-mcp 0.7.0) exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
+The MCP server (daz-mcp-server, formerly vangard-daz-mcp; 0.7.0) exposes the same loop as `daz_recipe_validate`, `daz_recipe_plan`,
 `daz_recipe_apply`, `daz_recipe_observe` and `daz_recipe_render`.
 
 ### ⏳ `DazClient.waiting_out_busy()`
