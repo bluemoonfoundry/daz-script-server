@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Callable, Iterator
 
 import requests as _requests
 
@@ -23,7 +23,13 @@ from .exceptions import (
 )
 from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
-from ._version import server_version_from_status, warn_if_server_older
+from ._version import (
+    VersionCheck,
+    VersionTracker,
+    evaluate_server_version,
+    server_instance_id_from_status,
+    server_version_from_status,
+)
 
 
 _TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
@@ -140,10 +146,16 @@ class DazClient:
         token: API token.  Pass an empty string to disable authentication or
             ``None`` to auto-load from the default token file.
         timeout: Per-request HTTP timeout in seconds.
-        check_version: On the first request, read the server version from
-            ``GET /status`` and emit a :class:`~dazpy.exceptions.ServerVersionWarning`
-            if the server's major.minor is older than this dazpy. Failures of
-            the check itself are ignored.
+        check_version: Before the first request, and again after a connection
+            failure or when the plugin's ``X-Server-Instance-Id`` changes (Studio
+            restarted), read the plugin version from ``GET /status`` and emit a
+            :class:`~dazpy.exceptions.ServerVersionWarning` if it is older than
+            :data:`dazpy.MIN_SERVER_VERSION`. Failures of the check itself are
+            ignored.
+        on_version_check: Optional callable receiving a
+            :class:`~dazpy.VersionCheck` after every completed check (compatible
+            or not), on the thread that ran it. Exceptions it raises are
+            swallowed. The latest result is also :attr:`version_check`.
 
     Requests are issued through a pooled ``requests.Session`` for connection
     reuse. Call :meth:`close` when done, or use as a context manager::
@@ -156,7 +168,7 @@ class DazClient:
     """
 
     # Class defaults keep instances built without __init__ (tests) check-free.
-    _version_checked: bool = True
+    _versions: VersionTracker = VersionTracker(enabled=False)
     _server_version: str | None = None
 
     def __init__(
@@ -166,12 +178,13 @@ class DazClient:
         token: str | None = None,
         timeout: float = 30.0,
         check_version: bool = True,
+        on_version_check: Callable[[VersionCheck], object] | None = None,
     ):
         self._base = f"http://{host}:{port}"
         self._token = token if token is not None else _load_token()
         self._timeout = timeout
         self._session = _requests.Session()
-        self._version_checked = not check_version
+        self._versions = VersionTracker(enabled=check_version, on_version_check=on_version_check)
         self._server_version: str | None = None
 
     def __enter__(self) -> "DazClient":
@@ -192,22 +205,46 @@ class DazClient:
         return h
 
     def _check_server_version(self) -> None:
-        """One-time, best-effort server version check (see ``check_version``)."""
-        if self._version_checked:
+        """Best-effort plugin version check (see ``check_version``)."""
+        if not self._versions.claim_check():
             return
-        self._version_checked = True
+        check = None
         try:
             resp = self._session.get(
                 f"{self._base}/status", headers=self._headers, timeout=self._timeout
             )
-            self._server_version = server_version_from_status(resp.json())
+            data = resp.json()
+            instance = server_instance_id_from_status(data)
+            if instance is None:
+                header = resp.headers.get("X-Server-Instance-Id")
+                instance = header if isinstance(header, str) and header else None
+            version = server_version_from_status(data)
+            check = evaluate_server_version(self._base, version, instance)
+            if version is not None:
+                self._server_version = version
         except Exception:
-            return  # unreachable/odd server: let the real request report it
-        warn_if_server_older(self._server_version, self._base)
+            check = None  # unreachable/odd server: let the real request report it
+        finally:
+            self._versions.finish_check(check)
+
+    def _observe(self, resp: _requests.Response) -> _requests.Response:
+        try:
+            self._versions.observe_instance(resp.headers.get("X-Server-Instance-Id"))
+        except Exception:
+            pass
+        return resp
+
+    @property
+    def version_check(self) -> VersionCheck | None:
+        """The latest plugin version check, or ``None`` before one completes."""
+        return self._versions.latest
 
     @property
     def server_version(self) -> str | None:
         """The connected server's version string, or ``None`` if unknown."""
+        latest = self._versions.latest
+        if latest is not None and latest.server_version is not None:
+            return latest.server_version
         if self._server_version is None:
             try:
                 self._server_version = server_version_from_status(self.status())
@@ -220,17 +257,20 @@ class DazClient:
     ) -> _requests.Response:
         self._check_server_version()
         try:
-            return self._session.post(
+            return self._observe(self._session.post(
                 f"{self._base}{path}",
                 json=payload,
                 headers={**self._headers, **headers} if headers else self._headers,
                 timeout=self._timeout if timeout is None else timeout,
-            )
+            ))
         except _requests.exceptions.ConnectionError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
+            self._versions.mark_stale()
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
         except _requests.exceptions.RequestException as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _get(
@@ -238,30 +278,36 @@ class DazClient:
     ) -> _requests.Response:
         self._check_server_version()
         try:
-            return self._session.get(
+            return self._observe(self._session.get(
                 f"{self._base}{path}",
                 headers=self._headers,
                 params=params,
                 timeout=self._timeout if timeout is None else timeout,
-            )
+            ))
         except _requests.exceptions.ConnectionError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
+            self._versions.mark_stale()
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
         except _requests.exceptions.RequestException as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     def _delete(self, path: str) -> _requests.Response:
         self._check_server_version()
         try:
-            return self._session.delete(
+            return self._observe(self._session.delete(
                 f"{self._base}{path}", headers=self._headers, timeout=self._timeout
-            )
+            ))
         except _requests.exceptions.ConnectionError as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
+            self._versions.mark_stale()
             raise TimeoutError(f"Request timed out after {self._timeout}s") from e
         except _requests.exceptions.RequestException as e:
+            self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
     @contextmanager
