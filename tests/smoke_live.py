@@ -4,7 +4,7 @@ Live smoke-test matrix for DazScriptServer (ASSESSMENT #8, bd 5d6f.9).
 
 A deliberately *small*, scoped check against a running DAZ Studio: API basics,
 async jobs, both SSE streams, one tiny render per engine (Iray / Filament /
-viewport) with live engine readback, and optionally the daz-mcp-server (formerly vangard-daz-mcp) tools.
+viewport) with live engine readback, and optionally the daz-mcp-server tools.
 It is NOT the full integration suite (that one froze Studio when run live);
 every stage here is bounded and read-mostly.
 
@@ -515,19 +515,11 @@ class Smoke:
         snippet = r"""
 import asyncio, json, sys
 from dazpy.aio import AsyncDazClient
-import importlib
-try:  # daz-mcp-server >= 0.8.0; older checkouts use the vangard_daz_mcp name
-    _pkg = importlib.import_module("daz_mcp_server").__name__
-except ImportError:
-    _pkg = "vangard_daz_mcp"
-_mod = lambda name: importlib.import_module(f"{_pkg}.{name}")
-_c = _mod("_client")
-DAZ_API_TOKEN, DAZ_HOST, DAZ_PORT, DAZ_TIMEOUT = _c.DAZ_API_TOKEN, _c.DAZ_HOST, _c.DAZ_PORT, _c.DAZ_TIMEOUT
-set_async_daz_client = _c.set_async_daz_client
-_REGISTRY, _register_scripts = _mod("_registry")._REGISTRY, _mod("_registry")._register_scripts
-daz_status = _mod("tools.utility").daz_status
-daz_scene_info = _mod("tools.scene").daz_scene_info
-daz_get_render_settings = _mod("tools.render").daz_get_render_settings
+from daz_mcp_server._client import DAZ_API_TOKEN, DAZ_HOST, DAZ_PORT, DAZ_TIMEOUT, set_async_daz_client
+from daz_mcp_server._registry import _REGISTRY, _register_scripts
+from daz_mcp_server.tools.utility import daz_status
+from daz_mcp_server.tools.scene import daz_scene_info
+from daz_mcp_server.tools.render import daz_get_render_settings
 
 async def main():
     out = {}
