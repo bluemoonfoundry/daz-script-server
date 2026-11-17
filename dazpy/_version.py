@@ -182,6 +182,10 @@ class VersionTracker:
         with self._lock:
             if self._instance is None:
                 self._instance = instance_id
+                # The last completed check saw no ID (a plugin too old to send
+                # one): an ID now means a different plugin answered.
+                if self._latest is not None:
+                    self._stale = True
             elif instance_id != self._instance:
                 self._stale = True
 

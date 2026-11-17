@@ -121,13 +121,27 @@ def test_tracker_ignores_missing_instance():
         assert t.claim_check() is False
 
 
-def test_tracker_first_observed_instance_is_remembered():
+def test_tracker_instance_seen_before_any_check_is_remembered():
     t = VersionTracker()
+    t.observe_instance("i1")
     _finish(t, _check(instance=None))
     t.observe_instance("i1")
     assert t.claim_check() is False
     t.observe_instance("i2")
     assert t.claim_check() is True
+
+
+def test_tracker_upgrade_from_idless_plugin_rechecks():
+    # Plugin 2.10 (no instance IDs) was checked; Studio restarts with 2.12,
+    # whose first response carries an ID -> that's a new plugin: re-check.
+    t = VersionTracker()
+    _record(lambda: _finish(t, _check(version="2.10.0", instance=None)))
+    t.observe_instance("i1")
+    assert t.claim_check() is True
+    t.finish_check(_check(version="2.12.0", instance="i1"))
+    t.observe_instance("i1")
+    assert t.claim_check() is False
+    assert t.latest.compatible is True
 
 
 def test_tracker_warns_once_per_instance():
