@@ -33,7 +33,10 @@ jobs:
         run: npm test
 
       - name: Pack tarball
-        run: npm pack --pack-destination dist-pack
+        # npm pack won't create the destination directory itself.
+        run: |
+          mkdir -p dist-pack
+          npm pack --pack-destination dist-pack
 
       - name: Verify pack artifact
         run: |
