@@ -180,6 +180,13 @@ describe("DazClient async job methods", () => {
     ]);
   });
 
+  it("cancelRequest treats a bodyless 205 as a response, not a connection failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 205 })));
+    const client = new DazClient({ token: "" });
+    expect(await client.cancelRequest("req-1")).toBe(false);
+    await expect(client.getRequestStatus("req-1")).rejects.not.toBeInstanceOf(ConnectionError);
+  });
+
   it("getRequestStatus/getRequestResult throw AuthenticationError on 401 instead of a JSON parse error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("token expired", { status: 401 })));
     const client = new DazClient({ token: "" });

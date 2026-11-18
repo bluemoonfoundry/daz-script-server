@@ -120,13 +120,34 @@ function sleep(seconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
+/** Parse one SSE event block (lines already split on LF). */
+function parseSseBlock(rawEvent: string): { event: string; data: string } | null {
+  let eventName = "message";
+  const dataLines: string[] = [];
+  for (const line of rawEvent.split("\n")) {
+    if (line.startsWith(":") || line === "") {
+      continue;
+    }
+    if (line.startsWith("event:")) {
+      eventName = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trim());
+    }
+  }
+  return dataLines.length > 0 ? { event: eventName, data: dataLines.join("\n") } : null;
+}
+
 /**
  * Parse a Server-Sent-Events HTTP response body into `{event, data}` pairs.
  *
  * Lines starting with `:` are keepalive comments and are skipped. An event
  * block with no explicit `event:` line defaults to `"message"`, matching
  * the SSE specification. Lines may end in LF, CRLF or CR, as the
- * specification allows; DazScriptServer itself sends LF.
+ * specification allows; DazScriptServer itself sends LF. An unterminated
+ * event at the end of the stream is discarded, as the specification requires.
+ *
+ * Stopping early (`break`, `return`, or a thrown error) cancels the body, so
+ * the connection closes instead of staying open until the server ends it.
  */
 export async function* parseSseStream(response: Response): AsyncGenerator<{ event: string; data: string }> {
   const body = response.body;
@@ -141,37 +162,30 @@ export async function* parseSseStream(response: Response): AsyncGenerator<{ even
     for (;;) {
       const { done, value } = await reader.read();
       if (done) {
-        break;
+        buffer += decoder.decode();
+      } else {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
-      // Normalize CRLF/CR to LF. A trailing CR is held back: it may be the
-      // first half of a CRLF split across chunks.
-      const heldCr = buffer.endsWith("\r");
+      // Normalize CRLF/CR to LF. Mid-stream a trailing CR is held back: it may
+      // be the first half of a CRLF split across chunks. At the end it can't be.
+      const heldCr = !done && buffer.endsWith("\r");
       buffer = (heldCr ? buffer.slice(0, -1) : buffer).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
 
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-        const rawEvent = buffer.slice(0, boundary);
+        const parsed = parseSseBlock(buffer.slice(0, boundary));
         buffer = buffer.slice(boundary + 2);
-
-        let eventName = "message";
-        const dataLines: string[] = [];
-        for (const line of rawEvent.split("\n")) {
-          if (line.startsWith(":") || line === "") {
-            continue;
-          }
-          if (line.startsWith("event:")) {
-            eventName = line.slice("event:".length).trim();
-          } else if (line.startsWith("data:")) {
-            dataLines.push(line.slice("data:".length).trim());
-          }
+        if (parsed !== null) {
+          yield parsed;
         }
-        if (dataLines.length > 0) {
-          yield { event: eventName, data: dataLines.join("\n") };
-        }
+      }
+      if (done) {
+        break;
       }
     }
   } finally {
+    // No-op if the stream already ended; otherwise closes the connection.
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -395,7 +409,8 @@ export class DazClient {
       if (stream) {
         return resp;
       }
-      const body = resp.status === 204 || resp.status === 304 ? null : await resp.arrayBuffer();
+      // These statuses can't carry a body; new Response() throws if given one.
+      const body = resp.status === 204 || resp.status === 205 || resp.status === 304 ? null : await resp.arrayBuffer();
       return new Response(body, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
@@ -748,14 +763,21 @@ export class DazClient {
   private async openStream(url: string, opts: StreamOptions): Promise<Response | null> {
     const { timeoutMs, signal } = opts;
     const controller = new AbortController();
+    const onAbort = (): void => controller.abort(signal?.reason);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Runs once the stream is finished with, however it ends, so neither the
+    // timer nor a listener on a long-lived caller signal outlives it.
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
     if (signal) {
       if (signal.aborted) {
         controller.abort(signal.reason);
       } else {
-        signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+        signal.addEventListener("abort", onAbort, { once: true });
       }
     }
-    let timer: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs !== undefined) {
       timer = setTimeout(
         () => controller.abort(new DazTimeoutError(`Stream timed out after ${timeoutMs / 1000}s`)),
@@ -768,7 +790,7 @@ export class DazClient {
     try {
       resp = await fetch(url, { headers: this.headers, signal: controller.signal });
     } catch (e) {
-      clearTimeout(timer);
+      cleanup();
       if (e instanceof DazTimeoutError || (signal?.aborted && e === signal.reason)) {
         throw e;
       }
@@ -776,15 +798,36 @@ export class DazClient {
       throw new ConnectionError(`Cannot reach DAZ Studio at ${this.baseUrl}: ${message}`);
     }
     if (resp.status === 401 || resp.status === 403) {
-      clearTimeout(timer);
+      cleanup();
       throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
     }
-    if (resp.status !== 200) {
-      clearTimeout(timer);
+    if (resp.status !== 200 || !resp.body) {
+      cleanup();
       await resp.body?.cancel();
       return null;
     }
-    return resp;
+    const reader = resp.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(c) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            cleanup();
+            c.close();
+          } else {
+            c.enqueue(value);
+          }
+        } catch (e) {
+          cleanup();
+          c.error(e);
+        }
+      },
+      async cancel(reason) {
+        cleanup();
+        await reader.cancel(reason);
+      },
+    });
+    return new Response(body, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
   }
 
   /**

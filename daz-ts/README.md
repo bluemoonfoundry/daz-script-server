@@ -12,21 +12,14 @@ layer (nodes, materials, skeletons, etc.).
 
 ## Install
 
-`daz-ts` is not published to the public npm registry. Install it as a git
-dependency (npm runs the package's `prepare` script automatically, which
-builds `dist/`):
-
-```bash
-npm install github:<owner>/<repo>#<branch-or-tag> --workspace-path daz-ts
-# or, pointing at a subdirectory of this monorepo:
-npm install "github:<owner>/<repo>#<ref>:daz-ts"
-```
-
-Alternatively, download the `daz-ts-*.tgz` tarball attached to a
-[GitHub release](../../../releases) and install it directly:
+`daz-ts` is not yet published to the npm registry, and npm can't install a
+package from a subdirectory of a git repository, so install the
+`daz-ts-*.tgz` tarball attached to a [GitHub release](../../../releases),
+either downloaded or by URL:
 
 ```bash
 npm install ./daz-ts-0.1.0.tgz
+npm install https://github.com/bluemoonfoundry/daz-script-server/releases/download/<tag>/daz-ts-0.1.0.tgz
 ```
 
 Requires Node.js >= 18 (for built-in `fetch`/`AbortController`).

@@ -19,7 +19,7 @@ function sseBodyStream(chunks: string[]): ReadableStream<Uint8Array> {
 }
 
 describe("DazClient.streamRenderProgress", () => {
-  it("returns the raw Response when the endpoint responds 200", async () => {
+  it("returns the streaming Response when the endpoint responds 200", async () => {
     const fakeResponse = new Response(sseBodyStream(["data: {}\n\n"]), { status: 200 });
     const fetchMock = vi.fn().mockResolvedValue(fakeResponse);
     vi.stubGlobal("fetch", fetchMock);
@@ -27,7 +27,8 @@ describe("DazClient.streamRenderProgress", () => {
     const client = new DazClient({ token: "" });
     const resp = await client.streamRenderProgress("req-1");
 
-    expect(resp).toBe(fakeResponse);
+    expect(resp?.status).toBe(200);
+    expect(await resp!.text()).toBe("data: {}\n\n");
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:18811/render/req-1/progress");
   });
@@ -92,6 +93,38 @@ describe("DazClient.streamRenderProgress", () => {
     const reason = new Error("stop");
     controller.abort(reason);
     await expect(opening).rejects.toBe(reason);
+  });
+
+  it("removes its listener from the caller's signal once the stream ends", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(sseBodyStream(["data: {}\n\n"]), { status: 200 })));
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+
+    const client = new DazClient({ token: "" });
+    const resp = await client.streamRenderProgress("req-1", { signal: controller.signal, timeoutMs: 60_000 });
+    await resp!.text();
+
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("closes the connection when the consumer stops reading early", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("data: 1\n\ndata: 2\n\n"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+
+    const client = new DazClient({ token: "" });
+    const resp = await client.streamSceneEvents();
+    for await (const _evt of parseSseStream(resp!)) {
+      break;
+    }
+    expect(cancelled).toBe(true);
   });
 });
 
@@ -159,5 +192,14 @@ describe("parseSseStream", () => {
       { event: "message", data: "2" },
       { event: "message", data: "3" },
     ]);
+  });
+
+  it("flushes an event whose terminating CR is the last byte of the stream", async () => {
+    const response = new Response(sseBodyStream(["data: x\r\r"]), { status: 200 });
+    const events: Array<{ event: string; data: string }> = [];
+    for await (const evt of parseSseStream(response)) {
+      events.push(evt);
+    }
+    expect(events).toEqual([{ event: "message", data: "x" }]);
   });
 });
