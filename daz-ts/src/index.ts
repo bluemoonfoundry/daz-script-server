@@ -81,7 +81,7 @@ export { DazPose } from "./pose.js";
 export type { DazPoseDict } from "./pose.js";
 
 export { DazSceneState } from "./sceneState.js";
-export type { ApplyOptions, ApplyResult, DazSceneStateDict } from "./sceneState.js";
+export type { ApplyOptions, ApplyResult, CaptureOptions, DazSceneStateDict, SkippedNode } from "./sceneState.js";
 
 export { DazAnimation } from "./animation.js";
 export type { AnimationFrame, DazAnimationDict } from "./animation.js";

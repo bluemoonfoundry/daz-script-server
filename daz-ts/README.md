@@ -301,10 +301,14 @@ domain-helper modules, which apply typed configuration objects to the Phase
   idempotent even on `DzERCLink`-driven dials. `capture()`/`apply()`/
   `applyFull()` are async (one HTTP call each); `lerp()`/`toDict()`/
   `fromDict()`/`save()`/`load()` are pure/local.
-- `DazSceneState` (`sceneState.ts`, from `_scene_state.py`) — a full scene
-  checkpoint: every skeleton's `DazPose`, plus camera/light transforms and a
-  few extra light properties, restored in a small fixed number of HTTP
-  calls. `apply()` independently verifies each skeleton restore with a
+- `DazSceneState` (`sceneState.ts`, from `_scene_state.py`) — a pose
+  checkpoint, not a full scene snapshot: every skeleton's `DazPose`, plus
+  camera/light transforms and a few extra light properties, restored in a
+  small fixed number of HTTP calls. Materials, render settings and deleted
+  nodes are not covered; `capture(scene, { backupPath })` first writes a
+  full-scene backup via `saveCopy()` for that. `apply()` returns a report:
+  `restored`, `skipped` (nodes deleted since capture, each also listed in
+  `errors`), `errors`, `complete` and `backup`. `apply()` independently verifies each skeleton restore with a
   fresh `DazPose.capture()` read-back (retrying up to `maxVerifyRetries`
   times on mismatch) since a 200 response can reflect a restore DAZ
   Studio's main thread only partially executed under contention, and

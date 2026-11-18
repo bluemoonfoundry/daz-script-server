@@ -1,9 +1,9 @@
 /**
- * A full snapshot of scene state, suitable for a save/restore checkpoint.
+ * An in-memory pose checkpoint: figure poses plus camera and light placement.
  * Mirrors dazpy's `_scene_state.py`.
  */
 
-import { DazBusyError } from "./exceptions.js";
+import { DazBusyError, NodeNotFoundError } from "./exceptions.js";
 import { DazPose, type DazPoseDict } from "./pose.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 import type { DazScene } from "./scene.js";
@@ -104,6 +104,7 @@ export interface DazSceneStateDict {
   cameras: Record<string, Record<string, number>>;
   lights: { transforms: Record<string, Record<string, number>>; extra: Record<string, Record<string, number>> };
   follow_targets: Record<string, string | null>;
+  backup?: Record<string, unknown> | null;
 }
 
 /** Options for {@link DazSceneState.apply}. */
@@ -121,19 +122,72 @@ export interface ApplyOptions {
   verifyTolerance?: number;
 }
 
-/** Result of {@link DazSceneState.apply}. */
+/** Options for {@link DazSceneState.capture}. */
+export interface CaptureOptions {
+  /**
+   * If given, first write a full-scene backup to this absolute path on the
+   * server host via {@link DazScene.saveCopy}, before anything else is
+   * captured. Use it before destructive work (deleting nodes, changing
+   * materials or render settings), which this checkpoint cannot undo. The
+   * save-copy result is kept in {@link DazSceneState.backup} and reported
+   * again by {@link DazSceneState.apply}. If the backup fails, the error is
+   * thrown and nothing is captured.
+   */
+  backupPath?: string;
+}
+
+/** A node in the checkpoint that no longer exists in the scene. */
+export interface SkippedNode {
+  /**
+   * `follow_target` means the skeleton was restored but the figure it was
+   * fitted to is gone, so the fit was not restored.
+   */
+  kind: "skeleton" | "camera" | "light" | "follow_target";
+  name: string;
+  reason: "not_found";
+}
+
+/** Verification report returned by {@link DazSceneState.apply}. */
 export interface ApplyResult {
+  /** Names applied (skeletons read back and verified). */
   restored: string[];
+  /** Nodes no longer in the scene. Each also has a line in `errors`. */
+  skipped: SkippedNode[];
+  /** Every problem, skips included. */
   errors: string[];
+  /** `true` only if nothing was skipped or failed. */
+  complete: boolean;
+  /** `saveCopy()` result from `capture(scene, { backupPath })`, or `null`. */
+  backup: Record<string, unknown> | null;
 }
 
 /**
- * A full snapshot of scene state, suitable for a save/restore checkpoint.
+ * An in-memory pose checkpoint: figure poses plus camera and light placement.
  *
- * Captures every skeleton's complete pose (bone rotations, morphs, and
- * node-level properties -- see {@link DazPose}) plus transform and a handful
- * of key properties for every camera and light in the scene. Everything is
- * captured and restored via each property's raw (pre-ERC) value, so
+ * This is not a full scene snapshot. For anything it does not cover, take a
+ * full-scene backup with {@link DazScene.saveCopy}, or pass `backupPath` to
+ * {@link DazSceneState.capture} to do both at once.
+ *
+ * Captured, for nodes that exist at capture time:
+ *
+ * - every skeleton (figure): bone rotations, morph values and the figure
+ *   node's own numeric properties (see {@link DazPose});
+ * - every skeleton's fit-to (follow) target;
+ * - every camera: X/Y/Z translate, X/Y/Z rotate and Scale;
+ * - every light: the same transform channels, plus Flux, Shadow Softness and
+ *   Spread Angle.
+ *
+ * Not captured:
+ *
+ * - materials and surface properties;
+ * - HDRI / environment and render settings;
+ * - nodes added or deleted after capture (restore never creates or deletes
+ *   nodes; missing ones are reported as skipped);
+ * - props and any other node that is not a skeleton, camera or light;
+ * - bone translations, keyframes / animation, and any other camera or light
+ *   property (focal length, color, etc.).
+ *
+ * Everything is captured and restored via each property's raw (pre-ERC) value, so
  * repeated capture/apply cycles are idempotent even for properties driven
  * by `DzERCLink` controllers (e.g. a "Scale" dial fed by dozens of linked
  * morphs) -- see {@link DazPose} for why this matters.
@@ -167,6 +221,11 @@ export class DazSceneState {
    * reliable fix.
    */
   readonly followTargets: Record<string, string | null>;
+  /**
+   * Result of the {@link DazScene.saveCopy} call made by
+   * `capture(scene, { backupPath })`, or `null` if no full-scene backup was taken.
+   */
+  readonly backup: Record<string, unknown> | null;
 
   constructor(
     skeletonPoses: Record<string, DazPose>,
@@ -174,18 +233,22 @@ export class DazSceneState {
     lightTransforms: Record<string, Record<string, number>>,
     lightExtra: Record<string, Record<string, number>>,
     followTargets: Record<string, string | null> = {},
+    backup: Record<string, unknown> | null = null,
   ) {
     this.skeletonPoses = skeletonPoses;
     this.cameraTransforms = cameraTransforms;
     this.lightTransforms = lightTransforms;
     this.lightExtra = lightExtra;
     this.followTargets = followTargets;
+    this.backup = backup;
   }
 
   // ── construction ──────────────────────────────────────────────────────
 
   /** Capture the current state of every skeleton, camera, and light in `scene`. */
-  static async capture(scene: DazScene): Promise<DazSceneState> {
+  static async capture(scene: DazScene, opts: CaptureOptions = {}): Promise<DazSceneState> {
+    const backup = opts.backupPath !== undefined ? await scene.saveCopy(opts.backupPath) : null;
+
     const client = scene.getClient();
     const skeletonPoses: Record<string, DazPose> = {};
     const followTargets: Record<string, string | null> = {};
@@ -254,6 +317,7 @@ export class DazSceneState {
       lightResult.transforms ?? {},
       lightResult.extra ?? {},
       followTargets,
+      backup,
     );
   }
 
@@ -266,6 +330,7 @@ export class DazSceneState {
       cameras: this.cameraTransforms,
       lights: { transforms: this.lightTransforms, extra: this.lightExtra },
       follow_targets: this.followTargets,
+      backup: this.backup,
     };
   }
 
@@ -282,6 +347,7 @@ export class DazSceneState {
       lights.transforms ?? {},
       lights.extra ?? {},
       data.follow_targets ?? {},
+      data.backup ?? null,
     );
   }
 
@@ -291,9 +357,12 @@ export class DazSceneState {
    * Apply this snapshot's skeleton poses, camera transforms, and light
    * properties back onto `scene` in a small, fixed number of HTTP calls.
    *
-   * Nodes that no longer exist in the scene are skipped and reported in
-   * `errors` rather than raising -- matching the behaviour of the
-   * registered-script checkpoint this class replaces.
+   * Restore is best effort. A skeleton, camera or light that no longer
+   * exists in the scene (deleted or renamed since capture) is skipped and
+   * listed in `skipped`, and the rest of the checkpoint is still applied.
+   * Nothing is recreated: this restores values, not the scene graph. To get
+   * deleted nodes back, reload the full-scene backup taken by
+   * `capture(scene, { backupPath })`.
    *
    * Each skeleton restore is independently verified: after
    * `pose.applyFull(skel)` returns, a fresh {@link DazPose.capture} is taken
@@ -305,21 +374,34 @@ export class DazSceneState {
    * (re-running `applyFull` and re-verifying) up to `maxVerifyRetries`
    * times before being reported in `errors` instead of `restored`, so
    * callers never trust an unverified result.
+   *
+   * Each skipped node also has a line in `errors`, so a caller that treats
+   * any `errors` entry as a failed restore stays safe.
    */
   async apply(scene: DazScene, opts: ApplyOptions = {}): Promise<ApplyResult> {
     const { maxVerifyRetries = DEFAULT_MAX_VERIFY_RETRIES, verifyTolerance = DEFAULT_VERIFY_TOLERANCE } = opts;
     const client = scene.getClient();
     const restored: string[] = [];
+    const skipped: SkippedNode[] = [];
     const errors: string[] = [];
     const resolvedSkeletons: Record<string, DazSkeleton> = {};
+
+    const skip = (kind: SkippedNode["kind"], name: string, message: string): void => {
+      skipped.push({ kind, name, reason: "not_found" });
+      errors.push(message);
+    };
 
     for (const [name, pose] of Object.entries(this.skeletonPoses)) {
       let skel: DazSkeleton;
       try {
         skel = await scene.findSkeleton(name);
         resolvedSkeletons[name] = skel;
-      } catch {
-        errors.push(`Skeleton not found: ${name}`);
+      } catch (exc) {
+        if (exc instanceof NodeNotFoundError) {
+          skip("skeleton", name, `Skeleton not found: ${name}`);
+        } else {
+          errors.push(`Failed to look up skeleton ${name}: ${exc instanceof Error ? exc.message : String(exc)}`);
+        }
         continue;
       }
 
@@ -383,8 +465,24 @@ export class DazSceneState {
         if (targetName === null) {
           await retryOnBusy(() => skel.unfit());
         } else {
-          const targetSkel = resolvedSkeletons[targetName] ?? (await scene.findSkeleton(targetName));
-          await retryOnBusy(() => skel.fitTo(targetSkel));
+          let targetSkel = resolvedSkeletons[targetName];
+          if (targetSkel === undefined) {
+            try {
+              targetSkel = await scene.findSkeleton(targetName);
+            } catch (exc) {
+              if (!(exc instanceof NodeNotFoundError)) {
+                throw exc;
+              }
+              skip(
+                "follow_target",
+                name,
+                `Follow-target ${targetName} of skeleton ${name} not found; fit not restored`,
+              );
+              continue;
+            }
+          }
+          const target = targetSkel;
+          await retryOnBusy(() => skel.fitTo(target));
         }
       } catch (exc) {
         errors.push(`Failed to restore follow-target for skeleton ${name}: ${exc instanceof Error ? exc.message : String(exc)}`);
@@ -403,18 +501,27 @@ export class DazSceneState {
                 }
             }
             var restored = [];
+            var skipped = [];
             var errors = [];
 
             for (var name in _camTransforms) {
                 var c = Scene.findNode(name);
-                if (!c) { errors.push("Camera not found: " + name); continue; }
+                if (!c) {
+                    skipped.push({kind: "camera", name: name, reason: "not_found"});
+                    errors.push("Camera not found: " + name);
+                    continue;
+                }
                 _applyTransforms(c, _camTransforms[name]);
                 restored.push(name);
             }
 
             for (var lname in _lightTransforms) {
                 var l = Scene.findNode(lname);
-                if (!l) { errors.push("Light not found: " + lname); continue; }
+                if (!l) {
+                    skipped.push({kind: "light", name: lname, reason: "not_found"});
+                    errors.push("Light not found: " + lname);
+                    continue;
+                }
                 _applyTransforms(l, _lightTransforms[lname]);
                 var extra = _lightExtra[lname] || {};
                 for (var ek in extra) {
@@ -424,16 +531,17 @@ export class DazSceneState {
                 restored.push(lname);
             }
 
-            return {restored: restored, errors: errors};
+            return {restored: restored, skipped: skipped, errors: errors};
         `);
     const nodeResult = ((await client.execute(restoreScript, undefined, {
       retryOnBusy: true,
       maxWait: FOLLOW_TARGET_RETRY_MAX_WAIT,
-    })).value as { restored?: string[]; errors?: string[] }) ?? { restored: [], errors: [] };
+    })).value as { restored?: string[]; skipped?: SkippedNode[]; errors?: string[] }) ?? { restored: [], errors: [] };
     restored.push(...(nodeResult.restored ?? []));
+    skipped.push(...(nodeResult.skipped ?? []));
     errors.push(...(nodeResult.errors ?? []));
 
-    return { restored, errors };
+    return { restored, skipped, errors, complete: errors.length === 0, backup: this.backup };
   }
 
   // ── dunder ────────────────────────────────────────────────────────────
