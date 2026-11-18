@@ -8,8 +8,10 @@ export type {
   ArtifactList,
   DownloadArtifactOptions,
   ServerCapabilities,
+  RequestStatus,
+  CancelResponse,
 } from "./client.js";
-export { parseSseStream } from "./client.js";
+export { parseSseStream, FINAL_REQUEST_STATUSES } from "./client.js";
 
 export type { ExecutionResult } from "./result.js";
 

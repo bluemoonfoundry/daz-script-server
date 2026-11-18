@@ -136,6 +136,16 @@ It submits the script with `executeAsyncSubmit`, then long-polls
 `timeoutMs` elapses (throwing `AsyncExecutionError` or `DazTimeoutError`
 respectively).
 
+A running script can't be interrupted, so cancelling it only moves it to
+`cancel_requested`; `executeLong` keeps waiting, and resolves with the result
+if the job ends `completed_after_cancel_request`. A job running past the
+server's Stuck Job Timeout becomes `stale`, which ends the wait with
+`AsyncExecutionError` (the script may still finish later, as
+`completed_after_stale`). The `RequestStatus` type and
+`FINAL_REQUEST_STATUSES` list every status, and
+`client.cancelRequestDetail(id)` returns the server's cancel response
+(`status` is `cancelled`, `cancel_requested` or `stale`).
+
 ### `DazClient.capabilities()`
 
 Ask the server what it supports instead of hard-coding versions (requires a

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DazClient } from "../../src/client.js";
-import { AuthenticationError } from "../../src/exceptions.js";
+import { DazClient, FINAL_REQUEST_STATUSES } from "../../src/client.js";
+import { AuthenticationError, ConnectionError, DazError } from "../../src/exceptions.js";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -117,5 +117,69 @@ describe("DazClient async job methods", () => {
 
     const client = new DazClient({ token: "" });
     expect(await client.cancelRequest("req-1")).toBe(false);
+  });
+
+  it("cancelRequestDetail returns cancel_requested for a running script without cancelled_at", async () => {
+    const body = {
+      request_id: "req-1",
+      status: "cancel_requested",
+      message: "Cancel requested; the script is still running",
+      cancel_requested_at: "2026-11-18T10:00:00",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new DazClient({ token: "" });
+    const resp = await client.cancelRequestDetail("req-1");
+
+    expect(resp).toEqual(body);
+    expect(resp.cancelled_at).toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:18811/requests/req-1");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("cancelRequestDetail routes rnd- IDs to POST /render/{id}/cancel", async () => {
+    const body = {
+      request_id: "rnd-1",
+      status: "cancelled",
+      message: "Cancelled",
+      cancel_requested_at: "2026-11-18T10:00:00",
+      cancelled_at: "2026-11-18T10:00:00",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new DazClient({ token: "" });
+    expect((await client.cancelRequestDetail("rnd-1")).status).toBe("cancelled");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:18811/render/rnd-1/cancel");
+    expect(init.method).toBe("POST");
+  });
+
+  it("cancelRequestDetail throws DazError for an unknown request and ConnectionError when unreachable", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(404, { success: false, error_code: "REQUEST_NOT_FOUND", error: "Request not found", retryable: false }),
+      )
+      .mockRejectedValueOnce(new TypeError("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new DazClient({ token: "" });
+    const err = await client.cancelRequestDetail("req-x").catch((e) => e);
+    expect(err).toBeInstanceOf(DazError);
+    expect(err.message).toBe("Request not found");
+    await expect(client.cancelRequestDetail("req-y")).rejects.toBeInstanceOf(ConnectionError);
+  });
+
+  it("FINAL_REQUEST_STATUSES excludes the non-final cancel_requested and stale", () => {
+    expect([...FINAL_REQUEST_STATUSES].sort()).toEqual([
+      "cancelled",
+      "completed",
+      "completed_after_cancel_request",
+      "completed_after_stale",
+      "failed",
+    ]);
   });
 });

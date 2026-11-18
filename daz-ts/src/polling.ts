@@ -20,7 +20,12 @@ function sleep(ms: number): Promise<void> {
  * Submits `script` asynchronously, then polls `/requests/:id/result` with
  * long-polling until the script completes or `timeoutMs` is exceeded.
  *
- * @throws {AsyncExecutionError} If the script fails or the request is cancelled.
+ * `completed_after_cancel_request` and `completed_after_stale` resolve with
+ * the kept result. `stale` ends the wait: the server answers it with
+ * `success: false`, so it throws even though the script may still finish.
+ * `cancel_requested` keeps polling until the script returns.
+ *
+ * @throws {AsyncExecutionError} If the script fails, the request is cancelled, or it goes `stale`.
  * @throws {DazTimeoutError} If `timeoutMs` is exceeded before the script completes.
  */
 export async function executeLong(
@@ -57,6 +62,7 @@ export async function executeLong(
     if (status === "cancelled") {
       throw new AsyncExecutionError("Request was cancelled", requestId);
     }
+    // cancel_requested is not final: keep polling for the real outcome.
     await sleep(pollIntervalMs);
   }
 

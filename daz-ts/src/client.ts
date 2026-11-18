@@ -273,6 +273,48 @@ export interface ArtifactList {
   artifacts: Artifact[];
 }
 
+/**
+ * Status of an async request (`openapi.yaml` `RequestStatus`).
+ *
+ * Final: `completed`, `failed`, `cancelled`, `completed_after_cancel_request`,
+ * `completed_after_stale`. Not final: `cancel_requested` (cancel asked while
+ * the script was running; scripts can't be interrupted) and `stale` (running
+ * past the Stuck Job Timeout; reported with `success: false` and ends
+ * long-polls, but changes to the real outcome if the script returns).
+ * `cancelled` means the work really stopped: it never started, or a render
+ * was aborted.
+ */
+export type RequestStatus =
+  | "queued"
+  | "running"
+  | "cancel_requested"
+  | "stale"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "completed_after_cancel_request"
+  | "completed_after_stale";
+
+/** The final {@link RequestStatus} values; a request in one of these never changes again. */
+export const FINAL_REQUEST_STATUSES: ReadonlySet<RequestStatus> = new Set<RequestStatus>([
+  "completed",
+  "failed",
+  "cancelled",
+  "completed_after_cancel_request",
+  "completed_after_stale",
+]);
+
+/** Body of `DELETE /requests/{id}` and `POST /render/{id}/cancel`. */
+export interface CancelResponse {
+  request_id: string;
+  /** `cancelled` only when the request was still queued; otherwise its current status. Poll it for the real outcome. */
+  status: "cancelled" | "cancel_requested" | "stale";
+  message: string;
+  cancel_requested_at: string;
+  /** Present only when `status` is `cancelled`. */
+  cancelled_at?: string;
+}
+
 /** Options accepted by {@link DazClient.downloadArtifact}. */
 export interface DownloadArtifactOptions {
   /** Inclusive byte range `[start, end]`; omit `end` for "to the end of the file". */
@@ -475,8 +517,10 @@ export class DazClient {
   /**
    * Return the current status of an async request.
    *
-   * @returns A dict with at least a `status` key: `"queued"`, `"running"`,
-   * `"completed"`, `"failed"`, `"cancelled"`, or `"not_found"`.
+   * @returns A dict with at least a `status` key: a {@link RequestStatus}, or
+   * `"not_found"`. `cancel_requested` and `stale` are not final: a running
+   * script can't be interrupted, so once it returns the status changes to its
+   * real outcome.
    */
   async getRequestStatus(requestId: string): Promise<Record<string, unknown>> {
     const resp = await this.get(`/requests/${requestId}/status`);
@@ -508,9 +552,9 @@ export class DazClient {
   /**
    * List all tracked async requests (script and render) with their status.
    *
-   * @param status - Optional filter: `"queued"`, `"running"`, `"completed"`, `"failed"`, `"cancelled"`.
+   * @param status - Optional filter: any {@link RequestStatus} (e.g. `"running"`, `"cancel_requested"`).
    */
-  async listRequests(status?: string): Promise<Record<string, unknown>> {
+  async listRequests(status?: RequestStatus): Promise<Record<string, unknown>> {
     const resp = await this.get("/requests", status ? { status } : undefined);
     if (resp.status === 401 || resp.status === 403) {
       throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -519,9 +563,36 @@ export class DazClient {
   }
 
   /**
+   * Cancel a script or render request and return the server's response.
+   *
+   * Render requests (`rnd-` IDs) go to `POST /render/{id}/cancel`; others to
+   * `DELETE /requests/{id}`. A queued request comes back `cancelled`; a
+   * running one comes back `cancel_requested` (or `stale`), so poll it for
+   * the real outcome.
+   *
+   * @throws {DazError} If the server rejects the cancel (e.g. unknown request).
+   */
+  async cancelRequestDetail(requestId: string): Promise<CancelResponse> {
+    const resp = requestId.startsWith("rnd-")
+      ? await this.post(`/render/${requestId}/cancel`, {})
+      : await this.delete_(`/requests/${requestId}`);
+    if (resp === null) {
+      throw new ConnectionError(`Could not reach the server to cancel ${requestId}`);
+    }
+    const errData = await raiseForError(resp);
+    if (errData !== undefined) {
+      throw new DazError((errData.error as string) ?? `HTTP ${resp.status}`);
+    }
+    return (await resp.json()) as CancelResponse;
+  }
+
+  /**
    * Cancel a queued or running async request.
    *
-   * @returns `true` if the server confirmed cancellation, `false` otherwise.
+   * @returns `true` if the server accepted the cancel, `false` otherwise. A
+   * queued request is cancelled at once; a running one only becomes
+   * `cancel_requested` (scripts can't be interrupted), so poll the request
+   * for its real outcome.
    */
   async cancelRequest(requestId: string): Promise<boolean> {
     const resp = await this.delete_(`/requests/${requestId}`);
