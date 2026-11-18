@@ -410,7 +410,7 @@ class DazScene:
                         name: _b.getName(),
                         label: _b.getLabel(),
                         parent_name: _parentName,
-                        rotation_order: _b.getRotationOrder(),
+                        rotation_order: _b.getRotationOrder().toString(),
                         local_position: {{x: _lpos.x, y: _lpos.y, z: _lpos.z}},
                         world_position: {{x: _wpos.x, y: _wpos.y, z: _wpos.z}},
                         local_euler: {{

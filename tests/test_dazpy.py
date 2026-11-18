@@ -2851,7 +2851,9 @@ class TestDazBoneScriptGeneration(unittest.TestCase):
         order = bone.rotation_order
         self.assertEqual(order, "XYZ")
         script = client.execute.call_args[0][0]
-        self.assertIn("getRotationOrder", script)
+        # getRotationOrder() returns a DzRotationOrder object, which
+        # JSON-serializes to "" unless converted explicitly.
+        self.assertIn("getRotationOrder().toString()", script)
 
     def test_get_skeleton_returns_daz_skeleton(self):
         from dazpy._skeleton import DazSkeleton
@@ -5424,6 +5426,22 @@ class TestCallCounts(unittest.TestCase):
         self.assertIn("getWSPos", script)
         self.assertIn("world_position", script)
 
+    def test_bone_metadata_rotation_order_stringified(self):
+        skel, client = self._make_batch_skeleton()
+        skel.bone_metadata()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRotationOrder().toString()", script)
+
+    def test_bone_metadata_includes_rest_orientation_and_axis_limits(self):
+        skel, client = self._make_batch_skeleton()
+        skel.bone_metadata()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getOrientation()", script)
+        self.assertIn("rest_orientation", script)
+        self.assertIn("axis_limits", script)
+        self.assertIn("getMin()", script)
+        self.assertIn("getMax()", script)
+
 
 class TestDazSceneStateApply(unittest.TestCase):
     """Tests for DazSceneState.apply()'s per-skeleton error isolation."""
@@ -6061,6 +6079,27 @@ class TestSceneSnapshot(unittest.TestCase):
         self.assertIn("getWSPos", script)
         self.assertIn("getAllBones", script)
         self.assertIn("getSkeletonList", script)
+
+    def test_scene_snapshot_rotation_order_stringified(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRotationOrder().toString()", script)
+
+    def test_undo_last_uses_global_undo_stack(self):
+        client = _make_client(None)
+        DazScene(client).undo_last()
+        script = client.execute.call_args[0][0]
+        self.assertIn("UndoStack.undo()", script)
+        self.assertNotIn("getUndoStack", script)
+
+    def test_redo_last_uses_global_undo_stack(self):
+        client = _make_client(None)
+        DazScene(client).redo_last()
+        script = client.execute.call_args[0][0]
+        self.assertIn("UndoStack.redo()", script)
+        self.assertNotIn("getUndoStack", script)
 
     def test_scene_snapshot_filter_serialized(self):
         client = _make_client([])
