@@ -979,6 +979,7 @@ class DazScene:
         self,
         nodes: list[DazNode] | None = None,
         *,
+        memorized_pose: bool = False,
         wait: bool = True,
         timeout: float = 300.0,
     ) -> str | None:
@@ -990,6 +991,12 @@ class DazScene:
                 simulates the whole scene via ``DzSimulationMgr.simulate()``,
                 which follows the frame range configured in the Simulation
                 Settings pane.
+            memorized_pose: If ``True``, sets the active engine's
+                ``startFromMemorizedPose`` global simulation setting before
+                simulating, so pose-based bulge corrections are computed
+                against the engine's memorized reference pose instead of the
+                figure's live pose. Mirrors the "Start Bulge from Memorized
+                Pose" checkbox in DAZ Studio's Simulation Settings pane.
             wait: If ``True`` (default), block until the simulation finishes,
                 using the async execute-and-poll endpoint since dForce runs can
                 take minutes. If ``False``, submit the job and return
@@ -1007,20 +1014,25 @@ class DazScene:
             :class:`~dazpy.exceptions.ScriptRuntimeError`: If the simulation
                 engine reports an error.
         """
+        memorized_flag = "true" if memorized_pose else "false"
         if nodes:
             node_exprs = ",".join(ScriptBuilder.find_node_expr(n._identifier) for n in nodes)
             body = f"""
                 var mgr = App.getSimulationMgr();
                 var engine = mgr.getActiveSimulationEngine();
                 if (!engine) return {{"error": "no_active_engine"}};
+                engine.getGlobalSimulationSettings().startFromMemorizedPose = {memorized_flag};
                 var err = engine.customSimulate([{node_exprs}]);
                 return {{"error": err ? String(err) : null}};
             """
         else:
-            body = """
+            body = f"""
                 var mgr = App.getSimulationMgr();
+                var engine = mgr.getActiveSimulationEngine();
+                if (!engine) return {{"error": "no_active_engine"}};
+                engine.getGlobalSimulationSettings().startFromMemorizedPose = {memorized_flag};
                 var err = mgr.simulate();
-                return {"error": err ? String(err) : null};
+                return {{"error": err ? String(err) : null}};
             """
         script = ScriptBuilder.iife(body)
 

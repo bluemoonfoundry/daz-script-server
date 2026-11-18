@@ -3881,6 +3881,30 @@ class TestDazSceneDForceSimulation(unittest.TestCase):
         with self.assertRaises(exceptions.ScriptRuntimeError):
             scene.run_dforce_simulation(wait=True)
 
+    def test_run_dforce_simulation_defaults_to_live_pose(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-live"
+        scene.run_dforce_simulation(wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("startFromMemorizedPose = false", script)
+
+    def test_run_dforce_simulation_memorized_pose_sets_engine_flag(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-mem"
+        scene.run_dforce_simulation(memorized_pose=True, wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("getGlobalSimulationSettings", script)
+        self.assertIn("startFromMemorizedPose = true", script)
+
+    def test_run_dforce_simulation_memorized_pose_with_nodes(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-mem-nodes"
+        node = DazNode(scene._client, NodeIdentifier("Skirt"))
+        scene.run_dforce_simulation(nodes=[node], memorized_pose=True, wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("startFromMemorizedPose = true", script)
+        self.assertIn("customSimulate", script)
+
 
 class TestDazLightScriptGeneration(unittest.TestCase):
     def setUp(self):

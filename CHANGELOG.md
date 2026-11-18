@@ -4,6 +4,13 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### dForce memorized-pose simulation option
+
+`DazScene.run_dforce_simulation()` gains a `memorized_pose` kwarg, which sets
+the active simulation engine's `startFromMemorizedPose` global setting before
+simulating -- mirrors the "Start Bulge from Memorized Pose" checkbox in DAZ
+Studio's Simulation Settings pane.
+
 ## [2.13.0] - 2026-11-16
 
 dazpy-only release. The plugin binaries are rebuilt with the new version
