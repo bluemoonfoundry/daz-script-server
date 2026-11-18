@@ -951,7 +951,7 @@ class DazScene:
         Note: this steps the global undo stack.  To group a series of changes
         into a single undoable operation use :meth:`undo` (the context manager).
         """
-        script = ScriptBuilder.iife("App.getUndoStack().undo();")
+        script = ScriptBuilder.iife("UndoStack.undo();")
         self._client.execute(script)
 
     def redo_last(self) -> None:
@@ -960,7 +960,7 @@ class DazScene:
         Equivalent to pressing Ctrl+Y / Edit > Redo in DAZ Studio.
         Has no effect if there is nothing to redo.
         """
-        script = ScriptBuilder.iife("App.getUndoStack().redo();")
+        script = ScriptBuilder.iife("UndoStack.redo();")
         self._client.execute(script)
 
     # ── dForce simulation ──────────────────────────────────────────────────────
