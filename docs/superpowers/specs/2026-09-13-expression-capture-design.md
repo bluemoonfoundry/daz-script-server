@@ -39,6 +39,27 @@ bones. No new dazpy primitives are needed — `DazSkeleton.set_morph_values(data
 dict[str, float])` (existing, `dazpy/_skeleton.py`) already sets an arbitrary
 subset of morphs in one HTTP call.
 
+## Relationship to `ai_vision/expression_transfer/expression_transfer.py`
+
+A pre-existing, actively-maintained standalone example already applies photo
+expressions to Genesis 9 (last touched 2026-09-12, 4 commits). It takes a
+different technical approach: hand-rolled Action-Unit magnitudes computed
+from raw 478-point face-mesh geometry, mapped to **Genesis 9 FACS HD**
+property *labels* (e.g. `"AU 01 Inner Brow Raiser Left"`, a separate paid
+Daz product) via `property.getLabel()` string matching, applied through raw
+DazScript. It covers ~15 AUs and is not integrated into
+`pose_transfer_photo.py`'s batch loop at all.
+
+Decision (confirmed with the user 2026-09-13): keep this design as specified
+— native MediaPipe `FaceLandmarker` blendshapes mapped to base-rig
+`facs_bs_*`/`facs_ctrl_*` morphs (no paid add-on required, verified live,
+49/52 ARKit coverage) — and leave `expression_transfer.py` untouched as its
+own separate example. The two scripts solve the same problem with
+genuinely different techniques and target different morph vocabularies;
+forcing shared code between them isn't worth it. Do not reuse
+`expression_transfer.py`'s AU computation, FACS_MAP, or `apply_expression()`
+in this feature's implementation.
+
 ## Goals
 
 - Extract a face's expression from a photo via MediaPipe `FaceLandmarker`'s
