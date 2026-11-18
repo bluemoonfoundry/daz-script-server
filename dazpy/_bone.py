@@ -73,7 +73,7 @@ class DazBone(DazNode):
     def rotation_order(self) -> str | None:
         """Rotation order string (e.g. ``"XYZ"``), or ``None``."""
         return self._client.execute(self._nb(
-            "return _node.getRotationOrder();"
+            "return _node.getRotationOrder().toString();"
         )).value
 
     def get_skeleton(self) -> "DazSkeleton | None":  # noqa: F821

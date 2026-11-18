@@ -410,7 +410,7 @@ class DazScene:
                         name: _b.getName(),
                         label: _b.getLabel(),
                         parent_name: _parentName,
-                        rotation_order: _b.getRotationOrder(),
+                        rotation_order: _b.getRotationOrder().toString(),
                         local_position: {{x: _lpos.x, y: _lpos.y, z: _lpos.z}},
                         world_position: {{x: _wpos.x, y: _wpos.y, z: _wpos.z}},
                         local_euler: {{
@@ -951,7 +951,7 @@ class DazScene:
         Note: this steps the global undo stack.  To group a series of changes
         into a single undoable operation use :meth:`undo` (the context manager).
         """
-        script = ScriptBuilder.iife("App.getUndoStack().undo();")
+        script = ScriptBuilder.iife("UndoStack.undo();")
         self._client.execute(script)
 
     def redo_last(self) -> None:
@@ -960,7 +960,7 @@ class DazScene:
         Equivalent to pressing Ctrl+Y / Edit > Redo in DAZ Studio.
         Has no effect if there is nothing to redo.
         """
-        script = ScriptBuilder.iife("App.getUndoStack().redo();")
+        script = ScriptBuilder.iife("UndoStack.redo();")
         self._client.execute(script)
 
     # ── dForce simulation ──────────────────────────────────────────────────────
@@ -979,6 +979,7 @@ class DazScene:
         self,
         nodes: list[DazNode] | None = None,
         *,
+        memorized_pose: bool = False,
         wait: bool = True,
         timeout: float = 300.0,
     ) -> str | None:
@@ -990,6 +991,12 @@ class DazScene:
                 simulates the whole scene via ``DzSimulationMgr.simulate()``,
                 which follows the frame range configured in the Simulation
                 Settings pane.
+            memorized_pose: If ``True``, sets the active engine's
+                ``startFromMemorizedPose`` global simulation setting before
+                simulating, so pose-based bulge corrections are computed
+                against the engine's memorized reference pose instead of the
+                figure's live pose. Mirrors the "Start Bulge from Memorized
+                Pose" checkbox in DAZ Studio's Simulation Settings pane.
             wait: If ``True`` (default), block until the simulation finishes,
                 using the async execute-and-poll endpoint since dForce runs can
                 take minutes. If ``False``, submit the job and return
@@ -1007,20 +1014,25 @@ class DazScene:
             :class:`~dazpy.exceptions.ScriptRuntimeError`: If the simulation
                 engine reports an error.
         """
+        memorized_flag = "true" if memorized_pose else "false"
         if nodes:
             node_exprs = ",".join(ScriptBuilder.find_node_expr(n._identifier) for n in nodes)
             body = f"""
                 var mgr = App.getSimulationMgr();
                 var engine = mgr.getActiveSimulationEngine();
                 if (!engine) return {{"error": "no_active_engine"}};
+                engine.getGlobalSimulationSettings().startFromMemorizedPose = {memorized_flag};
                 var err = engine.customSimulate([{node_exprs}]);
                 return {{"error": err ? String(err) : null}};
             """
         else:
-            body = """
+            body = f"""
                 var mgr = App.getSimulationMgr();
+                var engine = mgr.getActiveSimulationEngine();
+                if (!engine) return {{"error": "no_active_engine"}};
+                engine.getGlobalSimulationSettings().startFromMemorizedPose = {memorized_flag};
                 var err = mgr.simulate();
-                return {"error": err ? String(err) : null};
+                return {{"error": err ? String(err) : null}};
             """
         script = ScriptBuilder.iife(body)
 

@@ -2851,7 +2851,9 @@ class TestDazBoneScriptGeneration(unittest.TestCase):
         order = bone.rotation_order
         self.assertEqual(order, "XYZ")
         script = client.execute.call_args[0][0]
-        self.assertIn("getRotationOrder", script)
+        # getRotationOrder() returns a DzRotationOrder object, which
+        # JSON-serializes to "" unless converted explicitly.
+        self.assertIn("getRotationOrder().toString()", script)
 
     def test_get_skeleton_returns_daz_skeleton(self):
         from dazpy._skeleton import DazSkeleton
@@ -3880,6 +3882,30 @@ class TestDazSceneDForceSimulation(unittest.TestCase):
         }
         with self.assertRaises(exceptions.ScriptRuntimeError):
             scene.run_dforce_simulation(wait=True)
+
+    def test_run_dforce_simulation_defaults_to_live_pose(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-live"
+        scene.run_dforce_simulation(wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("startFromMemorizedPose = false", script)
+
+    def test_run_dforce_simulation_memorized_pose_sets_engine_flag(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-mem"
+        scene.run_dforce_simulation(memorized_pose=True, wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("getGlobalSimulationSettings", script)
+        self.assertIn("startFromMemorizedPose = true", script)
+
+    def test_run_dforce_simulation_memorized_pose_with_nodes(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-mem-nodes"
+        node = DazNode(scene._client, NodeIdentifier("Skirt"))
+        scene.run_dforce_simulation(nodes=[node], memorized_pose=True, wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("startFromMemorizedPose = true", script)
+        self.assertIn("customSimulate", script)
 
 
 class TestDazLightScriptGeneration(unittest.TestCase):
@@ -5168,6 +5194,23 @@ class TestQuat(unittest.TestCase):
 
     def test_euler_roundtrip_ZYX(self):
         self._euler_roundtrip(10, 20, 30, "ZYX")
+        self._euler_roundtrip(10, 20, 15, "ZYX")
+        self._euler_roundtrip(-25, 40, 65, "ZYX")
+
+    def test_from_euler_ZYX_w_sign(self):
+        # Regression test for daz-script-server-z0c1: the ZYX branch of
+        # _euler_to_quat previously flipped the sign on the sx*sy*sz term,
+        # producing the wrong w. Verify against the Hamilton product of the
+        # per-axis quaternions (qz.multiply(qy).multiply(qx)), independent of
+        # _euler_to_quat's own formula.
+        from dazpy import Quat, Vec3
+        x, y, z = 10, 20, 15
+        qx = Quat.from_axis_angle(Vec3(1, 0, 0), x)
+        qy = Quat.from_axis_angle(Vec3(0, 1, 0), y)
+        qz = Quat.from_axis_angle(Vec3(0, 0, 1), z)
+        expected = qz.multiply(qy).multiply(qx)
+        actual = Quat.from_euler(x, y, z, "ZYX")
+        self._approx_quat(actual, expected)
 
     def test_euler_identity_is_no_rotation(self):
         from dazpy import Quat
@@ -5382,6 +5425,22 @@ class TestCallCounts(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn("getWSPos", script)
         self.assertIn("world_position", script)
+
+    def test_bone_metadata_rotation_order_stringified(self):
+        skel, client = self._make_batch_skeleton()
+        skel.bone_metadata()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRotationOrder().toString()", script)
+
+    def test_bone_metadata_includes_rest_orientation_and_axis_limits(self):
+        skel, client = self._make_batch_skeleton()
+        skel.bone_metadata()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getOrientation()", script)
+        self.assertIn("rest_orientation", script)
+        self.assertIn("axis_limits", script)
+        self.assertIn("getMin()", script)
+        self.assertIn("getMax()", script)
 
 
 class TestDazSceneStateApply(unittest.TestCase):
@@ -6020,6 +6079,27 @@ class TestSceneSnapshot(unittest.TestCase):
         self.assertIn("getWSPos", script)
         self.assertIn("getAllBones", script)
         self.assertIn("getSkeletonList", script)
+
+    def test_scene_snapshot_rotation_order_stringified(self):
+        client = _make_client([])
+        scene = DazScene(client)
+        scene.scene_snapshot()
+        script = client.execute.call_args[0][0]
+        self.assertIn("getRotationOrder().toString()", script)
+
+    def test_undo_last_uses_global_undo_stack(self):
+        client = _make_client(None)
+        DazScene(client).undo_last()
+        script = client.execute.call_args[0][0]
+        self.assertIn("UndoStack.undo()", script)
+        self.assertNotIn("getUndoStack", script)
+
+    def test_redo_last_uses_global_undo_stack(self):
+        client = _make_client(None)
+        DazScene(client).redo_last()
+        script = client.execute.call_args[0][0]
+        self.assertIn("UndoStack.redo()", script)
+        self.assertNotIn("getUndoStack", script)
 
     def test_scene_snapshot_filter_serialized(self):
         client = _make_client([])

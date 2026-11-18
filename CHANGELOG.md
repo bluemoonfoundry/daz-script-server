@@ -4,6 +4,32 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-11-18
+
+dazpy-only release. The plugin binaries are rebuilt with the new version
+number; no plugin code changed, and plugin 2.12.x users need not upgrade.
+
+### Fixed
+
+- **`DazScene.undo_last()` / `redo_last()`** called `App.getUndoStack()`,
+  which DazScript doesn't have, so both failed. They now use the global
+  `UndoStack`.
+- **Bone rotation order was always `""`.** `DazBone.rotation_order`,
+  `DazSkeleton.bone_metadata()` and `DazScene.scene_snapshot()` returned the
+  `DzRotationOrder` object, which serializes to an empty string. They now
+  return the real per-bone order (e.g. `"YZX"`, `"XZY"`). Code that reads
+  `rotation_order`, including the interaction/IK helpers, now gets real values.
+
+### Added
+
+- `DazScene.run_dforce_simulation(memorized_pose=...)` sets the active
+  simulation engine's `startFromMemorizedPose` global setting before
+  simulating. It mirrors the "Start Bulge from Memorized Pose" checkbox in
+  DAZ Studio's Simulation Settings pane.
+- `DazSkeleton.bone_metadata()` entries carry `rest_orientation` (the bone's
+  rest quaternion, `x/y/z/w`) and `axis_limits` (live `min`/`max` per rotation
+  axis).
+
 ## [2.13.0] - 2026-11-16
 
 dazpy-only release. The plugin binaries are rebuilt with the new version

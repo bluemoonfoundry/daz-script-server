@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.13.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.14.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.14.0](#whats-new-in-v2140)
 - [What's New in v2.13.0](#whats-new-in-v2130)
 - [What's New in v2.12.0](#whats-new-in-v2120)
 - [What's New in v2.11.0](#whats-new-in-v2110)
@@ -174,6 +175,19 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.14.0
+
+### 🦴 Real bone rotation orders, working undo/redo, dForce memorized pose
+
+`rotation_order` on bones, `bone_metadata()` and `scene_snapshot()` now report
+each bone's real Euler order instead of an empty string, and `bone_metadata()`
+adds rest orientation and live axis limits. `DazScene.undo_last()`/`redo_last()`
+work again, and `run_dforce_simulation(memorized_pose=True)` simulates from the
+engine's memorized pose. This is a dazpy-only release: plugin 2.12.x users need
+not upgrade.
 
 ---
 
