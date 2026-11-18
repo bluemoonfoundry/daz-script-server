@@ -91,6 +91,10 @@ class DazSkeleton(DazNode):
                 }
                 var pos = b.getLocalPos();
                 var wpos = b.getWSPos();
+                var orient = b.getOrientation();
+                var xc = b.getXRotControl();
+                var yc = b.getYRotControl();
+                var zc = b.getZRotControl();
                 result.push({
                     name: b.getName(),
                     label: b.getLabel(),
@@ -98,10 +102,16 @@ class DazSkeleton(DazNode):
                     rotation_order: b.getRotationOrder().toString(),
                     local_position: {x: pos.x, y: pos.y, z: pos.z},
                     world_position: {x: wpos.x, y: wpos.y, z: wpos.z},
+                    rest_orientation: {x: orient.x, y: orient.y, z: orient.z, w: orient.w},
                     local_euler: {
-                        x: b.getXRotControl().getValue(),
-                        y: b.getYRotControl().getValue(),
-                        z: b.getZRotControl().getValue(),
+                        x: xc.getValue(),
+                        y: yc.getValue(),
+                        z: zc.getValue(),
+                    },
+                    axis_limits: {
+                        x: {min: xc.getMin(), max: xc.getMax()},
+                        y: {min: yc.getMin(), max: yc.getMax()},
+                        z: {min: zc.getMin(), max: zc.getMax()},
                     }
                 });
             }
