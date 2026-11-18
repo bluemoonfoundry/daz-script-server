@@ -3,14 +3,12 @@ import { DazClient } from "../../src/client.js";
 import {
   AuthenticationError,
   ConnectionError,
+  DazError,
   ScriptRuntimeError,
   ScriptSyntaxError,
   StudioBusyError,
 } from "../../src/exceptions.js";
-
-function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,7 +17,7 @@ afterEach(() => {
 describe("DazClient construction", () => {
   it("uses 127.0.0.1:18811 by default and an explicit empty token disables auth", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: true, result: 2, output: [], request_id: "r1", duration_ms: 1.2 }),
+      jsonResponse({ success: true, result: 2, output: [], request_id: "r1", duration_ms: 1.2 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -33,7 +31,7 @@ describe("DazClient construction", () => {
 
   it("sends an explicit token as the X-API-Token header", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: true, result: null, output: [], request_id: "r1", duration_ms: 0 }),
+      jsonResponse({ success: true, result: null, output: [], request_id: "r1", duration_ms: 0 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -48,7 +46,7 @@ describe("DazClient construction", () => {
 describe("DazClient.execute", () => {
   it("posts {script} and returns a mapped ExecutionResult on success", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: true, result: 4, output: ["hi"], request_id: "req-1", duration_ms: 5.5 }),
+      jsonResponse({ success: true, result: 4, output: ["hi"], request_id: "req-1", duration_ms: 5.5 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -70,7 +68,7 @@ describe("DazClient.execute", () => {
 
   it("includes args in the payload when provided", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: true, result: null, output: [], request_id: "", duration_ms: 0 }),
+      jsonResponse({ success: true, result: null, output: [], request_id: "", duration_ms: 0 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -83,7 +81,7 @@ describe("DazClient.execute", () => {
 
   it("throws ScriptSyntaxError when success is false and error mentions SyntaxError", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: false, error: "Line 1: SyntaxError: unexpected token", output: [], request_id: "r2" }),
+      jsonResponse({ success: false, error: "Line 1: SyntaxError: unexpected token", output: [], request_id: "r2" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -93,7 +91,7 @@ describe("DazClient.execute", () => {
 
   it("throws ScriptRuntimeError when success is false and error does not mention SyntaxError", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: false, error: "Line 1: TypeError: x is not a function", output: ["log"], request_id: "r3" }),
+      jsonResponse({ success: false, error: "Line 1: TypeError: x is not a function", output: ["log"], request_id: "r3" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -115,7 +113,7 @@ describe("DazClient.execute", () => {
 
   it("throws StudioBusyError on HTTP 503 with STUDIO_BUSY error_code", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(503, { error: "busy", error_code: "STUDIO_BUSY", detail: "scene is loading" }, { "Retry-After": "4" }),
+      jsonResponse({ error: "busy", error_code: "STUDIO_BUSY", detail: "scene is loading" }, 503, { "Retry-After": "4" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -136,7 +134,7 @@ describe("DazClient.execute", () => {
 
   it("throws ScriptRuntimeError on generic HTTP 200 with success: false and no recognized error_code", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: false, error: "malformed script", output: ["log"], request_id: "r5" }),
+      jsonResponse({ success: false, error: "malformed script", output: ["log"], request_id: "r5" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -149,7 +147,7 @@ describe("DazClient.execute", () => {
 
   it("maps response body correctly even when raiseForError consumes it for error checking", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: false, error: "some error", output: [], request_id: "r6" }),
+      jsonResponse({ success: false, error: "some error", output: [], request_id: "r6" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -159,12 +157,24 @@ describe("DazClient.execute", () => {
     expect(err.message).toBe("some error");
     expect(err.requestId).toBe("r6");
   });
+
+  it("maps a non-JSON error body (e.g. a 502 from a proxy) to DazError, not a JSON parse error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>Bad Gateway</html>", { status: 502, statusText: "Bad Gateway" })),
+    );
+    const client = new DazClient({ token: "" });
+    const err = await client.execute("1;").catch((e) => e);
+    expect(err).toBeInstanceOf(DazError);
+    expect(err).not.toBeInstanceOf(SyntaxError);
+    expect(err.message).toBe("HTTP 502: <html>Bad Gateway</html>");
+  });
 });
 
 describe("DazClient.executeFile", () => {
   it("posts {scriptFile} (not {script}) and maps the response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(200, { success: true, result: "ok", output: [], request_id: "r4", duration_ms: 2 }),
+      jsonResponse({ success: true, result: "ok", output: [], request_id: "r4", duration_ms: 2 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 

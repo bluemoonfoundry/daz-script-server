@@ -136,7 +136,7 @@ export class BatchLimitExceededError extends DazError {}
  * property on the live material, or a failed `setValue()`/`setMap()`.
  */
 export class MaterialError extends DazError {
-  /** The server-assigned render request ID. */
+  /** Request ID of the failing server call, or `""` when not known. */
   readonly requestId: string;
 
   constructor(message: string, requestId = "") {

@@ -65,7 +65,7 @@ export class BatchFuture {
 
 /** Options accepted by the {@link Batch} constructor. */
 export interface BatchOptions {
-  /** Max queued operations before {@link Batch.addOperation} throws {@link BatchLimitExceededError}. */
+  /** Max queued operations before {@link Batch.add}/{@link Batch.addOperation} throw {@link BatchLimitExceededError}. */
   maxOperations?: number;
   /** Max generated script length (characters) before {@link Batch.execute} throws {@link BatchLimitExceededError}. */
   maxScriptLength?: number;
@@ -114,8 +114,11 @@ export class Batch {
    * variable named after the internally generated key (`_r0`, `_r1`, ...
    * in call order). Prefer {@link addOperation}, which does not require
    * guessing the key name.
+   *
+   * @throws {BatchLimitExceededError} If this call would exceed `maxOperations`.
    */
   add(lines: string[]): BatchFuture {
+    this.checkOperationLimit();
     const key = `_r${this.counter++}`;
     const future = new BatchFuture(key);
     // `lines` is expected to already assign `key` itself, so the result
@@ -147,15 +150,19 @@ export class Batch {
    * @throws {BatchLimitExceededError} If this call would exceed `maxOperations`.
    */
   addOperation(bodyLines: string[], resultExpression: string): BatchFuture {
+    this.checkOperationLimit();
+    const key = `_r${this.counter++}`;
+    const future = new BatchFuture(key);
+    this.ops.push({ key, lines: [...bodyLines], resultExpression, future });
+    return future;
+  }
+
+  private checkOperationLimit(): void {
     if (this.ops.length >= this.maxOperations) {
       throw new BatchLimitExceededError(
         `Batch already has ${this.ops.length} operations (maxOperations=${this.maxOperations})`,
       );
     }
-    const key = `_r${this.counter++}`;
-    const future = new BatchFuture(key);
-    this.ops.push({ key, lines: [...bodyLines], resultExpression, future });
-    return future;
   }
 
   /**

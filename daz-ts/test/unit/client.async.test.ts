@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient, FINAL_REQUEST_STATUSES } from "../../src/client.js";
-import { AuthenticationError, ConnectionError, DazError } from "../../src/exceptions.js";
-
-function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
+import { AuthenticationError, ConnectionError, DazError, DazTimeoutError } from "../../src/exceptions.js";
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -12,7 +9,7 @@ afterEach(() => {
 
 describe("DazClient async job methods", () => {
   it("executeAsyncSubmit posts to /execute/async and returns request_id", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { request_id: "abc123" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ request_id: "abc123" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -25,7 +22,7 @@ describe("DazClient async job methods", () => {
   });
 
   it("executeFileAsyncSubmit posts {scriptFile} to /execute/async", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { request_id: "abc456" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ request_id: "abc456" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -47,7 +44,7 @@ describe("DazClient async job methods", () => {
   });
 
   it("getRequestStatus returns the parsed body on success", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { status: "running", progress: 0.5 }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "running", progress: 0.5 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -59,7 +56,7 @@ describe("DazClient async job methods", () => {
   });
 
   it("getRequestResult adds wait/timeout query params when wait=true", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true, result: 5 }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: 5 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -73,7 +70,7 @@ describe("DazClient async job methods", () => {
   });
 
   it("getRequestResult omits query params when wait is not requested", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true, result: 5 }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: 5 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -126,7 +123,7 @@ describe("DazClient async job methods", () => {
       message: "Cancel requested; the script is still running",
       cancel_requested_at: "2026-11-18T10:00:00",
     };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -147,7 +144,7 @@ describe("DazClient async job methods", () => {
       cancel_requested_at: "2026-11-18T10:00:00",
       cancelled_at: "2026-11-18T10:00:00",
     };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -161,7 +158,7 @@ describe("DazClient async job methods", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        jsonResponse(404, { success: false, error_code: "REQUEST_NOT_FOUND", error: "Request not found", retryable: false }),
+        jsonResponse({ success: false, error_code: "REQUEST_NOT_FOUND", error: "Request not found", retryable: false }, 404),
       )
       .mockRejectedValueOnce(new TypeError("network down"));
     vi.stubGlobal("fetch", fetchMock);
@@ -181,5 +178,55 @@ describe("DazClient async job methods", () => {
       "completed_after_stale",
       "failed",
     ]);
+  });
+
+  it("getRequestStatus/getRequestResult throw AuthenticationError on 401 instead of a JSON parse error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("token expired", { status: 401 })));
+    const client = new DazClient({ token: "" });
+    await expect(client.getRequestStatus("req-1")).rejects.toBeInstanceOf(AuthenticationError);
+    await expect(client.getRequestResult("req-1", true)).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
+  it("getRequestResult with wait=true allows the long-poll wait plus margin, not just the client timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_url: string, init: RequestInit) => {
+          signal = init.signal as AbortSignal;
+          return new Promise<Response>((resolve, reject) => {
+            signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+            setTimeout(() => resolve(jsonResponse({ status: "running" })), 25_000);
+          });
+        }),
+      );
+      const client = new DazClient({ token: "", timeoutMs: 1_000 });
+      const pending = client.getRequestResult("req-1", true, 30);
+      await vi.advanceTimersByTimeAsync(25_000);
+      await expect(pending).resolves.toEqual({ status: "running" });
+      expect(signal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the client timeout also bounds reading the response body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        const signal = init.signal as AbortSignal;
+        // Headers arrive at once; the body never finishes.
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"status":'));
+            signal.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+          },
+        });
+        return Promise.resolve(new Response(body, { status: 200 }));
+      }),
+    );
+    const client = new DazClient({ token: "", timeoutMs: 20 });
+    await expect(client.getRequestStatus("req-1")).rejects.toBeInstanceOf(DazTimeoutError);
   });
 });

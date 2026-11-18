@@ -6,6 +6,13 @@ function approxEqual(a: number, b: number, eps = 1e-9): boolean {
 }
 
 describe("Vec3", () => {
+  it("fromList builds from exactly three elements and rejects any other length", () => {
+    const v = Vec3.fromList([1, 2, 3]);
+    expect([v.x, v.y, v.z]).toEqual([1, 2, 3]);
+    expect(() => Vec3.fromList([1, 2])).toThrow(RangeError);
+    expect(() => Vec3.fromList([1, 2, 3, 4])).toThrow(RangeError);
+  });
+
   it("constructs from dict/list and round-trips to dict/list", () => {
     const v = Vec3.fromDict({ x: 1, y: 2, z: 3 });
     expect(v.toDict()).toEqual({ x: 1, y: 2, z: 3 });

@@ -10,6 +10,7 @@ export type {
   ServerCapabilities,
   RequestStatus,
   CancelResponse,
+  StreamOptions,
 } from "./client.js";
 export { parseSseStream, FINAL_REQUEST_STATUSES } from "./client.js";
 
@@ -36,7 +37,7 @@ export {
 
 export { ScriptBuilder } from "./scriptBuilder.js";
 
-export { Batch, BatchFuture, buildOperationsScript } from "./batch.js";
+export { Batch, BatchFuture, buildOperationsScript, DEFAULT_MAX_OPERATIONS, DEFAULT_MAX_SCRIPT_LENGTH } from "./batch.js";
 export type { BatchOptions } from "./batch.js";
 
 export { executeLong } from "./polling.js";

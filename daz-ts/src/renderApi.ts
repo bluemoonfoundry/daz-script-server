@@ -1,7 +1,7 @@
 /** High-level render API -- convenience wrappers over `/render` and `/render/batch`. */
 
 import { DazClient, parseSseStream } from "./client.js";
-import { DazTimeoutError, RenderError } from "./exceptions.js";
+import { AuthenticationError, DazTimeoutError, RenderError } from "./exceptions.js";
 
 /** A figure and the morph values to apply before rendering. */
 export interface FigureMorphs {
@@ -104,7 +104,7 @@ async function waitRenderSse(
   const deadline = Date.now() + timeoutMs;
 
   try {
-    const resp = await client.streamRenderProgress(requestId, timeoutMs + 5_000);
+    const resp = await client.streamRenderProgress(requestId, { timeoutMs: timeoutMs + 5_000 });
     if (resp !== null) {
       for await (const { event, data } of parseSseStream(resp)) {
         if (Date.now() > deadline) break;
@@ -133,7 +133,7 @@ async function waitRenderSse(
       }
     }
   } catch (e) {
-    if (e instanceof RenderError || e instanceof DazTimeoutError) {
+    if (e instanceof RenderError || e instanceof DazTimeoutError || e instanceof AuthenticationError) {
       throw e;
     }
     // SSE unavailable -- fall through to polling.

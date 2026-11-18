@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Batch, buildOperationsScript } from "../../src/batch.js";
+import { Batch, buildOperationsScript, DEFAULT_MAX_OPERATIONS, DEFAULT_MAX_SCRIPT_LENGTH } from "../../src/batch.js";
+import * as dazTs from "../../src/index.js";
 import { DazClient } from "../../src/client.js";
 import { BatchLimitExceededError } from "../../src/exceptions.js";
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -100,6 +98,19 @@ describe("Batch", () => {
     const batch = new Batch(client, { maxOperations: 1 });
     batch.addOperation(["var a = 1;"], "a");
     expect(() => batch.addOperation(["var b = 2;"], "b")).toThrow(BatchLimitExceededError);
+  });
+
+  it("add() counts toward maxOperations like addOperation()", () => {
+    const client = new DazClient({ token: "" });
+    const batch = new Batch(client, { maxOperations: 2 });
+    batch.add(["var _r0 = 1;"]);
+    batch.addOperation(["var b = 2;"], "b");
+    expect(() => batch.add(["var _r2 = 3;"])).toThrow(BatchLimitExceededError);
+  });
+
+  it("re-exports the default limits from the package entry point", () => {
+    expect(dazTs.DEFAULT_MAX_OPERATIONS).toBe(DEFAULT_MAX_OPERATIONS);
+    expect(dazTs.DEFAULT_MAX_SCRIPT_LENGTH).toBe(DEFAULT_MAX_SCRIPT_LENGTH);
   });
 
   it("execute() raises BatchLimitExceededError before any HTTP call when the script is too long", async () => {

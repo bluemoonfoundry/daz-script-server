@@ -196,7 +196,17 @@ Rejections throw `ArtifactError` with `statusCode` and `errorCode`
 - Render submission methods (`renderSubmit`, `renderBatchSubmit`,
   `renderAnimationSubmit`, ...) and SSE streaming helpers
   (`streamRenderProgress`, `streamSceneEvents`, `parseSseStream`) on
-  `DazClient` — see `src/client.ts` for full signatures.
+  `DazClient` — see `src/client.ts` for full signatures. The stream methods
+  take `{ timeoutMs, signal }`: `timeoutMs` caps the stream's whole lifetime
+  (reads throw `DazTimeoutError` when it elapses) and `signal` lets you
+  cancel it. They throw `ConnectionError`/`AuthenticationError` rather than
+  returning `null`; `null` means the server answered with another status
+  (e.g. 404).
+
+The client's `timeoutMs` covers the whole request, including reading the
+response body. Long-polls (`getRequestResult(id, true, waitTimeout)`) get
+`waitTimeout` plus 10 seconds instead, and artifact downloads are streamed,
+so only their time to first byte is bounded.
 
 ## Phase 2: Scene Graph Proxies
 

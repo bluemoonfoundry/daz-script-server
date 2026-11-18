@@ -9,7 +9,7 @@
  * start/end.
  */
 
-import { ConnectionError, DazTimeoutError } from "./exceptions.js";
+import { AuthenticationError, ConnectionError, DazTimeoutError } from "./exceptions.js";
 import { DazClient, parseSseStream } from "./client.js";
 
 const VALID_CATEGORIES = new Set(["node", "skeleton", "light", "camera", "selection", "scene", "time", "render"]);
@@ -51,11 +51,14 @@ async function* parseSceneEvents(response: Response): AsyncGenerator<SceneEvent>
  * server-side. Omit to subscribe to all categories.
  * @param eventTypes Optional set of exact event types to keep; all others
  * are dropped client-side. Omit to yield every event received.
- * @param streamTimeoutMs Socket timeout in milliseconds. Omit to wait
+ * @param streamTimeoutMs Maximum lifetime of the stream in milliseconds;
+ * when it elapses iteration throws `DazTimeoutError`. Omit to wait
  * indefinitely -- the server sends a keepalive comment every 15 seconds, so
  * the connection never idles out.
  *
  * @throws ConnectionError If the SSE endpoint could not be reached.
+ * @throws AuthenticationError If the server rejects the token.
+ * @throws DazTimeoutError If `streamTimeoutMs` elapses.
  *
  * @example
  * ```ts
@@ -72,7 +75,7 @@ export async function* watchSceneEvents(
   eventTypes?: string[],
   streamTimeoutMs?: number,
 ): AsyncGenerator<SceneEvent> {
-  const resp = await client.streamSceneEvents(categories, streamTimeoutMs);
+  const resp = await client.streamSceneEvents(categories, { timeoutMs: streamTimeoutMs });
   if (resp === null) {
     throw new ConnectionError("Could not open /scene/events stream");
   }
@@ -95,20 +98,21 @@ export async function* watchSceneEvents(
  *
  * @throws DazTimeoutError If `timeoutMs` elapses before a matching event arrives.
  * @throws ConnectionError If the SSE endpoint could not be reached.
+ * @throws AuthenticationError If the server rejects the token.
  */
 export async function waitForSceneEvent(client: DazClient, eventType: string, timeoutMs = 300_000): Promise<SceneEvent> {
   const category = eventType.split(".")[0];
   const categories = VALID_CATEGORIES.has(category) ? [category] : undefined;
 
   try {
-    for await (const event of watchSceneEvents(client, categories, [eventType], timeoutMs + 5_000)) {
+    for await (const event of watchSceneEvents(client, categories, [eventType], timeoutMs)) {
       return event;
     }
   } catch (e) {
-    if (e instanceof ConnectionError) {
+    if (e instanceof ConnectionError || e instanceof AuthenticationError) {
       throw e;
     }
-    // stream read timed out or connection dropped -- fall through
+    // stream timed out or connection dropped -- fall through
   }
 
   throw new DazTimeoutError(`Timed out after ${timeoutMs / 1000}s waiting for ${JSON.stringify(eventType)}`);

@@ -25,7 +25,15 @@ export class Vec3 {
     return new Vec3(d.x, d.y, d.z);
   }
 
-  static fromList(v: number[]): Vec3 {
+  /**
+   * Create from a `[x, y, z]` list (e.g. a vertex from `DazGeometry.vertexPositionsAll()`).
+   *
+   * @throws {RangeError} If `v` doesn't have exactly three elements.
+   */
+  static fromList(v: readonly number[]): Vec3 {
+    if (v.length !== 3) {
+      throw new RangeError(`Vec3.fromList expects 3 elements, got ${v.length}`);
+    }
     return new Vec3(v[0], v[1], v[2]);
   }
 

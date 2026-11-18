@@ -15,6 +15,7 @@ import {
   ScriptSyntaxError,
   StudioBusyError,
 } from "./exceptions.js";
+import { buildOperationsScript } from "./batch.js";
 import type { ExecutionResult } from "./result.js";
 
 const TOKEN_FILE = path.join(os.homedir(), ".daz3d", "dazscriptserver_token.txt");
@@ -49,7 +50,16 @@ async function raiseForError(resp: Response): Promise<Record<string, unknown> | 
   if (status < 400) {
     return undefined;
   }
-  const data = (await resp.json()) as Record<string, unknown>;
+  // An intermediary (proxy, 502 gateway) or an early httplib rejection can
+  // send a non-JSON body; read it as text so it still maps to a DazError.
+  const text = await resp.text();
+  let data: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    data = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    throw new DazError(`HTTP ${status}: ${text.slice(0, 200) || resp.statusText}`);
+  }
   const errorCode = (data.error_code as string) ?? "";
   const errorMsg = (data.error as string) ?? `HTTP ${status}`;
   const retryAfter = parseRetryAfter(resp.headers);
@@ -115,7 +125,8 @@ function sleep(seconds: number): Promise<void> {
  *
  * Lines starting with `:` are keepalive comments and are skipped. An event
  * block with no explicit `event:` line defaults to `"message"`, matching
- * the SSE specification.
+ * the SSE specification. Lines may end in LF, CRLF or CR, as the
+ * specification allows; DazScriptServer itself sends LF.
  */
 export async function* parseSseStream(response: Response): AsyncGenerator<{ event: string; data: string }> {
   const body = response.body;
@@ -133,6 +144,10 @@ export async function* parseSseStream(response: Response): AsyncGenerator<{ even
         break;
       }
       buffer += decoder.decode(value, { stream: true });
+      // Normalize CRLF/CR to LF. A trailing CR is held back: it may be the
+      // first half of a CRLF split across chunks.
+      const heldCr = buffer.endsWith("\r");
+      buffer = (heldCr ? buffer.slice(0, -1) : buffer).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
 
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) !== -1) {
@@ -201,6 +216,19 @@ export interface RenderSubmitOptions extends RetryOptions {
   engine?: string;
   iraySamples?: number;
   resetMorphs?: boolean;
+}
+
+/** Options accepted by {@link DazClient.streamRenderProgress} and {@link DazClient.streamSceneEvents}. */
+export interface StreamOptions {
+  /**
+   * Maximum lifetime of the whole stream in milliseconds, not just time to
+   * first byte: when it elapses the connection is aborted and the pending
+   * read (including one inside {@link parseSseStream}) rejects with
+   * `DazTimeoutError`. Omit for no limit.
+   */
+  timeoutMs?: number;
+  /** Aborts the connection (and any pending read) when signalled. */
+  signal?: AbortSignal;
 }
 
 /** A route listed by `GET /capabilities`. Paths use `{id}` placeholders. */
@@ -348,14 +376,30 @@ export class DazClient {
     return this.token ? { "X-API-Token": this.token } : {};
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  /**
+   * `fetch` with `timeoutMs` (default: the client's) bounding the whole
+   * exchange, body included: the body is read into memory before the timer is
+   * cleared, so callers' `resp.json()`/`resp.text()` can't hang afterwards.
+   * Pass `stream: true` to get the live body back instead (only
+   * time-to-headers is bounded then), for downloads that shouldn't be buffered.
+   */
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    { timeoutMs = this.timeoutMs, stream = false }: { timeoutMs?: number; stream?: boolean } = {},
+  ): Promise<Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(url, { ...init, signal: controller.signal });
+      const resp = await fetch(url, { ...init, signal: controller.signal });
+      if (stream) {
+        return resp;
+      }
+      const body = resp.status === 204 || resp.status === 304 ? null : await resp.arrayBuffer();
+      return new Response(body, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
-        throw new DazTimeoutError(`Request timed out after ${this.timeoutMs / 1000}s`);
+        throw new DazTimeoutError(`Request timed out after ${timeoutMs / 1000}s`);
       }
       const message = e instanceof Error ? e.message : String(e);
       throw new ConnectionError(`Cannot reach DAZ Studio at ${this.baseUrl}: ${message}`);
@@ -372,14 +416,14 @@ export class DazClient {
     });
   }
 
-  private get(pathname: string, params?: Record<string, string>): Promise<Response> {
+  private get(pathname: string, params?: Record<string, string>, timeoutMs?: number): Promise<Response> {
     const url = new URL(`${this.baseUrl}${pathname}`);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
       }
     }
-    return this.fetchWithTimeout(url.toString(), { method: "GET", headers: this.headers });
+    return this.fetchWithTimeout(url.toString(), { method: "GET", headers: this.headers }, { timeoutMs });
   }
 
   private async delete_(pathname: string): Promise<Response | null> {
@@ -508,7 +552,6 @@ export class DazClient {
     operations: Array<{ bodyLines: string[]; resultExpression: string }>,
     args?: unknown,
   ): Promise<string> {
-    const { buildOperationsScript } = await import("./batch.js");
     const pairs: Array<[string[], string]> = operations.map((op) => [op.bodyLines, op.resultExpression]);
     const script = buildOperationsScript(pairs);
     return this.executeAsyncSubmit(script, args);
@@ -527,7 +570,7 @@ export class DazClient {
     if (resp.status === 404) {
       return { status: "not_found" };
     }
-    return (await resp.json()) as Record<string, unknown>;
+    return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
   }
 
   /**
@@ -542,11 +585,15 @@ export class DazClient {
       params.wait = "true";
       params.timeout = String(waitTimeout);
     }
-    const resp = await this.get(`/requests/${requestId}/result`, Object.keys(params).length ? params : undefined);
+    const resp = await this.get(
+      `/requests/${requestId}/result`,
+      Object.keys(params).length ? params : undefined,
+      wait ? (waitTimeout + 10) * 1000 : undefined,
+    );
     if (resp.status === 404) {
       return { status: "not_found" };
     }
-    return (await resp.json()) as Record<string, unknown>;
+    return (await raiseForError(resp)) ?? ((await resp.json()) as Record<string, unknown>);
   }
 
   /**
@@ -695,24 +742,65 @@ export class DazClient {
   }
 
   /**
-   * Open the SSE progress stream for a render request.
-   *
-   * @returns The raw streaming `Response` on success, `null` if the
-   * endpoint is unavailable. Pass the result to {@link parseSseStream} to
-   * consume it, and remember to let the body drain or cancel the reader.
+   * Open an SSE stream. The timeout and the caller's signal stay attached to
+   * the returned body, so they bound reading the stream, not just connecting.
    */
-  async streamRenderProgress(requestId: string, streamTimeoutMs = 305_000): Promise<Response | null> {
+  private async openStream(url: string, opts: StreamOptions): Promise<Response | null> {
+    const { timeoutMs, signal } = opts;
+    const controller = new AbortController();
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort(signal.reason);
+      } else {
+        signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(
+        () => controller.abort(new DazTimeoutError(`Stream timed out after ${timeoutMs / 1000}s`)),
+        timeoutMs,
+      );
+      // Don't keep the process alive just to abort a stream nobody is reading.
+      timer.unref?.();
+    }
+    let resp: Response;
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), streamTimeoutMs);
-      const resp = await fetch(`${this.baseUrl}/render/${requestId}/progress`, {
-        headers: this.headers,
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timer));
-      return resp.status === 200 ? resp : null;
-    } catch {
+      resp = await fetch(url, { headers: this.headers, signal: controller.signal });
+    } catch (e) {
+      clearTimeout(timer);
+      if (e instanceof DazTimeoutError || (signal?.aborted && e === signal.reason)) {
+        throw e;
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      throw new ConnectionError(`Cannot reach DAZ Studio at ${this.baseUrl}: ${message}`);
+    }
+    if (resp.status === 401 || resp.status === 403) {
+      clearTimeout(timer);
+      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+    }
+    if (resp.status !== 200) {
+      clearTimeout(timer);
+      await resp.body?.cancel();
       return null;
     }
+    return resp;
+  }
+
+  /**
+   * Open the SSE progress stream for a render request.
+   *
+   * @returns The raw streaming `Response` on success, or `null` if the server
+   * answers with any other non-auth status (e.g. 404: no such render, or a
+   * server without the endpoint), so callers can fall back to polling. Pass
+   * the result to {@link parseSseStream} to consume it, and let the body
+   * drain or cancel the reader.
+   * @throws {AuthenticationError} On HTTP 401/403.
+   * @throws {ConnectionError} If the server can't be reached.
+   * @throws {DazTimeoutError} If `opts.timeoutMs` elapses (also from reads of the body).
+   */
+  async streamRenderProgress(requestId: string, opts: StreamOptions = {}): Promise<Response | null> {
+    return this.openStream(`${this.baseUrl}/render/${requestId}/progress`, opts);
   }
 
   /**
@@ -721,24 +809,20 @@ export class DazClient {
    * @param categories - Optional subset of event categories to subscribe to
    * (`"node"`, `"skeleton"`, `"light"`, `"camera"`, `"selection"`, `"scene"`,
    * `"time"`, `"render"`). Omit to subscribe to all categories.
-   * @param streamTimeoutMs - Socket timeout in milliseconds. Omit to wait
-   * indefinitely — the server sends a keepalive comment every 15 seconds.
+   * @param opts - Stream lifetime / abort signal. With no `timeoutMs` the
+   * stream stays open until the caller stops reading — the server sends a
+   * keepalive comment every 15 seconds.
+   * @returns The raw streaming `Response`, or `null` on a non-auth, non-200 status.
+   * @throws {AuthenticationError} On HTTP 401/403.
+   * @throws {ConnectionError} If the server can't be reached.
+   * @throws {DazTimeoutError} If `opts.timeoutMs` elapses (also from reads of the body).
    */
-  async streamSceneEvents(categories?: string[], streamTimeoutMs?: number): Promise<Response | null> {
-    try {
-      const url = new URL(`${this.baseUrl}/scene/events`);
-      if (categories && categories.length > 0) {
-        url.searchParams.set("filter", categories.join(","));
-      }
-      const controller = new AbortController();
-      const timer = streamTimeoutMs !== undefined ? setTimeout(() => controller.abort(), streamTimeoutMs) : undefined;
-      const resp = await fetch(url.toString(), { headers: this.headers, signal: controller.signal }).finally(() => {
-        if (timer) clearTimeout(timer);
-      });
-      return resp.status === 200 ? resp : null;
-    } catch {
-      return null;
+  async streamSceneEvents(categories?: string[], opts: StreamOptions = {}): Promise<Response | null> {
+    const url = new URL(`${this.baseUrl}/scene/events`);
+    if (categories && categories.length > 0) {
+      url.searchParams.set("filter", categories.join(","));
     }
+    return this.openStream(url.toString(), opts);
   }
 
   // ── Server health ───────────────────────────────────────────────────────
@@ -819,7 +903,9 @@ export class DazClient {
       headers.Range = `bytes=${start}-${end ?? ""}`;
     }
     const url = `${this.baseUrl}/artifacts/${encodeURIComponent(requestId)}/${encodeURIComponent(String(artifactId))}`;
-    const resp = await this.fetchWithTimeout(url, { method: "GET", headers });
+    // Artifacts can be large: stream the body rather than buffering it, so
+    // the client timeout covers only time-to-headers here.
+    const resp = await this.fetchWithTimeout(url, { method: "GET", headers }, { stream: true });
     await throwArtifactError(resp);
     if (dest === undefined) {
       return Buffer.from(await resp.arrayBuffer());
