@@ -3,10 +3,7 @@ import { DazClient } from "../../src/client.js";
 import { DazModifier } from "../../src/modifier.js";
 import { DazMorph } from "../../src/morph.js";
 import { DazDForce } from "../../src/dforce.js";
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => vi.unstubAllGlobals());
 

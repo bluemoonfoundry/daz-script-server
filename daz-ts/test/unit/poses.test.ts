@@ -7,10 +7,8 @@ import { DazNode } from "../../src/node.js";
 import { DazPose } from "../../src/pose.js";
 import { applyPose, resetTransforms, zeroFigure } from "../../src/poses.js";
 import { DazSkeleton } from "../../src/skeleton.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 function stub(value: unknown) {
   const fetchMock = vi

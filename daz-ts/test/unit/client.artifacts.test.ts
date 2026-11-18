@@ -4,10 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient, safeArtifactFilename } from "../../src/client.js";
 import { ArtifactError, AuthenticationError } from "../../src/exceptions.js";
-
-function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,7 +13,7 @@ afterEach(() => {
 describe("DazClient artifacts (GET /artifacts/...)", () => {
   it("listArtifacts GETs /artifacts/{id}", async () => {
     const body = { success: true, request_id: "rnd-1", status: "completed", count: 0, artifacts: [] };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(new DazClient({ token: "" }).listArtifacts("rnd-1")).resolves.toEqual(body);
@@ -70,8 +67,8 @@ describe("DazClient artifacts (GET /artifacts/...)", () => {
   it("maps rejections to ArtifactError / AuthenticationError", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(404, { success: false, error_code: "ARTIFACT_NOT_FOUND", error: "nope" }))
-      .mockResolvedValueOnce(jsonResponse(410, { success: false, error_code: "ARTIFACT_UNAVAILABLE", error: "gone" }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error_code: "ARTIFACT_NOT_FOUND", error: "nope" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error_code: "ARTIFACT_UNAVAILABLE", error: "gone" }, 410))
       .mockResolvedValueOnce(new Response("", { status: 416 }))
       .mockResolvedValueOnce(new Response("bad token", { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -96,7 +93,7 @@ describe("DazClient artifacts (GET /artifacts/...)", () => {
   it("downloadArtifacts skips unavailable entries and sanitizes names", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith("/artifacts/rnd-1")) {
-        return jsonResponse(200, {
+        return jsonResponse({
           artifacts: [
             { artifact_id: "0", available: true, filename: "../../evil.png" },
             { artifact_id: "1", available: false, filename: "gone.png" },

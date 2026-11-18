@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
 import { AuthenticationError, DazError, StudioBusyError } from "../../src/exceptions.js";
-
-function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -12,7 +9,7 @@ afterEach(() => {
 
 describe("DazClient render methods", () => {
   it("renderSubmit posts required + optional fields to /render", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { request_id: "r1", status: "queued", submitted_at: "now" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ request_id: "r1", status: "queued", submitted_at: "now" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -39,7 +36,7 @@ describe("DazClient render methods", () => {
   });
 
   it("renderSubmit prefers figures[] over figure/morphs when both are given", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { request_id: "r1" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ request_id: "r1" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -55,7 +52,7 @@ describe("DazClient render methods", () => {
   });
 
   it("renderBatchSubmit posts variants and optional base", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { batch_id: "b1", request_ids: ["r1", "r2"], total: 2 }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ batch_id: "b1", request_ids: ["r1", "r2"], total: 2 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -73,7 +70,7 @@ describe("DazClient render methods", () => {
   });
 
   it("renderAnimationSubmit posts frame range fields with default padding", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ request_id: "r1", status: "queued" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -104,7 +101,7 @@ describe("DazClient render methods", () => {
 
 describe("DazClient server health methods", () => {
   it("status/health/metrics GET their endpoints and throw AuthenticationError on 403", async () => {
-    const fetchMock = vi.fn(async () => new Response("blocked", { status: 403 }));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("blocked", { status: 403 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -121,7 +118,7 @@ describe("DazClient server health methods", () => {
 describe("DazClient.capabilities", () => {
   it("GETs /capabilities and returns the document", async () => {
     const doc = { schema_version: 1, compatibility_hash: "0123456789abcdef", render_engines: { selectable: ["viewport"] } };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, doc));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(doc));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -130,7 +127,7 @@ describe("DazClient.capabilities", () => {
   });
 
   it("throws DazError on 404 from an older server", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, { error: "not found" })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "not found" }, 404)));
     const err = await new DazClient({ token: "" }).capabilities().catch((e) => e);
     expect(err).toBeInstanceOf(DazError);
     expect(String(err.message)).toContain("404");
@@ -140,7 +137,7 @@ describe("DazClient.capabilities", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("bad token", { status: 401 }))
-      .mockResolvedValueOnce(jsonResponse(503, { error: "busy", error_code: "STUDIO_BUSY" }));
+      .mockResolvedValueOnce(jsonResponse({ error: "busy", error_code: "STUDIO_BUSY" }, 503));
     vi.stubGlobal("fetch", fetchMock);
     const client = new DazClient({ token: "" });
     await expect(client.capabilities()).rejects.toBeInstanceOf(AuthenticationError);

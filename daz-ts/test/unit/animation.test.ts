@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DazAnimation } from "../../src/animation.js";
+import { DazAnimation, type AnimationFrame } from "../../src/animation.js";
 import { DazClient } from "../../src/client.js";
 import { NodeNotFoundError } from "../../src/exceptions.js";
 import { DazSkeleton } from "../../src/skeleton.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 function stub(value: unknown) {
   const fetchMock = vi
@@ -33,7 +31,7 @@ const CAPTURE_RESULT = {
     { frame: 0, rotations: [[0, 0, 0]], morphs: {} },
     { frame: 1, rotations: [[5, 0, 0]], morphs: { Smile: 0.5 } },
     { frame: 2, rotations: [[10, 0, 0]], morphs: {} },
-  ],
+  ] as AnimationFrame[],
 };
 
 describe("DazAnimation.capture", () => {

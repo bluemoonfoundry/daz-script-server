@@ -3,10 +3,7 @@ import { DazClient } from "../../src/client.js";
 import { DazNode } from "../../src/node.js";
 import { Vec3 } from "../../src/math3.js";
 import { lookAtEuler, resolveTarget, sphericalOffset } from "../../src/shotGeometry.js";
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 function stub(value: unknown) {
   return async () => jsonResponse({ success: true, result: value, output: [], request_id: "r", duration_ms: 0 });

@@ -9,10 +9,8 @@ import { DazLight } from "../../src/light.js";
 import { Vec3 } from "../../src/math3.js";
 import { DazRenderSettings } from "../../src/render.js";
 import { DazScene } from "../../src/scene.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 
 function stubSequence(results: unknown[]) {

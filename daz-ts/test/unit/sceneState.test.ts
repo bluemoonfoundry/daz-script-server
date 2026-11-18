@@ -4,10 +4,8 @@ import { DazError } from "../../src/exceptions.js";
 import { DazPose } from "../../src/pose.js";
 import { DazScene } from "../../src/scene.js";
 import { DazSceneState } from "../../src/sceneState.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 
 /** Stub fetch with one result per call, in order. Extra calls repeat the last result. */

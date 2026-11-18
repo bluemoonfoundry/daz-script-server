@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
 import { RenderError, DazTimeoutError } from "../../src/exceptions.js";
 import { render, renderVariants } from "../../src/renderApi.js";
-
-function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 function sseBodyStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -28,7 +25,7 @@ describe("render()", () => {
   it("submits then completes from a 'complete' SSE event", async () => {
     const fetchMock = vi.fn();
     // /render submit
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "r1", status: "queued" }));
     // /render/r1/progress SSE stream
     fetchMock.mockResolvedValueOnce(
       new Response(
@@ -56,7 +53,7 @@ describe("render()", () => {
 
   it("throws RenderError from an 'error' SSE event", async () => {
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "r1", status: "queued" }));
     fetchMock.mockResolvedValueOnce(
       new Response(sseBodyStream(['event: error\ndata: {"error":"Camera not found"}\n\n']), { status: 200 }),
     );
@@ -68,7 +65,7 @@ describe("render()", () => {
 
   it("invokes onProgress for 'progress' SSE events before completing", async () => {
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "r1", status: "queued" }));
     fetchMock.mockResolvedValueOnce(
       new Response(
         sseBodyStream([
@@ -89,12 +86,12 @@ describe("render()", () => {
 
   it("falls back to result polling when the SSE endpoint is unavailable", async () => {
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "r1", status: "queued" }));
     // streamRenderProgress returns null (404) -> falls through to polling
     fetchMock.mockResolvedValueOnce(new Response("", { status: 404 }));
     // getRequestResult(wait=true) -> completed
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(200, { success: true, result: { output_path: "C:\\out.png" }, duration_ms: 750 }),
+      jsonResponse({ success: true, result: { output_path: "C:\\out.png" }, duration_ms: 750 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -113,9 +110,9 @@ describe("render()", () => {
 
   it("polling fallback throws RenderError when the request result reports failure", async () => {
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "r1", status: "queued" }));
     fetchMock.mockResolvedValueOnce(new Response("", { status: 404 }));
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: false, error: "Out of memory" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: false, error: "Out of memory" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -123,7 +120,7 @@ describe("render()", () => {
   });
 
   it("returns immediately without waiting when wait=false", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(200, { request_id: "r1", status: "queued" }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ request_id: "r1", status: "queued" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });
@@ -144,7 +141,7 @@ describe("render()", () => {
 describe("renderVariants()", () => {
   it("submits a batch and waits for each variant's SSE completion in order", async () => {
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_ids: ["r1", "r2"] }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_ids: ["r1", "r2"] }));
     fetchMock.mockResolvedValueOnce(
       new Response(sseBodyStream(['event: complete\ndata: {"output_path":"C:\\\\a.png"}\n\n']), { status: 200 }),
     );
@@ -185,7 +182,7 @@ describe("renderVariants()", () => {
 
   it("records a failed variant but still attempts the rest", async () => {
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { request_ids: ["r1", "r2"] }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ request_ids: ["r1", "r2"] }));
     fetchMock.mockResolvedValueOnce(
       new Response(sseBodyStream(['event: error\ndata: {"error":"bad morph"}\n\n']), { status: 200 }),
     );

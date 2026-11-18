@@ -5,10 +5,8 @@ import { DazMaterial } from "../../src/material.js";
 import { DazModifier } from "../../src/modifier.js";
 import { DazMorph } from "../../src/morph.js";
 import { DazNode } from "../../src/node.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 
 function stub(value: unknown) {

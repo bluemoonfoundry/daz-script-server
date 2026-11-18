@@ -6,10 +6,8 @@ import { DazCamera } from "../../src/camera.js";
 import { DazLight } from "../../src/light.js";
 import { DazNode } from "../../src/node.js";
 import { NodeNotFoundError, ScriptRuntimeError } from "../../src/exceptions.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 function stubSeq(...values: unknown[]) {
   const fetchMock = vi.fn();

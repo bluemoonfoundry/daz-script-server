@@ -11,10 +11,8 @@ import {
   getSurfaceProperty,
   setSurfaceProperty,
 } from "../../src/materials.js";
+import { jsonResponse } from "../helpers.js";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
 afterEach(() => vi.unstubAllGlobals());
 function stub(value: unknown) {
   const fetchMock = vi

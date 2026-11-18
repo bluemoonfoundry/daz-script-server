@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
 import { DazCamera } from "../../src/camera.js";
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => vi.unstubAllGlobals());
 

@@ -1,17 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DazClient } from "../../src/client.js";
 import { StudioBusyError } from "../../src/exceptions.js";
-
-function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
-}
+import { jsonResponse } from "../helpers.js";
 
 function busyResponse(): Response {
-  return jsonResponse(503, { error: "busy", error_code: "STUDIO_BUSY", detail: "scene is loading" });
+  return jsonResponse({ error: "busy", error_code: "STUDIO_BUSY", detail: "scene is loading" }, 503);
 }
 
 function successResponse(): Response {
-  return jsonResponse(200, { success: true, result: 42, output: [], request_id: "r1", duration_ms: 1 });
+  return jsonResponse({ success: true, result: 42, output: [], request_id: "r1", duration_ms: 1 });
 }
 
 beforeEach(() => {

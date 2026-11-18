@@ -2,10 +2,7 @@
 import { Batch } from "../../src/batch.js";
 import { DazClient } from "../../src/client.js";
 import { ScriptBuilder } from "../../src/scriptBuilder.js";
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-}
+import { jsonResponse } from "../helpers.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -42,7 +39,7 @@ describe("injection safety", () => {
   });
 
   it("DazClient.execute JSON-encodes args, never string-concatenates them into the script", async () => {
-    const fetchMock = vi.fn(() =>
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
       jsonResponse({ success: true, result: null, output: [], request_id: "r1", duration_ms: 0 }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -59,7 +56,7 @@ describe("injection safety", () => {
   });
 
   it("Batch.addOperation embeds adversarial result expressions without corrupting the combined script's JSON payload", async () => {
-    const fetchMock = vi.fn(() =>
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
       jsonResponse({ success: true, result: { _r0: "ok" }, output: [], request_id: "r1", duration_ms: 0 }),
     );
     vi.stubGlobal("fetch", fetchMock);
