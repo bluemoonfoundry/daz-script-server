@@ -3,7 +3,6 @@ export type {
   DazClientOptions,
   RetryOptions,
   RenderSubmitOptions,
-  ExportUsdOptions,
   CapabilityRoute,
   Artifact,
   ArtifactList,

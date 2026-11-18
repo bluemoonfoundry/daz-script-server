@@ -102,40 +102,6 @@ describe("DazClient render methods", () => {
   });
 });
 
-describe("DazClient USD export methods", () => {
-  it("exportUsdSubmit posts camelCase wire fields with documented defaults", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { job_id: "j1", status: "queued" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new DazClient({ token: "" });
-    await client.exportUsdSubmit("C:\\out.usda");
-
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:18811/export/usd");
-    expect(JSON.parse(init.body as string)).toEqual({
-      outputPath: "C:\\out.usda",
-      includeGeometry: true,
-      includeMaterials: true,
-      includeSkeleton: false,
-      includeMorphs: false,
-      includeLights: false,
-      includeCamera: false,
-    });
-  });
-
-  it("getUsdExportStatus returns not_found on 404 and throws on 401", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("", { status: 404 }))
-      .mockResolvedValueOnce(new Response("nope", { status: 401 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new DazClient({ token: "" });
-    expect(await client.getUsdExportStatus("j1")).toEqual({ job_id: "j1", status: "not_found" });
-    await expect(client.getUsdExportStatus("j2")).rejects.toBeInstanceOf(AuthenticationError);
-  });
-});
-
 describe("DazClient server health methods", () => {
   it("status/health/metrics GET their endpoints and throw AuthenticationError on 403", async () => {
     const fetchMock = vi.fn(async () => new Response("blocked", { status: 403 }));

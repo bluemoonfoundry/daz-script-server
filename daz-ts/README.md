@@ -6,7 +6,7 @@ code. `daz-ts` is the Node.js/TypeScript counterpart to
 [`dazpy`](../dazpy), the mature Python SDK — same wire protocol, same
 server, a single `DazClient` class (no sync/async split; `async`/`await`
 covers both). Phase 1 shipped the client core (`execute`, async job
-submission/polling, batching, render/USD submission, SSE plumbing) plus a
+submission/polling, batching, render submission, SSE plumbing) plus a
 dependency-free `math3` module. Phase 2 (below) adds the scene-graph proxy
 layer (nodes, materials, skeletons, etc.).
 
@@ -183,8 +183,8 @@ Rejections throw `ArtifactError` with `statusCode` and `errorCode`
 - `ScriptBuilder` — the injection-safety helpers (`escapeString`, `iife`,
   `serializeArg`) used internally to build generated DazScript source; every
   injected string goes through `JSON.stringify`.
-- Render/USD-export submission methods (`renderSubmit`, `renderBatchSubmit`,
-  `renderAnimationSubmit`, `exportUsdSubmit`, ...) and SSE streaming helpers
+- Render submission methods (`renderSubmit`, `renderBatchSubmit`,
+  `renderAnimationSubmit`, ...) and SSE streaming helpers
   (`streamRenderProgress`, `streamSceneEvents`, `parseSseStream`) on
   `DazClient` — see `src/client.ts` for full signatures.
 
@@ -271,9 +271,6 @@ top of Phase 1's raw job-queue client methods, ported from `dazpy`'s
   `complete`/`error` event. `renderVariants()` submits every variant in one
   batch request, then awaits each in order, recording a failed variant's
   error without aborting the rest.
-- USD export submission/status (`DazClient.exportUsdSubmit`,
-  `getUsdExportStatus`) was already ported in Phase 1 alongside the other
-  job-queue endpoints — see `src/client.ts`.
 
 `DazRenderSettings`'s environment-map/property methods
 (`getEnvironmentProperty`, `setEnvironmentProperty`,

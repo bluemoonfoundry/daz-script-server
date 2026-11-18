@@ -507,7 +507,7 @@ export class DazScene {
     return this.client.sceneSaveCopy(path);
   }
 
-  /** Export the scene to FBX via DAZ Studio's built-in `DzFbxExporter` (synchronous — no async job to poll, unlike `DazClient.exportUsdSubmit`). */
+  /** Export the scene to FBX via DAZ Studio's built-in `DzFbxExporter` (synchronous — no async job to poll). */
   async exportFbx(
     path: string,
     opts: {

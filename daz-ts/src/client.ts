@@ -203,7 +203,6 @@ export interface RenderSubmitOptions extends RetryOptions {
   resetMorphs?: boolean;
 }
 
-/** Options accepted by {@link DazClient.exportUsdSubmit}. */
 /** A route listed by `GET /capabilities`. Paths use `{id}` placeholders. */
 export interface CapabilityRoute {
   method: string;
@@ -278,15 +277,6 @@ export interface ArtifactList {
 export interface DownloadArtifactOptions {
   /** Inclusive byte range `[start, end]`; omit `end` for "to the end of the file". */
   range?: [number, number?];
-}
-
-export interface ExportUsdOptions {
-  includeGeometry?: boolean;
-  includeMaterials?: boolean;
-  includeSkeleton?: boolean;
-  includeMorphs?: boolean;
-  includeLights?: boolean;
-  includeCamera?: boolean;
 }
 
 /**
@@ -678,46 +668,6 @@ export class DazClient {
     } catch {
       return null;
     }
-  }
-
-  // ── USD export ──────────────────────────────────────────────────────────
-
-  /** Submit a USD export job and return immediately. */
-  async exportUsdSubmit(outputPath: string, opts: ExportUsdOptions = {}): Promise<Record<string, unknown>> {
-    const {
-      includeGeometry = true,
-      includeMaterials = true,
-      includeSkeleton = false,
-      includeMorphs = false,
-      includeLights = false,
-      includeCamera = false,
-    } = opts;
-    const payload = {
-      outputPath,
-      includeGeometry,
-      includeMaterials,
-      includeSkeleton,
-      includeMorphs,
-      includeLights,
-      includeCamera,
-    };
-    const resp = await this.post("/export/usd", payload);
-    if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-    }
-    return (await resp.json()) as Record<string, unknown>;
-  }
-
-  /** Poll the status of a USD export job. */
-  async getUsdExportStatus(jobId: string): Promise<Record<string, unknown>> {
-    const resp = await this.get(`/export/usd/${jobId}`);
-    if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-    }
-    if (resp.status === 404) {
-      return { job_id: jobId, status: "not_found" };
-    }
-    return (await resp.json()) as Record<string, unknown>;
   }
 
   // ── Server health ───────────────────────────────────────────────────────
