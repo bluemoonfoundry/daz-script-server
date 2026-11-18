@@ -95,7 +95,7 @@ class DazSkeleton(DazNode):
                     name: b.getName(),
                     label: b.getLabel(),
                     parent_name: parent_name,
-                    rotation_order: b.getRotationOrder(),
+                    rotation_order: b.getRotationOrder().toString(),
                     local_position: {x: pos.x, y: pos.y, z: pos.z},
                     world_position: {x: wpos.x, y: wpos.y, z: wpos.z},
                     local_euler: {
