@@ -4,6 +4,13 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-11-19
+
+dazpy-only release. The plugin binaries are rebuilt with the new version
+number; no plugin code changed, and plugin 2.12.x users need not upgrade.
+2.14.0 was tagged in this changelog but never published to PyPI or GitHub
+Releases; its changes ship in this release.
+
 ### Added
 
 - **daz-ts 0.1.0**, a TypeScript/Node.js (>= 18) SDK in `daz-ts/`: the
@@ -28,8 +35,8 @@ All notable changes to DazScript Server are documented here.
   side of the 180-degree line (eyelines match across cuts) with `check_axis`,
   `check_thirty_degree` and `check_plan`; headroom and lead-room composition;
   push-in/pull-out, arc and dolly/truck/pedestal/crane/pan/tilt/handheld moves;
-  rack focus and depth-of-field limits; single-actor coverage presets, two-actor dialogue coverage and
-  `conversation()` cutting dialogue beats; consistent `shot_name()` ids;
+  rack focus and depth-of-field limits; single-actor coverage presets,
+  two-actor dialogue coverage and `conversation()` cutting dialogue beats; consistent `shot_name()` ids;
   `compose_aim()` (thirds / golden section), `look_rotation()` with dutch roll,
   and camera-pose helpers that accept `DazNode.rotation`'s quaternion.
   `apply_shot()` gains `clear_keys=False` so successive moves on one camera chain.

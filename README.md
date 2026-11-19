@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.14.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.15.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,6 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
+- [What's New in v2.15.0](#whats-new-in-v2150)
 - [What's New in v2.14.0](#whats-new-in-v2140)
 - [What's New in v2.13.0](#whats-new-in-v2130)
 - [What's New in v2.12.0](#whats-new-in-v2120)
@@ -175,6 +176,42 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 - Automated scene generation and testing
 - Custom web-based controllers
 - CI/CD pipelines for 3D content validation
+
+---
+
+## What's New in v2.15.0
+
+### 🎬 Cinematic shot library, typed shot models, and daz-ts
+
+`dazpy.shot_library` builds common shots from actor positions: establishing,
+master, two-shot, singles, insert, POV, over-the-shoulder and shot/reverse-shot.
+A `LineOfAction` keeps every camera on one side of the 180-degree line so
+eyelines match across cuts, and `check_plan` reports line crossings and jump
+cuts. It also covers headroom and lead room, push-ins, arcs and
+dolly/truck/crane/pan/tilt/handheld moves, rack focus, coverage presets, and
+`conversation()`, which cuts dialogue beats between two actors.
+
+```python
+from dazpy import DazScene, shot_library as sl
+from dazpy.math3 import Vec3
+
+positions = {"anna": Vec3(0, 0, 0), "ben": Vec3(0, 0, -120)}
+line = sl.LineOfAction.between(positions, "anna", "ben")
+plan = sl.conversation(line, [sl.DialogueBeat("anna", 0, 47, "Where were you?"),
+                              sl.DialogueBeat("ben", 48, 95, "Out.")], establish_frames=24)
+assert sl.check_plan(plan, positions) == []
+sl.apply_coverage(DazScene(), plan, subjects=positions)
+```
+
+The shots are `dazpy.shots` models: typed, JSON-serialisable `Shot`, `Sequence`
+and `CoveragePlan`, applied with `apply_shot()` and convertible to scene-recipe
+cameras. Recipe cameras gain the full shot-size list, `angle` and
+`composition`. **daz-ts 0.1.0**, the TypeScript SDK, ships as `daz-ts-*.tgz`
+on the release.
+
+This is a dazpy-only release: plugin 2.12.x users need not upgrade. dazpy
+2.14.0 was never published, so this release also carries its fixes (real bone
+rotation orders, working undo/redo, dForce memorized pose).
 
 ---
 

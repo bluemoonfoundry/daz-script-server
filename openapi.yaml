@@ -62,7 +62,7 @@ info:
     job-result body with `error_code` `SCRIPT_ERROR`, `JOB_CANCELLED` or
     `JOB_STALE`. Branch on `error_code`, not on the message text.
 
-  version: 2.14.0
+  version: 2.15.0
   contact:
     name: Blue Moon Foundry
     url: https://github.com/bluemoonfoundry/daz-script-server/issues
