@@ -4,7 +4,9 @@ Cinematics
 Domain-level camera-shot builders, built on :class:`~dazpy.DazCamera` and
 :class:`~dazpy.DazScene`. Each is an adapter over the typed models in
 :doc:`shots`: ``spec.to_shot()`` returns the equivalent
-:class:`~dazpy.shots.Shot`.
+:class:`~dazpy.shots.Shot`. For named shot types, coverage, the
+180-degree rule and camera moves built from actor positions, see
+:doc:`shot_library`.
 
 CinematicStaticShot
 --------------------

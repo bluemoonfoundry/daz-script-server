@@ -4,7 +4,8 @@ Shots
 Typed, serialisable shot models -- :class:`~dazpy.shots.Shot`,
 :class:`~dazpy.shots.Sequence` and :class:`~dazpy.shots.CoveragePlan` -- and
 :func:`~dazpy.shots.apply_shot`, the single apply path the
-:doc:`cinematics` builders are adapters over.
+:doc:`cinematics` builders are adapters over. :doc:`shot_library` builds
+common shots, coverage and conversations as these models.
 
 .. code-block:: python
 
