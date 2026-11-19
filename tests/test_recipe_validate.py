@@ -85,7 +85,8 @@ class ValidateOfflineTests(unittest.TestCase):
 
     def test_invalid_enum_lists_allowed_values(self):
         rep = validate_offline(load_invalid("invalid_enum"))
-        self.assertEqual(rep.errors[0].allowed, ("close_up", "full_body", "medium"))
+        self.assertEqual(rep.errors[0].allowed, ("close_up", "extreme_close_up", "extreme_wide", "full_body",
+                                                 "medium", "medium_close_up", "medium_wide", "wide"))
 
     def test_collects_all_errors_in_one_pass(self):
         rep = validate_offline({"recipe_version": 1, "id": 3, "bogus": 1,

@@ -144,6 +144,28 @@ class DazCamera(DazNode):
         )
         self._client.execute(script)
 
+    def set_focal_distance_at_frame(self, frame: int, value: float) -> None:
+        """Write a real keyframe for the focal distance at timeline *frame* (a focus pull).
+
+        Uses ``getFocalDistanceControl().setDoubleValue(tm, value)``, the same
+        keyed-write surface as :meth:`~dazpy.DazNode.set_position_at_frame`;
+        *frame* is converted to ticks with the scene's ``getTimeStep()``.
+        """
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            f"var _tm = {int(frame)} * Scene.getTimeStep(); "
+            f"_node.getFocalDistanceControl().setDoubleValue(_tm, {float(value)});"
+        )
+        self._client.execute(script)
+
+    def clear_focal_distance_keys(self) -> None:
+        """Remove all keyframes from the focal distance control."""
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            "_node.getFocalDistanceControl().deleteAllKeys();"
+        )
+        self._client.execute(script)
+
     @property
     def aspect_width(self) -> float | None:
         """Render aspect ratio width component (read/write)."""

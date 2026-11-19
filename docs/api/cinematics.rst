@@ -2,7 +2,9 @@ Cinematics
 ==========
 
 Domain-level camera-shot builders, built on :class:`~dazpy.DazCamera` and
-:class:`~dazpy.DazScene`.
+:class:`~dazpy.DazScene`. Each is an adapter over the typed models in
+:doc:`shots`: ``spec.to_shot()`` returns the equivalent
+:class:`~dazpy.shots.Shot`.
 
 CinematicStaticShot
 --------------------
@@ -37,10 +39,8 @@ FrameSubject
 CinematicAnimatedShot
 ----------------------
 
-.. autoclass:: dazpy.CameraKeyframe
-   :members:
-   :undoc-members:
-   :show-inheritance:
+Waypoints are :class:`dazpy.shots.CameraKeyframe` (also importable from
+``dazpy.cinematics``).
 
 .. autoclass:: dazpy.CinematicAnimatedShot
    :members:

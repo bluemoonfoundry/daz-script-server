@@ -13,6 +13,20 @@ All notable changes to DazScript Server are documented here.
   ported yet. daz-ts versions independently of the plugin and dazpy. It is
   built and unit-tested in CI and attached to GitHub releases as
   `daz-ts-*.tgz`; it is not on the npm registry yet.
+- **`dazpy.shots`**: typed, JSON-serialisable `Shot`, `Sequence` and
+  `CoveragePlan` models (shot size, angle, lens, composition, orbit/keyframed
+  movement, focus pulls, blocking and gaze beats, lighting continuity,
+  storyboard metadata, render outputs) and `apply_shot()`. The
+  `dazpy.cinematics` builders now run through it (same API and behaviour;
+  each gains `to_shot()`). Static shots and coverage plans convert to scene
+  recipe cameras and shots (`Shot.to_recipe()`,
+  `CoveragePlan.merge_into_recipe()`). New `DazCamera.set_focal_distance_at_frame()`
+  / `clear_focal_distance_keys()` for focus pulls.
+- **Scene recipe cameras** (additive, still `recipe_version` 1): `shot_type`
+  accepts `extreme_wide`, `wide`, `medium_wide`, `medium_close_up` and
+  `extreme_close_up` as well; new `angle` (`eye_level`, `high`, `low`,
+  `birds_eye`, `worms_eye`; exclusive with `elevation_deg`) and `composition`
+  (`center`, `left_third`, `right_third`) for framing cameras.
 
 ## [2.14.0] - 2026-11-18
 

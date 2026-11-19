@@ -78,9 +78,12 @@ class RecipeEnvironment:
 @dataclass(frozen=True)
 class RecipeCamera:
     frame: Optional[Union[str, Tuple[str, ...]]] = None
-    shot_type: Literal["close_up", "medium", "full_body"] = "medium"
+    shot_type: Literal["extreme_wide", "wide", "full_body", "medium_wide", "medium",
+                       "medium_close_up", "close_up", "extreme_close_up"] = "medium"
     azimuth_deg: float = 0.0
     elevation_deg: float = 10.0
+    angle: Optional[Literal["eye_level", "high", "low", "birds_eye", "worms_eye"]] = None
+    composition: Literal["center", "left_third", "right_third"] = "center"
     position: Optional[Vec3T] = None
     look_at: Optional[RefOrVec] = None
     rotation: Optional[Vec3T] = None

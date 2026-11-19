@@ -23,6 +23,10 @@ from ._recipe_json import to_jsonable
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _LIGHT_TYPES = ("distant", "point", "spot")
 _ENGINES = ("filament", "iray", "viewport")
+_SHOT_TYPES = ("close_up", "extreme_close_up", "extreme_wide", "full_body", "medium",
+               "medium_close_up", "medium_wide", "wide")
+_ANGLES = ("birds_eye", "eye_level", "high", "low", "worms_eye")
+_COMPOSITIONS = ("center", "left_third", "right_third")
 
 
 @dataclass(frozen=True)
@@ -292,9 +296,9 @@ class _Validator:
             self.boolean(v["draw_dome"], f"{p}.draw_dome")
 
     def camera(self, v, p) -> None:
-        if not self.obj(v, p, ("frame", "shot_type", "azimuth_deg", "elevation_deg", "position",
-                               "look_at", "rotation", "focal_length", "depth_of_field",
-                               "focal_distance")):
+        if not self.obj(v, p, ("frame", "shot_type", "azimuth_deg", "elevation_deg", "angle",
+                               "composition", "position", "look_at", "rotation", "focal_length",
+                               "depth_of_field", "focal_distance")):
             return
         if "frame" in v:
             f, fp = v["frame"], f"{p}.frame"
@@ -306,7 +310,14 @@ class _Validator:
             else:
                 self.ref(f, fp, "actor_or_prop")
         if "shot_type" in v:
-            self.enum(v["shot_type"], f"{p}.shot_type", ("close_up", "medium", "full_body"))
+            self.enum(v["shot_type"], f"{p}.shot_type", _SHOT_TYPES)
+        if "angle" in v:
+            self.enum(v["angle"], f"{p}.angle", _ANGLES)
+            if "elevation_deg" in v:
+                self.err(f"{p}.elevation_deg", "mutually_exclusive",
+                         "'angle' and 'elevation_deg' both set the camera elevation; remove one")
+        if "composition" in v:
+            self.enum(v["composition"], f"{p}.composition", _COMPOSITIONS)
         for k in ("azimuth_deg", "elevation_deg"):
             if k in v:
                 self.number(v[k], f"{p}.{k}")
@@ -339,7 +350,7 @@ class _Validator:
             if "look_at" not in v and "rotation" not in v:
                 self.err(f"{p}.look_at", "missing_field",
                          "explicit cameras need 'look_at' or 'rotation'")
-            for k in ("shot_type", "azimuth_deg", "elevation_deg"):
+            for k in ("shot_type", "azimuth_deg", "elevation_deg", "angle", "composition"):
                 if k in v:
                     self.err(f"{p}.{k}", "mutually_exclusive",
                              f"'{k}' only applies to framing cameras (with 'frame'); remove it "

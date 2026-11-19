@@ -99,16 +99,24 @@ share one key namespace: a prop key that is also an actor key is a
        (``environment_requires_iray``). Scene state; the one thing besides nodes
        apply writes.
    * - ``cameras.<key>``
-     - Either framing (``frame`` = actor key or list of keys, ``shot_type`` of
-       ``close_up`` / ``medium`` / ``full_body``, ``azimuth_deg``,
-       ``elevation_deg``) or explicit (``position`` plus ``look_at`` or
-       ``rotation``). Common: ``focal_length``, ``depth_of_field``,
-       ``focal_distance``. Framing assumes a standing human: it aims at face
-       (``close_up``, 160 cm), chest (``medium``, 130 cm) or hip height
-       (``full_body``, 90 cm) above the actor's position, and stands back so
-       40 / 100 / 210 cm of subject fills the frame height at the camera's
-       ``focal_length`` and the recipe's ``render.resolution`` (4:3 if unset;
-       a shot's own ``render`` override does not reframe its camera).
+     - Either framing (``frame`` = actor key or list of keys, ``shot_type``,
+       ``azimuth_deg``, ``elevation_deg`` *or* ``angle``, ``composition``) or
+       explicit (``position`` plus ``look_at`` or ``rotation``). Common:
+       ``focal_length``, ``depth_of_field``, ``focal_distance``. Framing
+       assumes a standing human: each ``shot_type`` aims at a height above the
+       actor's position and stands back so a height of subject fills the frame
+       at the camera's ``focal_length`` and the recipe's ``render.resolution``
+       (4:3 if unset; a shot's own ``render`` override does not reframe its
+       camera). Sizes (aim cm / fit cm): ``extreme_wide`` 90/600, ``wide``
+       90/350, ``full_body`` 90/210, ``medium_wide`` 115/140, ``medium``
+       130/100, ``medium_close_up`` 145/60, ``close_up`` 160/40,
+       ``extreme_close_up`` 165/15. ``angle`` names the elevation
+       (``eye_level`` 0, ``high`` 30, ``low`` -20, ``birds_eye`` 80,
+       ``worms_eye`` -45 degrees); without it the elevation is
+       ``elevation_deg`` (default 10). ``composition`` ``left_third`` /
+       ``right_third`` turns the camera so the subject sits on that third.
+       :mod:`dazpy.shots` builds these entries from typed
+       :class:`~dazpy.shots.Shot` / :class:`~dazpy.shots.CoveragePlan` models.
        A framed prop is aimed at its position. Several framed subjects are
        framed at their centroid, without widening to fit them all. Rig lights,
        and an explicit camera's or light's ``look_at`` of an actor key, aim at

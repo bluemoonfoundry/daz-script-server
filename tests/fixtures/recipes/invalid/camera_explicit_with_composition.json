@@ -1,0 +1,33 @@
+{
+  "recipe_version": 1,
+  "id": "t",
+  "assets": {
+    "g9": {
+      "path": "/People/Genesis 9/Genesis 9.duf"
+    }
+  },
+  "actors": {
+    "anna": {
+      "asset": "g9"
+    },
+    "ben": {
+      "asset": "g9",
+      "position": [
+        100,
+        0,
+        0
+      ]
+    }
+  },
+  "cameras": {
+    "c": {
+      "position": [
+        0,
+        150,
+        300
+      ],
+      "look_at": "anna",
+      "composition": "left_third"
+    }
+  }
+}

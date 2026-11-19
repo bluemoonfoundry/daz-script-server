@@ -17,6 +17,7 @@ API Reference
    animation
    camera
    cinematics
+   shots
    light
    materials
    geometry
