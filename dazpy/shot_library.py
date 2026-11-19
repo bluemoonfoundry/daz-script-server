@@ -698,6 +698,26 @@ def rack_focus(camera_position: Vec3, from_target: Union[str, Vec3, float], to_t
     return FocusPull(keys=tuple(keys))
 
 
+#: Circle of confusion (mm) for a 36 mm-wide frame -- the usual full-frame value.
+CIRCLE_OF_CONFUSION_MM = 0.03
+
+
+def depth_of_field_limits(focal_length: float, f_stop: float, focal_distance: float, *,
+                          coc_mm: float = CIRCLE_OF_CONFUSION_MM) -> Tuple[float, Optional[float]]:
+    """``(near, far)`` limits of acceptable sharpness (cm) for a lens focused at *focal_distance* (cm).
+
+    Thin-lens hyperfocal approximation; *far* is ``None`` (infinity) at or
+    beyond the hyperfocal distance.
+    """
+    if focal_length <= 0 or f_stop <= 0 or focal_distance <= 0:
+        raise ValueError("focal_length, f_stop and focal_distance must be > 0")
+    f, s = focal_length, focal_distance * 10.0  # mm
+    hyperfocal = f * f / (f_stop * coc_mm) + f
+    near = hyperfocal * s / (hyperfocal + (s - f))
+    far = None if s >= hyperfocal else hyperfocal * s / (hyperfocal - (s - f))
+    return near / 10.0, None if far is None else far / 10.0
+
+
 def camera_position(shot: Shot, positions: Optional[Positions] = None, *,
                     frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT) -> Vec3:
     """Where *shot*'s camera stands (its first position, for a move)."""
@@ -1024,7 +1044,7 @@ __all__ = [
     "shot_name", "LineOfAction", "headroom_anchor", "lead_room", "THIRD_X", "GOLDEN_X", "compose_aim",
     "establishing", "master", "two_shot", "single", "over_the_shoulder", "shot_reverse_shot", "pov", "insert",
     "euler_from_quaternion", "canonical_rotation", "forward_from_rotation", "look_rotation", "camera_up", "aim_from_rotation", "camera_move", "push_in", "pull_out", "arc",
-    "focus_point", "rack_focus", "camera_position", "camera_positions", "with_rack_focus",
+    "CIRCLE_OF_CONFUSION_MM", "depth_of_field_limits", "focus_point", "rack_focus", "camera_position", "camera_positions", "with_rack_focus",
     "ContinuityIssue", "check_axis", "check_thirty_degree", "check_continuity", "plan_line", "check_plan",
     "subject_coverage", "dialogue_coverage", "DialogueBeat", "conversation", "apply_coverage",
 ]

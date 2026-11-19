@@ -339,6 +339,14 @@ class FocusTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sl.rack_focus(Vec3(0, 0, 0), "alice", 100.0, start=0, end=10)  # key without positions
 
+    def test_depth_of_field_limits(self):
+        near, far = sl.depth_of_field_limits(50, 2.8, 300)
+        self.assertAlmostEqual(near, 273.0, delta=0.5)  # DoF calculators (c=0.03): 50mm f/2.8 @ 3 m
+        self.assertAlmostEqual(far, 332.9, delta=0.5)
+        self.assertIsNone(sl.depth_of_field_limits(24, 11, 1000)[1])  # past hyperfocal
+        with self.assertRaises(ValueError):
+            sl.depth_of_field_limits(50, 0, 100)
+
     def test_with_rack_focus(self):
         shot = sl.with_rack_focus(sl.over_the_shoulder(line(), "alice", "bob"), "alice", "bob",
                                   start=0, end=24, positions=POS, f_stop=2.0)
