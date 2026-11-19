@@ -3754,11 +3754,19 @@ For plugin development, see `CLAUDE.md` for detailed architecture notes and deve
 
 ## License & Attribution
 
-This project is provided under the terms of the AGPL v3 license for use with DAZ Studio.
+This repository uses two licenses:
+
+- **DazScriptServer plugin** (everything outside `dazpy/` and `daz-ts/`): [AGPL v3](LICENSE),
+  with an additional permission (AGPL section 7) to link the plugin with the DAZ Studio SDK
+  and DAZ Studio. See the top of [`LICENSE`](LICENSE).
+- **dazpy** ([`dazpy/LICENSE`](dazpy/LICENSE)) and **daz-ts** ([`daz-ts/LICENSE`](daz-ts/LICENSE)):
+  MIT. The SDKs talk to the plugin only over HTTP, so applications that use them are not
+  bound by the plugin's AGPL terms.
 
 **Dependencies:**
-- [cpp-httplib](https://github.com/yhirose/cpp-httplib) - Header-only HTTP library (AGPL v3 License)
-- [DAZ Studio SDK](https://www.daz3d.com/daz-studio-4-5-sdk) - Required for building
+- [cpp-httplib](https://github.com/yhirose/cpp-httplib) - Header-only HTTP library (MIT License)
+- [miniz](https://github.com/richgel999/miniz) - ZIP reading for package import (public domain / Unlicense)
+- [DAZ Studio SDK](https://www.daz3d.com/daz-studio-4-5-sdk) - Required for building (proprietary, not included)
 
 **Platform APIs:**
 - Windows: CryptoAPI for secure random number generation

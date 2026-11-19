@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dazpy"
 version = "2.15.0"
 description = "Python SDK for the DAZ Studio Script Server"
-readme = "README.md"
+readme = "dazpy/README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
@@ -26,6 +26,11 @@ docs = [
 aio = [
     "httpx>=0.24",
 ]
+
+[tool.setuptools]
+# Ship only dazpy's MIT license. Without this, setuptools' default glob also
+# picks up the repo-root LICENSE (AGPL, covers the plugin, not dazpy).
+license-files = ["dazpy/LICENSE"]
 
 [tool.setuptools.packages.find]
 include = ["dazpy*"]

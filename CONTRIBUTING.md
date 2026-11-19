@@ -132,4 +132,9 @@ Open a GitHub issue describing:
 ## License
 
 By contributing you agree that your contributions will be licensed under the
-[AGPL v3](LICENSE).
+license of the directory you change:
+
+- `dazpy/` and `daz-ts/`: MIT ([`dazpy/LICENSE`](dazpy/LICENSE),
+  [`daz-ts/LICENSE`](daz-ts/LICENSE))
+- Everything else: [AGPL v3](LICENSE), including its additional permission to
+  link with the DAZ Studio SDK and DAZ Studio
