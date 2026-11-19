@@ -250,6 +250,19 @@ class ApplyTests(unittest.TestCase):
         self.assertIn(("set", "f_stop", 2.8), cam.calls)
         self.assertIn(("set", "pixels_width", 1920), cam.calls)
 
+    def test_clear_keys_false_keeps_existing_keys(self):
+        cam = FakeCamera()
+        shot = Shot(id="k", camera=Placement(position=Vec3(0, 0, 0)), movement=Keyframed(keyframes=(
+            CameraKeyframe(0, Vec3(0, 0, 0), rotation=(0, 0, 0)), CameraKeyframe(9, Vec3(1, 0, 0), rotation=(0, 5, 0)))),
+            focus=FocusPull(keys=(FocusKey(0, 100.0), FocusKey(9, 200.0))))
+        apply_shot(FakeScene(), shot, camera=cam, clear_keys=False)
+        names = [c[0] for c in cam.calls]
+        for n in ("clear_position_keys", "clear_rotation_keys", "clear_focal_distance_keys"):
+            self.assertNotIn(n, names)
+        self.assertEqual(names.count("set_position_at_frame"), 2)
+        apply_shot(FakeScene(), shot, camera=cam)
+        self.assertIn("clear_position_keys", [c[0] for c in cam.calls])
+
     def test_keyframed_look_at_key_resolves_through_subjects(self):
         cam = FakeCamera()
         shot = Shot(id="k", camera=Placement(position=Vec3(0, 100, 300)), movement=Keyframed(keyframes=(
