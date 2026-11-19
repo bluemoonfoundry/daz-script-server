@@ -868,6 +868,7 @@ def apply_shot(
     subjects: Optional[Mapping[str, Any]] = None,
     frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
     aspect: float = DEFAULT_ASPECT,
+    clear_keys: bool = True,
 ) -> "DazCamera":
     """Put *shot* into the scene on a camera and return the camera.
 
@@ -884,6 +885,10 @@ def apply_shot(
             :class:`~dazpy.math3.Vec3` (an actor root on the floor).
         frame_width_mm: Camera frame width used to fit a :class:`Framing`.
         aspect: Frame height / width used to fit a :class:`Framing`.
+        clear_keys: Clear the camera's existing position/rotation (for a
+            :class:`Keyframed` move) and focal-distance (for a focus pull)
+            keys first. ``False`` adds the shot's keys to what is there, so
+            successive moves on one camera chain.
 
     Raises:
         ValueError: A key target isn't in *subjects*, or an :class:`Orbit`
@@ -910,9 +915,10 @@ def apply_shot(
             cam.aim_at(target.x, target.y, target.z)
     elif isinstance(movement, Keyframed):
         _apply_lens(cam, shot.lens)
-        cam.clear_position_keys()
-        if movement.has_orientation:
-            cam.clear_rotation_keys()
+        if clear_keys:
+            cam.clear_position_keys()
+            if movement.has_orientation:
+                cam.clear_rotation_keys()
         for kf in movement.keyframes:
             cam.set_position_at_frame(kf.frame, kf.position.x, kf.position.y, kf.position.z)
             if kf.look_at is not None:
@@ -939,7 +945,8 @@ def apply_shot(
     _apply_aspect(cam, shot.aspect)
     if shot.focus is not None:
         cam.depth_of_field = True
-        cam.clear_focal_distance_keys()
+        if clear_keys:
+            cam.clear_focal_distance_keys()
         for k in shot.focus.keys:
             cam.set_focal_distance_at_frame(k.frame, k.focal_distance)
     return cam

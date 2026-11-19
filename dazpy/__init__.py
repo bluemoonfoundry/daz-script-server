@@ -109,6 +109,7 @@ from .cinematics import (
     apply_animated_shot,
 )
 from . import shots
+from . import shot_library
 from .shots import Shot, CoveragePlan, apply_shot
 from ._result import ExecutionResult
 from ._polling import execute_long
@@ -132,6 +133,7 @@ from . import exceptions
 
 __all__ = [
     "shots",
+    "shot_library",
     "Shot",
     "CoveragePlan",
     "apply_shot",

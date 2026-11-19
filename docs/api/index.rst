@@ -18,6 +18,7 @@ API Reference
    camera
    cinematics
    shots
+   shot_library
    light
    materials
    geometry

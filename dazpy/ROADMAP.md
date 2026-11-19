@@ -411,6 +411,12 @@ Section 10 — Typed shot models (5d6f.19)
 [x] 10a dazpy.shots: Shot / Sequence / CoveragePlan + parts, to_dict/from_dict, apply_shot
 [x] 10b cinematics builders reimplemented as adapters (to_shot); recipe framing shares framing_transform
 [x] 10c Recipe cameras: full shot-size list, angle, composition; Shot/CoveragePlan -> recipe entries
+
+Section 11 — Cinematic shot library (5d6f.20)
+[x] 11a dazpy.shot_library: establishing/master/two-shot/single/insert/POV/OTS, shot_reverse_shot
+[x] 11b LineOfAction (180-degree rule), check_axis / check_thirty_degree / check_plan, eyeline-matched pairs
+[x] 11c Composition (headroom_anchor, lead_room), moves (push_in/pull_out/arc/camera_move), rack_focus
+[x] 11d subject_coverage presets, dialogue_coverage, conversation(DialogueBeat...), shot_name, apply_coverage
 ```
 
 ---

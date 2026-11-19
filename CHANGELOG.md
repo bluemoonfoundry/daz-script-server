@@ -22,6 +22,17 @@ All notable changes to DazScript Server are documented here.
   recipe cameras and shots (`Shot.to_recipe()`,
   `CoveragePlan.merge_into_recipe()`). New `DazCamera.set_focal_distance_at_frame()`
   / `clear_focal_distance_keys()` for focus pulls.
+- **`dazpy.shot_library`**: common cinematic shots on top of `dazpy.shots` --
+  establishing, master, two-shot, clean singles, insert, POV, over-the-shoulder
+  and shot/reverse-shot pairs; a `LineOfAction` that keeps every camera on one
+  side of the 180-degree line (eyelines match across cuts) with `check_axis`,
+  `check_thirty_degree` and `check_plan`; headroom and lead-room composition;
+  push-in/pull-out, arc and dolly/truck/pedestal/crane/pan/tilt/handheld moves;
+  rack focus and depth-of-field limits; single-actor coverage presets, two-actor dialogue coverage and
+  `conversation()` cutting dialogue beats; consistent `shot_name()` ids;
+  `compose_aim()` (thirds / golden section), `look_rotation()` with dutch roll,
+  and camera-pose helpers that accept `DazNode.rotation`'s quaternion.
+  `apply_shot()` gains `clear_keys=False` so successive moves on one camera chain.
 - **Scene recipe cameras** (additive, still `recipe_version` 1): `shot_type`
   accepts `extreme_wide`, `wide`, `medium_wide`, `medium_close_up` and
   `extreme_close_up` as well; new `angle` (`eye_level`, `high`, `low`,
