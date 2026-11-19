@@ -33,6 +33,10 @@ jobs:
         run: |
           if [ -f sdk-coverage.md ]; then cat sdk-coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
 
+  daz-ts:
+    name: daz-ts build, type-check and unit tests
+    uses: ./.github/workflows/build-daz-ts.yml
+
   unit-tests:
     name: dazpy unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

@@ -13,6 +13,7 @@ on:
           - macos-intel
           - macos-arm
           - dazpy
+          - daz-ts
         default: 'all'
       sdk-version:
         description: 'DAZ Studio SDK version to build (ignored for dazpy)'
@@ -102,6 +103,11 @@ jobs:
     if: inputs.platform == 'all' || inputs.platform == 'dazpy'
     uses: ./.github/workflows/build-dazpy.yml
 
+  build-daz-ts:
+    name: Build daz-ts Package
+    if: inputs.platform == 'all' || inputs.platform == 'daz-ts'
+    uses: ./.github/workflows/build-daz-ts.yml
+
   summary:
     name: Build Summary
     needs:
@@ -112,6 +118,7 @@ jobs:
       - build-macos-arm-ds4
       - build-macos-arm-ds6
       - build-dazpy
+      - build-daz-ts
     if: always()
     runs-on: ubuntu-latest
 
@@ -154,6 +161,10 @@ jobs:
 
           if [ "${{ needs.build-dazpy.result }}" != "skipped" ]; then
             echo "- dazpy: ${{ needs.build-dazpy.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.build-daz-ts.result }}" != "skipped" ]; then
+            echo "- daz-ts: ${{ needs.build-daz-ts.result }}" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

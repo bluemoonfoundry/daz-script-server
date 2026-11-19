@@ -78,6 +78,10 @@ jobs:
       - name: Check version consistency against the tag
         run: python scripts/check_version_consistency.py --tag "${GITHUB_REF_NAME}"
 
+  build-daz-ts:
+    name: Build daz-ts Package
+    uses: ./.github/workflows/build-daz-ts.yml
+
   publish-pypi:
     name: Publish dazpy to PyPI
     needs: [check-version, build-dazpy]
@@ -105,6 +109,7 @@ jobs:
       - build-macos-arm-ds4
       - build-macos-ds6
       - build-dazpy
+      - build-daz-ts
       - publish-pypi
     runs-on: ubuntu-latest
 
@@ -166,6 +171,9 @@ jobs:
             echo ""
             echo "### Python"
             echo "- **Python Package:** \`dazpy-*.whl\`"
+            echo ""
+            echo "### TypeScript"
+            echo "- **daz-ts Package:** \`daz-ts-*.tgz\`"
           } > release_notes.md
 
       - name: Download all artifacts
@@ -193,6 +201,9 @@ jobs:
 
           # dazpy wheel
           cp artifacts/dazpy-dist/*.whl release-assets/
+
+          # daz-ts tarball
+          cp artifacts/daz-ts-dist/*.tgz release-assets/
 
           # List all files
           echo "Release assets:"

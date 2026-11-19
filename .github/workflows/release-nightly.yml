@@ -66,6 +66,10 @@ jobs:
     name: Build dazpy Wheel
     uses: ./.github/workflows/build-dazpy.yml
 
+  build-daz-ts:
+    name: Build daz-ts Package
+    uses: ./.github/workflows/build-daz-ts.yml
+
   create-nightly-release:
     name: Create Nightly Release
     needs:
@@ -75,6 +79,7 @@ jobs:
       - build-macos-arm-ds4
       - build-macos-ds6
       - build-dazpy
+      - build-daz-ts
     runs-on: ubuntu-latest
 
     steps:
@@ -172,6 +177,9 @@ jobs:
             echo ""
             echo "### Python"
             echo "- **Python Package:** \`dazpy-*.whl\`"
+            echo ""
+            echo "### TypeScript"
+            echo "- **daz-ts Package:** \`daz-ts-*.tgz\`"
           } > release_notes.md
 
       - name: Download all artifacts
@@ -201,6 +209,9 @@ jobs:
 
           # dazpy wheel
           cp artifacts/dazpy-dist/*.whl release-assets/
+
+          # daz-ts tarball
+          cp artifacts/daz-ts-dist/*.tgz release-assets/
 
           # List all files
           echo "Release assets:"

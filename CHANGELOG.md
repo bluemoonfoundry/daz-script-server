@@ -4,6 +4,16 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **daz-ts 0.1.0**, a TypeScript/Node.js (>= 18) SDK in `daz-ts/`: the
+  counterpart to dazpy, at parity with its client, batching, scene-graph
+  proxies, rendering, pose/animation/scene-state capture, and the poses,
+  materials, lighting and cinematics helpers. Interaction/IK posing is not
+  ported yet. daz-ts versions independently of the plugin and dazpy. It is
+  built and unit-tested in CI and attached to GitHub releases as
+  `daz-ts-*.tgz`; it is not on the npm registry yet.
+
 ## [2.14.0] - 2026-11-18
 
 dazpy-only release. The plugin binaries are rebuilt with the new version
