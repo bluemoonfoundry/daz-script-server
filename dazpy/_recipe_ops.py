@@ -79,11 +79,16 @@ class SceneOps(Protocol):
     def observe_environment(self) -> dict | None:
         """Read the scene environment (None when Studio exposes none)."""
 
-    def unparent(self, owner_name: str, child_names: list[str]) -> None:
-        """Move the named descendants of *owner_name* to scene root (world transform kept)."""
+    def unparent(self, owner_name: str, child_names: list[str]) -> list[str]:
+        """Move the named descendants of *owner_name* to scene root (world transform kept).
 
-    def reparent(self, child_names: list[str], parent_name: str) -> None:
-        """Move the nodes under *parent_name*, preserving world transform (undoes unparent)."""
+        Returns the keys of the nodes it moved, for :meth:`reparent`.  Raises,
+        having moved nothing, when a name is not found under the owner.
+        """
+
+    def reparent(self, child_keys: list[str], parent_name: str) -> None:
+        """Move the root nodes with *child_keys* under *parent_name*, preserving
+        world transform (undoes unparent)."""
 
     def delete(self, node_name: str, owner_recipe: str | None = None) -> None:
         """Remove the node from the scene.
@@ -96,6 +101,9 @@ class SceneOps(Protocol):
 
     def remove_record(self, node_name: str) -> None:
         """Remove the ownership record (release: the node stays, unowned)."""
+
+    def relabel(self, node_name: str, from_label: str, to_label: str) -> None:
+        """Set the node's label to *to_label* if it is still *from_label* (else no-op)."""
 
     def write_manifest(self, manifest: Manifest) -> None: ...
 
@@ -285,62 +293,68 @@ def _unparent_script(owner_name: str, child_names: list[str]) -> str:
     """Move the named descendants of *owner_name* to scene root, keeping world transform.
 
     Children are found in the owner's subtree, never by a scene-wide name
-    lookup.  A listed node under another listed node moves with it (the user's
-    own hierarchy is kept).  Nothing moves unless every name is found.
+    lookup, and never match a bone.  A listed node under another listed node
+    moves with it (the user's own hierarchy is kept).  Nothing moves unless
+    every name is found.  Returns ``{errors, moved}``: the keys of the nodes
+    actually moved to root, which ``_reparent_script`` takes back.
     """
     owner = ScriptBuilder.escape_string(owner_name)
     return ScriptBuilder.iife(f"""// recipe:unparent{_KEY_JS}
 var _owner = Scene.findNode({owner});
-if (!_owner) return [{owner} + ": owner not found"];
+if (!_owner) return {{errors: [{owner} + ": owner not found"], moved: []}};
 var _names = {json.dumps(child_names)}, _all = _owner.getNodeChildren(true);
 var _picked = {{}}, _nodes = [], _errs = [];
 for (var _i = 0; _i < _names.length; _i++) {{
     var _n = null;
     for (var _j = 0; _j < _all.length; _j++)
-        if (_all[_j].getName() === _names[_i] && !_picked[_key(_all[_j])]) {{ _n = _all[_j]; break; }}
+        if (_all[_j].getName() === _names[_i] && !_all[_j].inherits("DzBone")
+                && !_picked[_key(_all[_j])]) {{ _n = _all[_j]; break; }}
     if (!_n) {{ _errs.push(_names[_i] + ": not found under " + {owner}); continue; }}
     _picked[_key(_n)] = true;
     _nodes.push(_n);
 }}
-if (_errs.length) return _errs;
-var _ownerKey = _key(_owner);
+if (_errs.length) return {{errors: _errs, moved: []}};
+var _ownerKey = _key(_owner), _moved = [];
 for (var _k = 0; _k < _nodes.length; _k++) {{
     var _inner = false;
     for (var _p = _nodes[_k].getNodeParent(); _p && _key(_p) !== _ownerKey; _p = _p.getNodeParent())
         if (_picked[_key(_p)]) {{ _inner = true; break; }}
     if (_inner) continue;
     var _old = _nodes[_k].getNodeParent();
-    if (_old) _old.removeNodeChild(_nodes[_k], true);
+    if (_old) {{ _old.removeNodeChild(_nodes[_k], true); _moved.push(_key(_nodes[_k])); }}
 }}
-return [];""")
+return {{errors: [], moved: _moved}};""")
 
 
-def _reparent_script(child_names: list[str], parent_name: str) -> str:
-    """Move root nodes named *child_names* under *parent_name* (undoes ``_unparent_script``).
+def _reparent_script(child_keys: list[str], parent_name: str) -> str:
+    """Move the root nodes with *child_keys* under *parent_name* (undoes ``_unparent_script``).
 
-    A name not at scene root is fine when it sits under one of the moved
-    nodes (it went along with that ancestor).
+    Nodes are found by the keys ``_unparent_script`` returned, never by name,
+    so a same-named root node elsewhere in the scene is never picked up.
     """
     parent = ScriptBuilder.escape_string(parent_name)
-    return ScriptBuilder.iife(f"""// recipe:reparent
+    return ScriptBuilder.iife(f"""// recipe:reparent{_KEY_JS}
 var _parent = Scene.findNode({parent});
 if (!_parent) return [{parent} + ": parent not found"];
-var _names = {json.dumps(child_names)}, _nodes = Scene.getNodeList(), _roots = {{}}, _errs = [];
+var _keys = {json.dumps(child_keys)}, _nodes = Scene.getNodeList(), _found = {{}}, _errs = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
-    var _nm = _nodes[_i].getName();
-    if (!_nodes[_i].getNodeParent() && _names.indexOf(_nm) >= 0 && !_roots[_nm]) _roots[_nm] = _nodes[_i];
+    var _k = _key(_nodes[_i]);
+    if (!_nodes[_i].getNodeParent() && _keys.indexOf(_k) >= 0 && !_found[_k]) _found[_k] = _nodes[_i];
 }}
-for (var _j = 0; _j < _names.length; _j++) {{
-    if (_roots[_names[_j]]) continue;
-    var _inside = false;
-    for (var _r in _roots) {{
-        var _kids = _roots[_r].getNodeChildren(true);
-        for (var _k = 0; _k < _kids.length; _k++) if (_kids[_k].getName() === _names[_j]) _inside = true;
-    }}
-    if (!_inside) _errs.push(_names[_j] + ": not found at scene root");
-}}
-for (var _m in _roots) _parent.addNodeChild(_roots[_m], true);
+for (var _j = 0; _j < _keys.length; _j++)
+    if (!_found[_keys[_j]]) _errs.push(_keys[_j] + ": moved node not found at scene root");
+for (var _m in _found) _parent.addNodeChild(_found[_m], true);
 return _errs;""")
+
+
+def _relabel_script(node_name: str, from_label: str, to_label: str) -> str:
+    """Relabel the node only while its label is still *from_label*; false if no node."""
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:relabel
+var _node = Scene.findNode({esc(node_name)});
+if (!_node) return false;
+if (_node.getLabel() === {esc(from_label)}) _node.setLabel({esc(to_label)});
+return true;""")
 
 
 class DazSceneOps:
@@ -414,16 +428,18 @@ class DazSceneOps:
         if not self._client.execute(_delete_script(node_name)).value:
             raise DazError(f"Could not delete node {node_name!r} (not found or not removed)")
 
-    def unparent(self, owner_name: str, child_names: list[str]) -> None:
-        self._check_moved("unparent", _unparent_script(owner_name, list(child_names)))
+    def unparent(self, owner_name: str, child_names: list[str]) -> list[str]:
+        out = self._client.execute(_unparent_script(owner_name, list(child_names))).value
+        if not isinstance(out, dict):
+            raise DazError(f"unparent failed: Daz Studio returned no result for {owner_name!r}")
+        if out.get("errors"):
+            raise DazError(f"unparent failed: {'; '.join(map(str, out['errors']))}")
+        return [str(k) for k in out.get("moved") or []]
 
-    def reparent(self, child_names: list[str], parent_name: str) -> None:
-        self._check_moved("reparent", _reparent_script(list(child_names), parent_name))
-
-    def _check_moved(self, what: str, script: str) -> None:
-        errors = self._client.execute(script).value
+    def reparent(self, child_keys: list[str], parent_name: str) -> None:
+        errors = self._client.execute(_reparent_script(list(child_keys), parent_name)).value
         if errors:
-            raise DazError(f"{what} failed: {'; '.join(map(str, errors))}")
+            raise DazError(f"reparent failed: {'; '.join(map(str, errors))}")
 
     # ── channels ──────────────────────────────────────────────────────────────
 
@@ -544,6 +560,10 @@ class DazSceneOps:
     def remove_record(self, node_name: str) -> None:
         if self._client.execute(remove_record_script(node_name)).value is False:
             raise DazError(f"Cannot release {node_name!r}: node or ownership record not found")
+
+    def relabel(self, node_name: str, from_label: str, to_label: str) -> None:
+        if self._client.execute(_relabel_script(node_name, from_label, to_label)).value is False:
+            raise NodeNotFoundError(f"Cannot relabel, node not found: {node_name!r}")
 
     def write_manifest(self, manifest: Manifest) -> None:
         self._client.execute(write_manifest_script(manifest))

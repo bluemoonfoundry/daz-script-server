@@ -21,8 +21,10 @@ is restored too); set_environment → write back the pre-apply environment (the
 step's prior, or one ``observe_environment`` taken just before when the plan
 has none); record write → write the previous record back (records on nodes
 created by this apply are not compensated, since those nodes are deleted);
-release → write the removed record back; unparent → reparent the children,
-unless their owner has already been deleted.
+release → write the removed record back and restore the ``<recipe id>:`` label
+(a release strips that prefix from a label the user has not changed);
+unparent → reparent exactly the nodes it moved (by key), unless their owner
+has already been deleted (a refused unparent moved nothing and is not undone).
 Plan deletes are checked deletes (``owner_recipe``): a node that still has a
 descendant the recipe does not own is not deleted, the apply fails and rolls
 back instead.  Deletes cannot be undone: a failure in the delete phase leaves the deletes
@@ -130,20 +132,32 @@ class _Run:
                 self.undo("restore the scene environment", lambda: ops.set_environment(prior))
             ops.set_environment(step.channels[_ENV_CHANNEL])
         elif step.op == "release":
-            node, prev = step.node_name, self.live.entities[step.path].record
+            entity = self.live.entities[step.path]
+            node, prev = step.node_name, entity.record
             self.undo(f"restore the ownership record of {step.path} on {node!r}",
                       lambda: ops.write_record(node, prev))
             ops.remove_record(node)
             self.released.add(step.path)
+            # A kept node gives up the "<recipe id>:" label, so a node the recipe
+            # creates for the same path later is the only one carrying it.
+            prefix = f"{self.recipe_id}:"
+            old = entity.label
+            if old and old.startswith(prefix) and len(old) > len(prefix):
+                new = old[len(prefix):]
+                self.undo(f"restore the label {old!r} on {node!r}",
+                          lambda: ops.relabel(node, new, old))
+                ops.relabel(node, old, new)
         elif step.op == "unparent":
             names, owner = list(step.channels["children"]["names"]), step.node_name
+            # unparent moves nothing unless every name is found, so it is undone
+            # only once it succeeded, and exactly the nodes it moved go back.
+            moved = ops.unparent(owner, names)
 
             def reparent() -> None:
                 if owner not in self.deleted_nodes:
-                    ops.reparent(names, owner)
+                    ops.reparent(moved, owner)
 
             self.undo(f"reparent {names} under {owner!r}", reparent)
-            ops.unparent(owner, names)
         elif step.op == "delete":
             ops.delete(step.node_name, owner_recipe=self.recipe_id)
             self.deleted_nodes.add(step.node_name)

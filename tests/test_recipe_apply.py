@@ -25,7 +25,7 @@ from dazpy.exceptions import DazBusyError, DazError, NodeNotFoundError
 from dazpy.lighting import HDRIEnvironment
 from recipe_fakes import (ENV_PATH, FAKE_OBSERVED, RID, FakeOps, d_actor, d_camera,
                           d_environment, d_light, d_prop, ds, live_matching, live_with_children,
-                          live_without, scripted_client, with_observed, live_tweaked)
+                          labelled, live_without, scripted_client, with_observed, live_tweaked)
 
 EMPTY = LiveState(None, {}, None)
 
@@ -293,16 +293,53 @@ class RollbackTests(unittest.TestCase):
         self.assertIn(("unparent", "r1:anna", ["Shirt"]), ops.calls_with_args)
         self.assertIn(("reparent", ["Shirt"], "r1:anna"), ops.calls_with_args)
 
-    def test_failure_at_the_unparent_step_reparents_and_deletes_nothing(self):
+    def test_refused_unparent_is_not_undone_and_deletes_nothing(self):
+        # unparent moves nothing unless every child is found, so a refused one
+        # leaves nothing to reparent (and no spurious rollback error).
         D_old = ds(d_prop("ball"), d_actor("anna"))
         L = live_with_children(D_old, "actors.anna", ("Shirt",))
         ops = FakeOps(fail_on=("unparent", 1))
         plan, r = run(ds(d_prop("ball")), L, ops, on_conflict="recipe_wins")
         self.assertTrue(r.rolled_back)
         self.assertEqual(r.failed_step.op, "unparent")
-        self.assertIn(("reparent", ["Shirt"], "r1:anna"), ops.calls_with_args)
+        self.assertNotIn("reparent", ops.methods())
         self.assertNotIn("delete", ops.methods())
         self.assertEqual((r.steps, r.rollback_errors), ((), ()))
+
+    def test_reparent_moves_back_exactly_the_nodes_unparent_moved(self):
+        D_old = ds(d_prop("ball"), d_actor("anna"))
+        L = live_with_children(D_old, "actors.anna", ("Shirt",))
+        ops = FakeOps(fail_on=("delete", 2), moved={"r1:anna": ["1042"]})
+        run(ds(), L, ops, on_conflict="recipe_wins")
+        self.assertIn(("reparent", ["1042"], "r1:anna"), ops.calls_with_args)
+
+    def test_release_strips_the_recipe_prefix_from_the_label(self):
+        D_old = ds(d_camera("one"), d_prop("ball"))
+        L = labelled(live_tweaked(D_old, "props.ball", "transform", live=live_matching(D_old)),
+                     "props.ball", "r1:ball")
+        ops = FakeOps()
+        plan, r = run(ds(d_camera("one")), L, ops, on_conflict="scene_wins")
+        self.assertTrue(r.applied)
+        self.assertIn(("relabel", "r1:ball", "r1:ball", "ball"), ops.calls_with_args)
+
+    def test_release_keeps_a_label_the_user_changed(self):
+        D_old = ds(d_camera("one"), d_prop("ball"))
+        L = labelled(live_tweaked(D_old, "props.ball", "transform", live=live_matching(D_old)),
+                     "props.ball", "Hero Ball")
+        ops = FakeOps()
+        plan, r = run(ds(d_camera("one")), L, ops, on_conflict="scene_wins")
+        self.assertTrue(r.applied)
+        self.assertNotIn("relabel", ops.methods())
+
+    def test_failed_apply_restores_the_released_label(self):
+        D_old = ds(d_camera("one"), d_prop("ball"))
+        L = labelled(live_tweaked(D_old, "props.ball", "transform", live=live_matching(D_old)),
+                     "props.ball", "r1:ball")
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        plan, r = run(ds(d_camera("one")), L, ops, on_conflict="scene_wins")
+        self.assertTrue(r.rolled_back)
+        self.assertIn(("relabel", "r1:ball", "ball", "r1:ball"), ops.calls_with_args)
+        self.assertEqual(r.rollback_errors, ())
 
     def test_delete_steps_are_checked_deletes_rollback_deletes_are_not(self):
         D_old = ds(d_prop("ball"))
@@ -699,8 +736,45 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertIn('"Environment Intensity"', self.joined())
         self.assertIn("setValue(2)", self.joined())
 
+    def test_unparent_returns_the_keys_of_the_nodes_it_moved(self):
+        self.client = scripted_client(("recipe:unparent", {"errors": [], "moved": ["1042"]}))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.assertEqual(self.ops.unparent("Genesis 9", ["Shirt"]), ["1042"])
+
+    def test_unparent_never_matches_a_bone(self):
+        # a foreign child named like a bone ("head") must not pick the bone
+        self.client = scripted_client(("recipe:unparent", {"errors": [], "moved": ["7"]}))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.ops.unparent("Genesis 9", ["head"])
+        self.assertIn('inherits("DzBone")', self.client.scripts[-1])
+
+    def test_reparent_finds_the_moved_nodes_by_key_not_by_name(self):
+        self.client = scripted_client(("recipe:reparent", []))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.ops.reparent(["1042"], "Genesis 9")
+        s = self.client.scripts[-1]
+        self.assertIn(json.dumps(["1042"]), s)
+        self.assertIn("_key(_nodes[_i])", s)
+        self.assertNotIn("getNodeChildren(true)", s)  # no scene-wide name search
+
+    def test_relabel_script_only_changes_an_unchanged_label(self):
+        self.client = scripted_client(("recipe:relabel", True))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.ops.relabel("Ball", "r1:ball", "ball")
+        s = self.client.scripts[-1]
+        self.assertIn('Scene.findNode("Ball")', s)
+        self.assertIn('getLabel() === "r1:ball"', s)
+        self.assertIn('setLabel("ball")', s)
+
+    def test_relabel_of_a_missing_node_raises(self):
+        self.client = scripted_client(("recipe:relabel", False))
+        self.ops = DazSceneOps(DazScene(self.client))
+        with self.assertRaises(NodeNotFoundError):
+            self.ops.relabel("Gone", "r1:ball", "ball")
+
     def test_unparent_reparent_delete_scripts(self):
-        self.client = scripted_client(("recipe:delete", True), ("recipe:unparent", []),
+        self.client = scripted_client(("recipe:delete", True),
+                                      ("recipe:unparent", {"errors": [], "moved": ["7"]}),
                                       ("recipe:reparent", []))
         self.ops = DazSceneOps(DazScene(self.client))
         self.ops.unparent("Genesis 9", ["Shirt"])
@@ -720,7 +794,8 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertLess(d.index("Scene.selectAllNodes(false);"), d.index("_a.trigger()"))
 
     def test_unparent_reports_children_missing_from_the_owner_subtree(self):
-        self.client = scripted_client(("recipe:unparent", ["Shirt: not found under 'Genesis 9'"]))
+        self.client = scripted_client(("recipe:unparent", {
+            "errors": ["Shirt: not found under 'Genesis 9'"], "moved": []}))
         self.ops = DazSceneOps(DazScene(self.client))
         with self.assertRaisesRegex(DazError, "Shirt"):
             self.ops.unparent("Genesis 9", ["Shirt"])

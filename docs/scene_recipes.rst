@@ -240,8 +240,11 @@ one goes too (it is recreated on the next apply if the recipe still lists it).
 Keeping a removed node (``scene`` on ``removed_from_recipe`` or
 ``has_foreign_children``) **releases** it: apply removes its ownership record
 and drops it from the manifest, so the node stays in the scene as an ordinary,
-unowned node and later applies no longer report it. To bring it back under the
-recipe, delete it and add the entity again.
+unowned node and later applies no longer report it. It also loses the
+``"<id>:"`` prefix of its label (``"<id>:ball"`` becomes ``"ball"``) unless you
+renamed it, so a node the recipe creates for that entity later is the only one
+with the recipe label (shot rendering finds cameras by it). To bring it back
+under the recipe, delete it and add the entity again.
 
 Poses are compared by a full pose capture, so a hand-posed figure is a hand
 tweak, and a pose swap on top of it is a conflict.
