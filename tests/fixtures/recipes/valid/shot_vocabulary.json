@@ -1,0 +1,46 @@
+{
+  "recipe_version": 1,
+  "id": "t",
+  "assets": {
+    "g9": {
+      "path": "/People/Genesis 9/Genesis 9.duf"
+    }
+  },
+  "actors": {
+    "anna": {
+      "asset": "g9"
+    },
+    "ben": {
+      "asset": "g9",
+      "position": [
+        100,
+        0,
+        0
+      ]
+    }
+  },
+  "cameras": {
+    "ews": {
+      "frame": [
+        "anna",
+        "ben"
+      ],
+      "shot_type": "extreme_wide",
+      "angle": "high"
+    },
+    "mcu": {
+      "frame": "anna",
+      "shot_type": "medium_close_up",
+      "angle": "low",
+      "composition": "left_third",
+      "azimuth_deg": 30,
+      "focal_length": 85
+    },
+    "ecu": {
+      "frame": "ben",
+      "shot_type": "extreme_close_up",
+      "composition": "right_third",
+      "elevation_deg": 5
+    }
+  }
+}

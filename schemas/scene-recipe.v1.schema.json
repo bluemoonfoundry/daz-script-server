@@ -353,16 +353,40 @@
         },
         "shot_type": {
           "enum": [
-            "close_up",
+            "extreme_wide",
+            "wide",
+            "full_body",
+            "medium_wide",
             "medium",
-            "full_body"
-          ]
+            "medium_close_up",
+            "close_up",
+            "extreme_close_up"
+          ],
+          "description": "Shot size; each fits a height of subject to the frame (see dazpy.shots.SHOT_SIZES)"
         },
         "azimuth_deg": {
           "type": "number"
         },
         "elevation_deg": {
           "type": "number"
+        },
+        "angle": {
+          "enum": [
+            "eye_level",
+            "high",
+            "low",
+            "birds_eye",
+            "worms_eye"
+          ],
+          "description": "Named camera elevation (0, 30, -20, 80, -45 degrees); mutually exclusive with elevation_deg"
+        },
+        "composition": {
+          "enum": [
+            "center",
+            "left_third",
+            "right_third"
+          ],
+          "description": "Place the subject on a vertical third by turning the camera"
         },
         "position": {
           "$ref": "#/$defs/vec3"
@@ -456,7 +480,27 @@
                 "required": [
                   "elevation_deg"
                 ]
+              },
+              {
+                "required": [
+                  "angle"
+                ]
+              },
+              {
+                "required": [
+                  "composition"
+                ]
               }
+            ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "angle",
+              "elevation_deg"
             ]
           }
         }

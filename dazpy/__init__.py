@@ -108,6 +108,8 @@ from .cinematics import (
     apply_frame_subject,
     apply_animated_shot,
 )
+from . import shots
+from .shots import Shot, CoveragePlan, apply_shot
 from ._result import ExecutionResult
 from ._polling import execute_long
 from ._render_api import (
@@ -129,6 +131,10 @@ from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
 __all__ = [
+    "shots",
+    "Shot",
+    "CoveragePlan",
+    "apply_shot",
     "DazClient",
     "VersionCheck",
     "MIN_SERVER_VERSION",

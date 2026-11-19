@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from ._recipe_model import RecipeCamera, RecipeLight, SceneRecipe
-from ._shot_geometry import look_at_euler, spherical_offset
+from ._shot_geometry import look_at_euler
+from .shots import DEFAULT_ASPECT, DEFAULT_FRAME_WIDTH_MM, SHOT_SIZES, Framing, framing_transform
 from .lighting import _DEFAULT_FILL, _DEFAULT_KEY, _DEFAULT_RIM, _resolve_light_position
 from .math3 import Vec3
 
@@ -45,13 +46,10 @@ def _recipe_position(recipe: SceneRecipe, key: str) -> Vec3:
 
 # Framing.  An actor's recipe position is its root, on the floor, so framing aims
 # at a height above it, assuming a standing human (Genesis-scale, ~175 cm).  The
-# camera stands back so that _FIT_HEIGHT_CM of subject fills the frame vertically
-# at the recipe's focal length.  Props have no known size: aim at their position.
-_FRAME_WIDTH_MM = 36.0  # Daz camera "Frame Width" default (verified on DS4)
-_DEFAULT_ASPECT = 3 / 4  # height / width when the recipe sets no resolution
-_ACTOR_ANCHOR_CM = {"full_body": 90.0, "medium": 130.0, "close_up": 160.0}
-_FIT_HEIGHT_CM = {"full_body": 210.0, "medium": 100.0, "close_up": 40.0}
-_RIG_ANCHOR_CM = _ACTOR_ANCHOR_CM["medium"]  # rig lights light the chest, not the feet
+# camera stands back so that the shot size's fit height fills the frame
+# vertically at the recipe's focal length (see dazpy.shots.SHOT_SIZES, shared
+# with apply_shot).  Props have no known size: aim at their position.
+_RIG_ANCHOR_CM = SHOT_SIZES["medium"][1]  # rig lights light the chest, not the feet
 
 
 def _subject_point(recipe: SceneRecipe, key: str, anchor_cm: float) -> Vec3:
@@ -66,10 +64,18 @@ def _aim_point(recipe: SceneRecipe, ref: Any) -> Vec3:
     return _subject_point(recipe, ref, _RIG_ANCHOR_CM) if isinstance(ref, str) else _v(ref)
 
 
-def _framing_distance(recipe: SceneRecipe, shot_type: str, focal_length: float) -> float:
+def _aspect(recipe: SceneRecipe) -> float:
     res = recipe.render.resolution if recipe.render is not None else None
-    aspect = res[1] / res[0] if res else _DEFAULT_ASPECT
-    return _FIT_HEIGHT_CM[shot_type] * focal_length / (_FRAME_WIDTH_MM * aspect)
+    return res[1] / res[0] if res else DEFAULT_ASPECT
+
+
+def recipe_camera_framing(cam: RecipeCamera) -> Framing:
+    """The :class:`~dazpy.shots.Framing` a recipe framing camera describes."""
+    subjects = (cam.frame,) if isinstance(cam.frame, str) else tuple(cam.frame)
+    return Framing(subjects=subjects, size=cam.shot_type, angle=cam.angle or "eye_level",
+                   azimuth_deg=cam.azimuth_deg,
+                   elevation_deg=None if cam.angle is not None else cam.elevation_deg,
+                   composition=cam.composition)
 
 
 def _resolve(recipe: SceneRecipe, ref: Any) -> Vec3:
@@ -94,12 +100,10 @@ def _actor_rotation(recipe: SceneRecipe, key: str) -> tuple:
 
 def _camera(recipe: SceneRecipe, name: str, cam: RecipeCamera) -> DesiredEntity:
     if cam.frame is not None:
-        subjects = [cam.frame] if isinstance(cam.frame, str) else list(cam.frame)
-        pts = [_subject_point(recipe, s, _ACTOR_ANCHOR_CM[cam.shot_type]) for s in subjects]
-        n = len(pts)
-        aim = Vec3(sum(p.x for p in pts) / n, sum(p.y for p in pts) / n, sum(p.z for p in pts) / n)
-        pos = spherical_offset(aim, cam.azimuth_deg, cam.elevation_deg,
-                               _framing_distance(recipe, cam.shot_type, cam.focal_length))
+        framing = recipe_camera_framing(cam)
+        points = [(_recipe_position(recipe, s), s in recipe.actors) for s in framing.subjects]
+        pos, aim = framing_transform(points, framing, cam.focal_length,
+                                     frame_width_mm=DEFAULT_FRAME_WIDTH_MM, aspect=_aspect(recipe))
         transform = {"position": _t((pos.x, pos.y, pos.z)), "aim": _t((aim.x, aim.y, aim.z)),
                      "rotation": None}
     else:

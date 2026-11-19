@@ -406,6 +406,11 @@ Section 9 — Scene recipes (5d6f.18)
 [x] 9b  Three-way diff (desired / last applied / live), caller-chosen conflict policy, compensating rollback
 [x] 9c  Schema at schemas/scene-recipe.v1.schema.json, example recipe, live tests, docs/scene_recipes.rst
         (sync only: no dazpy.aio variants; async callers run it in a thread)
+
+Section 10 — Typed shot models (5d6f.19)
+[x] 10a dazpy.shots: Shot / Sequence / CoveragePlan + parts, to_dict/from_dict, apply_shot
+[x] 10b cinematics builders reimplemented as adapters (to_shot); recipe framing shares framing_transform
+[x] 10c Recipe cameras: full shot-size list, angle, composition; Shot/CoveragePlan -> recipe entries
 ```
 
 ---

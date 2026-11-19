@@ -7,6 +7,10 @@ Provides :func:`apply_static_shot` for a single camera placement/framing,
 keyframes (:meth:`~dazpy.DazNode.set_position_at_frame` /
 :meth:`~dazpy.DazNode.set_rotation_at_frame`) rather than a per-frame
 setValue bake — DAZ Studio interpolates between the given waypoints itself.
+
+Each builder is a thin adapter over the typed models in :mod:`dazpy.shots`:
+``spec.to_shot()`` gives the equivalent :class:`~dazpy.shots.Shot`, and the
+``apply_*`` functions are :func:`~dazpy.shots.apply_shot` on it.
 """
 
 from __future__ import annotations
@@ -15,19 +19,22 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .math3 import Vec3
-from ._shot_geometry import look_at_euler, resolve_target, spherical_offset
-from ._timeline import DazTimeline
+from .shots import (
+    CameraKeyframe,
+    AspectSettings,
+    Framing,
+    Keyframed,
+    Lens,
+    Orbit,
+    Placement,
+    Shot,
+    apply_shot,
+)
 
 if TYPE_CHECKING:
     from ._camera import DazCamera
     from ._node import DazNode
     from ._scene import DazScene
-
-
-def _resolve_camera(scene: "DazScene", camera: "DazCamera | None", name: str | None) -> "DazCamera":
-    if camera is not None:
-        return camera
-    return scene.create_camera(name)
 
 
 @dataclass(frozen=True)
@@ -73,6 +80,18 @@ class CinematicStaticShot:
     pixels_width: int | None = None
     pixels_height: int | None = None
 
+    def to_shot(self, shot_id: str = "static") -> Shot:
+        """The equivalent :class:`~dazpy.shots.Shot`."""
+        aspect = AspectSettings(self.aspect_width, self.aspect_height, self.pixels_width, self.pixels_height)
+        return Shot(
+            id=shot_id,
+            camera=Placement(position=self.position, look_at=self.look_at,
+                             look_at_offset_cm=self.look_at_offset_cm, rotation=self.rotation),
+            lens=Lens(focal_length=self.focal_length, depth_of_field=self.depth_of_field,
+                      focal_distance=self.focal_distance),
+            aspect=None if aspect == AspectSettings() else aspect,
+        )
+
 
 def apply_static_shot(
     scene: "DazScene",
@@ -97,30 +116,7 @@ def apply_static_shot(
         The configured :class:`~dazpy.DazCamera` (either *camera* or the
         newly created one).
     """
-    cam = _resolve_camera(scene, camera, name)
-    cam.set_position(shot.position.x, shot.position.y, shot.position.z)
-    if shot.look_at is not None:
-        target = resolve_target(shot.look_at, vertical_offset_cm=shot.look_at_offset_cm)
-        cam.aim_at(target.x, target.y, target.z)
-    elif shot.rotation is not None:
-        cam.set_rotation(*shot.rotation)
-    cam.focal_length = shot.focal_length
-    cam.depth_of_field = shot.depth_of_field
-    if shot.focal_distance is not None:
-        cam.focal_distance = shot.focal_distance
-    if shot.aspect_width is not None:
-        cam.aspect_width = shot.aspect_width
-    if shot.aspect_height is not None:
-        cam.aspect_height = shot.aspect_height
-    if shot.pixels_width is not None:
-        cam.pixels_width = shot.pixels_width
-    if shot.pixels_height is not None:
-        cam.pixels_height = shot.pixels_height
-    return cam
-
-
-def _lerp(start: float, end: float, t: float) -> float:
-    return start + (end - start) * t
+    return apply_shot(scene, shot.to_shot(), camera=camera, name=name)
 
 
 @dataclass(frozen=True)
@@ -171,6 +167,22 @@ class OrbitCamera:
     focal_length: float = 50.0
     target_offset_cm: float = 25.0
 
+    def to_shot(self, shot_id: str = "orbit") -> Shot:
+        """The equivalent :class:`~dazpy.shots.Shot`.
+
+        Raises:
+            ValueError: If *frame_end* is less than *frame_start*.
+        """
+        return Shot(
+            id=shot_id,
+            camera=Framing(subjects=(self.target,), size="medium"),
+            lens=Lens(focal_length=self.focal_length),
+            movement=Orbit(radius=self.radius, elevation_deg=self.elevation_deg,
+                           start_azimuth_deg=self.start_azimuth_deg, end_azimuth_deg=self.end_azimuth_deg,
+                           frame_start=self.frame_start, frame_end=self.frame_end,
+                           target_offset_cm=self.target_offset_cm),
+        )
+
 
 def apply_orbit_camera(
     scene: "DazScene",
@@ -207,24 +219,7 @@ def apply_orbit_camera(
     Raises:
         ValueError: If ``orbit.frame_end`` is less than ``orbit.frame_start``.
     """
-    if orbit.frame_end < orbit.frame_start:
-        raise ValueError(
-            f"OrbitCamera.frame_end ({orbit.frame_end}) must be >= frame_start ({orbit.frame_start})"
-        )
-    cam = _resolve_camera(scene, camera, name)
-    scene.set_anim_range(orbit.frame_start, orbit.frame_end)
-    target = resolve_target(orbit.target, vertical_offset_cm=orbit.target_offset_cm)
-    cam.focal_length = orbit.focal_length
-    timeline = DazTimeline(cam._client)
-    frame_count = orbit.frame_end - orbit.frame_start
-    for frame in range(orbit.frame_start, orbit.frame_end + 1):
-        t = (frame - orbit.frame_start) / frame_count if frame_count > 0 else 0.0
-        azimuth = _lerp(orbit.start_azimuth_deg, orbit.end_azimuth_deg, t)
-        pos = spherical_offset(target, azimuth, orbit.elevation_deg, orbit.radius)
-        timeline.frame = frame
-        cam.set_position(pos.x, pos.y, pos.z)
-        cam.aim_at(target.x, target.y, target.z)
-    return cam
+    return apply_shot(scene, orbit.to_shot(), camera=camera, name=name)
 
 
 _SHOT_DISTANCES = {"close_up": 60.0, "medium": 150.0, "full_body": 300.0}
@@ -261,6 +256,30 @@ class FrameSubject:
     focal_length: float = 50.0
     target_offset_cm: float | None = None
 
+    def to_shot(self, shot_id: str = "frame_subject") -> Shot:
+        """The equivalent :class:`~dazpy.shots.Shot`.
+
+        Keeps this builder's fixed, focal-length-independent distances and
+        aim offsets (``distance_cm`` / ``anchor_cm``) rather than the
+        focal-fitted :data:`~dazpy.shots.SHOT_SIZES`.
+
+        Raises:
+            ValueError: If *shot_type* is not one of ``"close_up"``,
+                ``"medium"``, ``"full_body"``.
+        """
+        if self.shot_type not in _SHOT_DISTANCES:
+            raise ValueError(
+                f"Invalid FrameSubject.shot_type {self.shot_type!r}; must be one of {sorted(_SHOT_DISTANCES)}"
+            )
+        offset = self.target_offset_cm if self.target_offset_cm is not None else _SHOT_TARGET_OFFSETS_CM[self.shot_type]
+        return Shot(
+            id=shot_id,
+            camera=Framing(subjects=(self.subject,), size=self.shot_type, azimuth_deg=self.azimuth_deg,
+                           elevation_deg=self.elevation_deg, distance_cm=_SHOT_DISTANCES[self.shot_type],
+                           anchor_cm=offset),
+            lens=Lens(focal_length=self.focal_length),
+        )
+
 
 def apply_frame_subject(
     scene: "DazScene",
@@ -288,41 +307,7 @@ def apply_frame_subject(
         ValueError: If ``frame.shot_type`` is not one of ``"close_up"``,
             ``"medium"``, ``"full_body"``.
     """
-    if frame.shot_type not in _SHOT_DISTANCES:
-        raise ValueError(
-            f"Invalid FrameSubject.shot_type {frame.shot_type!r}; must be one of {sorted(_SHOT_DISTANCES)}"
-        )
-    cam = _resolve_camera(scene, camera, name)
-    offset = frame.target_offset_cm if frame.target_offset_cm is not None else _SHOT_TARGET_OFFSETS_CM[frame.shot_type]
-    target = resolve_target(frame.subject, vertical_offset_cm=offset)
-    pos = spherical_offset(target, frame.azimuth_deg, frame.elevation_deg, _SHOT_DISTANCES[frame.shot_type])
-    cam.set_position(pos.x, pos.y, pos.z)
-    cam.aim_at(target.x, target.y, target.z)
-    cam.focal_length = frame.focal_length
-    return cam
-
-
-@dataclass(frozen=True)
-class CameraKeyframe:
-    """A single waypoint in an animated camera move (see :class:`CinematicAnimatedShot`).
-
-    Args:
-        frame: Timeline frame number for this waypoint.
-        position: World-space camera position at *frame*.
-        look_at: Aim target at *frame*, resolved the same way as
-            :attr:`CinematicStaticShot.look_at`. Ignored if ``None``; in
-            that case *rotation* (if set) is used instead.
-        look_at_offset_cm: Vertical offset (cm) applied when resolving
-            *look_at* — see :func:`~dazpy._shot_geometry.resolve_target`.
-        rotation: Explicit ``(x, y, z)`` degrees for this waypoint. Ignored
-            if *look_at* is set.
-    """
-
-    frame: int
-    position: Vec3
-    look_at: "Vec3 | DazNode | None" = None
-    look_at_offset_cm: float = 0.0
-    rotation: tuple[float, float, float] | None = None
+    return apply_shot(scene, frame.to_shot(), camera=camera, name=name)
 
 
 @dataclass(frozen=True)
@@ -353,6 +338,21 @@ class CinematicAnimatedShot:
     focal_length: float = 50.0
     depth_of_field: bool = False
     focal_distance: float | None = None
+
+    def to_shot(self, shot_id: str = "animated") -> Shot:
+        """The equivalent :class:`~dazpy.shots.Shot`.
+
+        Raises:
+            ValueError: See :func:`apply_animated_shot`.
+        """
+        move = Keyframed(keyframes=tuple(self.keyframes))
+        return Shot(
+            id=shot_id,
+            camera=Placement(position=move.keyframes[0].position),
+            lens=Lens(focal_length=self.focal_length, depth_of_field=self.depth_of_field,
+                      focal_distance=self.focal_distance),
+            movement=move,
+        )
 
 
 def apply_animated_shot(
@@ -390,34 +390,4 @@ def apply_animated_shot(
             *frame* values are not strictly ascending, or if only some
             keyframes specify an orientation (*look_at*/*rotation*).
     """
-    if len(shot.keyframes) < 2:
-        raise ValueError("CinematicAnimatedShot.keyframes needs at least two waypoints")
-    frames = [kf.frame for kf in shot.keyframes]
-    if frames != sorted(frames) or len(set(frames)) != len(frames):
-        raise ValueError("CinematicAnimatedShot.keyframes must have strictly ascending, unique frame numbers")
-    has_orientation = [kf.look_at is not None or kf.rotation is not None for kf in shot.keyframes]
-    if any(has_orientation) and not all(has_orientation):
-        raise ValueError(
-            "CinematicAnimatedShot.keyframes must either all specify an orientation "
-            "(look_at/rotation) or none of them should"
-        )
-
-    cam = _resolve_camera(scene, camera, name)
-    cam.focal_length = shot.focal_length
-    cam.depth_of_field = shot.depth_of_field
-    if shot.focal_distance is not None:
-        cam.focal_distance = shot.focal_distance
-
-    cam.clear_position_keys()
-    if any(has_orientation):
-        cam.clear_rotation_keys()
-
-    for kf in shot.keyframes:
-        cam.set_position_at_frame(kf.frame, kf.position.x, kf.position.y, kf.position.z)
-        if kf.look_at is not None:
-            target = resolve_target(kf.look_at, vertical_offset_cm=kf.look_at_offset_cm)
-            x, y, z = look_at_euler(kf.position, target)
-            cam.set_rotation_at_frame(kf.frame, x, y, z)
-        elif kf.rotation is not None:
-            cam.set_rotation_at_frame(kf.frame, *kf.rotation)
-    return cam
+    return apply_shot(scene, shot.to_shot(), camera=camera, name=name)
