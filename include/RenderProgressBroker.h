@@ -62,6 +62,8 @@ public:
 private:
     // Push a non-terminal event to all watchers (does not close queues).
     void pushEvent(const QString& requestId, const QString& sseEvent);
+    // Store the terminal event, push it to all watchers, and close them.
+    void publishTerminal(const QString& requestId, const QString& sseEvent);
 
     static QString makeEvent(const QString& type, const QString& dataJson);
 

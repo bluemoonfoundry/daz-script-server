@@ -86,19 +86,7 @@ void RenderProgressBroker::notifyCompleted(const QString& requestId, int duratio
         + ",\"duration_ms\":"      + QString::number(durationMs) + "}";
     QString event = makeEvent("complete", data);
 
-    QList<SubscriberQueue*> queues;
-    {
-        QMutexLocker lock(&m_mutex);
-        if (m_watches.contains(requestId)) {
-            m_watches[requestId].terminalEvent = event;
-            queues = m_watches[requestId].queues;
-            m_watches[requestId].queues.clear();
-        }
-    }
-    for (int i = 0; i < queues.size(); ++i) {
-        queues[i]->push(event);
-        queues[i]->close();
-    }
+    publishTerminal(requestId, event);
 }
 
 void RenderProgressBroker::notifyFailed(const QString& requestId, const QString& error, int durationMs)
@@ -111,19 +99,7 @@ void RenderProgressBroker::notifyFailed(const QString& requestId, const QString&
         + "\",\"duration_ms\":" + QString::number(durationMs) + "}";
     QString event = makeEvent("error", data);
 
-    QList<SubscriberQueue*> queues;
-    {
-        QMutexLocker lock(&m_mutex);
-        if (m_watches.contains(requestId)) {
-            m_watches[requestId].terminalEvent = event;
-            queues = m_watches[requestId].queues;
-            m_watches[requestId].queues.clear();
-        }
-    }
-    for (int i = 0; i < queues.size(); ++i) {
-        queues[i]->push(event);
-        queues[i]->close();
-    }
+    publishTerminal(requestId, event);
 }
 
 void RenderProgressBroker::stopAll()
@@ -139,14 +115,29 @@ void RenderProgressBroker::stopAll()
 
 void RenderProgressBroker::pushEvent(const QString& requestId, const QString& sseEvent)
 {
-    QList<SubscriberQueue*> queues;
-    {
-        QMutexLocker lock(&m_mutex);
-        if (!m_watches.contains(requestId)) return;
-        queues = m_watches[requestId].queues;
-    }
+    // Push under the lock: the SSE release callback deletes its queue right
+    // after unwatchRequest(), so a queue pointer is only valid while m_mutex
+    // is held and the queue is still registered.
+    QMutexLocker lock(&m_mutex);
+    if (!m_watches.contains(requestId)) return;
+    const QList<SubscriberQueue*>& queues = m_watches[requestId].queues;
     for (int i = 0; i < queues.size(); ++i)
         queues[i]->push(sseEvent);
+}
+
+void RenderProgressBroker::publishTerminal(const QString& requestId, const QString& sseEvent)
+{
+    // Same lifetime rule as pushEvent(): push and close before releasing
+    // m_mutex, or a disconnecting client may delete its queue in between.
+    QMutexLocker lock(&m_mutex);
+    if (!m_watches.contains(requestId)) return;
+    RequestWatch& w = m_watches[requestId];
+    w.terminalEvent = sseEvent;
+    for (int i = 0; i < w.queues.size(); ++i) {
+        w.queues[i]->push(sseEvent);
+        w.queues[i]->close();
+    }
+    w.queues.clear();
 }
 
 QString RenderProgressBroker::makeEvent(const QString& type, const QString& dataJson)
