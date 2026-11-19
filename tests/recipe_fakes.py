@@ -8,6 +8,7 @@ from canned poses.  Build the canned data with ``rec``, ``man`` and ``node``.
 from __future__ import annotations
 
 import copy as _copy
+import dataclasses as _dc
 import json
 from unittest.mock import MagicMock
 
@@ -229,6 +230,13 @@ def live_with_duplicate(live: LiveState, path: str, copy_name: str = "copy", cop
 
 # ── executor fakes (Task 7) ──────────────────────────────────────────────────
 
+def labelled(L: LiveState, path: str, label: str) -> LiveState:
+    """*L* with the node at *path* reporting *label* as its current label."""
+    ents = dict(L.entities)
+    ents[path] = _dc.replace(ents[path], label=label)
+    return _dc.replace(L, entities=ents)
+
+
 class FakeOps:
     """A SceneOps that records every call and fails on chosen calls.
 
@@ -239,12 +247,14 @@ class FakeOps:
     argument, deep-copied.  ``create`` returns ``create_names[path]`` (default
     ``[entity.label]``); ``observe`` returns ``observed[node]`` (default
     :data:`FAKE_OBSERVED`); ``observe_environment`` returns *environment*;
-    ``native_descendants`` returns ``native[node]`` (default ``()``).
+    ``native_descendants`` returns ``native[node]`` (default ``()``);
+    ``unparent`` returns ``moved[owner]`` (default: the child names, as keys).
     """
 
     def __init__(self, fail_on=None, exc: Exception | None = None, *,
                  create_names: dict | None = None, observed: dict | None = None,
-                 environment: dict | None = None, native: dict | None = None) -> None:
+                 environment: dict | None = None, native: dict | None = None,
+                 moved: dict | None = None) -> None:
         if fail_on is None:
             fail_on = []
         elif isinstance(fail_on, tuple):
@@ -255,6 +265,7 @@ class FakeOps:
         self.observed = observed or {}
         self.environment = environment
         self.native = native or {}
+        self.moved = moved or {}
         self.calls: list[tuple] = []
         self.calls_with_args: list[tuple] = []
         self._counts: dict[str, int] = {}
@@ -293,6 +304,7 @@ class FakeOps:
 
     def unparent(self, owner_name, child_names):
         self._call("unparent", owner_name, child_names)
+        return list(self.moved.get(owner_name, child_names))
 
     def reparent(self, child_names, parent_name):
         self._call("reparent", child_names, parent_name)
@@ -306,6 +318,9 @@ class FakeOps:
 
     def remove_record(self, node_name):
         self._call("remove_record", node_name)
+
+    def relabel(self, node_name, from_label, to_label):
+        self._call("relabel", node_name, from_label, to_label)
 
     def write_manifest(self, manifest):
         self._call("write_manifest", manifest)
@@ -557,6 +572,7 @@ class SimStudio:
         self._maybe_fail("unparent")
         for name in child_names:
             self.nodes[name]["parent"] = None
+        return list(child_names)  # keys: the sim's node names
 
     def reparent(self, child_names, parent_name):
         for name in child_names:
@@ -575,6 +591,10 @@ class SimStudio:
     def remove_record(self, node_name):
         self._maybe_fail("remove_record")
         self.nodes[node_name]["record"] = None
+
+    def relabel(self, node_name, from_label, to_label):
+        if self.nodes[node_name]["label"] == from_label:
+            self.nodes[node_name]["label"] = to_label
 
     def write_manifest(self, manifest):
         from dazpy._recipe_store import scene_item_name

@@ -493,6 +493,18 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual(self.assert_no_op(bare).warnings, ())
         self.assertTrue(observe(bare, self.sim).in_sync)
 
+    def test_a_released_node_gives_up_the_recipe_label(self):
+        # Kept, then re-added: the recreated node must be the only "<id>:ball".
+        r = two_actor_recipe()
+        r["props"] = {"ball": {"asset": "g9", "position": [0, 0, 100]}}
+        self.assertTrue(apply(r, self.sim).applied)
+        old = self.sim.by_label(f"{RID}:ball")
+        old["position"][0] += 30.0  # hand tweak -> removal conflict
+        self.assertTrue(apply(two_actor_recipe(), self.sim, on_conflict="scene_wins").applied)
+        self.assertEqual(old["label"], "ball")
+        self.assertTrue(apply(r, self.sim).applied)
+        self.assertIsNot(self.sim.by_label(f"{RID}:ball"), old)
+
     def test_accepted_hand_deletion_round_trips_to_a_no_op(self):
         r = two_actor_recipe()
         self.assertTrue(apply(r, self.sim).applied)
