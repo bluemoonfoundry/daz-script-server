@@ -63,6 +63,26 @@ def is_auth_enabled():
 AUTH_ENABLED = is_auth_enabled()
 
 
+def studio_qt_major():
+    """Major Qt version of the running Studio (4 = Studio 4, 6 = Studio 6),
+    from /capabilities; None when unknown (server down or older plugin)."""
+    try:
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=5).json()
+        version = str(caps.get("studio", {}).get("qt_version") or caps.get("qt_version") or "")
+        return int(version.split(".")[0]) if version else None
+    except (requests.exceptions.RequestException, ValueError):
+        return None
+
+
+IS_STUDIO_4 = studio_qt_major() == 4
+# ARCHITECTURE.md threading rules 2 and 6: Studio 4 submits async jobs on the
+# main thread (its JSON parser needs QScriptEngine) and parses job reports
+# only when the job completes, so it can't enqueue or report live progress
+# while a script is running.
+DS6_ASYNC_ONLY = unittest.skipIf(
+    IS_STUDIO_4, "Studio 4 submits async jobs and reads job reports on the main thread")
+
+
 def execute(script=None, script_file=None, args=None, headers=None):
     payload = {}
     if script is not None:
@@ -370,6 +390,7 @@ class TestAsyncExecution(unittest.TestCase):
         body = result_r.json()
         self.assertEqual(body.get("result"), 99)
 
+    @DS6_ASYNC_ONLY
     def test_queued_request_can_be_cancelled_while_main_thread_runs(self):
         blocker = async_execute(script=iife(
             "var start = Date.now(); "
@@ -458,7 +479,9 @@ class TestAsyncExecution(unittest.TestCase):
                 inline_request.json()["request_id"], wait=True, timeout=20
             ).json()
             self.assertTrue(inline_result.get("success"), inline_result.get("error"))
-            self.assertEqual(inline_result.get("result"), "")
+            # No file identity leaks from the previous job. Studio 4 reports
+            # an inline script's file name as null, Studio 6 as "".
+            self.assertIn(inline_result.get("result"), ("", None))
         finally:
             if script_path and os.path.exists(script_path):
                 os.unlink(script_path)
@@ -650,6 +673,7 @@ class TestAsyncExecution(unittest.TestCase):
         body = result_r.json()
         self.assertIsInstance(body.get("output"), list)
 
+    @DS6_ASYNC_ONLY
     def test_async_job_report_tracks_live_progress_logs_and_outputs(self):
         report_path = ""
         output_path = os.path.join(tempfile.gettempdir(), "dss-observed-output.png")

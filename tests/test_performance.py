@@ -19,6 +19,11 @@ import threading
 import time
 import requests
 
+# The report uses box-drawing characters; a legacy Windows console (cp1252)
+# can't encode them, so substitute instead of crashing.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from waiting import poll_until  # noqa: E402
 
