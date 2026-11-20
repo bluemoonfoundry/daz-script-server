@@ -425,6 +425,7 @@ class DazSceneState:
             {_RAW_WRITE_JS}
             function _applyTransforms(node, transforms) {{
                 for (var key in transforms) {{
+                    if (!transforms.hasOwnProperty(key)) continue;
                     var p = node.findProperty(key);
                     if (p) _rawSet(p, transforms[key]);
                 }}
@@ -434,6 +435,7 @@ class DazSceneState:
             var errors = [];
 
             for (var name in _camTransforms) {{
+                if (!_camTransforms.hasOwnProperty(name)) continue;
                 var c = Scene.findNode(name);
                 if (!c) {{
                     skipped.push({{kind: "camera", name: name, reason: "not_found"}});
@@ -445,6 +447,7 @@ class DazSceneState:
             }}
 
             for (var lname in _lightTransforms) {{
+                if (!_lightTransforms.hasOwnProperty(lname)) continue;
                 var l = Scene.findNode(lname);
                 if (!l) {{
                     skipped.push({{kind: "light", name: lname, reason: "not_found"}});
@@ -454,6 +457,7 @@ class DazSceneState:
                 _applyTransforms(l, _lightTransforms[lname]);
                 var extra = _lightExtra[lname] || {{}};
                 for (var ek in extra) {{
+                    if (!extra.hasOwnProperty(ek)) continue;
                     var ep = l.findProperty(ek);
                     if (ep) _rawSet(ep, extra[ek]);
                 }}

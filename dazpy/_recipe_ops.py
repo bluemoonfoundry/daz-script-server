@@ -202,8 +202,43 @@ try {{
 }}""")
 
 
+# The figure node's own transform controls (DzNode.get<X>Control()).
+_NODE_XFORM_CONTROLS = ("XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot",
+                        "XScale", "YScale", "ZScale", "Scale")
+
+
+def _read_node_xform_script(node_name: str) -> str:
+    """``{control: value}`` for the node's ten transform controls, or null."""
+    return ScriptBuilder.iife(f"""// recipe:read-xform
+var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+if (!_node) return null;
+var _c = {json.dumps(list(_NODE_XFORM_CONTROLS))}, _out = {{}};
+for (var _i = 0; _i < _c.length; _i++) _out[_c[_i]] = _node["get" + _c[_i] + "Control"]().getValue();
+return _out;""")
+
+
+def _write_node_xform_script(node_name: str, values: dict) -> str:
+    """Set the node's transform controls from ``{control: value}``; false if no node."""
+    return ScriptBuilder.iife(f"""// recipe:write-xform
+var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+if (!_node) return false;
+// An array, not for-in over an object: Studio 6's script engine enumerates
+// inherits/className/deleteLater/name on plain objects too.
+var _v = {json.dumps([[c, values[c]] for c in _NODE_XFORM_CONTROLS if c in values])};
+for (var _i = 0; _i < _v.length; _i++) _node["get" + _v[_i][0] + "Control"]().setValue(_v[_i][1]);
+return true;""")
+
+
 _POSE_PRESET_EXTS = (".duf", ".dsf")
 _POSE_JSON_EXTS = (".json",)
+
+
+def _check_pose_ext(path: str) -> None:
+    """DazError unless *path* is a Daz pose preset or a dazpy pose JSON file."""
+    if os.path.splitext(path)[1].lower() not in _POSE_PRESET_EXTS + _POSE_JSON_EXTS:
+        raise DazError(f"Unsupported pose file {path!r}; supported: Daz pose presets "
+                       f"({', '.join(_POSE_PRESET_EXTS)}) or dazpy pose JSON "
+                       f"({', '.join(_POSE_JSON_EXTS)})")
 
 
 def _claim_script(before: list[str], label: str) -> str:
@@ -343,7 +378,7 @@ for (var _i = 0; _i < _nodes.length; _i++) {{
 }}
 for (var _j = 0; _j < _keys.length; _j++)
     if (!_found[_keys[_j]]) _errs.push(_keys[_j] + ": moved node not found at scene root");
-for (var _m in _found) _parent.addNodeChild(_found[_m], true);
+for (var _m in _found) if (_found.hasOwnProperty(_m)) _parent.addNodeChild(_found[_m], true);
 return _errs;""")
 
 
@@ -467,13 +502,33 @@ class DazSceneOps:
                 if value.get("color") is not None:
                     light.set_color(*value["color"])
             elif name == "pose":
-                skeleton = DazSkeleton(self._client, ident)
-                if "snapshot" in value:
-                    self._apply_snapshot(skeleton, value["snapshot"])
-                elif value.get("pose_path") is not None:
-                    self._apply_pose_path(node_name, skeleton, value["pose_path"])
+                self._apply_pose(node_name, ident, value)
             else:
                 raise DazError(f"{node_name}: unknown channel {name!r}")
+
+    def _apply_pose(self, node_name: str, ident: NodeIdentifier, value: dict) -> None:
+        """Apply a pose channel without moving the figure node.
+
+        The ``transform`` channel owns the node transform. Pose presets often
+        carry one too (prop-interaction poses place the figure), so the node's
+        own transform controls are read before the pose and written back
+        after it; a changed ``transform`` channel is applied after this.
+        """
+        path = value.get("pose_path") if "snapshot" not in value else None
+        if "snapshot" not in value and path is None:
+            return
+        if path is not None:
+            _check_pose_ext(path)   # before any Studio round trip
+        saved = self._client.execute(_read_node_xform_script(node_name)).value
+        if saved is None:
+            raise NodeNotFoundError(f"Cannot apply pose, node not found: {node_name!r}")
+        skeleton = DazSkeleton(self._client, ident)
+        if path is None:
+            self._apply_snapshot(skeleton, value["snapshot"])
+        else:
+            self._apply_pose_path(node_name, skeleton, path)
+        if self._client.execute(_write_node_xform_script(node_name, saved)).value is not True:
+            raise NodeNotFoundError(f"Node disappeared while posing: {node_name!r}")
 
     @staticmethod
     def _apply_snapshot(skeleton: DazSkeleton, s: dict) -> None:
@@ -501,9 +556,7 @@ class DazSceneOps:
             if result is not True:
                 raise DazError(f"Daz Studio failed to open pose preset {resolved!r} on {node_name!r}")
         else:
-            raise DazError(f"Unsupported pose file {path!r}; supported: Daz pose presets "
-                           f"({', '.join(_POSE_PRESET_EXTS)}) or dazpy pose JSON "
-                           f"({', '.join(_POSE_JSON_EXTS)})")
+            _check_pose_ext(path)
 
     def _set_transform(self, ident: NodeIdentifier, kind: EntityKind, t: dict) -> None:
         node = DazCamera(self._client, ident) if kind == "camera" else DazNode(self._client, ident)

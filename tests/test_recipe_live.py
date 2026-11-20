@@ -193,6 +193,42 @@ class TestSceneRecipeLive(unittest.TestCase):
         self.assertEqual(result.rollback_errors, ())
         self.assertEqual(observe(edited, scene), before)
 
+    def test_recipe_pose_only_change_keeps_recipe_transform(self):
+        """5d6f.30 item 5: a pose preset that also moves the figure's root
+        (common in prop-interaction poses) must not move a recipe actor off
+        its recipe transform when the pose is the only thing that changed."""
+        recipe = _example("pose_only")
+        scene = _new_scene()
+        self.assertApplied(apply(recipe, scene))
+        figure = scene.find_node_by_label(f"{recipe['id']}:model")
+        before_pos, before_rot = figure.position, figure.rotation
+
+        os.makedirs(f"{_OUT}/pose_only", exist_ok=True)
+        preset = f"{_OUT}/pose_only/root_moving_pose.duf"
+        with open(preset, "w", encoding="utf-8") as fh:
+            json.dump({
+                "file_version": "0.6.0.0",
+                "asset_info": {"id": "/root_moving_pose.duf", "type": "preset_pose",
+                               "contributor": {"author": "dazpy tests"}, "revision": "1.0"},
+                "scene": {"animations": [
+                    {"url": "name://@selection:?translation/x/value", "keys": [[0, 55.0]]},
+                    {"url": "name://@selection:?translation/z/value", "keys": [[0, -120.0]]},
+                    {"url": "name://@selection:?rotation/y/value", "keys": [[0, 40.0]]},
+                ]},
+            }, fh)
+
+        posed = copy.deepcopy(recipe)
+        posed["actors"]["model"]["pose"] = preset
+        steps = plan(posed, scene).steps
+        self.assertEqual([(s.op, s.path) for s in steps], [("modify", "actors.model")])
+        self.assertApplied(apply(posed, scene))
+
+        after_pos, after_rot = figure.position, figure.rotation
+        for axis in "xyz":
+            self.assertAlmostEqual(after_pos[axis], before_pos[axis], places=2, msg=f"position {axis}")
+            self.assertAlmostEqual(after_rot[axis], before_rot[axis], places=2, msg=f"rotation {axis}")
+        self.assertEqual(list(plan(posed, scene).steps), [], "re-plan after apply is not clean")
+
     def test_recipe_reapply_after_save_reload(self):
         recipe = _example("save_reload")
         scene = _new_scene()

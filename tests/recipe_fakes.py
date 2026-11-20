@@ -334,14 +334,17 @@ def scripted_client(*responses) -> MagicMock:
 
     *responses* are ``(substring, value)`` pairs; the first whose substring is
     in the script wins (``value`` may be a callable taking the script).
-    Unmatched scripts return ``None``.  Scripts land in ``client.scripts``.
+    Unmatched scripts return ``None``, except the node-transform read/write
+    around a pose (``recipe:read-xform`` / ``recipe:write-xform``), which
+    succeed by default.  Scripts land in ``client.scripts``.
     """
     client = MagicMock()
     client.scripts = []
+    defaults = (("recipe:read-xform", {"XPos": 0.0}), ("recipe:write-xform", True))
 
     def execute(script, *a, **kw):
         client.scripts.append(script)
-        for sub, value in responses:
+        for sub, value in tuple(responses) + defaults:
             if sub in script:
                 return ExecutionResult(value=value(script) if callable(value) else value)
         return ExecutionResult(value=None)

@@ -593,8 +593,12 @@ class DazSceneOpsChannelTests(unittest.TestCase):
             self.ops.set_channels("G9", "actor", {
                 "transform": {"position": (1.0, 2.0, 3.0), "rotation": (0.0, 90.0, 0.0)},
                 "pose": {"pose_path": "C:/p.json"}})
-        self.assertEqual(seen, [0])
-        self.assertIn("setWSPos", self.joined())
+        # read-xform, then the pose, then write-xform, then the transform
+        self.assertEqual(seen, [1])
+        s = self.client.scripts
+        self.assertIn("recipe:read-xform", s[0])
+        self.assertIn("recipe:write-xform", s[1])
+        self.assertIn("setWSPos", "\n".join(s[2:]))
 
     def test_camera_with_aim_positions_then_aims(self):
         self.ops.set_channels("Cam", "camera", {"transform": {"position": (1.0, 2.0, 3.0),
@@ -664,7 +668,9 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         with patch("dazpy._recipe_ops.apply_pose") as apply_pose:
             self.ops.set_channels("Genesis 9", "actor", {"pose": {"pose_path": "/Poses/Sit.DUF"}})
         apply_pose.assert_not_called()
-        find, open_ = self.client.scripts
+        read, find, open_, write = self.client.scripts
+        self.assertIn("recipe:read-xform", read)
+        self.assertIn("recipe:write-xform", write)
         self.assertIn(json.dumps("/Poses/Sit.DUF"), find)
         self.assertIn('Scene.setPrimarySelection(_node)', open_)
         self.assertIn('openFile("C:/Lib/Poses/Sit.duf", true)', open_)
