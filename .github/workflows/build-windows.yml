@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up SDK paths
         id: sdk-paths
@@ -53,14 +53,14 @@ jobs:
 
       - name: Cache DAZ Studio SDK
         id: cache-sdk
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
           key: ${{ steps.sdk-paths.outputs.cache-key }}
 
       - name: Checkout DAZ Studio SDK repo
         if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bluemoonfoundry/daz-studio-sdks
           token: ${{ secrets.sdk-repo-token }}
@@ -104,7 +104,7 @@ jobs:
           echo "SDK structure verified"
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
       - name: Install Visual C++ 2010 Redistributable
         if: inputs.sdk-version != '6'
@@ -126,7 +126,7 @@ jobs:
       - name: Cache Qt6
         if: inputs.sdk-version == '6'
         id: cache-qt6
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/qt6
           key: qt6-6.10.3-win64_msvc2022_64-qt5compat-v1
@@ -185,7 +185,7 @@ jobs:
 
       - name: Upload Windows DLL artifact
         id: upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: DazScriptServer-windows-ds${{ inputs.sdk-version }}-${{ inputs.configuration }}
           path: build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}
