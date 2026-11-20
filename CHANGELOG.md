@@ -78,6 +78,15 @@ All notable changes to DazScript Server are documented here.
   'updateGL' ... is not a function"): Qt6's `Dz3DViewport` has no
   `updateGL()`. The capture scripts now call `update()` when `updateGL()` is
   missing.
+- **Scene recipes:** changing only an actor's pose no longer moves the figure
+  when the pose preset also sets the figure's root transform (common in
+  prop-interaction poses). The figure node's transform is kept across the
+  pose; the recipe's `transform` channel still wins when it changes too.
+- **dazpy / daz-ts on Studio 6:** Studio 6's script engine lists `inherits`,
+  `className`, `deleteLater` and `name` in every `for...in` loop. Scene-state
+  restore reported them as missing cameras/lights, and a recipe rollback that
+  had to reparent nodes could fail. Every generated loop now skips inherited
+  keys.
 - **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the
   server's `ErrorResponse` fields: `status_code`/`error_code`/`detail`/
   `retryable` in dazpy, `statusCode`/`errorCode`/`detail`/`retryable` in
