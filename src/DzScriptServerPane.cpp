@@ -3520,38 +3520,7 @@ std::string DzScriptServerPane::getHealthJson() const
 
 std::string DzScriptServerPane::getMetricsJson() const
 {
-	// Build with std::string only — called from httplib worker threads where Qt string ops are unsafe.
-	int total      = m_metrics.getTotalRequests();
-	int successful = m_metrics.getSuccessfulRequests();
-	int failed     = m_metrics.getFailedRequests();
-	int authFail   = m_metrics.getAuthFailures();
-	int active     = (int)m_nActiveRequests;
-	long long uptime = (long long)m_metrics.getUptimeSeconds();
-	double rate    = total > 0 ? (double)successful / total * 100.0 : 0.0;
-
-	char rateBuf[32];
-	std::snprintf(rateBuf, sizeof(rateBuf), "%.15g", rate);
-
-	std::string s = "{\"total_requests\":";
-	s += std::to_string(total);
-	s += ",\"successful_requests\":";
-	s += std::to_string(successful);
-	s += ",\"failed_requests\":";
-	s += std::to_string(failed);
-	s += ",\"auth_failures\":";
-	s += std::to_string(authFail);
-	s += ",\"active_requests\":";
-	s += std::to_string(active);
-	s += ",\"uptime_seconds\":";
-	s += std::to_string(uptime);
-	s += ",\"success_rate_percent\":";
-	s += rateBuf;
-	s += ",\"avg_main_thread_wait_ms\":";
-	s += std::to_string((long long)m_metrics.getAvgMainThreadWaitMs());
-	s += ",\"max_main_thread_wait_ms\":";
-	s += std::to_string((long long)m_metrics.getMaxMainThreadWaitMs());
-	s += "}";
-	return s;
+	return m_metrics.toJson((int)m_nActiveRequests);
 }
 
 // ─── Capabilities (GET /capabilities) ─────────────────────────────────────────

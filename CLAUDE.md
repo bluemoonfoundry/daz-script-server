@@ -92,6 +92,11 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 | `SecureRandom` | `src/SecureRandom.cpp` | Crypto-secure RNG (OS APIs) |
 | `JsonBuilder` | `src/JsonBuilder.cpp` | Type-safe JSON with auto-escaping |
 | `ServerConfig` | `include/DzScriptServerPane.h` | Centralized config constants |
+| `ArtifactRoutes` | `src/ArtifactRoutes.cpp` | `GET /artifacts` list/download handlers |
+| `ArtifactRoots` | `src/ArtifactRoots.cpp` | Artifact trust boundary (allowed folders) |
+| `Capabilities` | `src/Capabilities.cpp` | `GET /capabilities` document + route table |
+| `PluginRouteRegistry` | `src/PluginRouteRegistry.cpp` | Companion-plugin routes and matching |
+| `ScriptRegistry` | `src/ScriptRegistry.cpp` | Session-only registered scripts |
 
 ### HTTP API Endpoints
 
