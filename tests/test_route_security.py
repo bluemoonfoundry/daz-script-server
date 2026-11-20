@@ -223,6 +223,11 @@ class TestRouteSecurity(unittest.TestCase):
         self.assertIn("set_error_handler", self.src)
         self.assertIn("ErrorCode::BODY_TOO_LARGE", self.src)
 
+    def test_no_hand_built_error_bodies(self):
+        # Every failure body must come from ErrorResponse (x7ul.8 / W8).
+        hand_built = re.findall(r'set_content\(\s*"\{\\"error\\"', self.src)
+        self.assertEqual(hand_built, [], "use respondError()/ErrorResponse::build()")
+
 
 if __name__ == "__main__":
     unittest.main()

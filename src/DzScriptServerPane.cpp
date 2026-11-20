@@ -1712,23 +1712,21 @@ void DzScriptServerPane::setupRoutes()
 
 		QString requestId = QString::fromStdString(req.matches[1].str());
 		if (!requestId.startsWith("rnd-")) {
-			res.status = 404;
-			res.set_content("{\"error\":\"Not a render request\"}", "application/json");
+			// 404 (not 400 NOT_A_RENDER_REQUEST): no render exists at this path.
+			respondError(res, ErrorCode::REQUEST_NOT_FOUND, requestId.toStdString());
 			return;
 		}
 
 		auto statusPair = m_pAsyncMgr->getStatusJson(requestId.toStdString());
 		if (statusPair.first == 404) {
-			res.status = 404;
-			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			respondError(res, ErrorCode::REQUEST_NOT_FOUND, requestId.toStdString());
 			return;
 		}
 
 		SubscriberQueue* queue = new SubscriberQueue();
 		if (!m_pRenderProgress->watchRequest(requestId, queue)) {
 			delete queue;
-			res.status = 404;
-			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			respondError(res, ErrorCode::REQUEST_NOT_FOUND, requestId.toStdString());
 			return;
 		}
 
