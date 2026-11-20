@@ -33,6 +33,24 @@ jobs:
         run: |
           if [ -f sdk-coverage.md ]; then cat sdk-coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
 
+  lint:
+    name: Python lint (ruff) and type check (mypy, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dazpy, ruff and mypy
+        run: pip install -e ".[aio]" ruff mypy types-requests
+      # Rule selection lives in pyproject.toml [tool.ruff.lint].
+      - name: ruff check
+        run: ruff check --output-format=github dazpy scripts tests
+      # Non-blocking until the existing mypy backlog is worked down.
+      - name: mypy dazpy (advisory)
+        continue-on-error: true
+        run: mypy dazpy
+
   daz-ts:
     name: daz-ts build, type-check and unit tests
     uses: ./.github/workflows/build-daz-ts.yml

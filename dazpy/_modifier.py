@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._client import DazClient
 
 
 class DazModifier(DazElement):
@@ -12,7 +17,7 @@ class DazModifier(DazElement):
     specific :class:`~dazpy.DazMorph` subclass is returned automatically.
     """
 
-    def __init__(self, client: "DazClient", locator: str):  # noqa: F821
+    def __init__(self, client: "DazClient", locator: str):
         super().__init__(client, locator)
 
     @property

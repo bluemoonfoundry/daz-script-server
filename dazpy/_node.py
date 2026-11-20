@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from ._modifier import DazModifier
     from ._morph import DazMorph
     from ._dforce import DazDForce
+    from ._client import DazClient
+    from ._property import DazProperty
 
 
 @dataclass
@@ -43,7 +45,7 @@ class DazNode(DazElement):
         identifier: Identifies the underlying ``DzNode``.
     """
 
-    def __init__(self, client: "DazClient", identifier: NodeIdentifier):  # noqa: F821
+    def __init__(self, client: "DazClient", identifier: NodeIdentifier):
         locator = ScriptBuilder.find_node_expr(identifier)
         super().__init__(client, locator)
         object.__setattr__(self, "_identifier", identifier)
@@ -441,7 +443,7 @@ class DazNode(DazElement):
         loc = self._modifier_locator(result["name"])
         return self._modifier_class_for(result["className"])(self._client, loc)
 
-    def find_property(self, name: str) -> "DazProperty | None":  # noqa: F821
+    def find_property(self, name: str) -> "DazProperty | None":
         """Find a node-level property by its internal name.
 
         This searches properties directly on the node (via ``DzNode::findProperty``),
@@ -467,7 +469,7 @@ class DazNode(DazElement):
             return None
         return DazProperty._from_locator(self._client, locator)
 
-    def find_property_by_label(self, label: str) -> "DazProperty | None":  # noqa: F821
+    def find_property_by_label(self, label: str) -> "DazProperty | None":
         """Find a node-level property by its user-visible label.
 
         Equivalent to :meth:`find_property` but matches on ``getLabel()`` instead
@@ -773,7 +775,7 @@ class DazNode(DazElement):
         result = self._client.execute(script).value
         if result is None:
             raise NodeNotFoundError(
-                f"Could not fit node to figure: one of the nodes was not found."
+                "Could not fit node to figure: one of the nodes was not found."
             )
         return result
 

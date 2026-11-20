@@ -49,3 +49,17 @@ include = ["dazpy*"]
 
 [tool.setuptools.package-data]
 dazpy = ["py.typed", "schemas/*.json"]
+
+# Lint gate (CI `lint` job): pyflakes rules only for now. Widen `select`
+# deliberately, one rule family at a time, fixing findings as you go.
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F"]
+
+# Advisory only: CI runs `mypy dazpy` with continue-on-error until the
+# existing backlog is worked down.
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

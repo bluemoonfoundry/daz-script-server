@@ -7,7 +7,6 @@ No running server needed (part of `python tests.py unit`).
 """
 
 import importlib.util
-import os
 import tempfile
 import unittest
 from pathlib import Path

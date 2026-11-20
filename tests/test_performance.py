@@ -141,7 +141,7 @@ ITERS_FULL = 50
 ITERS_QUICK = 15
 N = ITERS_QUICK if args.quick else ITERS_FULL
 
-print(f"\nDazScriptServer Performance Benchmarks")
+print("\nDazScriptServer Performance Benchmarks")
 print(f"  Server : {BASE_URL}  (version {server_version})")
 print(f"  Auth   : {'enabled' if auth_enabled else 'disabled'}")
 print(f"  Mode   : {'quick (%d iters)' % N if args.quick else 'full (%d iters)' % N}")
@@ -315,7 +315,7 @@ for size_mb in sizes_mb:
             timeout=30,
         )
         code = r.status_code
-    except Exception as e:
+    except Exception:
         code = -1
 
     if size_mb <= 4:

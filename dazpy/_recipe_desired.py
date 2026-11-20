@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from ._recipe_model import RecipeCamera, RecipeLight, SceneRecipe
 from ._shot_geometry import look_at_euler

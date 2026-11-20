@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._client import DazClient
 
 
 class DazElement:
@@ -18,7 +22,7 @@ class DazElement:
             ``DzElement`` instance inside DAZ Studio.
     """
 
-    def __init__(self, client: "DazClient", locator: str):  # noqa: F821
+    def __init__(self, client: "DazClient", locator: str):
         object.__setattr__(self, "_client", client)
         object.__setattr__(self, "_locator", locator)
         object.__setattr__(self, "_cache", {})

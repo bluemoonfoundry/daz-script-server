@@ -2363,7 +2363,6 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertFalse(rs.remove_canvas("NoSuchCanvas"))
 
     def test_canvas_output_paths_derives_convention(self):
-        from dazpy._render import Canvas
         rs, client = self._make_render(
             [{"name": "Canvas1", "canvas_type": "Normal", "index": 0}]
         )
@@ -2494,7 +2493,7 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
 
     def test_find_bone_calls_findBone(self):
         skel, client = self._make_skeleton("hip")
-        bone = skel.find_bone("hip")
+        skel.find_bone("hip")
         script = client.execute.call_args[0][0]
         self.assertIn("findBone", script)
         self.assertIn("hip", script)
@@ -4133,8 +4132,6 @@ class TestDazGeometryScriptGeneration(unittest.TestCase):
         self.assertEqual(result, [[0, 1, 2], [0, 2, 3]])
 
     def test_face_vertex_indices_all_paginates(self):
-        from unittest.mock import MagicMock
-        from dazpy._geometry import DazGeometry
         from dazpy._result import ExecutionResult
         geo, _ = self._geo()
         # Two pages: 2 faces total, chunk_size=1
@@ -4265,7 +4262,6 @@ class TestDazGeometryScriptGeneration(unittest.TestCase):
         self.assertIsInstance(result[0], Vec3)
 
     def test_as_vec3_preserves_coordinates(self):
-        from dazpy import Vec3
         from dazpy._geometry import DazGeometry
         result = DazGeometry.as_vec3([[1.5, 2.5, 3.5]])
         self.assertAlmostEqual(result[0].x, 1.5)
@@ -5017,7 +5013,6 @@ class TestVec3(unittest.TestCase):
 
     def test_length(self):
         from dazpy import Vec3
-        import math
         self.assertAlmostEqual(Vec3(3, 4, 0).length(), 5.0)
 
     def test_normalize(self):
@@ -5105,7 +5100,6 @@ class TestQuat(unittest.TestCase):
 
     def test_multiply_identity(self):
         from dazpy import Quat
-        q = Quat.from_axis_angle
         qi = Quat.identity()
         from dazpy import Vec3
         ax = Quat.from_axis_angle(Vec3(0, 1, 0), 45)
@@ -5264,7 +5258,6 @@ class TestBoundingBox(unittest.TestCase):
             bb.min = None
 
     def test_center(self):
-        from dazpy import Vec3
         bb = self._box()
         c = bb.center
         self.assertAlmostEqual(c.x, 1.0)
@@ -5311,7 +5304,6 @@ class TestBoundingBox(unittest.TestCase):
         self.assertFalse(a.overlaps(b))
 
     def test_expand(self):
-        from dazpy import Vec3
         bb = self._box()
         e = bb.expand(1.0)
         self.assertAlmostEqual(e.min.x, -1.0)
@@ -6112,7 +6104,7 @@ class TestSceneSnapshot(unittest.TestCase):
 
     def test_apply_recipe_uses_snapshot_when_available(self):
         """apply_interaction_recipe_to_scene uses scene_snapshot() when present."""
-        from dazpy import build_rig_profiles_from_snapshot, InteractionRecipe, PoseTarget
+        from dazpy import build_rig_profiles_from_snapshot
 
         snapshot = self._SAMPLE_SNAPSHOT
         profiles = build_rig_profiles_from_snapshot(snapshot)
@@ -6123,19 +6115,6 @@ class TestSceneSnapshot(unittest.TestCase):
 
             def skeletons(self):
                 raise AssertionError("skeletons() should not be called when scene_snapshot() is present")
-
-        recipe = InteractionRecipe(
-            kind="custom",
-            actors=["Genesis 9"],
-            constraints=[PoseTarget(figure_label="Genesis 9", bone_name="hip")],
-        )
-
-        class _SceneWithApply(_SnapshotScene):
-            def __init__(self):
-                self.applied = False
-
-            def apply_interaction_recipe(self, *a, **kw):
-                self.applied = True
 
         # Just verify build_rig_profiles_from_snapshot returns correct structure
         self.assertIn("Genesis 9", profiles)
@@ -6324,7 +6303,7 @@ class TestBatchPoseEvaluation(unittest.TestCase):
 
     def test_evaluate_pose_script_contains_save_apply_restore(self):
         skel, client = self._make_skeleton_client({"r_hand": [10.0, 20.0, 30.0]})
-        result = skel.evaluate_pose({"hip": (5.0, 0.0, 0.0)}, ["r_hand"])
+        skel.evaluate_pose({"hip": (5.0, 0.0, 0.0)}, ["r_hand"])
         script = client.execute.call_args[0][0]
         self.assertIn("_originals", script)
         self.assertIn("getWSPos", script)
@@ -7401,7 +7380,6 @@ class TestOrbitCamera(unittest.TestCase):
 
     def test_apply_resolves_daznode_target_with_offset(self):
         from dazpy.cinematics import OrbitCamera, apply_orbit_camera
-        from dazpy.math3 import Vec3
 
         class _Node:
             position = {"x": 0.0, "y": 0.0, "z": 0.0}
@@ -8155,8 +8133,8 @@ class TestBatchAddOperation(unittest.TestCase):
         client = _make_client({"_r0": None, "_r1": 99})
         from dazpy._batch import Batch
         batch = Batch(client)
-        write_future = batch.add_operation(body_lines=["var _v = 99;"], result_expression="null")
-        read_future = batch.add_operation(body_lines=[], result_expression="_v")
+        batch.add_operation(body_lines=["var _v = 99;"], result_expression="null")
+        batch.add_operation(body_lines=[], result_expression="_v")
         batch.execute()
         script = client.execute.call_args[0][0]
         self.assertLess(script.index("var _v = 99;"), script.index("var _r1 = _v;"))

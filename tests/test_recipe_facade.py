@@ -17,9 +17,9 @@ from unittest.mock import patch
 
 from dazpy._render_api import RenderResult
 from dazpy.exceptions import DazError, RecipeNotAppliedError, RecipeValidationError
-from dazpy.recipe import (ObserveReport, ShotRender, apply, observe, plan, recipe_schema,
+from dazpy.recipe import (ShotRender, apply, observe, plan, recipe_schema,
                           render, validate)
-from recipe_fakes import (RID, SimStudio, empty_live, fake_scene, live_matching, live_without,
+from recipe_fakes import (RID, SimStudio, fake_scene, live_matching, live_without,
                           patch_facade, patch_sim)
 
 G9 = "/People/Genesis 9/Genesis 9.duf"

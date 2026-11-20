@@ -8,6 +8,7 @@ from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
     from ._interaction import LimbAlignmentResult
+    from ._bone import DazBone
 
 
 class DazSkeleton(DazNode):
@@ -55,7 +56,7 @@ class DazSkeleton(DazNode):
             f"}})()"
         )
 
-    def bones(self) -> list["DazBone"]:  # noqa: F821
+    def bones(self) -> list["DazBone"]:
         """Return all bones in this skeleton."""
         from ._bone import DazBone
         script = self._skeleton_body(
@@ -120,7 +121,7 @@ class DazSkeleton(DazNode):
         )
         return self._client.execute(script).value or []
 
-    def find_bone(self, name: str) -> "DazBone":  # noqa: F821
+    def find_bone(self, name: str) -> "DazBone":
         """Find a bone by its internal name.
 
         Args:
@@ -152,7 +153,7 @@ class DazSkeleton(DazNode):
             )
         return DazBone._from_locator(self._client, self._bone_locator(result), result)
 
-    def find_bone_by_label(self, label: str) -> "DazBone":  # noqa: F821
+    def find_bone_by_label(self, label: str) -> "DazBone":
         """Find a bone by its user-visible label.
 
         Args:

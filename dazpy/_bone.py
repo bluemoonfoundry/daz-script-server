@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ._element import DazElement
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._client import DazClient
+    from ._skeleton import DazSkeleton
 
 
 class DazBone(DazNode):
@@ -12,7 +18,7 @@ class DazBone(DazNode):
     """
 
     @classmethod
-    def _from_locator(cls, client: "DazClient", locator: str, name: str) -> "DazBone":  # noqa: F821
+    def _from_locator(cls, client: "DazClient", locator: str, name: str) -> "DazBone":
         """Construct a DazBone from a pre-built skeleton-relative locator."""
         bone = object.__new__(cls)
         DazElement.__init__(bone, client, locator)
@@ -76,7 +82,7 @@ class DazBone(DazNode):
             "return _node.getRotationOrder().toString();"
         )).value
 
-    def get_skeleton(self) -> "DazSkeleton | None":  # noqa: F821
+    def get_skeleton(self) -> "DazSkeleton | None":
         """Return the parent :class:`~dazpy.DazSkeleton`, or ``None``."""
         from ._skeleton import DazSkeleton
         name = self._client.execute(self._nb(
