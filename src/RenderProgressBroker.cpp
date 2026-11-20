@@ -63,7 +63,8 @@ void RenderProgressBroker::notifyProgress(const QString& requestId, int frame, i
         w.queues[i]->push(event);
 }
 
-void RenderProgressBroker::notifyCompleted(const QString& requestId, int durationMs)
+void RenderProgressBroker::notifyCompleted(const QString& requestId, int durationMs,
+                                           const QStringList& outputFiles)
 {
     QString outputPath;
     {
@@ -72,9 +73,17 @@ void RenderProgressBroker::notifyCompleted(const QString& requestId, int duratio
             outputPath = m_watches[requestId].outputPath;
     }
 
+    // Animation output paths are templates ("walk_{frame}.png") that never
+    // exist on disk, so size the files the job actually wrote: the sum of its
+    // declared outputs. Fall back to the stored path when nothing was declared.
     qint64 fileSize = -1;
-    if (!outputPath.isEmpty())
+    if (!outputFiles.isEmpty()) {
+        fileSize = 0;
+        for (int i = 0; i < outputFiles.size(); ++i)
+            fileSize += QFileInfo(outputFiles[i]).size();
+    } else if (!outputPath.isEmpty()) {
         fileSize = QFileInfo(outputPath).size();
+    }
 
     // Minimal JSON escaping for the path (backslashes on Windows).
     QString escapedPath = outputPath;

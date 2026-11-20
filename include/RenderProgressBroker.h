@@ -3,6 +3,7 @@
 #include <QtCore/qmutex.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qstring.h>
+#include <QtCore/qstringlist.h>
 
 // Full definition needed for QList<SubscriberQueue*> member
 #include "SceneEventBroker.h"
@@ -53,7 +54,11 @@ public:
     // event is replayed to subscribers that join mid-render.
     void notifyProgress(const QString& requestId, int frame, int totalFrames);
 
-    void notifyCompleted(const QString& requestId, int durationMs);
+    // outputFiles: the job's declared output files (its artifact manifest).
+    // file_size_bytes is their summed size; when empty, the size of the path
+    // stored by setOutputPath() (-1 if none was stored).
+    void notifyCompleted(const QString& requestId, int durationMs,
+                         const QStringList& outputFiles);
     void notifyFailed(const QString& requestId, const QString& error, int durationMs);
 
     // Close all queues on server stop so SSE handler threads can exit.

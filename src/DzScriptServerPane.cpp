@@ -4211,8 +4211,21 @@ void DzScriptServerPane::processNextAsyncRequest()
 	m_pAsyncMgr->clearCurrent();
 
 	if (isRender && m_pRenderProgress) {
-		if (executed && !wasCancelled)
-			m_pRenderProgress->notifyCompleted(id, durationMs);
+		if (executed && !wasCancelled) {
+			// markCompleted() declared the render's files (every frame for an
+			// animation), so size those rather than the {frame} template path.
+			QStringList outputFiles;
+			QVariantList manifest;
+			QString manifestStatus;
+			if (m_pAsyncMgr->artifactManifest(id.toStdString(), manifest, manifestStatus)) {
+				for (int i = 0; i < manifest.size(); ++i) {
+					const QString path = manifest[i].toMap().value("path").toString();
+					if (!path.isEmpty())
+						outputFiles.append(path);
+				}
+			}
+			m_pRenderProgress->notifyCompleted(id, durationMs, outputFiles);
+		}
 		else
 			m_pRenderProgress->notifyFailed(id, errorMsg, durationMs);
 	}
