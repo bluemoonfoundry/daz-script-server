@@ -268,12 +268,10 @@ DzScriptServerPane::DzScriptServerPane()
 	// Load settings and token
 	loadSettings();
 
+	// m_pLogView doesn't exist yet (appendLog() would drop these), so the
+	// messages — including a crypto-API failure — are logged after updateUI().
 	QStringList tokenMsgs;
-	if (!m_auth.loadOrGenerateToken(tokenMsgs)) {
-		// Crypto API unavailable — log will be empty at this point, messages shown later
-	}
-	for (const QString& msg : tokenMsgs)
-		appendLog(msg);
+	m_auth.loadOrGenerateToken(tokenMsgs);
 
 	// ── Async request manager ─────────────────────────────────────────────────
 	// Pass 'this' so AsyncRequestManager can invoke processNextAsyncRequest()
@@ -517,6 +515,9 @@ DzScriptServerPane::DzScriptServerPane()
 	connect(m_pStaleTimeoutSpin, SIGNAL(valueChanged(int)), this, SLOT(onStaleTimeoutChanged(int)));
 
 	updateUI();
+
+	for (const QString& msg : tokenMsgs)
+		appendLog(msg);
 
 	// Register this pane on the application object so companion plugins can find
 	// it without walking the widget tree (which may fail across DLL boundaries).
