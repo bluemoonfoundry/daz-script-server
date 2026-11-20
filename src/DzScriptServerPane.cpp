@@ -11,6 +11,7 @@
 #include "IdempotencyCache.h"
 #include "ArtifactFile.h"
 #include "ArtifactThumbnail.h"
+#include "MainThreadCall.h"
 #include "SecureRandom.h"
 #include "RequestValidator.h"
 #include "common_version.h"
@@ -975,6 +976,8 @@ static HttpContext toContext(const httplib::Request& req)
 	ctx.remoteAddr = req.remote_addr.empty() ? "unknown" : req.remote_addr;
 	if (req.matches.size() > 1)
 		ctx.urlMatch = req.matches[1].str();
+	if (req.is_connection_closed)
+		ctx.isClientGone = req.is_connection_closed;
 	ctx.headers["x-api-token"]  = req.get_header_value("X-API-Token");
 	ctx.headers["authorization"] = req.get_header_value("Authorization");
 	ctx.headers["idempotency-key"]  = req.get_header_value("Idempotency-Key");
@@ -1380,10 +1383,18 @@ void DzScriptServerPane::handleThumbnailJob(qulonglong job)
 	ArtifactThumbnail::run(reinterpret_cast<ArtifactThumbnail::Job*>(static_cast<quintptr>(job)));
 }
 
+void DzScriptServerPane::handleMainThreadCall(qulonglong call)
+{
+	MainThreadCall::runOnMainThread(this,
+		reinterpret_cast<MainThreadCall::Call*>(static_cast<quintptr>(call)));
+}
+
 // ─── Route setup ──────────────────────────────────────────────────────────────
 //
 // THREADING RULE: httplib invokes these handlers on raw std::threads (not QThreads).
-// Sync handlers cross to the main thread with BlockingQueuedConnection. On
+// Sync handlers cross to the main thread with BlockingQueuedConnection, except
+// sync script execution, which uses MainThreadCall so a request still queued
+// behind a busy main thread gives up instead of pinning its slot. On
 // Studio 6, async script enqueue handlers may build local reentrant Qt Core
 // values and call mutex-protected services; Studio 4 crosses to the main thread
 // because its JSON parser uses QScriptEngine. Execution later reaches the main
@@ -1419,11 +1430,11 @@ void DzScriptServerPane::setupRoutes()
 	m_pHealthHandler.reset(new HealthHandler(this));
 	m_pMetricsHandler.reset(new MetricsHandler(this));
 	m_pCapabilitiesHandler.reset(new CapabilitiesHandler(this));
-	m_pExecuteHandler.reset(new ExecuteScriptHandler(this));
+	m_pExecuteHandler.reset(new ExecuteScriptHandler(this, m_nTimeoutSec));
 	m_pRegisterHandler.reset(new ScriptRegisterHandler(this));
 	m_pScriptListHandler.reset(new ScriptListHandler(this));
 	m_pScriptDeleteHandler.reset(new ScriptDeleteHandler(this));
-	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this));
+	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this, m_nTimeoutSec));
 	// Snapshot the GUI-owned limit before httplib starts its worker threads.
 	// The corresponding control is disabled while the server is running.
 	m_pAsyncExecHandler.reset(new AsyncExecuteHandler(this, m_nMaxScriptLengthKB));

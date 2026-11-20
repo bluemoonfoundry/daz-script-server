@@ -245,6 +245,16 @@ paths:
           $ref: '#/components/responses/TooLarge'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: >-
+            STUDIO_BUSY (Retry-After header set): the main thread is loading,
+            saving, clearing or rendering, or did not start this script within
+            the server timeout because another script is still running. The
+            script was not run; retry is safe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /scripts/register:
     post:
@@ -335,6 +345,16 @@ paths:
           $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: >-
+            STUDIO_BUSY (Retry-After header set): the main thread is loading,
+            saving, clearing or rendering, or did not start this script within
+            the server timeout because another script is still running. The
+            script was not run; retry is safe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /scripts/{id}:
     delete:

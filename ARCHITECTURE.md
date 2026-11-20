@@ -87,8 +87,9 @@ sequenceDiagram
 **Rules that must never be broken:**
 
 1. `DzScript`, `QScriptEngine`, and all DAZ API calls on the **main thread only**.
-2. Synchronous execution crosses from HTTP workers with
-   `Qt::BlockingQueuedConnection`. On Studio 6, async script submission uses
+2. Synchronous execution crosses from HTTP workers with a bounded,
+   cancellable queued call (`MainThreadCall`), never a bare
+   `Qt::BlockingQueuedConnection` (which cannot time out). On Studio 6, async script submission uses
    only local, reentrant Qt Core values and mutex-protected services so it can
    enqueue while the main thread is busy. Studio 4 retains the blocking crossing
    for submission because its JSON parser uses `QScriptEngine`.
@@ -250,8 +251,14 @@ It runs on a dedicated thread managed by `ServerListenThread`.
 ### Why different crossings for synchronous and asynchronous execution?
 
 The DAZ Studio SDK explicitly requires all scene-graph and script-engine
-operations on the main thread. Synchronous `/execute` therefore uses
-`BlockingQueuedConnection` and waits for the result. On Studio 6, async script
+operations on the main thread. Synchronous `/execute` and
+`/scripts/:id/execute` therefore post a `MainThreadCall` with
+`Qt::QueuedConnection` and wait for the result. A request that is still
+queued when its client disconnects, or when the server timeout passes, gives
+up with 503 `STUDIO_BUSY` and is never run; a script that has started is
+always waited for. With a plain `BlockingQueuedConnection`, one stuck script
+made every queued request hold its concurrency slot forever, until all
+requests got 429 (daz-script-server-3w3y). On Studio 6, async script
 endpoints validate request value data on the HTTP worker and submit directly to
 the mutex-protected `AsyncRequestManager`; blocking on the main thread here
 would prevent submission and queued cancellation while a prior script is

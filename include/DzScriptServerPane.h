@@ -184,6 +184,11 @@ public slots:
 	// which waits on job->done with a timeout (see serveArtifactThumbnail()).
 	Q_INVOKABLE void handleThumbnailJob(qulonglong job);
 
+	// Sync /execute and /scripts/:id/execute — main thread. call is a
+	// MainThreadCall::Call* posted with Qt::QueuedConnection by the HTTP worker,
+	// which gives up if it is not started in time (see MainThreadCall.h).
+	Q_INVOKABLE void handleMainThreadCall(qulonglong call);
+
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
 	// not ::free, so it is safe to construct/destroy on httplib worker threads).
