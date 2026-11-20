@@ -21,6 +21,7 @@ add_library(DazScriptServer SHARED
 	IdempotencyCache.cpp
 	ArtifactFile.cpp
 	ArtifactRoots.cpp
+	ArtifactRoutes.cpp
 	ArtifactThumbnail.cpp
 	RequestValidator.cpp
 	SettingsService.cpp

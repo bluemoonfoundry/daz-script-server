@@ -19,6 +19,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PANE_CPP = os.path.join(ROOT, "src", "DzScriptServerPane.cpp")
+ARTIFACT_ROUTES_CPP = os.path.join(ROOT, "src", "ArtifactRoutes.cpp")
 
 # Routes that are public on purpose (no auth, no whitelist).
 PUBLIC_ROUTES = {("GET", "/status"), ("GET", "/health"), ("GET", "/metrics")}
@@ -178,17 +179,22 @@ class TestRouteSecurity(unittest.TestCase):
         for path in ("/artifacts/([^/]+)", "/artifacts/([^/]+)/([^/]+)"):
             with self.subTest(route=path):
                 self.assertIn("m_pReadChain->run(ctx)", found[("GET", path)])
-        def body(signature):
-            fn = self.src[self.src.index(signature):]
+        # The handlers live in ArtifactRoutes.cpp; the thumbnail route in the pane.
+        with open(ARTIFACT_ROUTES_CPP, encoding="utf-8") as f:
+            routes_src = f.read()
+
+        def body(signature, src=None):
+            src = self.src if src is None else src
+            fn = src[src.index(signature):]
             return fn[:fn.index("\n}\n")]
 
         # Shared lookup: IDs validated, then the manifest, then the file.
-        opener = body("static bool openDeclaredArtifact(")
-        self.assertLess(opener.index("artifactIdsValid(req, res)"), opener.index("findArtifact("))
+        opener = body("bool openDeclared(", routes_src)
+        self.assertLess(opener.index("idsValid(req, res)"), opener.index("findArtifact("))
         self.assertLess(opener.index("findArtifact("), opener.index("ArtifactFile::openForRead("))
 
-        serve = body("static void serveArtifact(")
-        self.assertIn("openDeclaredArtifact(", serve)
+        serve = body("void serve(", routes_src)
+        self.assertIn("openDeclared(", serve)
         self.assertNotIn("ArtifactFile::openForRead(", serve)
         # httplib only answers Range with 206 when the handler leaves status unset.
         self.assertNotIn("res.status", serve[serve.index("const QByteArray disposition"):])
@@ -196,7 +202,8 @@ class TestRouteSecurity(unittest.TestCase):
         # ?thumbnail: same lookup, IDs checked before anything else, and the
         # worker never touches QtGui or blocks on the main thread unbounded.
         thumb = body("void DzScriptServerPane::serveArtifactThumbnail(")
-        self.assertLess(thumb.index("artifactIdsValid(req, res)"), thumb.index("openDeclaredArtifact("))
+        self.assertLess(thumb.index("ArtifactRoutes::idsValid(req, res)"),
+                        thumb.index("ArtifactRoutes::openDeclared("))
         self.assertNotIn("ArtifactFile::openForRead(", thumb)
         self.assertNotIn("QImage", thumb)
         self.assertNotIn("BlockingQueuedConnection", thumb)
