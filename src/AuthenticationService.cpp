@@ -8,6 +8,8 @@
 
 #ifndef _WIN32
     #include <sys/stat.h>
+    #include <fcntl.h>
+    #include <unistd.h>
 #endif
 
 AuthenticationService::AuthenticationService()
@@ -103,10 +105,27 @@ bool AuthenticationService::saveToken(QString& outMessage)
     QFile   file(tokenPath);
 
     QReadLocker lock(&m_tokenLock);
+#ifndef _WIN32
+    // Create (or truncate) with 0600 from the start so the token is never
+    // readable by others, then fchmod in case a pre-existing file was wider.
+    int fd = ::open(tokenPath.toUtf8().constData(), O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0 || ::fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
+        if (fd >= 0)
+            ::close(fd);
+        outMessage = QString("[ERROR] Failed to save token to %1 with restrictive permissions").arg(tokenPath);
+        return false;
+    }
+    if (!file.open(fd, QIODevice::WriteOnly | QIODevice::Text, QFile::AutoCloseHandle)) {
+        ::close(fd);
+        outMessage = QString("[ERROR] Failed to save token to %1").arg(tokenPath);
+        return false;
+    }
+#else
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         outMessage = QString("[ERROR] Failed to save token to %1").arg(tokenPath);
         return false;
     }
+#endif
     QTextStream out(&file);
 #if DAZ_SDK_MAJOR_VERSION < 6
     out.setCodec("UTF-8"); // Qt6 QTextStream is UTF-8 by default; setCodec() was removed
@@ -114,10 +133,7 @@ bool AuthenticationService::saveToken(QString& outMessage)
     out << m_sToken << "\n";
     file.close();
 
-#ifndef _WIN32
-    if (chmod(tokenPath.toUtf8().constData(), S_IRUSR | S_IWUSR) != 0)
-        outMessage = QString("[WARN] Failed to set restrictive permissions on %1").arg(tokenPath);
-#else
+#ifdef _WIN32
     outMessage = QString("[INFO] Token saved to %1. On Windows, manually restrict file "
                          "access to your user account only.").arg(tokenPath);
 #endif
@@ -139,7 +155,14 @@ bool AuthenticationService::validateToken(const std::string& providedToken) cons
         return false;
     std::string trimmed = trimStr(providedToken);
     QReadLocker lock(&m_tokenLock);
-    return trimmed == m_sTokenStr;
+    // Constant-time compare: the token length is fixed and public, so only the
+    // length check may short-circuit; the content scan always visits every byte.
+    if (m_sTokenStr.empty() || trimmed.size() != m_sTokenStr.size())
+        return false;
+    unsigned char diff = 0;
+    for (size_t i = 0; i < trimmed.size(); ++i)
+        diff |= static_cast<unsigned char>(trimmed[i]) ^ static_cast<unsigned char>(m_sTokenStr[i]);
+    return diff == 0;
 }
 
 QString AuthenticationService::getToken() const
