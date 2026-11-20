@@ -107,9 +107,9 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 
 ### HTTP API Endpoints
 
-**Sync:** `/status`, `/health`, `/metrics`, `/execute`, `/scripts/*`
-**Async:** `/execute/async`, `/scripts/:id/async`, `/requests/*`
-**Artifacts:** `/artifacts/:id`, `/artifacts/:id/:artifact_id` (read chain; serves only files in the job's output manifest, Range/HEAD via httplib content provider)
+`openapi.yaml` is the route list: CI keeps it in parity with `setupRoutes()`
+(see **OpenAPI parity** below), so read it rather than a hand-kept list here.
+It also documents artifact manifest and Range/HEAD behavior.
 
 Default: `127.0.0.1:18811`
 
