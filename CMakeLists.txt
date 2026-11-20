@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 
 set(CMAKE_CONFIGURATION_TYPES ${CMAKE_CONFIGURATION_TYPES} "MinSizeRel;RelWithDebInfo;Debug;Release")
-set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
+# Default single-config generators (Makefiles/Ninja) to Release, but only when
+# the caller didn't choose: build.sh passes -DCMAKE_BUILD_TYPE for --debug.
+# Multi-config generators (Visual Studio/Xcode) ignore this and use --config.
+if(NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type for single-config generators" FORCE)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
