@@ -15,9 +15,6 @@ Report it privately through GitHub:
 **Security → Report a vulnerability** on
 <https://github.com/bluemoonfoundry/daz-script-server/security/advisories/new>.
 
-If that form isn't available, open an issue titled "Security contact request"
-that leaves out all details, and a maintainer will give you a private channel.
-
 Please include:
 
 - the plugin version (`GET /status` → `version`) and the Daz Studio version
