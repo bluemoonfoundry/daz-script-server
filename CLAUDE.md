@@ -59,24 +59,12 @@ the full live integration suite. See `docs/LIVE_SMOKE.md`.
 
 ### Threading Model (CRITICAL)
 
-- **Main Qt thread**: GUI, script execution via `DzScript`, DAZ API calls, and
-  access to thread-affine `QObject` instances
-- **HTTP workers**: middleware plus synchronous parsing/validation; Studio 6
-  async queue submission may use local instances of documented reentrant Qt
-  Core value classes
-
-**IMPORTANT:** HTTP handlers run on raw `std::thread`s (not Qt threads).
-Synchronous execution crosses to `handleExecuteRequest()` via
-`Qt::BlockingQueuedConnection`. On Studio 6, async script submission may parse
-and validate with local reentrant Qt Core values, then submit to mutex-protected
-services without blocking on the main thread. Studio 4 must keep submission on
-the main thread because `JsonStd::parseObject()` uses `QScriptEngine` there.
-The same split applies to structured job reports: Studio 6 may ingest JSONL
-from polling workers for live observation, while Studio 4 parses the final
-report from `markCompleted()` on the main thread after script execution returns.
-Neither path may touch GUI objects, `DzScript`, the DAZ API, or shared mutable
-state from a worker. Settings used by an async handler are snapshotted before
-the server starts.
+HTTP handlers run on raw `std::thread`s, not Qt threads. `DzScript`,
+`QScriptEngine`, GUI objects and every DAZ API call belong to the main Qt
+thread. Read the rules in
+[`ARCHITECTURE.md` → Threading Model](ARCHITECTURE.md#threading-model) before
+changing any code that crosses threads; they cover the Studio 4 vs Studio 6
+async-submission split, job reports and settings snapshots.
 
 ### Request Flow (POST /execute)
 
@@ -195,51 +183,9 @@ posts SDK coverage to the job summary), as does `tests/test_openapi_parity.py`.
 
 See `README.md` for the full API reference.
 
+## Issue Tracking and Session Completion
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
-## Beads Issue Tracker
+The beads (`bd`) workflow and the session-close checklist live in
+`AGENTS.md`, which other coding agents read too:
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
-## Session Completion
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+@AGENTS.md

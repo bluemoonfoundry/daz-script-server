@@ -1009,6 +1009,29 @@ changes either.
 - Fixed high-bust anchor placed above the bust peak rather than at the shoulder
   on some G9 figures.
 
+## [2.5.0] - 2026-06-11
+
+### Added
+
+- **Interaction posing (dazpy):** places two figures together (seated,
+  touching, kissing, combat stances). `build_sit_recipe`, `build_touch_recipe`,
+  `build_kiss_recipe` and `build_fight_recipe` take two figure labels and
+  return a JSON-serialisable `InteractionRecipe`, applied with
+  `DazScene.apply_interaction_recipe()`.
+- **IK limb alignment (dazpy):** `align_hand_target()` / `align_foot_target()`
+  move a hand or foot to a world-space target with an iterative Jacobian
+  solver and report `converged` and `final_error`.
+- **Bulk scene snapshot (dazpy):** `DazScene.scene_snapshot()` returns every
+  skeleton's bone world positions in one HTTP call;
+  `build_rig_profiles_from_snapshot()` builds rig data from it.
+
+### Fixed
+
+- Body measurements: torso loop selection is centroid-weighted, so arm
+  cross-sections no longer inflate A-pose chest measurements (~70 cm
+  overestimate). The fallback for unlabelled figures rejects outlier slices,
+  and `--figure-type G9F` (or `G9M`, `G8F`, ...) forces a calibration entry.
+
 ## [2.4.0] - 2026-05-25
 
 ### Added

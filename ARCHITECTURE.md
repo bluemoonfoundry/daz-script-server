@@ -97,6 +97,11 @@ sequenceDiagram
    the HTTP thread.
 5. HTTP workers must not read GUI-owned mutable settings; async handlers receive
    immutable snapshots captured before the server starts.
+6. Structured job reports follow the same split as rule 2: on Studio 6, polling
+   workers may ingest JSONL for live observation; on Studio 4, the final report
+   is parsed in `markCompleted()` on the main thread after the script returns.
+7. No worker path may touch GUI objects, `DzScript`, the DAZ API, or shared
+   mutable state that is not mutex-protected.
 
 ---
 

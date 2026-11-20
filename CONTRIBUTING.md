@@ -69,11 +69,8 @@ python tests/test_performance.py --quick   # fewer iterations, suitable for CI
 
 ### Threading Rules (Critical)
 
-All `QScriptEngine`, `DzScript`, and DAZ API calls **must** happen on the
-main Qt thread. HTTP handler callbacks run on raw `std::thread`s. Cross-thread
-calls must use `Qt::BlockingQueuedConnection`.
-
-See `CLAUDE.md` → "Threading Model" for the full explanation.
+See [`ARCHITECTURE.md` → Threading Model](ARCHITECTURE.md#threading-model).
+Read it before touching any code that runs on an HTTP thread.
 
 ### Commit Messages
 

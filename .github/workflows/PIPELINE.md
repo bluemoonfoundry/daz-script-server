@@ -1,4 +1,4 @@
-# Workflow Architecture
+# Workflow Pipeline
 
 This document provides a visual overview of how the GitHub Actions workflows are structured and interact.
 

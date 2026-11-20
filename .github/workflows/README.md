@@ -2,6 +2,11 @@
 
 This directory contains the CI/CD workflows for building and releasing the DazScriptServer plugin.
 
+This README is the reference. Two companion docs:
+[`QUICK_START.md`](QUICK_START.md) has release and troubleshooting commands, and
+[`PIPELINE.md`](PIPELINE.md) has diagrams of how the workflows connect. Plugin
+architecture is in the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md).
+
 ## Workflows Overview
 
 ### Build Workflows (Reusable)
