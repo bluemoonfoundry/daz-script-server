@@ -11,6 +11,8 @@
 #include <QtCore/qglobal.h>
 #include <cstdio>
 
+class ArtifactRoots;
+
 namespace ArtifactFile {
 
 // Artifact and job IDs in the URL: 1-64 chars of [A-Za-z0-9_-]. Anything else
@@ -25,17 +27,21 @@ enum OpenStatus {
     OPEN_OK,
     OPEN_PATH_REJECTED,   // isServablePath() failed
     OPEN_MISSING,         // file does not exist / cannot be opened
-    OPEN_NOT_REGULAR      // directory, device, pipe ...
+    OPEN_NOT_REGULAR,     // directory, device, pipe ...
+    OPEN_OUTSIDE_ROOTS    // real path is outside the allowed artifact roots
 };
 
 // Opens a declared output for reading. On OPEN_OK, *outFile is an open FILE*
 // the caller must fclose(), and *outSize is its size in bytes. When outMtime
 // is given it receives the modification time (seconds since the epoch).
+// When roots is given, the opened file's real path must pass roots->allows()
+// (checked on the open handle, so a symlink can't be swapped in afterwards).
 OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize,
-                       qint64* outMtime = 0);
+                       qint64* outMtime = 0, const ArtifactRoots* roots = 0);
 
-// Size of a declared output without keeping it open; -1 when unavailable.
-qint64 sizeOf(const QString& path);
+// Size of a declared output without keeping it open; -1 when unavailable
+// (including outside the roots, when given).
+qint64 sizeOf(const QString& path, const ArtifactRoots* roots = 0);
 
 // Seek on a FILE* with 64-bit offsets.
 bool seek(FILE* f, qint64 offset);

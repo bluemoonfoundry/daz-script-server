@@ -90,6 +90,26 @@ describe("DazClient artifacts (GET /artifacts/...)", () => {
     await expect(client.listArtifacts("rnd-1")).rejects.toBeInstanceOf(AuthenticationError);
   });
 
+  it("maps 403 ARTIFACT_OUTSIDE_ROOTS to ArtifactError, other 403s to AuthenticationError", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: false, error_code: "ARTIFACT_OUTSIDE_ROOTS", error: "outside", retryable: false }, 403),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error_code: "IP_NOT_WHITELISTED", error: "IP not allowed" }, 403));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new DazClient({ token: "" });
+
+    const outside = await client.downloadArtifact("rnd-1", "0").catch((e) => e);
+    expect(outside).toBeInstanceOf(ArtifactError);
+    expect(outside.statusCode).toBe(403);
+    expect(outside.errorCode).toBe("ARTIFACT_OUTSIDE_ROOTS");
+
+    const blocked = await client.downloadArtifact("rnd-1", "0").catch((e) => e);
+    expect(blocked).toBeInstanceOf(AuthenticationError);
+    expect(blocked.errorCode).toBe("IP_NOT_WHITELISTED");
+  });
+
   it("downloadArtifacts skips unavailable entries and sanitizes names", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith("/artifacts/rnd-1")) {

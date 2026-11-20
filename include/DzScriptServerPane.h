@@ -36,6 +36,7 @@
 #include "AuthenticationService.h"
 #include "RateLimiterService.h"
 #include "IPWhitelistService.h"
+#include "ArtifactRoots.h"
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
@@ -259,6 +260,7 @@ private slots:
 	void onAuthEnabledChanged(int state);
 	void onClearLogClicked();
 	void onIpWhitelistEnabledChanged(int state);
+	void onArtifactRootsEnabledChanged(int state);
 	void onRateLimitEnabledChanged(int state);
 	void onAutoStartChanged(int state);
 	void onStaleTimeoutChanged(int minutes);
@@ -334,6 +336,7 @@ private:
 	AuthenticationService m_auth;
 	RateLimiterService    m_rateLimiter;
 	IPWhitelistService    m_ipWhitelist;
+	ArtifactRoots         m_artifactRoots;   // GET /artifacts trust boundary
 	MetricsCollector      m_metrics;
 
 	QAtomicInt       m_nActiveRequests;  // Current concurrent requests (atomic: written from HTTP threads)
@@ -457,6 +460,10 @@ private:
 	// IP Whitelist UI
 	QCheckBox*   m_pIpWhitelistCheck;
 	QLineEdit*   m_pIpWhitelistEdit;
+
+	// Artifact roots UI
+	QCheckBox*   m_pArtifactRootsCheck;
+	QLineEdit*   m_pArtifactRootsEdit;
 
 	// Rate Limiting UI
 	QCheckBox*   m_pRateLimitCheck;

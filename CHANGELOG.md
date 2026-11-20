@@ -21,6 +21,21 @@ All notable changes to DazScript Server are documented here.
   `package-lock.json` in step. The release tarball is now
   `bluemoonfoundry-daz-ts-*.tgz`.
 
+### Security
+
+- **Artifact trust boundary:** `GET /artifacts/{id}/{artifact_id}` (and its
+  thumbnails) now serves a declared output only when the opened file's real
+  path, with symlinks and junctions resolved, is inside an allowed artifact
+  folder. Defaults: the system temp folder plus the user's Documents,
+  Pictures, Desktop and Downloads. Configure the list, or switch the
+  restriction off, under **Artifact Folders** in the server pane. Files under
+  `~/.daz3d` are always refused. A refused file answers HTTP 403
+  `ARTIFACT_OUTSIDE_ROOTS` and lists as `available: false`; `/capabilities`
+  reports `security.artifact_roots_enabled` and `security.artifact_roots`.
+  dazpy raises `ServerResponseError` and daz-ts `ArtifactError` for it (not
+  `AuthenticationError`). **Upgrade note:** jobs that write outputs elsewhere
+  (e.g. `D:/renders`) need that folder added.
+
 ### Fixed
 
 - **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the

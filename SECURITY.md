@@ -40,8 +40,9 @@ In scope, for example:
 - recovering the token, or predicting a generated one
 - getting past the body-size, rate, or concurrency limits in a way that
   crashes or hangs Daz Studio
-- path traversal in archive extraction or artifact serving that reaches
-  beyond what scripts can already read
+- path traversal in archive extraction, or `GET /artifacts` serving a file
+  outside the allowed artifact folders while that restriction is on (or
+  anything under `~/.daz3d` at all)
 - memory-safety bugs in request parsing
 
 Out of scope:

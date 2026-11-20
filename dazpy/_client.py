@@ -108,6 +108,16 @@ def _authentication_error(resp: _HTTPResponse) -> AuthenticationError:
     )
 
 
+def _is_artifact_refusal(resp: _HTTPResponse) -> bool:
+    """True for a 403 that refuses an artifact outside the server's allowed
+    folders: not an authentication problem, so it maps to ServerResponseError."""
+    try:
+        data = resp.json()
+    except (TypeError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("error_code") == "ARTIFACT_OUTSIDE_ROOTS"
+
+
 def _raise_for_error(resp: _HTTPResponse) -> None:
     """Raise a typed exception for authentication or server-busy responses.
 
@@ -115,7 +125,7 @@ def _raise_for_error(resp: _HTTPResponse) -> None:
     errors, which use HTTP 200) for the caller to handle.
     """
     status = resp.status_code
-    if status == 401 or status == 403:
+    if status == 401 or (status == 403 and not _is_artifact_refusal(resp)):
         raise _authentication_error(resp)
     if status < 400:
         return
@@ -835,8 +845,10 @@ class DazClient:
         Raises:
             ServerResponseError: ``ARTIFACT_NOT_FOUND`` (404) when the job
                 declared no such artifact, ``ARTIFACT_UNAVAILABLE`` (410) when
-                the declared file is gone, ``REQUEST_NOT_FOUND`` for an unknown
-                job, or HTTP 416 for a range outside the file.
+                the declared file is gone, ``ARTIFACT_OUTSIDE_ROOTS`` (403) when
+                its real path is outside the server's allowed artifact
+                folders, ``REQUEST_NOT_FOUND`` for an unknown job, or HTTP 416
+                for a range outside the file.
         """
         headers = dict(self._headers)
         if byte_range is not None:

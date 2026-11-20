@@ -20,6 +20,7 @@ add_library(DazScriptServer SHARED
 	ErrorResponse.cpp
 	IdempotencyCache.cpp
 	ArtifactFile.cpp
+	ArtifactRoots.cpp
 	ArtifactThumbnail.cpp
 	RequestValidator.cpp
 	SettingsService.cpp
@@ -52,6 +53,7 @@ add_library(DazScriptServer SHARED
 	../include/ErrorResponse.h
 	../include/IdempotencyCache.h
 	../include/ArtifactFile.h
+	../include/ArtifactRoots.h
 	../include/ArtifactThumbnail.h
 	../include/RequestValidator.h
 	../include/common_version.h

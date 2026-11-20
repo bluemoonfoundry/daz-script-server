@@ -894,6 +894,24 @@ All settings are persisted via QSettings and restored between DAZ Studio session
   `/health` and `/metrics` are public and skip it
 - Essential for network-exposed deployments
 
+### 📁 Artifact Folders
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Only serve artifacts from these folders** | ✅ Enabled | `GET /artifacts` serves a job's declared output only when its real path is inside one of the folders |
+| **Folders** | *(empty = defaults)* | `;`-separated list. Defaults: the system temp folder, Documents, Pictures, Desktop and Downloads |
+
+- A job can declare any path as an output, so this is what keeps
+  `GET /artifacts` from serving arbitrary files the Studio process can read
+- The check runs on the opened file's real path, so symlinks and junctions
+  that point out of an allowed folder are refused
+- Files under `~/.daz3d` (the API token's folder) are never served, even with
+  the restriction off
+- A refused file answers HTTP 403 `ARTIFACT_OUTSIDE_ROOTS` and lists as
+  `available: false`; `/capabilities` reports `security.artifact_roots`
+- Render somewhere else (e.g. `D:/renders`)? Add that folder. The folder list
+  applies at server start; the checkbox applies immediately
+
 ### ⏱️ Rate Limiting
 
 | Setting | Default | Range | Description |
@@ -1680,6 +1698,7 @@ Streams the file with `Content-Type` (by extension), `Content-Length`,
 | Job declared no such artifact | `404 ARTIFACT_NOT_FOUND` |
 | ID isn't 1-64 chars of `A-Z a-z 0-9 - _` (e.g. `..`, `a.png`) | `400 INVALID_FIELD` |
 | Declared file is missing, a directory, or a relative path | `410 ARTIFACT_UNAVAILABLE` |
+| File's real path is outside the [allowed artifact folders](#-artifact-folders), or under `~/.daz3d` | `403 ARTIFACT_OUTSIDE_ROOTS` |
 
 ### Thumbnails: `GET /artifacts/{id}/{artifact_id}?thumbnail=<px>`
 

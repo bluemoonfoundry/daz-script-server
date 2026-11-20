@@ -19,6 +19,11 @@ struct ServerSettings {
     bool    ipWhitelistEnabled    = false;
     QString ipWhitelist           = "127.0.0.1";
 
+    // GET /artifacts serves only files inside these folders (';'-separated;
+    // empty = ArtifactRoots::defaultRoots()). ~/.daz3d is always refused.
+    bool    artifactRootsEnabled  = true;
+    QString artifactRoots;
+
     bool    rateLimitEnabled      = false;
     int     rateLimitMax          = 60;
     int     rateLimitWindow       = 60;

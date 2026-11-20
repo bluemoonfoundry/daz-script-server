@@ -370,6 +370,32 @@ DzScriptServerPane::DzScriptServerPane()
 	whitelistHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
 	whitelistLayout->addWidget(whitelistHint);
 
+	// ─── Artifact folders ─────────────────────────────────────────────────
+	QGroupBox* artifactGroup = new QGroupBox(tr("Artifact Folders"), this);
+	QVBoxLayout* artifactLayout = new QVBoxLayout(artifactGroup);
+
+	m_pArtifactRootsCheck = new QCheckBox(tr("Only serve artifacts from these folders"), this);
+	m_pArtifactRootsCheck->setChecked(m_artifactRoots.isEnabled());
+	artifactLayout->addWidget(m_pArtifactRootsCheck);
+
+	QHBoxLayout* artifactInputLayout = new QHBoxLayout();
+	artifactInputLayout->addWidget(new QLabel(tr("Folders (;-separated):"), this));
+	m_pArtifactRootsEdit = new QLineEdit(this);
+	m_pArtifactRootsEdit->setText(m_artifactRoots.rawList());
+	m_pArtifactRootsEdit->setPlaceholderText(
+		tr("Default: temp, Documents, Pictures, Desktop, Downloads"));
+	m_pArtifactRootsEdit->setToolTip(ArtifactRoots::defaultRoots().join("\n"));
+	artifactInputLayout->addWidget(m_pArtifactRootsEdit);
+	artifactLayout->addLayout(artifactInputLayout);
+
+	QLabel* artifactHint = new QLabel(
+		tr("GET /artifacts refuses declared outputs outside these folders (symlinks resolved). "
+		   "~/.daz3d is always refused."),
+		this);
+	artifactHint->setWordWrap(true);
+	artifactHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	artifactLayout->addWidget(artifactHint);
+
 	// ─── Rate Limiting ────────────────────────────────────────────────────
 	QGroupBox* rateLimitGroup = new QGroupBox(tr("Rate Limiting"), this);
 	QVBoxLayout* rateLimitLayout = new QVBoxLayout(rateLimitGroup);
@@ -483,6 +509,7 @@ DzScriptServerPane::DzScriptServerPane()
 	mainLayout->addLayout(formLayout);
 	mainLayout->addWidget(authGroup);
 	mainLayout->addWidget(whitelistGroup);
+	mainLayout->addWidget(artifactGroup);
 	mainLayout->addWidget(rateLimitGroup);
 	mainLayout->addWidget(limitsGroup);
 	mainLayout->addWidget(m_pStatusLabel);
@@ -511,6 +538,7 @@ DzScriptServerPane::DzScriptServerPane()
 	connect(m_pAuthEnabledCheck, SIGNAL(stateChanged(int)), this, SLOT(onAuthEnabledChanged(int)));
 	connect(m_pClearLogBtn, SIGNAL(clicked()), this, SLOT(onClearLogClicked()));
 	connect(m_pIpWhitelistCheck, SIGNAL(stateChanged(int)), this, SLOT(onIpWhitelistEnabledChanged(int)));
+	connect(m_pArtifactRootsCheck, SIGNAL(stateChanged(int)), this, SLOT(onArtifactRootsEnabledChanged(int)));
 	connect(m_pRateLimitCheck, SIGNAL(stateChanged(int)), this, SLOT(onRateLimitEnabledChanged(int)));
 	connect(m_pAutoStartCheck, SIGNAL(stateChanged(int)), this, SLOT(onAutoStartChanged(int)));
 	connect(m_pStaleTimeoutSpin, SIGNAL(valueChanged(int)), this, SLOT(onStaleTimeoutChanged(int)));
@@ -573,6 +601,10 @@ void DzScriptServerPane::onStartClicked()
 	m_ipWhitelist.setEnabled(m_pIpWhitelistCheck->isChecked());
 	m_ipWhitelist.setWhitelist(m_pIpWhitelistEdit->text());
 
+	// Capture artifact folder settings (resolved in startServer())
+	m_artifactRoots.setEnabled(m_pArtifactRootsCheck->isChecked());
+	m_artifactRoots.configure(m_pArtifactRootsEdit->text());
+
 	// Capture rate limit settings
 	m_rateLimiter.setEnabled(m_pRateLimitCheck->isChecked());
 	m_rateLimiter.configure(m_pRateLimitMaxSpin->value(), m_pRateLimitWindowSpin->value());
@@ -632,6 +664,20 @@ void DzScriptServerPane::startServer()
 			probe.close();
 			probe.remove();
 		}
+	}
+
+	// 4. Artifact trust boundary: resolve the allowed folders now, so a folder
+	//    created since the settings were loaded counts, and log what applies.
+	{
+		QStringList warnings;
+		m_artifactRoots.configure(m_artifactRoots.rawList(), &warnings);
+		m_artifactRoots.setDeniedDir(QFileInfo(AuthenticationService::getTokenFilePath()).absolutePath());
+		for (const QString& w : warnings)
+			appendLog(QString("[WARN] %1").arg(w));
+		if (m_artifactRoots.isEnabled())
+			appendLog(QString("[INFO] Artifact folders: %1").arg(m_artifactRoots.effectiveRoots().join("; ")));
+		else
+			appendLog("[WARN] Artifact folder restriction disabled - any declared output can be served (~/.daz3d still refused)");
 	}
 
 	m_pServer = new httplib::Server();
@@ -873,6 +919,7 @@ void DzScriptServerPane::updateUI()
 		m_pRegenTokenBtn->setEnabled(false);
 		m_pIpWhitelistCheck->setEnabled(false);
 		m_pIpWhitelistEdit->setEnabled(false);
+		m_pArtifactRootsEdit->setEnabled(false);
 		m_pRateLimitCheck->setEnabled(false);
 		m_pRateLimitMaxSpin->setEnabled(false);
 		m_pRateLimitWindowSpin->setEnabled(false);
@@ -890,6 +937,7 @@ void DzScriptServerPane::updateUI()
 		m_pRegenTokenBtn->setEnabled(true);
 		m_pIpWhitelistCheck->setEnabled(true);
 		m_pIpWhitelistEdit->setEnabled(true);
+		m_pArtifactRootsEdit->setEnabled(true);
 		m_pRateLimitCheck->setEnabled(true);
 		m_pRateLimitMaxSpin->setEnabled(true);
 		m_pRateLimitWindowSpin->setEnabled(true);
@@ -1151,7 +1199,8 @@ static bool artifactIdsValid(const httplib::Request& req, httplib::Response& res
 }
 
 // GET /artifacts/:job_id — the job's declared outputs plus file metadata.
-static void listArtifacts(AsyncRequestManager& mgr, const QStringList& thumbnailExts,
+static void listArtifacts(AsyncRequestManager& mgr, const ArtifactRoots& roots,
+                          const QStringList& thumbnailExts,
                           const httplib::Request& req, httplib::Response& res)
 {
 	if (!artifactIdsValid(req, res)) return;
@@ -1168,7 +1217,7 @@ static void listArtifacts(AsyncRequestManager& mgr, const QStringList& thumbnail
 	for (int i = 0; i < entries.size(); ++i) {
 		QVariantMap entry = entries[i].toMap();
 		const QString path = entry.value("path").toString();
-		const qint64  size = ArtifactFile::sizeOf(path);
+		const qint64  size = ArtifactFile::sizeOf(path, &roots);
 		entry.insert("available", size >= 0);
 		entry.insert("size", size >= 0 ? QVariant(size) : QVariant());
 		entry.insert("content_type", QString::fromLatin1(ArtifactFile::contentTypeFor(path)));
@@ -1192,7 +1241,8 @@ static void listArtifacts(AsyncRequestManager& mgr, const QStringList& thumbnail
 // Resolve :job_id/:artifact_id to the declared file and open it. On failure
 // the error response is already written and false is returned; on success the
 // caller owns *file and must fclose() it.
-static bool openDeclaredArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
+static bool openDeclaredArtifact(AsyncRequestManager& mgr, const ArtifactRoots& roots,
+                                 const httplib::Request& req,
                                  httplib::Response& res, QString* path, FILE** file,
                                  qint64* size, qint64* mtime = 0)
 {
@@ -1211,9 +1261,14 @@ static bool openDeclaredArtifact(AsyncRequestManager& mgr, const httplib::Reques
 		break;
 	}
 
-	switch (ArtifactFile::openForRead(*path, file, size, mtime)) {
+	switch (ArtifactFile::openForRead(*path, file, size, mtime, &roots)) {
 	case ArtifactFile::OPEN_OK:
 		return true;
+	case ArtifactFile::OPEN_OUTSIDE_ROOTS:
+		respondError(res, ErrorCode::ARTIFACT_OUTSIDE_ROOTS,
+			"the declared file's real path is outside the allowed artifact folders "
+			"(server pane: Artifact Folders)");
+		return false;
 	case ArtifactFile::OPEN_PATH_REJECTED:
 		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not an absolute file path");
 		return false;
@@ -1229,13 +1284,14 @@ static bool openDeclaredArtifact(AsyncRequestManager& mgr, const httplib::Reques
 
 // GET /artifacts/:job_id/:artifact_id — stream one declared output. httplib
 // answers Range requests (206 / 416) and HEAD from the sized content provider.
-static void serveArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
+static void serveArtifact(AsyncRequestManager& mgr, const ArtifactRoots& roots,
+                          const httplib::Request& req,
                           httplib::Response& res)
 {
 	QString path;
 	FILE*   file = 0;
 	qint64  size = 0;
-	if (!openDeclaredArtifact(mgr, req, res, &path, &file, &size)) return;
+	if (!openDeclaredArtifact(mgr, roots, req, res, &path, &file, &size)) return;
 
 	// Leave res.status unset: httplib then picks 200, or 206 for a Range
 	// request (and 416 for an unsatisfiable one). An explicit 200 would make
@@ -1286,7 +1342,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 	FILE*   file  = 0;
 	qint64  size  = 0;
 	qint64  mtime = 0;
-	if (!openDeclaredArtifact(*m_pAsyncMgr, req, res, &path, &file, &size, &mtime)) return;
+	if (!openDeclaredArtifact(*m_pAsyncMgr, m_artifactRoots, req, res, &path, &file, &size, &mtime)) return;
 
 	if (!extensionIn(path, m_thumbnailExtensions)) {
 		std::fclose(file);
@@ -1559,13 +1615,14 @@ void DzScriptServerPane::setupRoutes()
 	//
 	// Read chain (IP whitelist -> auth), like the other polling GETs: a client
 	// fetching a large file in Range chunks must not trip the rate limiter.
-	// Downloads only serve files in the job's output manifest; see
+	// Downloads only serve files in the job's output manifest whose real
+	// path is inside the allowed artifact folders (ArtifactRoots); see
 	// listArtifacts()/serveArtifact() above. ?thumbnail=<px> goes to
 	// serveArtifactThumbnail(), which decodes on the main thread.
 	m_pServer->Get("/artifacts/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (!m_pReadChain->run(ctx)) { applyContext(ctx, res); return; }
-		listArtifacts(*m_pAsyncMgr, m_thumbnailExtensions, req, res);
+		listArtifacts(*m_pAsyncMgr, m_artifactRoots, m_thumbnailExtensions, req, res);
 	});
 
 	m_pServer->Get("/artifacts/([^/]+)/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1574,7 +1631,7 @@ void DzScriptServerPane::setupRoutes()
 		if (req.has_param("thumbnail"))
 			serveArtifactThumbnail(req, res);
 		else
-			serveArtifact(*m_pAsyncMgr, req, res);
+			serveArtifact(*m_pAsyncMgr, m_artifactRoots, req, res);
 	});
 
 	// ── Render endpoints ──────────────────────────────────────────────────────
@@ -3604,6 +3661,10 @@ void DzScriptServerPane::applySettings(const ServerSettings& s)
 	m_ipWhitelist.setEnabled(s.ipWhitelistEnabled);
 	m_ipWhitelist.setWhitelist(s.ipWhitelist);
 
+	// Resolved (and any missing folders logged) in startServer().
+	m_artifactRoots.setEnabled(s.artifactRootsEnabled);
+	m_artifactRoots.configure(s.artifactRoots);
+
 	m_rateLimiter.setEnabled(s.rateLimitEnabled);
 	m_rateLimiter.configure(s.rateLimitMax, s.rateLimitWindow);
 }
@@ -3622,6 +3683,8 @@ void DzScriptServerPane::saveSettings()
 	s.authEnabled           = m_auth.isEnabled();
 	s.ipWhitelistEnabled    = m_ipWhitelist.isEnabled();
 	s.ipWhitelist           = m_ipWhitelist.getWhitelist();
+	s.artifactRootsEnabled  = m_artifactRoots.isEnabled();
+	s.artifactRoots         = m_artifactRoots.rawList();
 	s.rateLimitEnabled      = m_rateLimiter.isEnabled();
 	// Prefer live UI values for rate limit so the user sees what was saved.
 	s.rateLimitMax    = m_pRateLimitMaxSpin    ? m_pRateLimitMaxSpin->value()
@@ -3687,6 +3750,18 @@ void DzScriptServerPane::onIpWhitelistEnabledChanged(int state)
 
 	if (m_ipWhitelist.isEnabled() && m_bRunning) {
 		appendLog("[INFO] IP whitelist enabled - only configured IPs allowed");
+	}
+}
+
+void DzScriptServerPane::onArtifactRootsEnabledChanged(int state)
+{
+	// Live: the flag is atomic, and the folder list was resolved at start.
+	m_artifactRoots.setEnabled(state == Qt::Checked);
+	saveSettings();
+	if (m_bRunning) {
+		appendLog(m_artifactRoots.isEnabled()
+			? QString("[INFO] Artifact folders enforced: %1").arg(m_artifactRoots.effectiveRoots().join("; "))
+			: QString("[WARN] Artifact folder restriction disabled - any declared output can be served (~/.daz3d still refused)"));
 	}
 }
 
@@ -4040,6 +4115,8 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 	security["auth_enabled"]         = m_auth.isEnabled();
 	security["auth_headers"]         = QStringList() << "X-API-Token" << "Authorization: Bearer";
 	security["ip_whitelist_enabled"] = m_ipWhitelist.isEnabled();
+	security["artifact_roots_enabled"] = m_artifactRoots.isEnabled();
+	security["artifact_roots"]         = m_artifactRoots.effectiveRoots();
 	json.addMember("security", QVariant(security));
 
 	// ── Render engines, read live from DzRenderMgr ───────────────────────────

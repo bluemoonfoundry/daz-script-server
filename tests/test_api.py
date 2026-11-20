@@ -953,6 +953,99 @@ class TestArtifacts(unittest.TestCase):
             self.assertEqual(dl.content, f.read())
 
 
+class TestArtifactRoots(unittest.TestCase):
+    """Artifact trust boundary (x7ul.33): GET /artifacts serves a declared
+    output only when its real path (symlinks resolved) is inside an allowed
+    artifact folder, and never anything under ~/.daz3d. Defaults: temp,
+    Documents, Pictures, Desktop, Downloads -- so a folder directly under the
+    home folder is outside them."""
+
+    @classmethod
+    def setUpClass(cls):
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        security = caps.get("security", {})
+        if not security.get("artifact_roots_enabled"):
+            raise unittest.SkipTest("artifact folder restriction is disabled on this server")
+        cls.roots = security.get("artifact_roots", [])
+
+        cls.inside_dir = tempfile.mkdtemp(prefix="dss-roots-in-")
+        cls.outside_dir = tempfile.mkdtemp(prefix=".dss-roots-out-", dir=os.path.expanduser("~"))
+        cls.inside = os.path.join(cls.inside_dir, "inside.png")
+        cls.outside = os.path.join(cls.outside_dir, "outside.png")
+        for p in (cls.inside, cls.outside):
+            with open(p, "wb") as f:
+                f.write(b"artifact bytes")
+        cls.token_file = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+
+        # A symlink inside an allowed folder pointing outside of it. Creating
+        # one needs Developer Mode or admin on Windows; skip that case if not.
+        cls.link = os.path.join(cls.inside_dir, "link.png")
+        try:
+            os.symlink(cls.outside, cls.link)
+        except (OSError, NotImplementedError):
+            cls.link = None
+
+        outputs = [{"path": cls.inside}, {"path": cls.outside}, {"path": cls.token_file}]
+        if cls.link:
+            outputs.append({"path": cls.link})
+        report = os.path.join(cls.inside_dir, "report.jsonl")
+        script = iife(
+            "var cfg = getArguments()[0]; "
+            "var f = new DzFile(cfg.__dssReportFile); "
+            "if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+            "f.write(JSON.stringify({type:'manifest', outputs:cfg.outputs}) + '\\n'); "
+            "f.close(); return 'declared';"
+        )
+        r = async_execute(script=script, args={"outputs": outputs}, report_file=report)
+        assert r.status_code == 200, r.text
+        cls.rid = r.json()["request_id"]
+        body = get_result(cls.rid, wait=True, timeout=30).json()
+        assert body.get("status") == "completed", body
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.inside_dir, ignore_errors=True)
+        shutil.rmtree(cls.outside_dir, ignore_errors=True)
+
+    def _get(self, artifact_id):
+        return requests.get(f"{BASE_URL}/artifacts/{self.rid}/{artifact_id}",
+                            headers=auth_headers(), timeout=10)
+
+    def assertOutsideRoots(self, r):
+        self.assertEqual(r.status_code, 403, r.text)
+        body = r.json()
+        self.assertEqual(body["error_code"], "ARTIFACT_OUTSIDE_ROOTS")
+        self.assertFalse(body["retryable"])
+
+    def test_capabilities_list_the_roots(self):
+        self.assertTrue(self.roots, "no effective artifact roots reported")
+
+    def test_file_inside_a_root_is_served(self):
+        r = self._get(0)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.content, b"artifact bytes")
+
+    def test_file_outside_the_roots_is_refused(self):
+        self.assertOutsideRoots(self._get(1))
+
+    def test_token_folder_is_always_refused(self):
+        self.assertOutsideRoots(self._get(2))
+
+    def test_symlink_out_of_a_root_is_refused(self):
+        if not self.link:
+            self.skipTest("cannot create symlinks here (needs Developer Mode/admin on Windows)")
+        self.assertOutsideRoots(self._get(3))
+
+    def test_listing_marks_refused_files_unavailable(self):
+        r = requests.get(f"{BASE_URL}/artifacts/{self.rid}", headers=auth_headers(), timeout=10)
+        self.assertEqual(r.status_code, 200, r.text)
+        available = [a["available"] for a in r.json()["artifacts"]]
+        self.assertEqual(available[:3], [True, False, False])
+        if self.link:
+            self.assertFalse(available[3])
+
+
 class TestArtifactThumbnails(unittest.TestCase):
     """GET /artifacts/{job_id}/{artifact_id}?thumbnail=<px> (5d6f.24): scaled
     previews of image artifacts, decoded on the main thread."""

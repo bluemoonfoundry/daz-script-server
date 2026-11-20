@@ -211,6 +211,24 @@ class TestDazClientArtifacts(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 404)
         resp.close.assert_called_once()
 
+    def test_artifact_outside_roots_is_not_an_auth_error(self):
+        client, _ = self._client(status_code=403, json_data={
+            "success": False, "error_code": "ARTIFACT_OUTSIDE_ROOTS",
+            "error": "Artifact file is outside the server's allowed artifact folders",
+            "retryable": False})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.download_artifact("rnd-1", "0")
+        self.assertNotIsInstance(cm.exception, exceptions.AuthenticationError)
+        self.assertEqual(cm.exception.error_code, "ARTIFACT_OUTSIDE_ROOTS")
+        self.assertEqual(cm.exception.status_code, 403)
+
+    def test_other_403_is_still_an_auth_error(self):
+        client, _ = self._client(status_code=403, json_data={
+            "success": False, "error_code": "IP_NOT_WHITELISTED", "error": "IP not allowed",
+            "retryable": False})
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.download_artifact("rnd-1", "0")
+
     def test_thumbnail_sends_params(self):
         client, _ = self._client(content=b"\x89PNG")
         self.assertEqual(client.get_artifact_thumbnail("rnd-1", 0, 128, format="jpeg"), b"\x89PNG")

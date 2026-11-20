@@ -105,6 +105,24 @@ async function throwArtifactError(resp: Response): Promise<void> {
   if (resp.status === 416) {
     throw new ArtifactError("Requested range is outside the artifact (HTTP 416)", 416);
   }
+  if (resp.status === 403) {
+    // A file outside the server's allowed artifact folders is refused with
+    // 403 ARTIFACT_OUTSIDE_ROOTS: an artifact error, not an auth failure.
+    // Peek on a clone so raiseForError() can still read the body otherwise.
+    let peek: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(await resp.clone().text());
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        peek = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Not JSON: fall through to the authentication error below.
+    }
+    if (peek.error_code === "ARTIFACT_OUTSIDE_ROOTS") {
+      const msg = typeof peek.error === "string" ? peek.error : "HTTP 403";
+      throw new ArtifactError(msg, 403, "ARTIFACT_OUTSIDE_ROOTS");
+    }
+  }
   const data = await raiseForError(resp);
   const code = (data?.error_code as string) ?? "";
   const msg = (data?.error as string) ?? `HTTP ${resp.status}`;
@@ -958,7 +976,9 @@ export class DazClient {
    * Download one declared artifact (`GET /artifacts/{id}/{artifact_id}`).
    * Returns the bytes, or, when `dest` is given, streams them into that file
    * and returns its path. `range` sends an HTTP `Range` header (206 reply).
-   * Rejections throw {@link ArtifactError}; 401/403 throw `AuthenticationError`.
+   * Rejections throw {@link ArtifactError} (including 403 `ARTIFACT_OUTSIDE_ROOTS`
+   * for a file outside the server's allowed artifact folders); other 401/403
+   * throw `AuthenticationError`.
    */
   async downloadArtifact(requestId: string, artifactId: string | number, opts?: DownloadArtifactOptions): Promise<Buffer>;
   async downloadArtifact(

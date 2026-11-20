@@ -12,6 +12,7 @@ enum class ErrorCode {
 
     // 403 Authorization
     IP_NOT_WHITELISTED,
+    ARTIFACT_OUTSIDE_ROOTS,
 
     // 404 Not Found
     SCRIPT_NOT_FOUND,
