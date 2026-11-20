@@ -156,7 +156,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 - [Migration Guide (v1.x → v2.0)](MIGRATION.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing Guide](CONTRIBUTING.md)
-- [Interaction Pose Roadmap](INTERACTION_POSE_ROADMAP.md)
+- [Archived planning docs](docs/archive/)
 
 ---
 

@@ -1,5 +1,7 @@
 # DazScriptServer Refactoring Summary
 
+> **Status:** Archived 2026-11-19. Its "awaiting Phase 1 approval" status and issue counts are from May 2026 and no longer apply. Open work lives in beads (`bd ready`).
+
 ## Overview
 
 A comprehensive code quality evaluation identified 15 major categories of issues in the DazScriptServer codebase. These issues have been organized into a 10-phase refactoring plan spanning 18 weeks, with corresponding GitHub issues for tracking.

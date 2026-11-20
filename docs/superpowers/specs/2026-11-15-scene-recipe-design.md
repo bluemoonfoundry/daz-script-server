@@ -320,7 +320,7 @@ Details:
 
 **Boundary.** All recipe logic (schema, validation, diff, conflicts, ownership
 data) lives in dazpy. The MCP server only wraps it: no new embedded DazScript
-goes into `_registry.py`. That follows ASSESSMENT.md's layering (MCP turns intent
+goes into `_registry.py`. That follows docs/archive/ASSESSMENT.md's layering (MCP turns intent
 into plans, dazpy owns domain primitives, the plugin executes). The wider
 problem of the MCP server's ~106 embedded scripts duplicating dazpy is tracked
 separately and isn't part of this work.

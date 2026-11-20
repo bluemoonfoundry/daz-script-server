@@ -1,5 +1,7 @@
 # Interaction Posing Roadmap
 
+> **Status:** Archived 2026-11-19. Written for a feature branch while the interaction posing stack was in progress; it does not describe current master.
+
 This branch is building a DAZ-aware interaction posing stack in stages. The
 first step is a stable adapter layer that understands DAZ bone naming,
 rotation-order quirks, and canonical interaction anchors.

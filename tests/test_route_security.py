@@ -2,7 +2,7 @@
 Static checks on the route table in src/DzScriptServerPane.cpp.
 
 No running server needed (runs in `python tests.py unit` / CI). It guards
-against two regressions from ASSESSMENT.md:
+against two regressions from docs/archive/ASSESSMENT.md:
 
   * a POST route without a request-body size limit (daz-script-server-5d6f.1)
   * an authenticated route that skips the IP whitelist / rate limiter
