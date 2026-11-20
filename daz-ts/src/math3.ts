@@ -127,6 +127,17 @@ export class Vec3 {
 
 type RotationOrder = "XYZ" | "XZY" | "YXZ" | "YZX" | "ZXY" | "ZYX";
 
+const ORDERS: readonly RotationOrder[] = ["XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"];
+
+/** math3 order for a Studio rotation order string (Studio's is reversed). */
+function dzOrder(rotationOrder: string): RotationOrder {
+  const o = String(rotationOrder).toUpperCase() as RotationOrder;
+  if (!ORDERS.includes(o)) {
+    throw new RangeError(`Unknown rotation order: ${String(rotationOrder)}. Expected one of ${ORDERS.join(" ")}.`);
+  }
+  return o.split("").reverse().join("") as RotationOrder;
+}
+
 function eulerToQuat(hx: number, hy: number, hz: number, order: RotationOrder): [number, number, number, number] {
   const cx = Math.cos(hx), sx = Math.sin(hx);
   const cy = Math.cos(hy), sy = Math.sin(hy);
@@ -214,8 +225,9 @@ function quatToEuler(m: number[][], order: RotationOrder): [number, number, numb
 /**
  * Unit quaternion representing a 3D rotation.
  *
- * Stored as `(x, y, z, w)` — imaginary components first, scalar last —
- * matching the dict format returned by the DAZ Studio Script Server API.
+ * Stored as `(x, y, z, w)` — imaginary components first, scalar last.
+ * Studio returns the same dict shape in its DzQuat convention, which is the
+ * conjugate: convert with {@link Quat.fromDz} / {@link Quat.toDz}.
  * All methods return new {@link Quat} instances.
  */
 export class Quat {
@@ -235,11 +247,54 @@ export class Quat {
     return new Quat(0, 0, 0, 1);
   }
 
+  /**
+   * Create from an `{x, y, z, w}` dict, components taken as-is. For a
+   * quaternion read from Studio (`getLocalRot`, `getWSRot`,
+   * `getOrientation`) use {@link fromDz}: a DzQuat stores the conjugate.
+   */
   static fromDict(d: { x: number; y: number; z: number; w: number }): Quat {
     return new Quat(d.x, d.y, d.z, d.w);
   }
 
-  /** Create from Euler angles in degrees using intrinsic rotations (DAZ Studio's bone-rotation convention). */
+  /**
+   * Create from a DAZ Studio DzQuat dict. A DzQuat stores the conjugate
+   * `(-x, -y, -z, w)` of the math3 quaternion for the same rotation
+   * (live-verified; `DzQuat.multVec` rotates like {@link rotate} on the
+   * converted value).
+   */
+  static fromDz(d: { x: number; y: number; z: number; w: number }): Quat {
+    return new Quat(-d.x, -d.y, -d.z, d.w);
+  }
+
+  /** The DzQuat dict for this rotation (inverse of {@link fromDz}). */
+  toDz(): { x: number; y: number; z: number; w: number } {
+    return { x: -this.x, y: -this.y, z: -this.z, w: this.w };
+  }
+
+  /**
+   * The local rotation Studio produces from rotation channel values (degrees,
+   * as applied after limits). Studio's rotation order string (e.g. `"YZX"`)
+   * is the reverse of math3's `order`, and channels rotate about the bone's
+   * oriented axes: `local = O * fromEuler(x, y, z, reversed) * O⁻¹`.
+   * `orientation` is `Quat.fromDz(getOrientation())`; omit for identity.
+   * Returns the value equal to `Quat.fromDz(getLocalRot())`.
+   */
+  static fromDzEuler(x: number, y: number, z: number, rotationOrder: string = "XYZ", orientation?: Quat): Quat {
+    const e = Quat.fromEuler(x, y, z, dzOrder(rotationOrder));
+    return orientation ? orientation.multiply(e).multiply(orientation.conjugate()) : e;
+  }
+
+  /** Channel values `[x, y, z]` reproducing this local rotation. Inverse of {@link fromDzEuler}; ignores limits. */
+  toDzEuler(rotationOrder: string = "XYZ", orientation?: Quat): [number, number, number] {
+    const q = orientation ? orientation.conjugate().multiply(this).multiply(orientation) : this;
+    return q.toEuler(dzOrder(rotationOrder));
+  }
+
+  /**
+   * Create from Euler angles in degrees using intrinsic rotations. `order`
+   * is the reverse of Studio's rotation order string; to convert Studio
+   * channel values use {@link fromDzEuler}.
+   */
   static fromEuler(x: number, y: number, z: number, order: RotationOrder = "XYZ"): Quat {
     const hx = ((x * Math.PI) / 180) * 0.5;
     const hy = ((y * Math.PI) / 180) * 0.5;

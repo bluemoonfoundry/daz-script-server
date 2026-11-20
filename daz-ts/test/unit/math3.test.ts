@@ -110,6 +110,58 @@ describe("Quat", () => {
   });
 });
 
+// Captured live from DAZ Studio 4 (Genesis 9, 2026-11-19, bd 0pga): applied
+// channel values, getRotationOrder()/getOrientation(), resulting getLocalRot().
+const LIVE_BONES = [
+  {
+    name: "l_hand", order: "XYZ", vals: [10, 30, 20] as [number, number, number],
+    orient: { w: 0.926597115209923, x: 0.0342056607995472, y: 0.11667538626529, z: 0.355857574169442 },
+    local: { w: 0.951548532113196, x: -0.178874742342876, y: -0.196265627486259, z: -0.155045222604303 },
+  },
+  {
+    name: "l_thigh", order: "YZX", vals: [30, 50, 20] as [number, number, number],
+    orient: { w: 0.998708501902959, x: -0.0158161208513694, y: -0.0435336276449156, z: -0.0208806564081596 },
+    local: { w: 0.881120356041757, x: -0.167559419586953, y: -0.35995317082981, z: -0.256874432137761 },
+  },
+  {
+    name: "l_upperarm", order: "XYZ", vals: [30, 40, 20] as [number, number, number],
+    orient: { w: 0.913774293765234, x: -0.00570622770112479, y: 0.013546899678335, z: 0.405956229818408 },
+    local: { w: 0.909255368408199, x: -0.392627261813084, y: -0.111276994846015, z: -0.0819508311127546 },
+  },
+];
+
+function sameRotation(a: Quat, b: Quat, tol = 1e-6): boolean {
+  const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.z - b.z), Math.abs(a.w - b.w));
+  const e = Math.max(Math.abs(a.x + b.x), Math.abs(a.y + b.y), Math.abs(a.z + b.z), Math.abs(a.w + b.w));
+  return Math.min(d, e) < tol;
+}
+
+describe("Quat DzQuat convention", () => {
+  it("fromDz conjugates and toDz round-trips", () => {
+    const d = { x: 0.1, y: -0.2, z: 0.3, w: 0.9 };
+    expect(Quat.fromDz(d).toDict()).toEqual({ x: -0.1, y: 0.2, z: -0.3, w: 0.9 });
+    expect(Quat.fromDz(d).toDz()).toEqual(d);
+  });
+
+  it("camera: fromDzEuler with identity orientation equals fromEuler with reversed order", () => {
+    expect(sameRotation(Quat.fromDzEuler(30, 50, 20, "XYZ"), Quat.fromEuler(30, 50, 20, "ZYX"))).toBe(true);
+  });
+
+  it("bones: fromDzEuler matches live getLocalRot and toDzEuler inverts it", () => {
+    for (const b of LIVE_BONES) {
+      const o = Quat.fromDz(b.orient);
+      const q = Quat.fromDzEuler(...b.vals, b.order, o);
+      expect(sameRotation(q, Quat.fromDz(b.local)), b.name).toBe(true);
+      const back = q.toDzEuler(b.order, o);
+      back.forEach((v, i) => expect(approxEqual(v, b.vals[i], 1e-6), b.name).toBe(true));
+    }
+  });
+
+  it("rejects an unknown rotation order", () => {
+    expect(() => Quat.fromDzEuler(0, 0, 0, "XXY")).toThrow(RangeError);
+  });
+});
+
 describe("BoundingBox", () => {
   it("computes center, size, and volume", () => {
     const bbox = new BoundingBox(new Vec3(0, 0, 0), new Vec3(2, 4, 6));

@@ -179,5 +179,65 @@ class TestYUpToZUpPreset(unittest.TestCase):
         self.assertIsInstance(PkgPreset, PkgAxisRemap)
 
 
+# Captured live from DAZ Studio 4 (Genesis 9, 2026-11-19, bd 0pga): rotation
+# channel values as Studio applied them (after joint limits), the bone's
+# getRotationOrder()/getOrientation(), and the resulting getLocalRot().
+_LIVE_BONES = [
+    {"name": "l_hand", "order": "XYZ", "vals": (10, 30, 20),
+     "orient": {"w": 0.926597115209923, "x": 0.0342056607995472, "y": 0.11667538626529, "z": 0.355857574169442},
+     "local": {"w": 0.951548532113196, "x": -0.178874742342876, "y": -0.196265627486259, "z": -0.155045222604303}},
+    {"name": "l_thigh", "order": "YZX", "vals": (30, 50, 20),
+     "orient": {"w": 0.998708501902959, "x": -0.0158161208513694, "y": -0.0435336276449156, "z": -0.0208806564081596},
+     "local": {"w": 0.881120356041757, "x": -0.167559419586953, "y": -0.35995317082981, "z": -0.256874432137761}},
+    {"name": "l_upperarm", "order": "XYZ", "vals": (30, 40, 20),
+     "orient": {"w": 0.913774293765234, "x": -0.00570622770112479, "y": 0.013546899678335, "z": 0.405956229818408},
+     "local": {"w": 0.909255368408199, "x": -0.392627261813084, "y": -0.111276994846015, "z": -0.0819508311127546}},
+]
+
+
+def _same_rotation(a, b, tol=1e-6):
+    d = max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z), abs(a.w - b.w))
+    e = max(abs(a.x + b.x), abs(a.y + b.y), abs(a.z + b.z), abs(a.w + b.w))
+    return min(d, e) < tol
+
+
+class TestDzQuatConvention(unittest.TestCase):
+    """DzQuat stores the conjugate of the math3 quaternion for the same rotation."""
+
+    def test_from_dz_conjugates(self):
+        q = Quat.from_dz({"x": 0.1, "y": -0.2, "z": 0.3, "w": 0.9})
+        self.assertEqual((q.x, q.y, q.z, q.w), (-0.1, 0.2, -0.3, 0.9))
+
+    def test_to_dz_round_trips(self):
+        d = {"x": 0.1, "y": -0.2, "z": 0.3, "w": 0.9}
+        self.assertEqual(Quat.from_dz(d).to_dz(), d)
+
+    def test_camera_from_dz_euler_identity_orientation(self):
+        # Camera (no orientation, Studio order XYZ): live getLocalRot() was
+        # conj(from_euler(x, y, z, "ZYX")).
+        dz = Quat.from_euler(30, 50, 20, order="ZYX").conjugate().to_dict()
+        q = Quat.from_dz_euler(30, 50, 20, "XYZ")
+        self.assertTrue(_same_rotation(q, Quat.from_dz(dz)))
+
+    def test_bones_from_dz_euler_match_live_local_rot(self):
+        for b in _LIVE_BONES:
+            with self.subTest(bone=b["name"]):
+                q = Quat.from_dz_euler(*b["vals"], b["order"], orientation=Quat.from_dz(b["orient"]))
+                self.assertTrue(_same_rotation(q, Quat.from_dz(b["local"]), tol=1e-6), b["name"])
+
+    def test_to_dz_euler_inverts_from_dz_euler(self):
+        for b in _LIVE_BONES:
+            with self.subTest(bone=b["name"]):
+                o = Quat.from_dz(b["orient"])
+                q = Quat.from_dz_euler(*b["vals"], b["order"], orientation=o)
+                x, y, z = q.to_dz_euler(b["order"], orientation=o)
+                for got, want in zip((x, y, z), b["vals"]):
+                    self.assertAlmostEqual(got, want, places=6)
+
+    def test_rejects_bad_rotation_order(self):
+        with self.assertRaises(ValueError):
+            Quat.from_dz_euler(0, 0, 0, "XXY")
+
+
 if __name__ == "__main__":
     unittest.main()
