@@ -141,6 +141,7 @@ ZipInstaller::Result ZipInstaller::install(const QString &zipPath) const
 
 	const CommitResult committed = commit(staged.packageId, staged.stagingDir);
 	if (!committed.success) {
+		PortableFs::removeRecursively(staged.stagingDir);
 		result.errorMessage = committed.errorMessage;
 		return result;
 	}
