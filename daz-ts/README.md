@@ -126,7 +126,7 @@ const result = await executeLong(client, "renderEverything();", undefined, {
 ```
 
 It submits the script with `executeAsyncSubmit`, then long-polls
-`/requests/:id/result` until the script completes, fails, is cancelled, or
+`/requests/{id}/result` until the script completes, fails, is cancelled, or
 `timeoutMs` elapses (throwing `AsyncExecutionError` or `DazTimeoutError`
 respectively).
 
@@ -296,8 +296,8 @@ top of Phase 1's raw job-queue client methods, ported from `dazpy`'s
   over the HTTP `/render` and `/render/batch` job-queue endpoints already on
   `DazClient` (`renderSubmit`, `renderBatchSubmit`, `streamRenderProgress`).
   Both wait for completion via the SSE progress stream
-  (`GET /render/:id/progress`), falling back to long-poll on
-  `/requests/:id/result` if the stream is unavailable or ends without a
+  (`GET /render/{id}/progress`), falling back to long-poll on
+  `/requests/{id}/result` if the stream is unavailable or ends without a
   `complete`/`error` event. `renderVariants()` submits every variant in one
   batch request, then awaits each in order, recording a failed variant's
   error without aborting the rest.

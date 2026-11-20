@@ -13,7 +13,7 @@ describe("executeLong", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ request_id: "req-1" })) // /execute/async
-      .mockResolvedValueOnce(jsonResponse({ success: true, result: 42, output: ["ok"], duration_ms: 100 })); // /requests/:id/result
+      .mockResolvedValueOnce(jsonResponse({ success: true, result: 42, output: ["ok"], duration_ms: 100 })); // /requests/{id}/result
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new DazClient({ token: "" });

@@ -112,7 +112,7 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> queued : POST /execute/async
     queued --> running : dispatcher picks up request
-    queued --> cancelled : DELETE /requests/:id
+    queued --> cancelled : DELETE /requests/{id}
     running --> completed : script returns
     running --> failed : script throws
     running --> cancelled : cancel flag + killRender()
@@ -183,7 +183,7 @@ flowchart TD
 - Thread-safe queue (`QMutex`) for incoming async work items
 - Map of `request_id → AsyncRequest` for status and result retrieval
 - TTL cleanup timer (Qt timer, fires on main thread)
-- Long-poll support: waiting `GET /requests/:id/result?wait=true` calls block
+- Long-poll support: waiting `GET /requests/{id}/result?wait=true` calls block
   in `QWaitCondition` until the result is available or the timeout fires
 
 ---
@@ -252,7 +252,7 @@ It runs on a dedicated thread managed by `ServerListenThread`.
 
 The DAZ Studio SDK explicitly requires all scene-graph and script-engine
 operations on the main thread. Synchronous `/execute` and
-`/scripts/:id/execute` therefore post a `MainThreadCall` with
+`/scripts/{id}/execute` therefore post a `MainThreadCall` with
 `Qt::QueuedConnection` and wait for the result. A request that is still
 queued when its client disconnects, or when the server timeout passes, gives
 up with 503 `STUDIO_BUSY` and is never run; a script that has started is

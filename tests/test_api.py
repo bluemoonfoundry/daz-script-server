@@ -23,6 +23,9 @@ import unittest
 import uuid
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from waiting import poll_until  # noqa: E402
+
 BASE_URL = "http://127.0.0.1:18811"
 TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
 # Must match "Max Body Size (MB)" in the DAZ Studio pane (default 5).
@@ -304,20 +307,18 @@ TERMINAL_STATUSES = (
 
 
 def poll_status(request_id, timeout=15):
-    """Poll /requests/:id/status until terminal or timeout. Returns final body dict."""
-    deadline = __import__("time").time() + timeout
-    while __import__("time").time() < deadline:
-        r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
-                         headers=auth_headers(), timeout=5)
-        body = r.json()
-        if body.get("status") in TERMINAL_STATUSES:
-            return body
-        __import__("time").sleep(0.2)
+    """Poll /requests/{id}/status until terminal or timeout. Returns the last body
+    dict (non-terminal on timeout; callers assert on its status)."""
+    body, _ = poll_until(
+        lambda: requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                             headers=auth_headers(), timeout=5).json(),
+        lambda b: b.get("status") in TERMINAL_STATUSES,
+        timeout=timeout, interval=0.2)
     return body
 
 
 def get_result(request_id, wait=False, timeout=15):
-    """GET /requests/:id/result, optionally with long-poll."""
+    """GET /requests/{id}/result, optionally with long-poll."""
     params = {}
     if wait:
         params["wait"] = "true"
@@ -570,15 +571,11 @@ class TestAsyncExecution(unittest.TestCase):
         request_id = r.json()["request_id"]
 
         # Wait for it to actually start running before cancelling.
-        deadline = time.time() + 5
-        status = None
-        while time.time() < deadline:
-            status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
-                                    headers=auth_headers(), timeout=5)
-            status = status_r.json().get("status")
-            if status == "running":
-                break
-            time.sleep(0.05)
+        status, _ = poll_until(
+            lambda: requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                                 headers=auth_headers(), timeout=5).json().get("status"),
+            lambda s: s == "running",
+            timeout=5)
         self.assertEqual(status, "running", "request never reached running state")
 
         cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
@@ -693,20 +690,16 @@ class TestAsyncExecution(unittest.TestCase):
             self.assertEqual(r.status_code, 200)
             request_id = r.json()["request_id"]
 
-            saw_live_progress = False
             # A prior cancellation test leaves a non-render script finishing
             # on Daz's main thread, so this job may remain queued for ~8 seconds.
-            deadline = time.time() + 20
-            while time.time() < deadline:
-                status = requests.get(
+            _, saw_live_progress = poll_until(
+                lambda: requests.get(
                     f"{BASE_URL}/requests/{request_id}/status",
                     headers=auth_headers(), timeout=5,
-                ).json()
-                detail = status.get("observation", {}).get("progress") or {}
-                if status.get("status") == "running" and detail.get("value") == 0.25:
-                    saw_live_progress = True
-                    break
-                time.sleep(0.05)
+                ).json(),
+                lambda s: s.get("status") == "running"
+                and (s.get("observation", {}).get("progress") or {}).get("value") == 0.25,
+                timeout=20)
             self.assertTrue(saw_live_progress, "structured progress was not visible while running")
 
             body = get_result(request_id, wait=True, timeout=20).json()
@@ -1579,7 +1572,9 @@ class TestConcurrency(unittest.TestCase):
         blocker = threading.Thread(target=lambda: blocker_result.update(r=execute(script=iife(
             "var t = Date.now(); while (Date.now() - t < %d) {} return 'done';" % busy_ms))))
         blocker.start()
-        time.sleep(1.0)  # let the blocker reach the main thread
+        # Let the blocker be accepted (and so reach the main thread first).
+        _, started = poll_until(active, lambda n: n >= 1, timeout=5.0)
+        self.assertTrue(started, "blocker request was never accepted")
 
         marker_dir = tempfile.mkdtemp(prefix="dss_3w3y_")
         self.addCleanup(lambda: __import__("shutil").rmtree(marker_dir, ignore_errors=True))
@@ -1602,9 +1597,7 @@ class TestConcurrency(unittest.TestCase):
             t.join(timeout=10)
 
         # Only the blocker should still hold a slot, well before it finishes.
-        deadline = time.time() + 3.0
-        while active() > 1 and time.time() < deadline:
-            time.sleep(0.1)
+        poll_until(active, lambda n: n <= 1, timeout=3.0, interval=0.1)
         self.assertLessEqual(active(), 1,
                              "abandoned queued requests still hold concurrency slots")
         self.assertTrue(blocker.is_alive(), "blocker finished too early to prove anything")

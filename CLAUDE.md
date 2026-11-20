@@ -108,7 +108,7 @@ Default: `127.0.0.1:18811`
 error body; add an `ErrorCode` instead. Script/job failures stay HTTP 200 with
 `error_code` `SCRIPT_ERROR` / `JOB_CANCELLED` / `JOB_STALE`.
 
-**Job routes** (`/execute`, `/scripts/:id/execute`, async + render submission)
+**Job routes** (`/execute`, `/scripts/{id}/execute`, async + render submission)
 go through `runJobRoute()`: write chain → `X-Correlation-Id` → `Idempotency-Key`
 (`IdempotencyCache`, async/render submission only) → handler → identity stamp.
 
@@ -121,10 +121,10 @@ go through `runJobRoute()`: write chain → `X-Correlation-Id` → `Idempotency-
 
 **Script Registry** (in-memory, session-only):
 - `POST /scripts/register`: `{"name":"id","description":"...","script":"..."}` (name is ID, overwrites existing)
-- `POST /scripts/:id/execute`: Execute registered script
+- `POST /scripts/{id}/execute`: Execute registered script
 - Script names: 1-64 chars, alphanumeric/hyphens/underscores
 
-**Async endpoints:** Return `request_id` immediately. Poll `/requests/:id/status` or use `GET /requests/:id/result?wait=true` for long-poll. Status: `queued`, `running`, `completed`, `failed`, `cancelled`. TTL: 1 hour cleanup.
+**Async endpoints:** Return `request_id` immediately. Poll `/requests/{id}/status` or use `GET /requests/{id}/result?wait=true` for long-poll. Status: `queued`, `running`, `completed`, `failed`, `cancelled`. TTL: 1 hour cleanup.
 
 ### Dependencies & Build
 

@@ -219,8 +219,8 @@ Transform and manage scene objects:
 |-----------|-------------|-------------|
 | `daz_render` | Trigger a render (async) | `POST /render` or `dazpy.render()` |
 | `daz_render_variants` | Batch render with variations | `POST /render/batch` or `render_variants()` |
-| `daz_get_render_progress` | Poll render progress | `GET /render/:id/progress` (SSE) |
-| `daz_cancel_render` | Cancel running render | `POST /render/:id/cancel` |
+| `daz_get_render_progress` | Poll render progress | `GET /render/{id}/progress` (SSE) |
+| `daz_cancel_render` | Cancel running render | `POST /render/{id}/cancel` |
 | `daz_set_render_settings` | Configure render options | DazScript `RenderOptions` |
 | `daz_capture_viewport` | Quick viewport screenshot | `dazpy` viewport capture |
 

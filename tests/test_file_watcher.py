@@ -5,7 +5,6 @@ import os
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,7 +13,28 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fixtures", "rendering", "comfyui_enhance"))
 
-from file_watcher import FileWatcher, _wait_for_stable
+import file_watcher  # noqa: E402
+from file_watcher import FileWatcher, _wait_for_stable  # noqa: E402
+
+
+PNG_BYTES = bytes.fromhex("89504e470d0a") + b"data"
+
+
+def _observed_watcher():
+    """Patch FileWatcher's watchdog Observer so tests know when it is watching.
+
+    FileWatcher only sees files created after its observer starts, so tests
+    wait on the returned event before writing instead of sleeping and hoping.
+    Returns ``(patcher, started)``.
+    """
+    started = threading.Event()
+
+    class _SignallingObserver(file_watcher.Observer):
+        def start(self):
+            super().start()
+            started.set()
+
+    return patch("file_watcher.Observer", _SignallingObserver), started
 
 
 class TestWaitForStable(unittest.TestCase):
@@ -56,16 +76,16 @@ class TestFileWatcherFunctional(unittest.TestCase):
     def test_watch_detects_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             target = os.path.join(tmpdir, "snap.png")
+            patcher, started = _observed_watcher()
 
-            def _write_after_delay():
-                time.sleep(0.3)
-                Path(target).write_bytes(b"\x89PNG\r\ndata")
+            def _write_once_watching():
+                if started.wait(timeout=5.0):
+                    Path(target).write_bytes(PNG_BYTES)
 
-            t = threading.Thread(target=_write_after_delay, daemon=True)
-            t.start()
+            threading.Thread(target=_write_once_watching, daemon=True).start()
 
-            watcher = FileWatcher()
-            result = watcher.watch(tmpdir, pattern="snap.png", timeout=5.0)
+            with patcher:
+                result = FileWatcher().watch(tmpdir, pattern="snap.png", timeout=5.0)
             self.assertEqual(os.path.normpath(result), os.path.normpath(target))
 
     def test_watch_timeout_raises(self):
@@ -76,17 +96,17 @@ class TestFileWatcherFunctional(unittest.TestCase):
 
     def test_watch_ignores_non_matching_pattern(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            patcher, started = _observed_watcher()
+
             def _write_wrong_then_right():
-                time.sleep(0.2)
-                Path(os.path.join(tmpdir, "ignore.txt")).write_bytes(b"ignored")
-                time.sleep(0.2)
-                Path(os.path.join(tmpdir, "snap.png")).write_bytes(b"\x89PNG\r\ndata")
+                if started.wait(timeout=5.0):
+                    Path(os.path.join(tmpdir, "ignore.txt")).write_bytes(b"ignored")
+                    Path(os.path.join(tmpdir, "snap.png")).write_bytes(PNG_BYTES)
 
-            t = threading.Thread(target=_write_wrong_then_right, daemon=True)
-            t.start()
+            threading.Thread(target=_write_wrong_then_right, daemon=True).start()
 
-            watcher = FileWatcher()
-            result = watcher.watch(tmpdir, pattern="*.png", timeout=5.0)
+            with patcher:
+                result = FileWatcher().watch(tmpdir, pattern="*.png", timeout=5.0)
             self.assertTrue(result.endswith(".png"))
 
     def test_watch_async_calls_callback(self):
@@ -99,11 +119,11 @@ class TestFileWatcherFunctional(unittest.TestCase):
                 received.append(path)
                 done.set()
 
-            watcher = FileWatcher()
-            watcher.watch_async(tmpdir, _cb, pattern="*.png", timeout=5.0)
-
-            time.sleep(0.2)
-            Path(target).write_bytes(b"\x89PNG\r\ndata")
+            patcher, started = _observed_watcher()
+            with patcher:
+                FileWatcher().watch_async(tmpdir, _cb, pattern="*.png", timeout=5.0)
+                self.assertTrue(started.wait(timeout=5.0), "watcher never started")
+            Path(target).write_bytes(PNG_BYTES)
 
             self.assertTrue(done.wait(timeout=5.0), "callback never fired")
             self.assertEqual(len(received), 1)

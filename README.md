@@ -907,7 +907,7 @@ All settings are persisted via QSettings and restored between DAZ Studio session
 - Exceeded IPs receive HTTP 429 Too Many Requests
 - Logs violations with timestamp and client IP
 - Applies to every POST/DELETE route. Polling and streaming GETs
-  (`/requests/*`, `GET /scripts`, `/render/:id/progress`, `/scene/events`)
+  (`/requests/*`, `GET /scripts`, `/render/{id}/progress`, `/scene/events`)
   aren't rate limited, so a client watching a job isn't throttled
 
 ### 🎛️ Advanced Limits
@@ -1317,7 +1317,7 @@ The script registry allows you to register scripts once and execute them by name
 
 ---
 
-### `POST /scripts/:id/execute`
+### `POST /scripts/{id}/execute`
 
 **Purpose:** Execute a registered script by ID
 **Authentication:** Required (if enabled)
@@ -1343,7 +1343,7 @@ The script registry allows you to register scripts once and execute them by name
 
 ---
 
-### `DELETE /scripts/:id`
+### `DELETE /scripts/{id}`
 
 **Purpose:** Remove a script from the registry
 **Authentication:** Required (if enabled)
@@ -1452,18 +1452,18 @@ is still running.
 
 ---
 
-### `POST /scripts/:id/async`
+### `POST /scripts/{id}/async`
 
 **Purpose:** Submit a registered script for asynchronous execution
 **Authentication:** Required (if enabled)
 
-**Request Body:** Same as `POST /scripts/:id/execute`
+**Request Body:** Same as `POST /scripts/{id}/execute`
 
 **Response (immediate):** Same shape as `POST /execute/async`
 
 ---
 
-### `GET /requests/:id/status`
+### `GET /requests/{id}/status`
 
 **Purpose:** Poll the status of an async request
 **Authentication:** Required (if enabled)
@@ -1528,7 +1528,7 @@ with `phase: "done"`.
 
 ---
 
-### `GET /requests/:id/result`
+### `GET /requests/{id}/result`
 
 **Purpose:** Fetch the final result of an async request
 **Authentication:** Required (if enabled)
@@ -1563,7 +1563,7 @@ Returns HTTP 404 if the request ID is unknown or has been purged (TTL: 1 hour).
 
 ---
 
-### `DELETE /requests/:id`
+### `DELETE /requests/{id}`
 
 **Purpose:** Cancel a queued or running async request
 **Authentication:** Required (if enabled)
@@ -1634,7 +1634,7 @@ The URL takes IDs only, never paths, so a client can't name an undeclared file.
 Both routes use the read middleware chain (IP whitelist, then auth) and are not
 rate limited. Artifact records expire with the job (1 hour).
 
-### `GET /artifacts/:id`
+### `GET /artifacts/{id}`
 
 Lists the job's artifacts with file metadata read at request time:
 
@@ -1665,7 +1665,7 @@ directory, or is not absolute. `thumbnail_supported` says whether `?thumbnail`
 should work (see below). It is judged by extension and size only; the content
 is checked when a thumbnail is requested.
 
-### `GET /artifacts/:id/:artifact_id`
+### `GET /artifacts/{id}/{artifact_id}`
 
 Streams the file with `Content-Type` (by extension), `Content-Length`,
 `Accept-Ranges: bytes` and `Content-Disposition: inline; filename=...`.
@@ -1681,7 +1681,7 @@ Streams the file with `Content-Type` (by extension), `Content-Length`,
 | ID isn't 1-64 chars of `A-Z a-z 0-9 - _` (e.g. `..`, `a.png`) | `400 INVALID_FIELD` |
 | Declared file is missing, a directory, or a relative path | `410 ARTIFACT_UNAVAILABLE` |
 
-### Thumbnails: `GET /artifacts/:id/:artifact_id?thumbnail=<px>`
+### Thumbnails: `GET /artifacts/{id}/{artifact_id}?thumbnail=<px>`
 
 Returns a scaled copy of an image artifact instead of the file, for previews
 of renders that may be thousands of pixels across.

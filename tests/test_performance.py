@@ -19,6 +19,9 @@ import threading
 import time
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from waiting import poll_until  # noqa: E402
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser(description="DazScriptServer performance tests")
@@ -110,16 +113,16 @@ def execute(script: str, args=None, timeout: int = 30) -> requests.Response:
 
 
 def poll_async(request_id: str, timeout: int = 60) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    def fetch() -> dict:
         r = get(f"/requests/{request_id}/status", headers=AUTH, timeout=5)
         if r.status_code != 200:
             return {"status": "error", "_http": r.status_code}
-        data = r.json()
-        if data.get("status") in ("completed", "failed", "cancelled"):
-            return data
-        time.sleep(0.1)
-    return {"status": "timeout"}
+        return r.json()
+
+    data, ok = poll_until(
+        fetch, lambda d: d.get("status") in ("completed", "failed", "cancelled", "error"),
+        timeout=timeout, interval=0.1)
+    return data if ok else {"status": "timeout"}
 
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────

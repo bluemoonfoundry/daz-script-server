@@ -206,8 +206,8 @@ def render(
 ) -> RenderResult:
     """Render the DAZ Studio scene to *output_path*.
 
-    Uses the SSE progress stream (``GET /render/:id/progress``) when available;
-    falls back to long-poll on ``/requests/:id/result`` otherwise.
+    Uses the SSE progress stream (``GET /render/{id}/progress``) when available;
+    falls back to long-poll on ``/requests/{id}/result`` otherwise.
 
     Args:
         client: Connected :class:`~dazpy.DazClient`.
