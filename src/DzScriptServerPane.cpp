@@ -2002,44 +2002,13 @@ void DzScriptServerPane::applyPluginRoutes()
 
 std::string DzScriptServerPane::listScriptsJson() const
 {
-	struct Entry { std::string id, description; long long registeredAtMs; };
-	std::vector<Entry> entries;
-	{
-		QMutexLocker lock(&m_scriptRegistry.mutex);
-		entries.reserve(m_scriptRegistry.scripts.size());
-		for (QMap<QByteArray, RegisteredScript>::const_iterator it = m_scriptRegistry.scripts.begin();
-		     it != m_scriptRegistry.scripts.end(); ++it) {
-			entries.push_back({
-			    std::string(it.key().constData(), it.key().size()),
-			    JsonStd::qstrToStd(it.value().description),
-			    (long long)it.value().registeredAt.toMSecsSinceEpoch()
-			});
-		}
-	}
-
-	std::string items;
-	for (size_t i = 0; i < entries.size(); ++i) {
-		if (i > 0) items += ",";
-		items += "{\"name\":\"" + JsonStd::escape(entries[i].id) + "\"";
-		items += ",\"description\":\"" + JsonStd::escape(entries[i].description) + "\"";
-		items += ",\"registered_at\":\"" + JsonStd::msecToIso(entries[i].registeredAtMs) + "\"}";
-	}
-	std::string s = "{\"scripts\":[" + items + "]";
-	s += ",\"count\":" + std::to_string(entries.size()) + "}";
-	return s;
+	return m_scriptRegistry.listJson();
 }
 
 std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
     const std::string& id, const std::string& clientIP)
 {
-	bool removed = false;
-	{
-		QByteArray key(id.c_str(), (int)id.size());
-		QMutexLocker lock(&m_scriptRegistry.mutex);
-		removed = m_scriptRegistry.scripts.remove(key) > 0;
-	}
-
-	if (!removed) {
+	if (!m_scriptRegistry.remove(id)) {
 		return {404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id)};
 	}
 
@@ -2053,12 +2022,7 @@ std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
 
 bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string& outScript) const
 {
-	QByteArray key(id.c_str(), (int)id.size());
-	QMutexLocker lock(&m_scriptRegistry.mutex);
-	if (!m_scriptRegistry.scripts.contains(key))
-		return false;
-	outScript = JsonStd::qstrToStd(m_scriptRegistry.scripts.value(key).script);
-	return true;
+	return m_scriptRegistry.lookup(id, outScript);
 }
 
 // ─── Async Request public API (called from HTTP threads) ──────────────────────
@@ -2273,18 +2237,8 @@ HttpResult DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, 
 		return HttpResult(scriptResult.httpStatus(),
 			stdToQBA(scriptResult.toErrorJson()));
 
-	RegisteredScript entry;
-	entry.description  = description;
-	entry.script       = script;
-	entry.registeredAt = QDateTime::currentDateTime();
-
-	bool isUpdate;
-	{
-		QByteArray key = name.toUtf8();
-		QMutexLocker lock(&m_scriptRegistry.mutex);
-		isUpdate = m_scriptRegistry.scripts.contains(key);
-		m_scriptRegistry.scripts.insert(key, entry);
-	}
+	QDateTime registeredAt;
+	const bool isUpdate = m_scriptRegistry.registerScript(name, description, script, &registeredAt);
 
 	appendLog(QString("[%1] [%2] [REGISTRY] %3 script: %4")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -2296,7 +2250,7 @@ HttpResult DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, 
 	json.startObject();
 	json.addMember("success",       true);
 	json.addMember("id",            name);
-	json.addMember("registered_at", entry.registeredAt.toString(Qt::ISODate));
+	json.addMember("registered_at", registeredAt.toString(Qt::ISODate));
 	json.addMember("updated",       isUpdate);
 	json.finishObject();
 	return HttpResult(200, json.toString().toUtf8());

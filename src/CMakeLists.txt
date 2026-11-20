@@ -22,6 +22,7 @@ add_library(DazScriptServer SHARED
 	ArtifactFile.cpp
 	ArtifactRoots.cpp
 	ArtifactRoutes.cpp
+	ScriptRegistry.cpp
 	ArtifactThumbnail.cpp
 	RequestValidator.cpp
 	SettingsService.cpp
@@ -55,6 +56,7 @@ add_library(DazScriptServer SHARED
 	../include/IdempotencyCache.h
 	../include/ArtifactFile.h
 	../include/ArtifactRoots.h
+	../include/ScriptRegistry.h
 	../include/ArtifactThumbnail.h
 	../include/RequestValidator.h
 	../include/common_version.h

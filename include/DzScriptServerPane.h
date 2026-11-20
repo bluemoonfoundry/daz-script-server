@@ -37,6 +37,7 @@
 #include "RateLimiterService.h"
 #include "IPWhitelistService.h"
 #include "ArtifactRoots.h"
+#include "ScriptRegistry.h"
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
@@ -341,19 +342,7 @@ private:
 
 	QAtomicInt       m_nActiveRequests;  // Current concurrent requests (atomic: written from HTTP threads)
 
-	// Script Registry (session-only, in-memory)
-	struct RegisteredScript {
-		QString   description;
-		QString   script;
-		QDateTime registeredAt;
-	};
-	struct ScriptRegistry {
-		// Key is QByteArray (not QString) so worker threads can look up scripts
-		// without creating QString temporaries that ~QString would free via the
-		// wrong CRT (ucrtbase vs msvcr100).
-		QMap<QByteArray, RegisteredScript> scripts;
-		mutable QMutex mutex;
-	};
+	// Script Registry (session-only, in-memory; see ScriptRegistry.h)
 	ScriptRegistry m_scriptRegistry;
 
 	// ── Async Request Infrastructure ─────────────────────────────────────────
