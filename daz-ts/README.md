@@ -12,14 +12,15 @@ layer (nodes, materials, skeletons, etc.).
 
 ## Install
 
-`daz-ts` is not yet published to the npm registry, and npm can't install a
-package from a subdirectory of a git repository, so install the
-`daz-ts-*.tgz` tarball attached to a [GitHub release](https://github.com/bluemoonfoundry/daz-script-server/releases),
-either downloaded or by URL:
+```bash
+npm install @bluemoonfoundry/daz-ts
+```
+
+For offline installs, each `daz-ts-v*` [GitHub release](https://github.com/bluemoonfoundry/daz-script-server/releases)
+also carries the `bluemoonfoundry-daz-ts-*.tgz` tarball:
 
 ```bash
-npm install ./daz-ts-0.1.0.tgz
-npm install https://github.com/bluemoonfoundry/daz-script-server/releases/download/<tag>/daz-ts-0.1.0.tgz
+npm install ./bluemoonfoundry-daz-ts-0.1.0.tgz
 ```
 
 Requires Node.js >= 18 (for built-in `fetch`/`AbortController`).
@@ -33,7 +34,7 @@ first run). You can also pass a token explicitly, or pass `token: ""` to
 disable authentication (only if the server has auth disabled too):
 
 ```ts
-import { DazClient } from "daz-ts";
+import { DazClient } from "@bluemoonfoundry/daz-ts";
 
 const client = new DazClient(); // auto-loads token from ~/.daz3d/...
 const explicit = new DazClient({ token: "your-token-here" });
@@ -51,7 +52,7 @@ Run a DazScript string synchronously and get back its result, captured
 console output, and timing:
 
 ```ts
-import { DazClient } from "daz-ts";
+import { DazClient } from "@bluemoonfoundry/daz-ts";
 
 const client = new DazClient();
 
@@ -88,7 +89,7 @@ whole call, and earlier mutations already applied to the live scene are
 **not** rolled back:
 
 ```ts
-import { Batch, DazClient } from "daz-ts";
+import { Batch, DazClient } from "@bluemoonfoundry/daz-ts";
 
 const client = new DazClient();
 const batch = new Batch(client); // options: { maxOperations, maxScriptLength }
@@ -116,7 +117,7 @@ Run a potentially long-running script via the async endpoint, with polling
 handled for you:
 
 ```ts
-import { executeLong } from "daz-ts";
+import { executeLong } from "@bluemoonfoundry/daz-ts";
 
 const result = await executeLong(client, "renderEverything();", undefined, {
   timeoutMs: 300_000, // default 120000

@@ -179,7 +179,7 @@ jobs:
             echo "- **Python Package:** \`dazpy-*.whl\`"
             echo ""
             echo "### TypeScript"
-            echo "- **daz-ts Package:** \`daz-ts-*.tgz\`"
+            echo "- **daz-ts Package:** \`bluemoonfoundry-daz-ts-*.tgz\` (also on npm: \`npm install @bluemoonfoundry/daz-ts\`)"
           } > release_notes.md
 
       - name: Download all artifacts

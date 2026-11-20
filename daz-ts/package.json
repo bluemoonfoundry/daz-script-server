@@ -1,17 +1,43 @@
 {
-  "name": "daz-ts",
+  "name": "@bluemoonfoundry/daz-ts",
   "version": "0.1.0",
   "description": "TypeScript SDK for the DAZ Studio Script Server",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bluemoonfoundry/daz-script-server.git",
+    "directory": "daz-ts"
+  },
+  "homepage": "https://github.com/bluemoonfoundry/daz-script-server/tree/master/daz-ts#readme",
+  "bugs": {
+    "url": "https://github.com/bluemoonfoundry/daz-script-server/issues"
+  },
+  "keywords": [
+    "daz",
+    "daz-studio",
+    "dazscript",
+    "3d",
+    "sdk"
+  ],
   "engines": {
     "node": ">=18"
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc -p tsconfig.json",

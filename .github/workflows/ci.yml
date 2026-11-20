@@ -17,6 +17,8 @@ jobs:
           python-version: "3.12"
       - name: Check version is the same in every file
         run: python scripts/check_version_consistency.py
+      - name: Check daz-ts version is the same in package.json and package-lock.json
+        run: python scripts/check_daz_ts_version.py
 
   openapi-parity:
     name: Route / OpenAPI parity

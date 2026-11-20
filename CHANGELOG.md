@@ -13,6 +13,13 @@ All notable changes to DazScript Server are documented here.
 - `SECURITY.md` (supported versions, private vulnerability reporting, scope)
   and a docs index at `docs/README.md`. Plans for shipped features moved to
   `docs/superpowers/plans/archive/`.
+- **daz-ts on npm:** the package is now `@bluemoonfoundry/daz-ts`
+  (`npm install @bluemoonfoundry/daz-ts`; imports change from `"daz-ts"`).
+  It has its own release train: a `daz-ts-v<version>` tag publishes it from
+  `publish-daz-ts.yml` via npm trusted publishing with provenance.
+  `scripts/check_daz_ts_version.py` keeps the tag, `package.json` and
+  `package-lock.json` in step. The release tarball is now
+  `bluemoonfoundry-daz-ts-*.tgz`.
 
 ### Fixed
 

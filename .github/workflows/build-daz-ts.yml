@@ -42,7 +42,8 @@ jobs:
 
       - name: Verify pack artifact
         run: |
-          TARBALL=$(ls dist-pack/daz-ts-*.tgz 2>/dev/null | head -1)
+          # Scoped package: npm pack names it bluemoonfoundry-daz-ts-<version>.tgz.
+          TARBALL=$(ls dist-pack/bluemoonfoundry-daz-ts-*.tgz 2>/dev/null | head -1)
           if [ -z "$TARBALL" ]; then
             echo "Error: daz-ts tarball not found in dist-pack/"
             exit 1
