@@ -96,6 +96,16 @@ class TestSceneRecipeLive(unittest.TestCase):
         except Exception:
             pass
 
+    def assertApplied(self, result) -> None:
+        """Fail with the apply's own diagnosis, not just "False is not true"."""
+        if not result.applied:
+            step = result.failed_step
+            self.fail(f"apply failed: error={result.error!r} "
+                      f"failed_step={f'{step.op} {step.path}' if step else None} "
+                      f"conflicts={[c.path for c in result.conflicts]} "
+                      f"rolled_back={result.rolled_back} "
+                      f"rollback_errors={list(result.rollback_errors)}")
+
     def _tweak_key(self, recipe: dict, scene: DazScene) -> dict:
         """Move the rig's key light 30 cm by hand; return its new position."""
         key = scene.find_node_by_label(f"{recipe['id']}:main.key")
@@ -107,7 +117,7 @@ class TestSceneRecipeLive(unittest.TestCase):
         recipe = _example("end_to_end")
         scene = _new_scene()
         self.assertTrue(validate(recipe, scene).ok)
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         renders = render(recipe, scene)
         self.assertEqual([r.shot_id for r in renders], ["full_body", "close_up"])
         for shot in renders:
@@ -117,7 +127,7 @@ class TestSceneRecipeLive(unittest.TestCase):
     def test_recipe_reapply_changes_only_moved_camera(self):
         recipe = _example("moved_camera")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         moved = copy.deepcopy(recipe)
         moved["cameras"]["close_up"]["azimuth_deg"] = 45
         steps = plan(moved, scene).steps
@@ -126,13 +136,13 @@ class TestSceneRecipeLive(unittest.TestCase):
     def test_recipe_hand_tweak_warns_then_conflicts(self):
         recipe = _example("hand_tweak")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         key = scene.find_node_by_label(f"{recipe['id']}:main.key")
         pos = key.position
         key.set_position(pos["x"] + 30, pos["y"], pos["z"])
 
         same = apply(recipe, scene)
-        self.assertTrue(same.applied)
+        self.assertApplied(same)
         self.assertIn("hand_tweak_kept", [w.code for w in same.warnings])
 
         changed = copy.deepcopy(recipe)
@@ -142,18 +152,18 @@ class TestSceneRecipeLive(unittest.TestCase):
         self.assertEqual([c.path for c in blocked.conflicts], ["lighting.rigs.main.key.transform"])
 
         won = apply(changed, scene, on_conflict="recipe_wins")
-        self.assertTrue(won.applied)
+        self.assertApplied(won)
 
     def test_recipe_remove_actor_deletes_node(self):
         recipe = _example("remove_actor")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         label = f"{recipe['id']}:model"
         scene.find_node_by_label(label)  # exists
         # Drop the actor and everything that references it.
         bare = {"recipe_version": 1, "id": recipe["id"], "assets": recipe["assets"]}
         result = apply(bare, scene)
-        self.assertTrue(result.applied)
+        self.assertApplied(result)
         self.assertIn(("delete", "actors.model"), [(s.op, s.path) for s in result.steps])
         with self.assertRaises(Exception):
             scene.find_node_by_label(label)
@@ -161,7 +171,7 @@ class TestSceneRecipeLive(unittest.TestCase):
     def test_recipe_rollback_restores_scene(self):
         recipe = _example("rollback")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         edited = copy.deepcopy(recipe)
         edited["cameras"]["close_up"]["focal_length"] = 120
         edited["cameras"]["full_body"]["focal_length"] = 35
@@ -186,7 +196,7 @@ class TestSceneRecipeLive(unittest.TestCase):
     def test_recipe_reapply_after_save_reload(self):
         recipe = _example("save_reload")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         path = f"{_OUT}/save_reload/scene.duf"
         scene._client.execute(
             f'(function(){{ new DzDir("{_OUT}/save_reload").mkpath("{_OUT}/save_reload"); return true; }})()')
@@ -200,7 +210,7 @@ class TestSceneRecipeLive(unittest.TestCase):
     def test_recipe_ask_conflict_changes_nothing(self):
         recipe = _example("ask_blocks")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         tweaked = self._tweak_key(recipe, scene)
         changed = copy.deepcopy(recipe)
         changed["lighting"]["rigs"]["main"]["key"] = {"azimuth_deg": 60}
@@ -216,12 +226,12 @@ class TestSceneRecipeLive(unittest.TestCase):
     def test_recipe_scene_wins_keeps_tweak_and_adopts_it(self):
         recipe = _example("scene_wins")
         scene = _new_scene()
-        self.assertTrue(apply(recipe, scene).applied)
+        self.assertApplied(apply(recipe, scene))
         tweaked = self._tweak_key(recipe, scene)
         changed = copy.deepcopy(recipe)
         changed["lighting"]["rigs"]["main"]["key"] = {"azimuth_deg": 60}
         result = apply(changed, scene, on_conflict="scene_wins")
-        self.assertTrue(result.applied)
+        self.assertApplied(result)
         self.assertEqual(result.kept, ("lighting.rigs.main.key.transform",))
         key = scene.find_node_by_label(f"{recipe['id']}:main.key")
         self.assertAlmostEqual(key.position["x"], tweaked["x"], places=1)
