@@ -23,15 +23,11 @@ from dazpy._scene_events import SceneEvent, watch_scene_events, wait_for_scene_e
 from dazpy.exceptions import ConnectionError as DazConnectionError
 from dazpy.exceptions import TimeoutError as DazTimeoutError
 from dazpy import (
-    AnchorTarget,
     AxisLimit,
     BalanceTarget,
-    BoneChain,
     BoneProfile,
-    ContactTarget,
     FigureRigProfile,
     FootTarget,
-    InteractionAnchor,
     InteractionPlan,
     InteractionRecipe,
     InteractionPosePatch,
@@ -54,8 +50,6 @@ from dazpy import (
     build_rig_profile,
     align_hand_target,
     default_axis_limits_for_bone,
-    align_single_limb_target,
-    apply_interaction_recipe_to_scene,
     resolve_interaction_target,
 )
 from dazpy import GeometryFrames, parse_geometry_frames
@@ -2369,7 +2363,6 @@ class TestDazRenderSettingsScriptGeneration(unittest.TestCase):
         self.assertFalse(rs.remove_canvas("NoSuchCanvas"))
 
     def test_canvas_output_paths_derives_convention(self):
-        from dazpy._render import Canvas
         rs, client = self._make_render(
             [{"name": "Canvas1", "canvas_type": "Normal", "index": 0}]
         )
@@ -2500,7 +2493,7 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
 
     def test_find_bone_calls_findBone(self):
         skel, client = self._make_skeleton("hip")
-        bone = skel.find_bone("hip")
+        skel.find_bone("hip")
         script = client.execute.call_args[0][0]
         self.assertIn("findBone", script)
         self.assertIn("hip", script)
@@ -4139,8 +4132,6 @@ class TestDazGeometryScriptGeneration(unittest.TestCase):
         self.assertEqual(result, [[0, 1, 2], [0, 2, 3]])
 
     def test_face_vertex_indices_all_paginates(self):
-        from unittest.mock import MagicMock
-        from dazpy._geometry import DazGeometry
         from dazpy._result import ExecutionResult
         geo, _ = self._geo()
         # Two pages: 2 faces total, chunk_size=1
@@ -4271,7 +4262,6 @@ class TestDazGeometryScriptGeneration(unittest.TestCase):
         self.assertIsInstance(result[0], Vec3)
 
     def test_as_vec3_preserves_coordinates(self):
-        from dazpy import Vec3
         from dazpy._geometry import DazGeometry
         result = DazGeometry.as_vec3([[1.5, 2.5, 3.5]])
         self.assertAlmostEqual(result[0].x, 1.5)
@@ -5023,7 +5013,6 @@ class TestVec3(unittest.TestCase):
 
     def test_length(self):
         from dazpy import Vec3
-        import math
         self.assertAlmostEqual(Vec3(3, 4, 0).length(), 5.0)
 
     def test_normalize(self):
@@ -5111,7 +5100,6 @@ class TestQuat(unittest.TestCase):
 
     def test_multiply_identity(self):
         from dazpy import Quat
-        q = Quat.from_axis_angle
         qi = Quat.identity()
         from dazpy import Vec3
         ax = Quat.from_axis_angle(Vec3(0, 1, 0), 45)
@@ -5270,7 +5258,6 @@ class TestBoundingBox(unittest.TestCase):
             bb.min = None
 
     def test_center(self):
-        from dazpy import Vec3
         bb = self._box()
         c = bb.center
         self.assertAlmostEqual(c.x, 1.0)
@@ -5317,7 +5304,6 @@ class TestBoundingBox(unittest.TestCase):
         self.assertFalse(a.overlaps(b))
 
     def test_expand(self):
-        from dazpy import Vec3
         bb = self._box()
         e = bb.expand(1.0)
         self.assertAlmostEqual(e.min.x, -1.0)
@@ -6118,7 +6104,7 @@ class TestSceneSnapshot(unittest.TestCase):
 
     def test_apply_recipe_uses_snapshot_when_available(self):
         """apply_interaction_recipe_to_scene uses scene_snapshot() when present."""
-        from dazpy import build_rig_profiles_from_snapshot, InteractionRecipe, PoseTarget
+        from dazpy import build_rig_profiles_from_snapshot
 
         snapshot = self._SAMPLE_SNAPSHOT
         profiles = build_rig_profiles_from_snapshot(snapshot)
@@ -6129,19 +6115,6 @@ class TestSceneSnapshot(unittest.TestCase):
 
             def skeletons(self):
                 raise AssertionError("skeletons() should not be called when scene_snapshot() is present")
-
-        recipe = InteractionRecipe(
-            kind="custom",
-            actors=["Genesis 9"],
-            constraints=[PoseTarget(figure_label="Genesis 9", bone_name="hip")],
-        )
-
-        class _SceneWithApply(_SnapshotScene):
-            def __init__(self):
-                self.applied = False
-
-            def apply_interaction_recipe(self, *a, **kw):
-                self.applied = True
 
         # Just verify build_rig_profiles_from_snapshot returns correct structure
         self.assertIn("Genesis 9", profiles)
@@ -6227,26 +6200,28 @@ class TestApplyPose(unittest.TestCase):
 
 
 class TestResetTransforms(unittest.TestCase):
-    def test_reset_transforms_calls_position_rotation_scale_setters(self):
+    def test_reset_transforms_calls_set_transform_once(self):
         from dazpy.poses import reset_transforms
         node = MagicMock()
         reset_transforms(node)
-        node.set_local_position.assert_called_once_with(0.0, 0.0, 0.0)
-        node.set_local_rotation.assert_called_once_with(0.0, 0.0, 0.0)
-        node.set_scale.assert_called_once_with(1.0, 1.0, 1.0)
+        node.set_transform.assert_called_once_with(
+            position=(0.0, 0.0, 0.0),
+            rotation=(0.0, 0.0, 0.0),
+            scale=(1.0, 1.0, 1.0),
+        )
 
-    def test_reset_transforms_works_on_real_node(self):
+    def test_reset_transforms_issues_exactly_one_call(self):
         from dazpy._node import DazNode
         from dazpy.poses import reset_transforms
 
         client = _make_client(None)
         node = DazNode(client, NodeIdentifier("SomeCamera"))
         reset_transforms(node)
-        self.assertEqual(client.execute.call_count, 3)
-        scripts = [call.args[0] for call in client.execute.call_args_list]
-        self.assertTrue(any("setLocalPos" in s for s in scripts))
-        self.assertTrue(any("getXRotControl" in s for s in scripts))
-        self.assertTrue(any("getXScaleControl" in s for s in scripts))
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getXScaleControl", script)
 
 
 class TestZeroFigure(unittest.TestCase):
@@ -6328,7 +6303,7 @@ class TestBatchPoseEvaluation(unittest.TestCase):
 
     def test_evaluate_pose_script_contains_save_apply_restore(self):
         skel, client = self._make_skeleton_client({"r_hand": [10.0, 20.0, 30.0]})
-        result = skel.evaluate_pose({"hip": (5.0, 0.0, 0.0)}, ["r_hand"])
+        skel.evaluate_pose({"hip": (5.0, 0.0, 0.0)}, ["r_hand"])
         script = client.execute.call_args[0][0]
         self.assertIn("_originals", script)
         self.assertIn("getWSPos", script)
@@ -7405,7 +7380,6 @@ class TestOrbitCamera(unittest.TestCase):
 
     def test_apply_resolves_daznode_target_with_offset(self):
         from dazpy.cinematics import OrbitCamera, apply_orbit_camera
-        from dazpy.math3 import Vec3
 
         class _Node:
             position = {"x": 0.0, "y": 0.0, "z": 0.0}
@@ -8020,20 +7994,6 @@ class TestDazNodeSetTransform(unittest.TestCase):
         client.execute.assert_not_called()
 
 
-class TestResetTransforms(unittest.TestCase):
-    def test_reset_transforms_issues_exactly_one_call(self):
-        client = _make_client(None)
-        from dazpy._node import DazNode, NodeIdentifier
-        from dazpy.poses import reset_transforms
-        node = DazNode(client, NodeIdentifier("name", "Camera"))
-        reset_transforms(node)
-        self.assertEqual(client.execute.call_count, 1)
-        script = client.execute.call_args[0][0]
-        self.assertIn("setLocalPos", script)
-        self.assertIn("getXRotControl", script)
-        self.assertIn("getXScaleControl", script)
-
-
 class TestZeroFigureDefaultPath(unittest.TestCase):
     def test_default_mode_issues_exactly_one_call(self):
         client = _make_client(None)
@@ -8173,8 +8133,8 @@ class TestBatchAddOperation(unittest.TestCase):
         client = _make_client({"_r0": None, "_r1": 99})
         from dazpy._batch import Batch
         batch = Batch(client)
-        write_future = batch.add_operation(body_lines=["var _v = 99;"], result_expression="null")
-        read_future = batch.add_operation(body_lines=[], result_expression="_v")
+        batch.add_operation(body_lines=["var _v = 99;"], result_expression="null")
+        batch.add_operation(body_lines=[], result_expression="_v")
         batch.execute()
         script = client.execute.call_args[0][0]
         self.assertLess(script.index("var _v = 99;"), script.index("var _r1 = _v;"))
@@ -8538,3 +8498,61 @@ class TestParseVersion(unittest.TestCase):
         self.assertIsNone(parse_version("abc"))
         self.assertIsNone(parse_version(None))
         self.assertIsNone(parse_version(2.1))
+
+
+class TestAuthenticationErrorFields(unittest.TestCase):
+    """401/403 keep the server's ErrorResponse fields (review W13)."""
+
+    def _client(self, status_code, json_data=None, text=None):
+        client = DazClient(token="", check_version=False)
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        if json_data is None:
+            response.json.side_effect = ValueError("not json")
+        else:
+            response.json.return_value = json_data
+        response.text = text if text is not None else json.dumps(json_data)
+        client._session.post.return_value = response
+        client._session.get.return_value = response
+        return client
+
+    def test_401_keeps_error_response_fields(self):
+        body = {"success": False, "error_code": "AUTH_INVALID_TOKEN", "error": "Invalid API token",
+                "retryable": False, "detail": "token mismatch"}
+        client = self._client(401, body)
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            client.execute("1;")
+        err = ctx.exception
+        self.assertEqual(err.status_code, 401)
+        self.assertEqual(err.error_code, "AUTH_INVALID_TOKEN")
+        self.assertEqual(err.detail, "token mismatch")
+        self.assertFalse(err.retryable)
+        self.assertEqual(str(err), "HTTP 401: Invalid API token")
+
+    def test_403_ip_blocked(self):
+        body = {"success": False, "error_code": "IP_NOT_WHITELISTED", "error": "IP not allowed",
+                "retryable": False}
+        client = self._client(403, body)
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            client.status()
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.error_code, "IP_NOT_WHITELISTED")
+        self.assertEqual(ctx.exception.detail, "")
+
+    def test_non_json_body_falls_back_to_text(self):
+        client = self._client(401, None, text="Unauthorized")
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            client.execute("1;")
+        self.assertEqual(ctx.exception.error_code, "")
+        self.assertEqual(str(ctx.exception), "HTTP 401: Unauthorized")
+
+    def test_scene_save_copy_keeps_fields(self):
+        client = self._client(401, {"error_code": "AUTH_MISSING_TOKEN", "error": "Missing token"})
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            DazScene(client).save_copy("C:/x.duf")
+        self.assertEqual(ctx.exception.error_code, "AUTH_MISSING_TOKEN")
+
+    def test_old_positional_constructor_still_works(self):
+        err = exceptions.AuthenticationError("HTTP 401: x")
+        self.assertEqual((err.status_code, err.error_code, err.detail, err.retryable), (401, "", "", False))

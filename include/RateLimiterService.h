@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <string>
 #include <QtCore/qbytearray.h>
 #include <QtCore/qmap.h>
@@ -28,7 +29,7 @@ private:
 
     void cleanupStale();
 
-    bool  m_bEnabled;
+    std::atomic<bool> m_bEnabled;  // read by HTTP threads, written on main thread
     int   m_nMax;
     int   m_nWindowSec;
 

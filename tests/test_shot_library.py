@@ -13,7 +13,7 @@ from dazpy.math3 import Quat, Vec3
 from dazpy._shot_geometry import look_at_euler
 from dazpy._recipe_validate import _KEY_RE
 from dazpy.shots import (
-    SHOT_SIZES, CoveragePlan, Framing, Keyframed, Lens, Orbit, Placement, Shot, framing_transform,
+    SHOT_SIZES, CoveragePlan, Framing, Keyframed, Orbit, Shot, framing_transform,
 )
 from dazpy import shot_library as sl
 from dazpy.shot_library import DialogueBeat, LineOfAction

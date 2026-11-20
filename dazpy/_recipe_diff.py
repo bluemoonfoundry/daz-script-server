@@ -105,6 +105,14 @@ class Step:
     prior: dict[str, dict] | None
     node_name: str | None
 
+    @property
+    def node(self) -> str:
+        """``node_name`` for ops on an existing node (modify, release, unparent,
+        delete), where the planner always sets it."""
+        if self.node_name is None:
+            raise ValueError(f"{self.op} step for {self.path} has no node_name")
+        return self.node_name
+
     def to_dict(self) -> dict:
         return to_jsonable(self)
 
@@ -193,7 +201,8 @@ class _Planner:
         self.targets.append(path)
         if path in self.resolutions:
             return self.resolutions[path]
-        return {"recipe_wins": "recipe", "scene_wins": "scene"}.get(self.on_conflict)
+        defaults: dict[str, Resolution] = {"recipe_wins": "recipe", "scene_wins": "scene"}
+        return defaults.get(self.on_conflict)
 
     def conflict(self, c: Conflict) -> Resolution | None:
         """Record *c*; return how it resolves (None = unresolved under ``ask``)."""
@@ -290,6 +299,7 @@ class _Planner:
         Returns False only when the conflict is unresolved (nothing emitted).
         """
         path = entity.path
+        kind: ConflictKind | None
         if entity.foreign_children:
             kind = "has_foreign_children"
             live_report: object = {"foreign_children": list(entity.foreign_children)}

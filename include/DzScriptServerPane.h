@@ -71,8 +71,19 @@ namespace ServerConfig {
     // Server lifecycle timing
     const int SERVER_BIND_WAIT_MS = 100;           // Wait after listen() before checking is_running()
     const int SERVER_THREAD_STOP_TIMEOUT_MS = 5000; // Max wait for server thread to join on stop
+    const int SERVER_THREAD_REAP_WAIT_MS = 1000;    // Short join after a failed bind or forced terminate()
     const int HTTP_KEEP_ALIVE_MAX_COUNT = 5;        // Max requests per persistent connection
     const int HTTP_KEEP_ALIVE_TIMEOUT_SEC = 5;      // Keep-alive idle timeout in seconds
+
+    // SSE streams (/events, render progress). The keepalive interval is also
+    // the subscriber-queue pop timeout; it must stay well under httplib's
+    // default 5 s write timeout so a keepalive goes out before the stream's
+    // wait_writable() check can time out.
+    const int SSE_KEEPALIVE_INTERVAL_MS = 3000;
+    const int SSE_FRAME_POLL_MS = 500;              // Studio 6 render-progress frame polling
+
+    // Body-size settings are in MB; httplib and the middleware compare bytes.
+    inline size_t mbToBytes(int mb) { return static_cast<size_t>(mb) * 1024 * 1024; }
 
     // Async request management
     const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
@@ -183,6 +194,11 @@ public slots:
 	// ArtifactThumbnail::Job* posted with Qt::QueuedConnection by the HTTP worker,
 	// which waits on job->done with a timeout (see serveArtifactThumbnail()).
 	Q_INVOKABLE void handleThumbnailJob(qulonglong job);
+
+	// Sync /execute and /scripts/:id/execute — main thread. call is a
+	// MainThreadCall::Call* posted with Qt::QueuedConnection by the HTTP worker,
+	// which gives up if it is not started in time (see MainThreadCall.h).
+	Q_INVOKABLE void handleMainThreadCall(qulonglong call);
 
 	void appendLog(const QString& line);
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,

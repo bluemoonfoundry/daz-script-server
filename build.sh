@@ -218,6 +218,10 @@ else
     CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=OFF")
 fi
 
+# Single-config generators (macOS Makefiles) fix the build type at configure
+# time; Visual Studio is multi-config and picks it from --config at build time.
+[ "$PLATFORM" != "win" ] && CMAKE_FLAGS+=("-DCMAKE_BUILD_TYPE=$BUILD_CONFIG")
+
 if [ "$PLATFORM" = "win" ]; then
     STALE_CHECK="$BUILD_DIR/ALL_BUILD.vcxproj"
 else
@@ -235,6 +239,13 @@ fi
 if [ "$COMMAND" != "install" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ] \
     && grep -qE '^INSTALL_TO_DAZ:BOOL=(ON|TRUE|1|YES)$' "$BUILD_DIR/CMakeCache.txt"; then
     echo "CMake cache has INSTALL_TO_DAZ=ON from a previous install; reconfiguring with it OFF."
+    NEEDS_CONFIGURE=1
+fi
+
+# ...and reconfigure a single-config build cached for the other build type
+if [ "$PLATFORM" != "win" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ] \
+    && ! grep -qE "^CMAKE_BUILD_TYPE:STRING=$BUILD_CONFIG\$" "$BUILD_DIR/CMakeCache.txt"; then
+    echo "CMake cache has a different CMAKE_BUILD_TYPE; reconfiguring for $BUILD_CONFIG."
     NEEDS_CONFIGURE=1
 fi
 

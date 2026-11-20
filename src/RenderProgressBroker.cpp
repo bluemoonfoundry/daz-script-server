@@ -1,7 +1,18 @@
 #include "RenderProgressBroker.h"
+#include "JsonStd.h"
 
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qmutex.h>
+
+namespace {
+// Full JSON string escaping (control chars included): a raw newline in an
+// error message or path would break both the JSON and the SSE "data:" framing.
+QString jsonEscape(const QString& s)
+{
+    const std::string escaped = JsonStd::escape(JsonStd::qstrToStd(s));
+    return QString::fromUtf8(escaped.data(), static_cast<int>(escaped.size()));
+}
+}
 
 RenderProgressBroker::RenderProgressBroker() {}
 
@@ -37,7 +48,7 @@ void RenderProgressBroker::unwatchRequest(const QString& requestId, SubscriberQu
 
 void RenderProgressBroker::notifyStarted(const QString& requestId)
 {
-    QString data = "{\"request_id\":\"" + requestId + "\",\"percent\":0}";
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId) + "\",\"percent\":0}";
     pushEvent(requestId, makeEvent("progress", data));
 }
 
@@ -45,7 +56,7 @@ void RenderProgressBroker::notifyProgress(const QString& requestId, int frame, i
 {
     if (frame < 1 || totalFrames < 1) return;
     double percent = 100.0 * (frame - 1) / totalFrames;
-    QString data = "{\"request_id\":\"" + requestId
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
         + "\",\"percent\":" + QString::number(percent, 'f', 2)
         + ",\"frame\":" + QString::number(frame)
         + ",\"total_frames\":" + QString::number(totalFrames) + "}";
@@ -63,7 +74,8 @@ void RenderProgressBroker::notifyProgress(const QString& requestId, int frame, i
         w.queues[i]->push(event);
 }
 
-void RenderProgressBroker::notifyCompleted(const QString& requestId, int durationMs)
+void RenderProgressBroker::notifyCompleted(const QString& requestId, int durationMs,
+                                           const QStringList& outputFiles)
 {
     QString outputPath;
     {
@@ -72,58 +84,35 @@ void RenderProgressBroker::notifyCompleted(const QString& requestId, int duratio
             outputPath = m_watches[requestId].outputPath;
     }
 
+    // Animation output paths are templates ("walk_{frame}.png") that never
+    // exist on disk, so size the files the job actually wrote: the sum of its
+    // declared outputs. Fall back to the stored path when nothing was declared.
     qint64 fileSize = -1;
-    if (!outputPath.isEmpty())
+    if (!outputFiles.isEmpty()) {
+        fileSize = 0;
+        for (int i = 0; i < outputFiles.size(); ++i)
+            fileSize += QFileInfo(outputFiles[i]).size();
+    } else if (!outputPath.isEmpty()) {
         fileSize = QFileInfo(outputPath).size();
+    }
 
-    // Minimal JSON escaping for the path (backslashes on Windows).
-    QString escapedPath = outputPath;
-    escapedPath.replace("\\", "\\\\").replace("\"", "\\\"");
-
-    QString data = "{\"request_id\":\"" + requestId
-        + "\",\"output_path\":\"" + escapedPath
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
+        + "\",\"output_path\":\"" + jsonEscape(outputPath)
         + "\",\"file_size_bytes\":" + QString::number(fileSize)
         + ",\"duration_ms\":"      + QString::number(durationMs) + "}";
     QString event = makeEvent("complete", data);
 
-    QList<SubscriberQueue*> queues;
-    {
-        QMutexLocker lock(&m_mutex);
-        if (m_watches.contains(requestId)) {
-            m_watches[requestId].terminalEvent = event;
-            queues = m_watches[requestId].queues;
-            m_watches[requestId].queues.clear();
-        }
-    }
-    for (int i = 0; i < queues.size(); ++i) {
-        queues[i]->push(event);
-        queues[i]->close();
-    }
+    publishTerminal(requestId, event);
 }
 
 void RenderProgressBroker::notifyFailed(const QString& requestId, const QString& error, int durationMs)
 {
-    QString escapedError = error;
-    escapedError.replace("\\", "\\\\").replace("\"", "\\\"");
-
-    QString data = "{\"request_id\":\"" + requestId
-        + "\",\"error\":\""     + escapedError
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
+        + "\",\"error\":\""     + jsonEscape(error)
         + "\",\"duration_ms\":" + QString::number(durationMs) + "}";
     QString event = makeEvent("error", data);
 
-    QList<SubscriberQueue*> queues;
-    {
-        QMutexLocker lock(&m_mutex);
-        if (m_watches.contains(requestId)) {
-            m_watches[requestId].terminalEvent = event;
-            queues = m_watches[requestId].queues;
-            m_watches[requestId].queues.clear();
-        }
-    }
-    for (int i = 0; i < queues.size(); ++i) {
-        queues[i]->push(event);
-        queues[i]->close();
-    }
+    publishTerminal(requestId, event);
 }
 
 void RenderProgressBroker::stopAll()
@@ -139,14 +128,29 @@ void RenderProgressBroker::stopAll()
 
 void RenderProgressBroker::pushEvent(const QString& requestId, const QString& sseEvent)
 {
-    QList<SubscriberQueue*> queues;
-    {
-        QMutexLocker lock(&m_mutex);
-        if (!m_watches.contains(requestId)) return;
-        queues = m_watches[requestId].queues;
-    }
+    // Push under the lock: the SSE release callback deletes its queue right
+    // after unwatchRequest(), so a queue pointer is only valid while m_mutex
+    // is held and the queue is still registered.
+    QMutexLocker lock(&m_mutex);
+    if (!m_watches.contains(requestId)) return;
+    const QList<SubscriberQueue*>& queues = m_watches[requestId].queues;
     for (int i = 0; i < queues.size(); ++i)
         queues[i]->push(sseEvent);
+}
+
+void RenderProgressBroker::publishTerminal(const QString& requestId, const QString& sseEvent)
+{
+    // Same lifetime rule as pushEvent(): push and close before releasing
+    // m_mutex, or a disconnecting client may delete its queue in between.
+    QMutexLocker lock(&m_mutex);
+    if (!m_watches.contains(requestId)) return;
+    RequestWatch& w = m_watches[requestId];
+    w.terminalEvent = sseEvent;
+    for (int i = 0; i < w.queues.size(); ++i) {
+        w.queues[i]->push(sseEvent);
+        w.queues[i]->close();
+    }
+    w.queues.clear();
 }
 
 QString RenderProgressBroker::makeEvent(const QString& type, const QString& dataJson)

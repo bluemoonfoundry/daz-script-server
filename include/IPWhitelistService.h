@@ -1,9 +1,12 @@
 #pragma once
+#include <atomic>
 #include <string>
 #include <vector>
 #include <QtCore/qstring.h>
 
-// Exact-match IP whitelist. Immutable after parse — no mutex needed during checks.
+// Exact-match IP whitelist. The parsed list is only rewritten while the server
+// is stopped (setWhitelist runs before start), so checks need no mutex. The
+// enabled flag is atomic: HTTP threads read it while the main thread writes it.
 class IPWhitelistService {
 public:
     IPWhitelistService();
@@ -20,7 +23,7 @@ public:
     bool isAllowed(const std::string& clientIP) const;
 
 private:
-    bool        m_bEnabled;
+    std::atomic<bool> m_bEnabled;
     QString     m_sRawList;              // for UI display (main thread only)
     std::vector<std::string> m_aParsedIPs; // for hot-path checking (any thread)
 };

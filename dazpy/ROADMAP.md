@@ -19,15 +19,15 @@ local HTTP server (the DazScriptServer plugin at `127.0.0.1:18811`).
   `_script_builder.py:ScriptBuilder.escape_string()`.
 - `DazElement.get_property(label)` / `set_property(label, value)` are the
   generic fallback for anything not wrapped explicitly.
-- Unit tests live in `tests_dazpy.py` (mock-based, no server needed).
-- Integration tests live in `tests_dazpy_integration.py` (skip gracefully
+- Unit tests live in `tests/test_dazpy.py` (mock-based, no server needed).
+- Integration tests live in `tests/test_dazpy_integration.py` (skip gracefully
   when server is down; further skip with `@skip_no_daz` when `Scene` global
   is unavailable).
 
 **Run tests:**
 ```
-python tests_dazpy.py
-python tests_dazpy_integration.py
+python tests.py unit
+python tests.py integration
 ```
 
 **DAZ API reference:** use the `mcp__daz-api__get_class_details` MCP tool,
@@ -136,7 +136,7 @@ Update `nodes()` to return the correct subclass. Add a `_NODE_CLASS_MAP` dict
 in `__init__.py`.
 
 ### 1e — Tests
-Add integration tests in `tests_dazpy_integration.py`:
+Add integration tests in `tests/test_dazpy_integration.py`:
 - `TestDazSkeleton` class (gated with `@skip_no_daz`) — assert
   `scene.skeletons()` returns a list, `find_skeleton` works/raises,
   `skeleton.bones()` returns `DazBone` instances
@@ -427,7 +427,7 @@ Section 11 — Cinematic shot library (5d6f.20)
 2. Pick the first unchecked item.
 3. Run `mcp__daz-api__get_class_details("DzXxx")` for the relevant class.
 4. Implement in the appropriate `dazpy/_xxx.py` file.
-5. Add unit tests to `tests_dazpy.py` (mock-based).
-6. Add integration tests to `tests_dazpy_integration.py` (gated with `@skip_no_daz`).
+5. Add unit tests to `tests/test_dazpy.py` (mock-based).
+6. Add integration tests to `tests/test_dazpy_integration.py` (gated with `@skip_no_daz`).
 7. Run both test suites and confirm green.
 8. Check off the item in this file.

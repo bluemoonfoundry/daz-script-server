@@ -2,7 +2,7 @@
 Unified test runner for DazScriptServer.
 
 Suites:
-  unit         tests/test_dazpy.py (+ test_recipe_*)  mocked, no server needed
+  unit         tests/test_*.py minus LIVE_TEST_FILES  mocked, no server needed (pytest)
   api          tests/test_api.py                raw HTTP API, requires server
   integration  tests/test_dazpy_integration.py  dazpy SDK, requires DAZ Studio
 
@@ -16,8 +16,28 @@ Usage:
 import argparse
 import sys
 import unittest
+from pathlib import Path
 
 VALID_SUITES = ("unit", "api", "integration")
+
+TESTS_DIR = Path(__file__).parent / "tests"
+
+# Test files that talk to a live DAZ Studio / ComfyUI (or parse CLI args at
+# import). Every other tests/test_*.py is a unit test and runs under `unit`,
+# so a new unit test file is picked up without editing this runner.
+LIVE_TEST_FILES = frozenset({
+    "test_api.py",                          # raw HTTP API, requires server
+    "test_dazpy_integration.py",            # dazpy SDK, requires DAZ Studio
+    "test_recipe_live.py",                  # scene recipes against DAZ Studio
+    "test_comfyui_enhance_integration.py",  # DAZ Studio + ComfyUI when reachable
+    "test_sprite_matrix_integration.py",    # DAZ Studio when reachable
+    "test_performance.py",                  # load test; parse_args() at import
+})
+
+
+def unit_test_files():
+    """Every tests/test_*.py that is not in LIVE_TEST_FILES, sorted."""
+    return sorted(p for p in TESTS_DIR.glob("test_*.py") if p.name not in LIVE_TEST_FILES)
 
 
 def _parse_args():
@@ -26,7 +46,7 @@ def _parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "suites:\n"
-            "  unit         tests/test_dazpy.py              mocked, no server needed\n"
+            "  unit         tests/test_*.py minus live files mocked, no server needed\n"
             "  api          tests/test_api.py                raw HTTP API, requires server\n"
             "  integration  tests/test_dazpy_integration.py  dazpy SDK, requires DAZ Studio\n"
         ),
@@ -51,23 +71,14 @@ def main():
     suite = unittest.TestSuite()
 
     if "unit" in args.suites:
-        from tests import test_dazpy as _unit
-        suite.addTests(loader.loadTestsFromModule(_unit))
-        from tests import test_math3 as _math3
-        suite.addTests(loader.loadTestsFromModule(_math3))
-        from tests import test_route_security as _routes
-        suite.addTests(loader.loadTestsFromModule(_routes))
-        from tests import test_openapi_parity as _openapi
-        suite.addTests(loader.loadTestsFromModule(_openapi))
-        from tests import test_smoke_live as _smoke
-        suite.addTests(loader.loadTestsFromModule(_smoke))
-        # Scene-recipe unit tests (test_recipe_live.py needs DAZ Studio; excluded)
-        import importlib
-        from pathlib import Path
-        for _p in sorted(Path(__file__).parent.joinpath("tests").glob("test_recipe_*.py")):
-            if _p.stem != "test_recipe_live":
-                suite.addTests(loader.loadTestsFromModule(
-                    importlib.import_module(f"tests.{_p.stem}")))
+        # Unit files mix unittest classes with plain pytest tests
+        # (parametrize, pytest-asyncio), so they run under pytest.
+        import pytest
+        rc = pytest.main(["-q", *[str(p) for p in unit_test_files()]])
+        if rc != 0:
+            sys.exit(int(rc))
+        if not ({"api", "integration"} & set(args.suites)):
+            sys.exit(0)
 
     if "api" in args.suites:
         from tests import test_api as _api

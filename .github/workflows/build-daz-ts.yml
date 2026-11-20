@@ -13,12 +13,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: daz-ts/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -40,7 +42,8 @@ jobs:
 
       - name: Verify pack artifact
         run: |
-          TARBALL=$(ls dist-pack/daz-ts-*.tgz 2>/dev/null | head -1)
+          # Scoped package: npm pack names it bluemoonfoundry-daz-ts-<version>.tgz.
+          TARBALL=$(ls dist-pack/bluemoonfoundry-daz-ts-*.tgz 2>/dev/null | head -1)
           if [ -z "$TARBALL" ]; then
             echo "Error: daz-ts tarball not found in dist-pack/"
             exit 1
@@ -50,7 +53,7 @@ jobs:
 
       - name: Upload dist artifact
         id: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: daz-ts-dist
           path: daz-ts/dist-pack/

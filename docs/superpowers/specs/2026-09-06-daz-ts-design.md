@@ -30,11 +30,15 @@ plan under `docs/superpowers/plans/`.
   unit tests asserting exact generated DazScript strings, plus a separate
   integration suite gated on an env var, skipping gracefully with no live
   server.
-- **Distribution**: npm-packaged but not published to the public npm
-  registry. Built in CI (new workflow analogous to
-  `.github/workflows/build-dazpy.yml`) and attached to GitHub releases as a
-  tarball; consumers install via GitHub/git dependency or the release
-  artifact.
+- **Distribution**: published to the public npm registry as
+  `@bluemoonfoundry/daz-ts` (`npm install @bluemoonfoundry/daz-ts`).
+  *Revised 2026-11-20:* this spec originally said "not published to public
+  npm", with installs from a GitHub release tarball only. That ruled out
+  semver ranges, `npm update` and depending on daz-ts from other packages
+  (npm can't install from a git-repo subdirectory), so it now publishes from
+  `.github/workflows/publish-daz-ts.yml` on `daz-ts-v*` tags via npm trusted
+  publishing (OIDC, with provenance). Built and tested in CI by
+  `build-daz-ts.yml`; the tarball is still attached to GitHub releases.
 - **Versioning**: `daz-ts` starts at its own `0.1.0`. It does not mirror
   dazpy's version number — it's a fresh port on its own release train.
 

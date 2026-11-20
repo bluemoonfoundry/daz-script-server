@@ -121,36 +121,6 @@ ZipInstaller::ZipInstaller(QString packagesDir, Limits limits)
 {
 }
 
-ZipInstaller::Result ZipInstaller::install(const QString &zipPath) const
-{
-	Result result;
-
-	const StageResult staged = extractToStaging(zipPath);
-	if (!staged.success) {
-		result.errorMessage = staged.errorMessage;
-		return result;
-	}
-
-	const QString finalDir = QDir(m_packagesDir).filePath(staged.packageId);
-	if (QFileInfo(finalDir).exists()) {
-		PortableFs::removeRecursively(staged.stagingDir);
-		result.errorMessage = QString::fromLatin1(
-			"Package '%1' is already installed; reinstall is not handled by this installer").arg(staged.packageId);
-		return result;
-	}
-
-	const CommitResult committed = commit(staged.packageId, staged.stagingDir);
-	if (!committed.success) {
-		result.errorMessage = committed.errorMessage;
-		return result;
-	}
-
-	result.success = true;
-	result.packageId = staged.packageId;
-	result.finalPackageDir = committed.finalPackageDir;
-	return result;
-}
-
 ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath) const
 {
 	StageResult result;
@@ -188,7 +158,8 @@ ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath)
 	ZipReaderGuard zipGuard(&zip);
 
 	const mz_uint numFiles = mz_zip_reader_get_num_files(&zip);
-	if (static_cast<int>(numFiles) > m_limits.maxEntryCount) {
+	// Compare in 64-bit: a zip64 count above INT_MAX would wrap negative as int.
+	if (static_cast<qint64>(numFiles) > static_cast<qint64>(m_limits.maxEntryCount)) {
 		return failAndCleanStaging(QString::fromLatin1("Archive has too many entries (%1 > %2)")
 			.arg(numFiles).arg(m_limits.maxEntryCount));
 	}

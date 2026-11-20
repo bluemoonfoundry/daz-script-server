@@ -480,7 +480,7 @@ git commit -m "feat(dazpy): export poses.apply_pose/reset_transforms/zero_figure
 After Task 5 is committed and the full suite is green, update beads issue `daz-script-server-p1af`:
 
 ```bash
-bd update daz-script-server-p1af --notes="dazpy.poses shipped (apply_pose, reset_transforms, zero_figure) -- see docs/superpowers/specs/2026-08-10-dazpy-poses-design.md and docs/superpowers/plans/2026-08-10-dazpy-poses.md. Remaining GH #31 domain submodules: dazpy.cinematics, dazpy.materials."
+bd update daz-script-server-p1af --notes="dazpy.poses shipped (apply_pose, reset_transforms, zero_figure) -- see docs/superpowers/specs/2026-08-10-dazpy-poses-design.md and docs/superpowers/plans/archive/2026-08-10-dazpy-poses.md. Remaining GH #31 domain submodules: dazpy.cinematics, dazpy.materials."
 ```
 
 Do not close the issue — `dazpy.cinematics` and `dazpy.materials` are still open slices of this same issue.

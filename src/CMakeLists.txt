@@ -16,6 +16,7 @@ add_library(DazScriptServer SHARED
 	SecureRandom.cpp
 	JsonBuilder.cpp
 	RequestHandlers.cpp
+	MainThreadCall.cpp
 	ErrorResponse.cpp
 	IdempotencyCache.cpp
 	ArtifactFile.cpp
@@ -47,6 +48,7 @@ add_library(DazScriptServer SHARED
 	../include/JsonBuilder.h
 	../include/JsonStd.h
 	../include/RequestHandler.h
+	../include/MainThreadCall.h
 	../include/ErrorResponse.h
 	../include/IdempotencyCache.h
 	../include/ArtifactFile.h

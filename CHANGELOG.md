@@ -4,6 +4,31 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **daz-ts:** `MIN_SERVER_VERSION` (2.11, the oldest plugin daz-ts needs)
+  and `DazClient.checkServerVersion()`, which reads `GET /status` and returns
+  a `VersionCheck` (`compatible`, upgrade `message`). Unlike dazpy, daz-ts
+  never checks on its own; call it when you want to know.
+- `SECURITY.md` (supported versions, private vulnerability reporting, scope)
+  and a docs index at `docs/README.md`. Plans for shipped features moved to
+  `docs/superpowers/plans/archive/`.
+- **daz-ts on npm:** the package is now `@bluemoonfoundry/daz-ts`
+  (`npm install @bluemoonfoundry/daz-ts`; imports change from `"daz-ts"`).
+  It has its own release train: a `daz-ts-v<version>` tag publishes it from
+  `publish-daz-ts.yml` via npm trusted publishing with provenance.
+  `scripts/check_daz_ts_version.py` keeps the tag, `package.json` and
+  `package-lock.json` in step. The release tarball is now
+  `bluemoonfoundry-daz-ts-*.tgz`.
+
+### Fixed
+
+- **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the
+  server's `ErrorResponse` fields: `status_code`/`error_code`/`detail`/
+  `retryable` in dazpy, `statusCode`/`errorCode`/`detail`/`retryable` in
+  daz-ts (e.g. `AUTH_INVALID_TOKEN`, `IP_NOT_WHITELISTED`). The message uses
+  the server's `error` text when the body is JSON.
+
 ## [2.15.0] - 2026-11-19
 
 dazpy-only release. The plugin binaries are rebuilt with the new version
@@ -711,7 +736,7 @@ CONCURRENT_LIMIT_EXCEEDED` responses were misreported as
 `render_batch_submit`, and `render_animation_submit`.
 
 Design: `docs/superpowers/specs/2026-07-22-studio-busy-handling-design.md`.
-Plan: `docs/superpowers/plans/2026-07-22-studio-busy-handling.md`.
+Plan: `docs/superpowers/plans/archive/2026-07-22-studio-busy-handling.md`.
 
 ## [2.7.2] - 2026-07-19
 
@@ -1000,6 +1025,29 @@ changes either.
   sleeve length on posed figures).
 - Fixed high-bust anchor placed above the bust peak rather than at the shoulder
   on some G9 figures.
+
+## [2.5.0] - 2026-06-11
+
+### Added
+
+- **Interaction posing (dazpy):** places two figures together (seated,
+  touching, kissing, combat stances). `build_sit_recipe`, `build_touch_recipe`,
+  `build_kiss_recipe` and `build_fight_recipe` take two figure labels and
+  return a JSON-serialisable `InteractionRecipe`, applied with
+  `DazScene.apply_interaction_recipe()`.
+- **IK limb alignment (dazpy):** `align_hand_target()` / `align_foot_target()`
+  move a hand or foot to a world-space target with an iterative Jacobian
+  solver and report `converged` and `final_error`.
+- **Bulk scene snapshot (dazpy):** `DazScene.scene_snapshot()` returns every
+  skeleton's bone world positions in one HTTP call;
+  `build_rig_profiles_from_snapshot()` builds rig data from it.
+
+### Fixed
+
+- Body measurements: torso loop selection is centroid-weighted, so arm
+  cross-sections no longer inflate A-pose chest measurements (~70 cm
+  overestimate). The fallback for unlabelled figures rejects outlier slices,
+  and `--figure-type G9F` (or `G9M`, `G8F`, ...) forces a calibration entry.
 
 ## [2.4.0] - 2026-05-25
 

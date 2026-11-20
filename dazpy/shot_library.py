@@ -88,7 +88,7 @@ _KEY_MAX = 64
 
 # ---- naming ---------------------------------------------------------------
 
-def _slug(text: str) -> str:
+def _slug(text: str | int) -> str:
     s = re.sub(r"[^A-Za-z0-9-]+", "-", str(text)).strip("-")
     return s or "x"
 

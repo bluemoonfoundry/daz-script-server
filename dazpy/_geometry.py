@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ._element import DazElement
 from ._node import NodeIdentifier
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._client import DazClient
+    from .math3 import BoundingBox
 
 
 class DazGeometry(DazElement):
@@ -21,7 +27,9 @@ class DazGeometry(DazElement):
         identifier: Identifies the scene node whose geometry to access.
     """
 
-    def __init__(self, client: "DazClient", identifier: NodeIdentifier):  # noqa: F821
+    _identifier: NodeIdentifier
+
+    def __init__(self, client: "DazClient", identifier: NodeIdentifier):
         locator = (
             f"(function(){{"
             f"var n = {ScriptBuilder.find_node_expr(identifier)};"
@@ -313,7 +321,7 @@ class DazGeometry(DazElement):
 
     # ── bounding box ──────────────────────────────────────────────────────────
 
-    def bounding_box(self) -> "BoundingBox | None":  # noqa: F821
+    def bounding_box(self) -> "BoundingBox | None":
         """Axis-aligned bounding box of the base mesh in one HTTP call.
 
         Iterates all vertices server-side, avoiding the need to transfer every
@@ -344,7 +352,7 @@ class DazGeometry(DazElement):
         from .math3 import BoundingBox
         return BoundingBox.from_dict(result)
 
-    def bounding_box_posed(self) -> "BoundingBox | None":  # noqa: F821
+    def bounding_box_posed(self) -> "BoundingBox | None":
         """AABB of the world-space posed-and-morphed mesh in one HTTP call.
 
         Uses ``DzObject.getCachedGeom()`` after forcing a cache update, so the

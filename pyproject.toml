@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dazpy"
 version = "2.15.0"
 description = "Python SDK for the DAZ Studio Script Server"
-readme = "README.md"
+readme = "dazpy/README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
@@ -26,9 +26,40 @@ docs = [
 aio = [
     "httpx>=0.24",
 ]
+# Everything the offline unit suites import (python tests.py unit plus the
+# pytest-only suites such as tests/test_dazpy_aio.py).
+test = [
+    "httpx>=0.24",
+    "jsonschema>=4.0",
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "respx>=0.20",
+    "watchdog>=3.0",
+]
+
+[tool.setuptools]
+# Ship only dazpy's MIT license. Without this, setuptools' default glob also
+# picks up the repo-root LICENSE (AGPL, covers the plugin, not dazpy).
+license-files = ["dazpy/LICENSE"]
 
 [tool.setuptools.packages.find]
 include = ["dazpy*"]
 
 [tool.setuptools.package-data]
 dazpy = ["py.typed", "schemas/*.json"]
+
+# Lint gate (CI `lint` job): pyflakes rules only for now. Widen `select`
+# deliberately, one rule family at a time, fixing findings as you go.
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F"]
+
+# Advisory only: CI runs `mypy dazpy` with continue-on-error until the
+# existing backlog is worked down.
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

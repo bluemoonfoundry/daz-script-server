@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 (dazpy SDK), `unittest`/`unittest.mock`, C++17 (DAZ Studio SDK 4/6, Qt4/Qt6), `httplib`.
 
-**Spec:** `docs/superpowers/plans/2026-08-21-script-call-batching.md` (design spec this plan implements — read it first; this plan is the step-by-step execution of its Tasks 1–7).
+**Spec:** `docs/superpowers/plans/archive/2026-08-21-script-call-batching.md` (design spec this plan implements — read it first; this plan is the step-by-step execution of its Tasks 1–7).
 
 ## Global Constraints
 
@@ -375,7 +375,7 @@ This also completes **Task 3A** from the spec (node transforms bulk API) — no 
 - Consumes: `self._skeleton_body(body) -> str` is private to `DazSkeleton`; `zero_figure()` is a free function in `poses.py`, so it must call through public/semi-public skeleton surface. Add a small private helper method on `DazSkeleton` for this rather than reaching into `_skeleton_body` from outside the class.
 - Produces: `DazSkeleton._zero_bones_and_morphs() -> None` (new, private — same module-private convention as `_skeleton_body`), called by `zero_figure()`.
 
-Reminder from the spec (`docs/superpowers/plans/2026-08-21-script-call-batching.md` Task 2C): only the **default** (`include_props=False`) path changes. The `include_props=True` path stays on `DazPose.apply_full()` unchanged — do not touch it.
+Reminder from the spec (`docs/superpowers/plans/archive/2026-08-21-script-call-batching.md` Task 2C): only the **default** (`include_props=False`) path changes. The `include_props=True` path stays on `DazPose.apply_full()` unchanged — do not touch it.
 
 - [ ] **Step 1: Write the failing test**
 

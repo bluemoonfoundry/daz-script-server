@@ -492,7 +492,7 @@ def run_all(h: Harness, scene, skeletons: dict) -> None:
             h.assert_true(result.initial_error is not None, "initial_error is None")
             h.assert_true(
                 result.initial_error > 0.0,
-                f"initial error is zero — target same as starting position?",
+                "initial error is zero — target same as starting position?",
             )
             converge_note = "converged" if result.converged else f"{result.iterations} iters"
             print(f"  {dim(f'path={path}, initial_error={result.initial_error:.1f}cm, {converge_note}')}")

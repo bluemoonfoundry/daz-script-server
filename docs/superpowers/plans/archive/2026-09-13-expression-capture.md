@@ -925,7 +925,7 @@ git push
 
 ```bash
 cd Y:/working/BlueMoonFoundry/daz-script-server
-bd close daz-script-server-hb5t.4 --reason="Implemented --expression-image in pose_transfer_photo.py: MediaPipe FaceLandmarker blendshapes -> Genesis 9 facs_bs_*/facs_ctrl_* morphs, see docs/superpowers/specs/2026-09-13-expression-capture-design.md and docs/superpowers/plans/2026-09-13-expression-capture.md"
+bd close daz-script-server-hb5t.4 --reason="Implemented --expression-image in pose_transfer_photo.py: MediaPipe FaceLandmarker blendshapes -> Genesis 9 facs_bs_*/facs_ctrl_* morphs, see docs/superpowers/specs/2026-09-13-expression-capture-design.md and docs/superpowers/plans/archive/2026-09-13-expression-capture.md"
 ```
 
 - [ ] **Step 4: Push this repo (design/plan docs + beads state)**

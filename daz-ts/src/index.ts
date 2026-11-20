@@ -110,3 +110,6 @@ export type {
 
 export { watchSceneEvents, waitForSceneEvent } from "./sceneEvents.js";
 export type { SceneEvent } from "./sceneEvents.js";
+
+export { MIN_SERVER_VERSION, parseVersion, evaluateServerVersion } from "./version.js";
+export type { VersionCheck } from "./version.js";

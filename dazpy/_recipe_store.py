@@ -327,11 +327,11 @@ def owned_by(record_json: str | None, recipe_id: str) -> EntityRecord | None:
     return rec if rec.recipe_id == recipe_id else None
 
 
-_KIND_PREFIXES = (("actors.", "actor"), ("props.", "prop"), ("cameras.", "camera"),
+_KIND_PREFIXES: tuple[tuple[str, EntityKind], ...] = (("actors.", "actor"), ("props.", "prop"), ("cameras.", "camera"),
                   ("lighting.lights.", "light"), ("lighting.rigs.", "light"))
 
 
-def _kind_from_path(path: str) -> str | None:
+def _kind_from_path(path: str) -> EntityKind | None:
     for prefix, kind in _KIND_PREFIXES:
         if path.startswith(prefix):
             return kind

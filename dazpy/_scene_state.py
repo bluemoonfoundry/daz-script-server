@@ -10,6 +10,7 @@ from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
     from ._scene import DazScene
+    from ._skeleton import DazSkeleton
 
 _TRANSFORM_KEYS = ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate", "Scale"]
 _LIGHT_EXTRA_KEYS = ["Flux", "Shadow Softness", "Spread Angle"]
@@ -334,7 +335,7 @@ class DazSceneState:
         restored: list[str] = []
         skipped: list[dict] = []
         errors: list[str] = []
-        resolved_skeletons: dict[str, "DazSkeleton"] = {}  # noqa: F821
+        resolved_skeletons: dict[str, "DazSkeleton"] = {}
 
         def _skip(kind: str, name: str, message: str) -> None:
             skipped.append({"kind": kind, "name": name, "reason": "not_found"})

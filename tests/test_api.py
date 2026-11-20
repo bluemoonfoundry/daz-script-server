@@ -1566,6 +1566,56 @@ class TestConcurrency(unittest.TestCase):
         has_successes = any(c == 200 for c in statuses)
         self.assertTrue(has_successes, "Expected at least some successful responses")
 
+    def test_disconnected_queued_requests_release_their_slots(self):
+        """daz-script-server-3w3y: sync requests queued behind a busy main
+        thread must give up when their client disconnects. They used to block
+        forever (BlockingQueuedConnection has no timeout) and pin every
+        concurrency slot, so every later request got 429."""
+        def active():
+            return requests.get(f"{BASE_URL}/health", timeout=3).json()["active_requests"]
+
+        busy_ms = 8000
+        blocker_result = {}
+        blocker = threading.Thread(target=lambda: blocker_result.update(r=execute(script=iife(
+            "var t = Date.now(); while (Date.now() - t < %d) {} return 'done';" % busy_ms))))
+        blocker.start()
+        time.sleep(1.0)  # let the blocker reach the main thread
+
+        marker_dir = tempfile.mkdtemp(prefix="dss_3w3y_")
+        self.addCleanup(lambda: __import__("shutil").rmtree(marker_dir, ignore_errors=True))
+
+        def queued(i):
+            # Writes a marker file if it ever runs; it must not.
+            path = os.path.join(marker_dir, f"ran_{i}.txt").replace("\\", "/")
+            script = iife("var f = new DzFile(%r); f.open(DzFile.WriteOnly); "
+                          "f.write('x'); f.close(); return %d;" % (path, i))
+            try:
+                requests.post(f"{BASE_URL}/execute", headers=auth_headers(),
+                              json={"script": script}, timeout=1.5)
+            except requests.exceptions.RequestException:
+                pass  # expected: the client gives up while the script is queued
+
+        clients = [threading.Thread(target=queued, args=(i,)) for i in range(6)]
+        for t in clients:
+            t.start()
+        for t in clients:
+            t.join(timeout=10)
+
+        # Only the blocker should still hold a slot, well before it finishes.
+        deadline = time.time() + 3.0
+        while active() > 1 and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertLessEqual(active(), 1,
+                             "abandoned queued requests still hold concurrency slots")
+        self.assertTrue(blocker.is_alive(), "blocker finished too early to prove anything")
+
+        blocker.join(timeout=30)
+        self.assertEqual(blocker_result["r"].json().get("result"), "done")
+        execute(script=iife("return 1;"))  # drain anything still queued
+        self.assertEqual(os.listdir(marker_dir), [],
+                         "an abandoned queued script ran after its client left")
+        self.assertEqual(active(), 0)
+
 
 # ─── Stress ───────────────────────────────────────────────────────────────────
 

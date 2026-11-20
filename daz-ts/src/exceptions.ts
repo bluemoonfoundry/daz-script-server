@@ -10,8 +10,30 @@ export class DazError extends Error {
 /** Raised when the SDK cannot reach the DAZ Studio Script Server. */
 export class ConnectionError extends DazError {}
 
-/** Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked). */
-export class AuthenticationError extends DazError {}
+/**
+ * Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked).
+ *
+ * Carries the server's `ErrorResponse` fields when the body had them
+ * (e.g. `errorCode` `"AUTH_INVALID_TOKEN"` or `"IP_NOT_WHITELISTED"`).
+ */
+export class AuthenticationError extends DazError {
+  /** HTTP status code (401 or 403). */
+  readonly statusCode: number;
+  /** The server's `error_code`, or `""` when the body had none. */
+  readonly errorCode: string;
+  /** Optional structured detail from the server response. */
+  readonly detail: string;
+  /** True when the server says an identical retry may succeed. */
+  readonly retryable: boolean;
+
+  constructor(message: string, statusCode = 401, errorCode = "", detail = "", retryable = false) {
+    super(message);
+    this.statusCode = statusCode;
+    this.errorCode = errorCode;
+    this.detail = detail;
+    this.retryable = retryable;
+  }
+}
 
 /**
  * Base class for transient "DAZ Studio is busy, please retry" conditions.

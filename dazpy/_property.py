@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._client import DazClient
 
 
 class DazProperty(DazElement):
@@ -19,7 +23,10 @@ class DazProperty(DazElement):
         property_label: The ``getLabel()`` string of the property.
     """
 
-    def __init__(self, client: "DazClient", owner_locator: str, property_label: str):  # noqa: F821
+    _owner_locator: str
+    _property_label: str
+
+    def __init__(self, client: "DazClient", owner_locator: str, property_label: str):
         locator = (
             f"(function(){{"
             f"var obj = {owner_locator};"
@@ -31,7 +38,7 @@ class DazProperty(DazElement):
         object.__setattr__(self, "_property_label", property_label)
 
     @classmethod
-    def _from_locator(cls, client: "DazClient", locator: str) -> "DazProperty":  # noqa: F821
+    def _from_locator(cls, client: "DazClient", locator: str) -> "DazProperty":
         """Construct a DazProperty from a pre-built JavaScript locator expression."""
         from ._element import DazElement
         prop = object.__new__(cls)

@@ -1,4 +1,8 @@
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._node import NodeIdentifier
 
 
 class ScriptBuilder:
@@ -21,13 +25,13 @@ class ScriptBuilder:
         return json.dumps(value)
 
     @staticmethod
-    def find_node_expr(identifier: "NodeIdentifier") -> str:  # noqa: F821
+    def find_node_expr(identifier: "NodeIdentifier") -> str:
         if identifier.kind == "label":
             return f"Scene.findNodeByLabel({json.dumps(identifier.value)})"
         return f"Scene.findNode({json.dumps(identifier.value)})"
 
     @staticmethod
-    def node_body(identifier: "NodeIdentifier", body: str) -> str:  # noqa: F821
+    def node_body(identifier: "NodeIdentifier", body: str) -> str:
         expr = ScriptBuilder.find_node_expr(identifier)
         return ScriptBuilder.iife(
             f"var _node = {expr};\n"
@@ -45,7 +49,7 @@ class ScriptBuilder:
         )
 
     @staticmethod
-    def skeleton_lookup(identifier: "NodeIdentifier") -> str:  # noqa: F821
+    def skeleton_lookup(identifier: "NodeIdentifier") -> str:
         """Return a JS snippet that finds a skeleton and binds it to ``_skel``.
 
         The snippet does not wrap itself in an IIFE — embed it at the top of

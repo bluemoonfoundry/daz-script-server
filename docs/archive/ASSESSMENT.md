@@ -1,5 +1,7 @@
 # DazScript Server Assessment
 
+> **Status:** Archived 2026-11-19. Its findings are tracked as the beads epic `daz-script-server-5d6f`; check there for current status.
+
 > **Re-check on master (2026-11-14):** This assessment was written against the
 > out-of-date `feature/daz-ts-phase1-docs` branch (2.9.x), not `master` (2.10.1,
 > `34101ef`). On master, the version drift in #5 is already fixed (all versions

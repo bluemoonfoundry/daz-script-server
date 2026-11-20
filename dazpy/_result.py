@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -16,7 +17,8 @@ class ExecutionResult:
             the server.
     """
 
-    value: object
+    # Any (not object): JSON-decoded, same contract as json.loads().
+    value: Any
     output: list[str] = field(default_factory=list)
     request_id: str = ""
     success: bool = True

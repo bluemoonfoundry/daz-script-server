@@ -226,7 +226,7 @@ In `ComfyUIStageConfig`, add after the existing `face_detailer_faceid_weight: fl
     # Without this, the face pass has zero ControlNet guidance and renders
     # visibly flatter/shinier skin than the ink-hatched body regardless of
     # denoise/faceid_weight -- see
-    # docs/superpowers/plans/2026-08-05-face-detailer-controlnet.md. Live-
+    # docs/superpowers/plans/archive/2026-08-05-face-detailer-controlnet.md. Live-
     # tuned in Task 5 of that plan; provisional defaults below (1.0/0.8/0.6)
     # are one notch above the main pass's own 0.6/0.5/0.4, per the spike
     # that motivated this plan.
@@ -524,7 +524,7 @@ several `face_detailer_controlnet_normal/depth/lineart_weight` combinations
 directly via `build_controlnet_workflow` (the same ad-hoc-script pattern
 used for the spike in this plan's own design work, and the earlier
 denoise/faceid_weight grid in
-`docs/superpowers/plans/2026-08-05-faceid-conditioning.md`'s Task 7), e.g.
+`docs/superpowers/plans/archive/2026-08-05-faceid-conditioning.md`'s Task 7), e.g.
 try the provisional default (1.0/0.8/0.6) plus at least one stronger
 combination (e.g. 1.4/1.1/0.9) and one weaker combination (e.g. 0.6/0.5/0.4,
 matching the main pass exactly, to confirm the spike's finding that this is

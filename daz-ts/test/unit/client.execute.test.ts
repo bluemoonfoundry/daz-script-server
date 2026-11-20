@@ -111,6 +111,42 @@ describe("DazClient.execute", () => {
     await expect(client.execute("1;")).rejects.toBeInstanceOf(AuthenticationError);
   });
 
+  it("keeps ErrorResponse fields on AuthenticationError (W13)", async () => {
+    const body = {
+      success: false,
+      error_code: "AUTH_INVALID_TOKEN",
+      error: "Invalid API token",
+      retryable: false,
+      detail: "token mismatch",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body, 401)));
+    const client = new DazClient({ token: "bad" });
+    const err = (await client.execute("1;").catch((e: unknown) => e)) as AuthenticationError;
+    expect(err).toBeInstanceOf(AuthenticationError);
+    expect(err.statusCode).toBe(401);
+    expect(err.errorCode).toBe("AUTH_INVALID_TOKEN");
+    expect(err.detail).toBe("token mismatch");
+    expect(err.retryable).toBe(false);
+    expect(err.message).toBe("HTTP 401: Invalid API token");
+  });
+
+  it("keeps ErrorResponse fields on 403 from direct-check routes and falls back to text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ error_code: "IP_NOT_WHITELISTED", error: "IP not allowed" }, 403)),
+    );
+    const client = new DazClient({ token: "" });
+    const err = (await client.status().catch((e: unknown) => e)) as AuthenticationError;
+    expect(err.statusCode).toBe(403);
+    expect(err.errorCode).toBe("IP_NOT_WHITELISTED");
+    expect(err.detail).toBe("");
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Unauthorized", { status: 401 })));
+    const plain = (await client.execute("1;").catch((e: unknown) => e)) as AuthenticationError;
+    expect(plain.errorCode).toBe("");
+    expect(plain.message).toBe("HTTP 401: Unauthorized");
+  });
+
   it("throws StudioBusyError on HTTP 503 with STUDIO_BUSY error_code", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ error: "busy", error_code: "STUDIO_BUSY", detail: "scene is loading" }, 503, { "Retry-After": "4" }),

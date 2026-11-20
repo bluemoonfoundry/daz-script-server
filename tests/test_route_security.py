@@ -2,7 +2,7 @@
 Static checks on the route table in src/DzScriptServerPane.cpp.
 
 No running server needed (runs in `python tests.py unit` / CI). It guards
-against two regressions from ASSESSMENT.md:
+against two regressions from docs/archive/ASSESSMENT.md:
 
   * a POST route without a request-body size limit (daz-script-server-5d6f.1)
   * an authenticated route that skips the IP whitelist / rate limiter
@@ -216,12 +216,17 @@ class TestRouteSecurity(unittest.TestCase):
         )
         self.assertRegex(
             self.src,
-            r"maxBodyBytes\s*=\s*static_cast<size_t>\(m_nMaxBodySizeMB\)\s*\*\s*1024\s*\*\s*1024",
+            r"maxBodyBytes\s*=\s*ServerConfig::mbToBytes\(m_nMaxBodySizeMB\)",
         )
 
     def test_httplib_413_gets_json_body(self):
         self.assertIn("set_error_handler", self.src)
         self.assertIn("ErrorCode::BODY_TOO_LARGE", self.src)
+
+    def test_no_hand_built_error_bodies(self):
+        # Every failure body must come from ErrorResponse (x7ul.8 / W8).
+        hand_built = re.findall(r'set_content\(\s*"\{\\"error\\"', self.src)
+        self.assertEqual(hand_built, [], "use respondError()/ErrorResponse::build()")
 
 
 if __name__ == "__main__":

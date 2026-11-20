@@ -7,7 +7,23 @@ class ConnectionError(DazError):
 
 
 class AuthenticationError(DazError):
-    """Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked)."""
+    """Raised on HTTP 401 or 403 (bad or missing API token, or IP blocked).
+
+    Attributes:
+        status_code: HTTP response status (401 or 403).
+        error_code: Stable server error code when supplied (e.g.
+            ``AUTH_INVALID_TOKEN``, ``IP_NOT_WHITELISTED``).
+        detail: Optional structured detail from the server response.
+        retryable: True when the server says an identical retry may succeed.
+    """
+
+    def __init__(self, message: str, status_code: int = 401, error_code: str = "", detail: str = "",
+                 retryable: bool = False):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.detail = detail
+        self.retryable = retryable
 
 
 class ServerResponseError(DazError):

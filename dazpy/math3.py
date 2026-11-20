@@ -12,15 +12,15 @@ Typical usage::
 
     # Convert API dicts to math objects
     pos  = Vec3.from_dict(node.position)       # {"x":...,"y":...,"z":...}
-    rot  = Quat.from_dict(bone.local_rotation) # {"x":...,"y":...,"z":...,"w":...}
+    rot  = Quat.from_dz(bone.local_rotation)   # DzQuat dict -> math3 (conjugate)
     bbox = BoundingBox.from_dict(node.bounding_box())
 
-    # Slerp between two bone orientations
-    a   = Quat.from_euler(*bone_a.local_euler, order="XYZ")
-    b   = Quat.from_euler(*bone_b.local_euler, order="XYZ")
-    mid = a.slerp(b, 0.5)
-    x, y, z = mid.to_euler(order="XYZ")
-    bone_a.set_local_rotation(x, y, z)
+    # Slerp a bone between two channel poses. Studio's rotation order string
+    # is the reverse of math3's order; from_dz_euler/to_dz_euler handle it.
+    order = bone.rotation_order
+    a   = Quat.from_dz_euler(*pose_a, order)
+    b   = Quat.from_dz_euler(*pose_b, order)
+    bone.set_local_rotation(*a.slerp(b, 0.5).to_dz_euler(order))
 
     # Convert a DAZ Studio (Y-up) position to a Z-up convention
     from dazpy.math3 import Y_UP_TO_Z_UP
@@ -30,6 +30,7 @@ Typical usage::
 from __future__ import annotations
 
 import math
+from typing import Any, Mapping
 
 
 # ── Vec3 ──────────────────────────────────────────────────────────────────────
@@ -46,6 +47,9 @@ class Vec3:
     """
 
     __slots__ = ("x", "y", "z")
+    x: float
+    y: float
+    z: float
 
     def __init__(self, x: float, y: float, z: float) -> None:
         object.__setattr__(self, "x", float(x))
@@ -58,7 +62,7 @@ class Vec3:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Vec3":
+    def from_dict(cls, d: Mapping[str, Any]) -> "Vec3":
         """Create from an ``{"x", "y", "z"}`` dict (e.g. from :attr:`~dazpy.DazNode.position`)."""
         return cls(d["x"], d["y"], d["z"])
 
@@ -161,6 +165,17 @@ class Vec3:
 
 
 # ── Quat ──────────────────────────────────────────────────────────────────────
+
+_ORDERS = ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX")
+
+
+def _dz_order(rotation_order: str) -> str:
+    """math3 order for a Studio rotation order string (Studio's is reversed)."""
+    o = str(rotation_order).upper()
+    if o not in _ORDERS:
+        raise ValueError(f"Unknown rotation order: {rotation_order!r}. Expected one of {' '.join(_ORDERS)}.")
+    return o[::-1]
+
 
 def _euler_to_quat(hx: float, hy: float, hz: float, order: str) -> tuple:
     """Return (x, y, z, w) given half-angles in radians and a rotation order."""
@@ -288,8 +303,9 @@ class Quat:
     """Unit quaternion representing a 3D rotation.
 
     Stored as ``(x, y, z, w)`` — imaginary components first, scalar last.
-    This matches the dict format returned by the dazpy API
-    (``DazNode.rotation``, ``DazBone.local_rotation``).
+    The dazpy API (``DazNode.rotation``, ``DazBone.local_rotation``) returns
+    the same dict shape but with Studio's DzQuat convention, which is the
+    conjugate: convert with :meth:`from_dz` / :meth:`to_dz`.
 
     All methods return new :class:`Quat` instances.  The object is immutable.
 
@@ -302,6 +318,10 @@ class Quat:
 
 
     __slots__ = ("x", "y", "z", "w")
+    x: float
+    y: float
+    z: float
+    w: float
 
     def __init__(self, x: float, y: float, z: float, w: float) -> None:
         object.__setattr__(self, "x", float(x))
@@ -320,9 +340,70 @@ class Quat:
         return cls(0.0, 0.0, 0.0, 1.0)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Quat":
-        """Create from an ``{"x", "y", "z", "w"}`` dict (e.g. from :attr:`~dazpy.DazNode.rotation`)."""
+    def from_dict(cls, d: Mapping[str, Any]) -> "Quat":
+        """Create from an ``{"x", "y", "z", "w"}`` dict, components taken as-is.
+
+        For a quaternion read from Studio (:attr:`~dazpy.DazNode.rotation`,
+        :attr:`~dazpy.DazBone.local_rotation`, ``getOrientation()``) use
+        :meth:`from_dz` instead: a DzQuat stores the conjugate.
+        """
         return cls(d["x"], d["y"], d["z"], d["w"])
+
+    @classmethod
+    def from_dz(cls, d: Mapping[str, Any]) -> "Quat":
+        """Create from a DAZ Studio ``DzQuat`` dict.
+
+        A DzQuat stores the *conjugate* ``(-x, -y, -z, w)`` of the math3
+        quaternion for the same rotation (live-verified for ``getLocalRot``,
+        ``getWSRot`` and ``getOrientation``; ``DzQuat.multVec`` rotates
+        vectors like :meth:`rotate` on the converted value). Use this for
+        :attr:`~dazpy.DazNode.rotation` and :attr:`~dazpy.DazBone.local_rotation`.
+        """
+        return cls(-d["x"], -d["y"], -d["z"], d["w"])
+
+    def to_dz(self) -> dict:
+        """Return the ``DzQuat`` dict for this rotation (inverse of :meth:`from_dz`)."""
+        return {"x": -self.x, "y": -self.y, "z": -self.z, "w": self.w}
+
+    @classmethod
+    def from_dz_euler(cls, x: float, y: float, z: float, rotation_order: str = "XYZ",
+                      orientation: "Quat | None" = None) -> "Quat":
+        """The local rotation Studio produces from rotation channel values.
+
+        Studio's rotation order string (``getRotationOrder()``, e.g. ``"YZX"``)
+        is the *reverse* of math3's *order*, and the channels rotate about
+        the bone's oriented axes, so ``local = O * from_euler(x, y, z,
+        reversed_order) * O⁻¹``. Live-verified against ``getLocalRot()`` on
+        Genesis 9 bones and cameras.
+
+        Args:
+            x: X rotation channel value in degrees (as applied, after limits).
+            y: Y rotation channel value in degrees.
+            z: Z rotation channel value in degrees.
+            rotation_order: Studio's order string (:attr:`~dazpy.DazBone.rotation_order`).
+                Nodes such as cameras report ``"XYZ"``.
+            orientation: The node's orientation as a math3 quaternion, i.e.
+                ``Quat.from_dz(<getOrientation() dict>)``. ``None`` for identity.
+
+        Returns:
+            The math3 quaternion equal to ``Quat.from_dz(<getLocalRot()>)``.
+        """
+        e = cls.from_euler(x, y, z, order=_dz_order(rotation_order))
+        if orientation is None:
+            return e
+        return orientation.multiply(e).multiply(orientation.conjugate())
+
+    def to_dz_euler(self, rotation_order: str = "XYZ",
+                    orientation: "Quat | None" = None) -> tuple[float, float, float]:
+        """Rotation channel values ``(x, y, z)`` that reproduce this local rotation.
+
+        Inverse of :meth:`from_dz_euler`; pass the values to
+        :meth:`~dazpy.DazBone.set_local_rotation`. Joint limits are not applied.
+        """
+        q = self
+        if orientation is not None:
+            q = orientation.conjugate().multiply(q).multiply(orientation)
+        return q.to_euler(order=_dz_order(rotation_order))
 
     @classmethod
     def from_euler(cls, x: float, y: float, z: float, order: str = "XYZ") -> "Quat":
@@ -337,7 +418,9 @@ class Quat:
             y: Rotation around the Y axis in degrees.
             z: Rotation around the Z axis in degrees.
             order: Application order — one of ``XYZ``, ``XZY``, ``YXZ``,
-                ``YZX``, ``ZXY``, ``ZYX``.  Matches :attr:`~dazpy.DazBone.rotation_order`.
+                ``YZX``, ``ZXY``, ``ZYX``.  This is the *reverse* of Studio's
+                :attr:`~dazpy.DazBone.rotation_order` string; to convert
+                Studio channel values use :meth:`from_dz_euler`.
 
         Returns:
             A unit quaternion.
@@ -527,6 +610,8 @@ class BoundingBox:
     """
 
     __slots__ = ("min", "max")
+    min: Vec3
+    max: Vec3
 
     def __init__(self, min: "Vec3", max: "Vec3") -> None:
         object.__setattr__(self, "min", min)
@@ -538,7 +623,7 @@ class BoundingBox:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, d: dict) -> "BoundingBox":
+    def from_dict(cls, d: Mapping[str, Any]) -> "BoundingBox":
         """Create from the dict returned by :meth:`~dazpy.DazNode.bounding_box`.
 
         Expected shape: ``{"min": {"x":..., "y":..., "z":...}, "max": {...}}``.
@@ -698,6 +783,8 @@ class AxisRemap:
     """
 
     __slots__ = ("_specs", "_rotation_quat")
+    _specs: tuple[tuple[int, float], tuple[int, float], tuple[int, float]]
+    _rotation_quat: Quat | None
 
     def __init__(self, x: str, y: str, z: str) -> None:
         specs = (_parse_axis_spec(x), _parse_axis_spec(y), _parse_axis_spec(z))

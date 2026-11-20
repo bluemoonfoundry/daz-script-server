@@ -11,10 +11,6 @@
 #else
     #include <fstream>
     #include <unistd.h>
-    #include <errno.h>
-    #ifdef __linux__
-        #include <sys/syscall.h>
-    #endif
 #endif
 
 static const int MAX_RETRIES = 3;

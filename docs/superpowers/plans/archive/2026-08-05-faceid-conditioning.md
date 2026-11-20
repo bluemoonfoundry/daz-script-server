@@ -390,7 +390,7 @@ Replace:
 ```
 with a placeholder noting Task 7 will set the real value (this step is intentionally provisional -- Task 7 supersedes it):
 ```python
-    # Re-tuned in Task 7 of docs/superpowers/plans/2026-08-05-faceid-conditioning.md
+    # Re-tuned in Task 7 of docs/superpowers/plans/archive/2026-08-05-faceid-conditioning.md
     # once FaceID conditioning decouples identity from denoise -- expected
     # to land higher than the previous 0.15 (chosen back when low denoise
     # was the only identity-preservation mechanism available).

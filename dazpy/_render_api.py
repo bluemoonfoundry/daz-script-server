@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from ._client import DazClient
 from .exceptions import RenderError, TimeoutError
@@ -97,7 +97,7 @@ def _base_to_dict(b: RenderBase) -> dict:
     return d
 
 
-def _parse_sse_events(response: object):
+def _parse_sse_events(response: Any):
     """Yield ``(event_type, data_dict)`` pairs from a streaming SSE response."""
     event_type = "message"
     data_lines: list[str] = []

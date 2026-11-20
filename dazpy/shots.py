@@ -594,7 +594,7 @@ class Shot(_Model):
             cam["depth_of_field"] = True
         if lens.focal_distance is not None:
             cam["focal_distance"] = lens.focal_distance
-        shot = None
+        shot: dict[str, Any] | None = None
         if self.output is not None:
             shot = {"id": self.id, "camera": self.id, "output": self.output.path}
             render = {k: v for k, v in (("engine", self.output.engine),

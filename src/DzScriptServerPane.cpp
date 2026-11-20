@@ -11,6 +11,7 @@
 #include "IdempotencyCache.h"
 #include "ArtifactFile.h"
 #include "ArtifactThumbnail.h"
+#include "MainThreadCall.h"
 #include "SecureRandom.h"
 #include "RequestValidator.h"
 #include "common_version.h"
@@ -236,11 +237,11 @@ DzScriptServerPane::DzScriptServerPane()
 	: DzPane("Daz Script Server")
 	, m_pServer(nullptr)
 	, m_pServerThread(nullptr)
-	, m_nPort(18811)
+	, m_nPort(ServerSettings().port)
 	, m_sHost("127.0.0.1")
 	, m_bRunning(false)
 	, m_bCapturingLog(false)
-	, m_nTimeoutSec(30)
+	, m_nTimeoutSec(ServerSettings().timeoutSec)
 	, m_nActiveRequests(0)
 	, m_bAutoStart(false)
 	, m_nMaxConcurrentRequests(ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS)
@@ -268,12 +269,10 @@ DzScriptServerPane::DzScriptServerPane()
 	// Load settings and token
 	loadSettings();
 
+	// m_pLogView doesn't exist yet (appendLog() would drop these), so the
+	// messages — including a crypto-API failure — are logged after updateUI().
 	QStringList tokenMsgs;
-	if (!m_auth.loadOrGenerateToken(tokenMsgs)) {
-		// Crypto API unavailable — log will be empty at this point, messages shown later
-	}
-	for (const QString& msg : tokenMsgs)
-		appendLog(msg);
+	m_auth.loadOrGenerateToken(tokenMsgs);
 
 	// ── Async request manager ─────────────────────────────────────────────────
 	// Pass 'this' so AsyncRequestManager can invoke processNextAsyncRequest()
@@ -518,6 +517,9 @@ DzScriptServerPane::DzScriptServerPane()
 
 	updateUI();
 
+	for (const QString& msg : tokenMsgs)
+		appendLog(msg);
+
 	// Register this pane on the application object so companion plugins can find
 	// it without walking the widget tree (which may fail across DLL boundaries).
 	// Bridge plugins look up: qApp->property("DzScriptServerPane").value<QObject*>()
@@ -643,7 +645,7 @@ void DzScriptServerPane::startServer()
 	// httplib buffers up to its 100 MB compile-time default on every route before
 	// any middleware runs. The spin box is disabled while the server is running,
 	// so the value can't change under the worker threads.
-	const size_t maxBodyBytes = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
+	const size_t maxBodyBytes = ServerConfig::mbToBytes(m_nMaxBodySizeMB);
 	m_pServer->set_payload_max_length(maxBodyBytes);
 
 	// New identity for this run. Jobs and idempotency records from an earlier
@@ -752,7 +754,7 @@ void DzScriptServerPane::startServer()
 		delete m_pServer;
 		m_pServer = nullptr;
 		if (m_pServerThread) {
-			m_pServerThread->wait(1000);
+			m_pServerThread->wait(ServerConfig::SERVER_THREAD_REAP_WAIT_MS);
 			delete m_pServerThread;
 			m_pServerThread = nullptr;
 		}
@@ -818,7 +820,7 @@ void DzScriptServerPane::stopServer()
 		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
 			appendLog("[WARN] Server thread did not stop within timeout; forcing termination.");
 			m_pServerThread->terminate();
-			m_pServerThread->wait(1000);
+			m_pServerThread->wait(ServerConfig::SERVER_THREAD_REAP_WAIT_MS);
 		}
 		delete m_pServerThread;
 		m_pServerThread = nullptr;
@@ -974,6 +976,8 @@ static HttpContext toContext(const httplib::Request& req)
 	ctx.remoteAddr = req.remote_addr.empty() ? "unknown" : req.remote_addr;
 	if (req.matches.size() > 1)
 		ctx.urlMatch = req.matches[1].str();
+	if (req.is_connection_closed)
+		ctx.isClientGone = req.is_connection_closed;
 	ctx.headers["x-api-token"]  = req.get_header_value("X-API-Token");
 	ctx.headers["authorization"] = req.get_header_value("Authorization");
 	ctx.headers["idempotency-key"]  = req.get_header_value("Idempotency-Key");
@@ -1379,10 +1383,18 @@ void DzScriptServerPane::handleThumbnailJob(qulonglong job)
 	ArtifactThumbnail::run(reinterpret_cast<ArtifactThumbnail::Job*>(static_cast<quintptr>(job)));
 }
 
+void DzScriptServerPane::handleMainThreadCall(qulonglong call)
+{
+	MainThreadCall::runOnMainThread(this,
+		reinterpret_cast<MainThreadCall::Call*>(static_cast<quintptr>(call)));
+}
+
 // ─── Route setup ──────────────────────────────────────────────────────────────
 //
 // THREADING RULE: httplib invokes these handlers on raw std::threads (not QThreads).
-// Sync handlers cross to the main thread with BlockingQueuedConnection. On
+// Sync handlers cross to the main thread with BlockingQueuedConnection, except
+// sync script execution, which uses MainThreadCall so a request still queued
+// behind a busy main thread gives up instead of pinning its slot. On
 // Studio 6, async script enqueue handlers may build local reentrant Qt Core
 // values and call mutex-protected services; Studio 4 crosses to the main thread
 // because its JSON parser uses QScriptEngine. Execution later reaches the main
@@ -1418,11 +1430,11 @@ void DzScriptServerPane::setupRoutes()
 	m_pHealthHandler.reset(new HealthHandler(this));
 	m_pMetricsHandler.reset(new MetricsHandler(this));
 	m_pCapabilitiesHandler.reset(new CapabilitiesHandler(this));
-	m_pExecuteHandler.reset(new ExecuteScriptHandler(this));
+	m_pExecuteHandler.reset(new ExecuteScriptHandler(this, m_nTimeoutSec));
 	m_pRegisterHandler.reset(new ScriptRegisterHandler(this));
 	m_pScriptListHandler.reset(new ScriptListHandler(this));
 	m_pScriptDeleteHandler.reset(new ScriptDeleteHandler(this));
-	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this));
+	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this, m_nTimeoutSec));
 	// Snapshot the GUI-owned limit before httplib starts its worker threads.
 	// The corresponding control is disabled while the server is running.
 	m_pAsyncExecHandler.reset(new AsyncExecuteHandler(this, m_nMaxScriptLengthKB));
@@ -1662,12 +1674,11 @@ void DzScriptServerPane::setupRoutes()
 
 		// The chunked content provider is called repeatedly by httplib on the
 		// HTTP handler thread until it returns false or the client disconnects.
-		// Pop timeout (3 s) is kept well under the server's default 5 s write
-		// timeout so that each iteration writes a keepalive before the loop's
-		// wait_writable() check can time out.
+		// The pop timeout is SSE_KEEPALIVE_INTERVAL_MS, so each idle iteration
+		// writes a keepalive (see ServerConfig for the write-timeout bound).
 		res.set_chunked_content_provider("text/event-stream",
 			[queue](size_t /*offset*/, httplib::DataSink& sink) -> bool {
-				QString event = queue->pop(3000 /*ms*/);
+				QString event = queue->pop(ServerConfig::SSE_KEEPALIVE_INTERVAL_MS);
 
 				if (event.isEmpty()) {
 					// Timeout or closed queue — send keepalive to prove the
@@ -1712,23 +1723,21 @@ void DzScriptServerPane::setupRoutes()
 
 		QString requestId = QString::fromStdString(req.matches[1].str());
 		if (!requestId.startsWith("rnd-")) {
-			res.status = 404;
-			res.set_content("{\"error\":\"Not a render request\"}", "application/json");
+			// 404 (not 400 NOT_A_RENDER_REQUEST): no render exists at this path.
+			respondError(res, ErrorCode::REQUEST_NOT_FOUND, requestId.toStdString());
 			return;
 		}
 
 		auto statusPair = m_pAsyncMgr->getStatusJson(requestId.toStdString());
 		if (statusPair.first == 404) {
-			res.status = 404;
-			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			respondError(res, ErrorCode::REQUEST_NOT_FOUND, requestId.toStdString());
 			return;
 		}
 
 		SubscriberQueue* queue = new SubscriberQueue();
 		if (!m_pRenderProgress->watchRequest(requestId, queue)) {
 			delete queue;
-			res.status = 404;
-			res.set_content("{\"error\":\"Render request not found\"}", "application/json");
+			respondError(res, ErrorCode::REQUEST_NOT_FOUND, requestId.toStdString());
 			return;
 		}
 
@@ -1744,11 +1753,11 @@ void DzScriptServerPane::setupRoutes()
 		// onMessagePosted. Poll the job's frame report (ingested here on the
 		// HTTP thread, like status polling) and feed the broker, which drops
 		// frames already sent. Shorter pop so frames show up promptly;
-		// keepalives still go out about every 3 s.
-		const int  popMs          = 500;
+		// keepalives still go out every SSE_KEEPALIVE_INTERVAL_MS.
+		const int  popMs          = ServerConfig::SSE_FRAME_POLL_MS;
 		const bool pollFrames     = true;
 #else
-		const int  popMs          = 3000;
+		const int  popMs          = ServerConfig::SSE_KEEPALIVE_INTERVAL_MS;
 		const bool pollFrames     = false;
 #endif
 		std::shared_ptr<int> idleMs = std::make_shared<int>(0);
@@ -1764,7 +1773,7 @@ void DzScriptServerPane::setupRoutes()
 				if (event.isEmpty()) {
 					if (queue->isClosed()) return false;
 					*idleMs += popMs;
-					if (*idleMs < 3000) return true;
+					if (*idleMs < ServerConfig::SSE_KEEPALIVE_INTERVAL_MS) return true;
 					*idleMs = 0;
 					static const char ka[] = ":keepalive\n\n";
 					return sink.write(ka, sizeof(ka) - 1);
@@ -4211,8 +4220,21 @@ void DzScriptServerPane::processNextAsyncRequest()
 	m_pAsyncMgr->clearCurrent();
 
 	if (isRender && m_pRenderProgress) {
-		if (executed && !wasCancelled)
-			m_pRenderProgress->notifyCompleted(id, durationMs);
+		if (executed && !wasCancelled) {
+			// markCompleted() declared the render's files (every frame for an
+			// animation), so size those rather than the {frame} template path.
+			QStringList outputFiles;
+			QVariantList manifest;
+			QString manifestStatus;
+			if (m_pAsyncMgr->artifactManifest(id.toStdString(), manifest, manifestStatus)) {
+				for (int i = 0; i < manifest.size(); ++i) {
+					const QString path = manifest[i].toMap().value("path").toString();
+					if (!path.isEmpty())
+						outputFiles.append(path);
+				}
+			}
+			m_pRenderProgress->notifyCompleted(id, durationMs, outputFiles);
+		}
 		else
 			m_pRenderProgress->notifyFailed(id, errorMsg, durationMs);
 	}

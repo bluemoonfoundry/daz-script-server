@@ -3,6 +3,7 @@
 #include <QtCore/qstringlist.h>
 #include <QtCore/qreadwritelock.h>
 #include <string>
+#include <atomic>
 
 // Manages API token generation, persistence, and validation.
 // Thread-safe: validateToken() may be called from HTTP threads.
@@ -25,14 +26,13 @@ public:
     bool validateToken(const std::string& providedToken) const;
 
     QString getToken() const;
-    void    setToken(const QString& token);
 
     static QString getTokenFilePath();
 
 private:
     QString generateToken() const;
 
-    bool    m_bEnabled;
+    std::atomic<bool> m_bEnabled;  // read by HTTP threads, written on main thread
     QString m_sToken;
     std::string m_sTokenStr;  // ucrtbase-allocated copy for worker-thread comparison
     mutable QReadWriteLock m_tokenLock;

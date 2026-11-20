@@ -291,6 +291,7 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 
 	ZipInstaller::CommitResult commitResult = installer.commit(stage.packageId, stage.stagingDir);
 	if (!commitResult.success) {
+		PortableFs::removeRecursively(stage.stagingDir);
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"), commitResult.errorMessage);
 		return DZ_OPERATION_FAILED_ERROR;
 	}

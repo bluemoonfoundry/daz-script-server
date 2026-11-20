@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Any
 
 from ._script_builder import ScriptBuilder
+
+if TYPE_CHECKING:
+    from ._client import DazClient
 
 
 class DazElement:
@@ -18,12 +22,17 @@ class DazElement:
             ``DzElement`` instance inside DAZ Studio.
     """
 
-    def __init__(self, client: "DazClient", locator: str):  # noqa: F821
+    # Set via object.__setattr__ in __init__; declared here for type checkers.
+    _client: "DazClient"
+    _locator: str
+    _cache: dict
+
+    def __init__(self, client: "DazClient", locator: str):
         object.__setattr__(self, "_client", client)
         object.__setattr__(self, "_locator", locator)
         object.__setattr__(self, "_cache", {})
 
-    def get_property(self, label: str) -> object:
+    def get_property(self, label: str) -> Any:
         """Return the current value of a property looked up by its display label.
 
         Args:

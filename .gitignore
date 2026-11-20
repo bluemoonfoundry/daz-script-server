@@ -25,3 +25,11 @@ scene.usda
 
 # Local git worktrees
 .worktrees/
+
+# CI / tool output
+smoke-report.json
+sdk-coverage.md
+dist-pack/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

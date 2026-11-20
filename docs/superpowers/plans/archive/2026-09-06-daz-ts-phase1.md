@@ -3651,7 +3651,7 @@ EOF
 - [ ] **Step 8: Close the beads issue for this phase**
 
 ```bash
-bd close daz-script-server-xtni --reason="Phase 1 (client core, exceptions, batching, math3) implemented and tested per docs/superpowers/plans/2026-09-06-daz-ts-phase1.md"
+bd close daz-script-server-xtni --reason="Phase 1 (client core, exceptions, batching, math3) implemented and tested per docs/superpowers/plans/archive/2026-09-06-daz-ts-phase1.md"
 ```
 
 ---

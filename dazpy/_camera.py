@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ._node import DazNode, NodeIdentifier
+from ._node import DazNode
 from ._script_builder import ScriptBuilder
 
 

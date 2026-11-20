@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <map>
+#include <functional>
 #include <QtCore/qstring.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qatomic.h>
@@ -23,6 +24,10 @@ struct HttpContext {
     std::map<std::string, std::string> headers;
     std::map<std::string, std::string> queryParams;
     std::map<std::string, std::string> responseHeaders;
+
+    // True once the client has closed its connection (httplib's
+    // Request::is_connection_closed). Empty when not backed by a socket.
+    std::function<bool()> isClientGone;
 
     int         responseStatus;
     std::string responseBody;
@@ -153,10 +158,13 @@ private:
 
 class ExecuteScriptHandler : public IRequestHandler {
 public:
-    explicit ExecuteScriptHandler(DzScriptServerPane* pane);
+    // queueTimeoutSec: how long a request may wait for the main thread to
+    // *start* it before giving up with 503 STUDIO_BUSY (daz-script-server-3w3y).
+    ExecuteScriptHandler(DzScriptServerPane* pane, int queueTimeoutSec);
     void handle(HttpContext& ctx) override;
 private:
     DzScriptServerPane* m_pPane;
+    int                 m_queueTimeoutSec;
 };
 
 class ScriptRegisterHandler : public IRequestHandler {
@@ -185,10 +193,13 @@ private:
 
 class ScriptExecuteHandler : public IRequestHandler {
 public:
-    explicit ScriptExecuteHandler(DzScriptServerPane* pane);
+    // queueTimeoutSec: how long a request may wait for the main thread to
+    // *start* it before giving up with 503 STUDIO_BUSY (daz-script-server-3w3y).
+    ScriptExecuteHandler(DzScriptServerPane* pane, int queueTimeoutSec);
     void handle(HttpContext& ctx) override;
 private:
     DzScriptServerPane* m_pPane;
+    int                 m_queueTimeoutSec;
 };
 
 class AsyncExecuteHandler : public IRequestHandler {

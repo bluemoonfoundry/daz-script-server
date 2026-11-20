@@ -245,6 +245,16 @@ paths:
           $ref: '#/components/responses/TooLarge'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: >-
+            STUDIO_BUSY (Retry-After header set): the main thread is loading,
+            saving, clearing or rendering, or did not start this script within
+            the server timeout because another script is still running. The
+            script was not run; retry is safe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /scripts/register:
     post:
@@ -335,6 +345,16 @@ paths:
           $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: >-
+            STUDIO_BUSY (Retry-After header set): the main thread is loading,
+            saving, clearing or rendering, or did not start this script within
+            the server timeout because another script is still running. The
+            script was not run; retry is safe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /scripts/{id}:
     delete:
@@ -928,6 +948,9 @@ paths:
                   `data: {"request_id":"rnd-1a2b3c4d","percent":25.00,"frame":2,"total_frames":8}`
                   Completion (`event: complete`):
                   `data: {"request_id":"rnd-1a2b3c4d","output_path":"/path/render.png","file_size_bytes":123456,"duration_ms":9800}`
+                  `file_size_bytes` is the summed size of every file the job declared
+                  (each frame of an animation render, whose `output_path` stays the
+                  `{frame}` template).
                   Failure or cancellation (`event: error`):
                   `data: {"request_id":"rnd-1a2b3c4d","error":"...","duration_ms":1200}`
         '401':

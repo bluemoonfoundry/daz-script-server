@@ -1,5 +1,7 @@
 # DazScriptServer Refactoring Plan
 
+> **Status:** Archived 2026-11-19. The May 2026 refactoring plan; the service split it proposed has largely shipped. Open work lives in beads (`bd ready`).
+
 ## Overview
 
 This document outlines a comprehensive refactoring plan to address code quality, maintainability, and reliability issues identified in the DazScriptServer codebase. The plan is organized into phases to minimize risk and maintain functionality throughout the refactoring process.
