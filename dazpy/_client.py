@@ -76,6 +76,25 @@ def _safe_artifact_filename(name: str) -> str:
     return name if name.strip(". ") else "artifact"
 
 
+def _authentication_error(resp: _requests.Response) -> AuthenticationError:
+    """Build an AuthenticationError for a 401/403 response, keeping the server's
+    ``ErrorResponse`` fields (``error_code``, ``detail``, ``retryable``)."""
+    status = resp.status_code
+    try:
+        parsed = resp.json()
+    except (TypeError, ValueError):
+        parsed = {}
+    data = parsed if isinstance(parsed, dict) else {}
+    detail = data.get("detail")
+    return AuthenticationError(
+        f"HTTP {status}: {data.get('error') or resp.text[:200]}",
+        status_code=status,
+        error_code=str(data.get("error_code") or ""),
+        detail="" if detail is None else str(detail),
+        retryable=data.get("retryable") is True,
+    )
+
+
 def _raise_for_error(resp: _requests.Response) -> None:
     """Raise a typed exception for authentication or server-busy responses.
 
@@ -84,7 +103,7 @@ def _raise_for_error(resp: _requests.Response) -> None:
     """
     status = resp.status_code
     if status == 401 or status == 403:
-        raise AuthenticationError(f"HTTP {status}: {resp.text[:200]}")
+        raise _authentication_error(resp)
     if status < 400:
         return
     try:

@@ -4,6 +4,14 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the
+  server's `ErrorResponse` fields: `status_code`/`error_code`/`detail`/
+  `retryable` in dazpy, `statusCode`/`errorCode`/`detail`/`retryable` in
+  daz-ts (e.g. `AUTH_INVALID_TOKEN`, `IP_NOT_WHITELISTED`). The message uses
+  the server's `error` text when the body is JSON.
+
 ## [2.15.0] - 2026-11-19
 
 dazpy-only release. The plugin binaries are rebuilt with the new version

@@ -37,6 +37,33 @@ function parseRetryAfter(headers: Headers): number {
 }
 
 /**
+ * Build an AuthenticationError for a 401/403 response, keeping the server's
+ * `ErrorResponse` fields (`error_code`, `detail`, `retryable`) when present.
+ */
+async function authenticationError(resp: Response): Promise<AuthenticationError> {
+  const status = resp.status;
+  const text = await resp.text();
+  let data: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      data = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Non-JSON body (proxy, early httplib rejection): fall back to the raw text.
+  }
+  const error = typeof data.error === "string" && data.error ? data.error : text.slice(0, 200);
+  const detail = data.detail === undefined || data.detail === null ? "" : typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+  return new AuthenticationError(
+    `HTTP ${status}: ${error}`,
+    status,
+    typeof data.error_code === "string" ? data.error_code : "",
+    detail,
+    data.retryable === true,
+  );
+}
+
+/**
  * Check the response status and raise an exception for errors, or return the parsed body for caller reuse.
  * Callers must use the returned value instead of re-reading the response body, since Node's fetch only allows one read.
  * @returns undefined if status < 400, or the parsed JSON body if >= 400 and no exception was thrown.
@@ -44,8 +71,7 @@ function parseRetryAfter(headers: Headers): number {
 async function raiseForError(resp: Response): Promise<Record<string, unknown> | undefined> {
   const status = resp.status;
   if (status === 401 || status === 403) {
-    const text = await resp.text();
-    throw new AuthenticationError(`HTTP ${status}: ${text.slice(0, 200)}`);
+    throw await authenticationError(resp);
   }
   if (status < 400) {
     return undefined;
@@ -619,7 +645,7 @@ export class DazClient {
   async listRequests(status?: RequestStatus): Promise<Record<string, unknown>> {
     const resp = await this.get("/requests", status ? { status } : undefined);
     if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      throw await authenticationError(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -799,7 +825,7 @@ export class DazClient {
     }
     if (resp.status === 401 || resp.status === 403) {
       cleanup();
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      throw await authenticationError(resp);
     }
     if (resp.status !== 200 || !resp.body) {
       cleanup();
@@ -874,7 +900,7 @@ export class DazClient {
   async status(): Promise<Record<string, unknown>> {
     const resp = await this.get("/status");
     if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      throw await authenticationError(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -883,7 +909,7 @@ export class DazClient {
   async health(): Promise<Record<string, unknown>> {
     const resp = await this.get("/health");
     if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      throw await authenticationError(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -892,7 +918,7 @@ export class DazClient {
   async metrics(): Promise<Record<string, unknown>> {
     const resp = await this.get("/metrics");
     if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      throw await authenticationError(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -998,7 +1024,7 @@ export class DazClient {
   async sceneSaveCopy(path: string): Promise<Record<string, unknown>> {
     const resp = await this.post("/scene/save-copy", { path });
     if (resp.status === 401 || resp.status === 403) {
-      throw new AuthenticationError(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      throw await authenticationError(resp);
     }
     if (!resp.ok) {
       const body = (await resp.json().catch(() => ({}))) as Record<string, unknown>;

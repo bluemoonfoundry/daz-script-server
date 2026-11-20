@@ -8520,3 +8520,61 @@ class TestParseVersion(unittest.TestCase):
         self.assertIsNone(parse_version("abc"))
         self.assertIsNone(parse_version(None))
         self.assertIsNone(parse_version(2.1))
+
+
+class TestAuthenticationErrorFields(unittest.TestCase):
+    """401/403 keep the server's ErrorResponse fields (review W13)."""
+
+    def _client(self, status_code, json_data=None, text=None):
+        client = DazClient(token="", check_version=False)
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=status_code, headers={})
+        if json_data is None:
+            response.json.side_effect = ValueError("not json")
+        else:
+            response.json.return_value = json_data
+        response.text = text if text is not None else json.dumps(json_data)
+        client._session.post.return_value = response
+        client._session.get.return_value = response
+        return client
+
+    def test_401_keeps_error_response_fields(self):
+        body = {"success": False, "error_code": "AUTH_INVALID_TOKEN", "error": "Invalid API token",
+                "retryable": False, "detail": "token mismatch"}
+        client = self._client(401, body)
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            client.execute("1;")
+        err = ctx.exception
+        self.assertEqual(err.status_code, 401)
+        self.assertEqual(err.error_code, "AUTH_INVALID_TOKEN")
+        self.assertEqual(err.detail, "token mismatch")
+        self.assertFalse(err.retryable)
+        self.assertEqual(str(err), "HTTP 401: Invalid API token")
+
+    def test_403_ip_blocked(self):
+        body = {"success": False, "error_code": "IP_NOT_WHITELISTED", "error": "IP not allowed",
+                "retryable": False}
+        client = self._client(403, body)
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            client.status()
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.error_code, "IP_NOT_WHITELISTED")
+        self.assertEqual(ctx.exception.detail, "")
+
+    def test_non_json_body_falls_back_to_text(self):
+        client = self._client(401, None, text="Unauthorized")
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            client.execute("1;")
+        self.assertEqual(ctx.exception.error_code, "")
+        self.assertEqual(str(ctx.exception), "HTTP 401: Unauthorized")
+
+    def test_scene_save_copy_keeps_fields(self):
+        client = self._client(401, {"error_code": "AUTH_MISSING_TOKEN", "error": "Missing token"})
+        with self.assertRaises(exceptions.AuthenticationError) as ctx:
+            DazScene(client).save_copy("C:/x.duf")
+        self.assertEqual(ctx.exception.error_code, "AUTH_MISSING_TOKEN")
+
+    def test_old_positional_constructor_still_works(self):
+        err = exceptions.AuthenticationError("HTTP 401: x")
+        self.assertEqual((err.status_code, err.error_code, err.detail, err.retryable), (401, "", "", False))

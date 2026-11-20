@@ -736,10 +736,11 @@ class DazScene:
             :class:`~dazpy.exceptions.AuthenticationError`: on HTTP 401/403.
             :class:`~dazpy.exceptions.ConnectionError`: if the server is unreachable.
         """
-        from .exceptions import AuthenticationError, DazError
+        from ._client import _authentication_error
+        from .exceptions import DazError
         resp = self._client._post("/scene/save-copy", {"path": path})
         if resp.status_code in (401, 403):
-            raise AuthenticationError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            raise _authentication_error(resp)
         if not resp.ok:
             body = resp.json() if resp.content else {}
             msg = body.get("error") or body.get("detail") or resp.text[:200]
