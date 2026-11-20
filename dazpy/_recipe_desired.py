@@ -41,6 +41,8 @@ def _v(v: Any) -> Vec3:
 
 def _recipe_position(recipe: SceneRecipe, key: str) -> Vec3:
     spec = recipe.actors.get(key) or recipe.props.get(key)
+    if spec is None:
+        raise KeyError(f"recipe has no actor or prop {key!r}")
     return _v(spec.position)
 
 
@@ -71,7 +73,7 @@ def _aspect(recipe: SceneRecipe) -> float:
 
 def recipe_camera_framing(cam: RecipeCamera) -> Framing:
     """The :class:`~dazpy.shots.Framing` a recipe framing camera describes."""
-    subjects = (cam.frame,) if isinstance(cam.frame, str) else tuple(cam.frame)
+    subjects = (cam.frame,) if isinstance(cam.frame, str) else tuple(cam.frame or ())
     return Framing(subjects=subjects, size=cam.shot_type, angle=cam.angle or "eye_level",
                    azimuth_deg=cam.azimuth_deg,
                    elevation_deg=None if cam.angle is not None else cam.elevation_deg,
@@ -101,15 +103,17 @@ def _actor_rotation(recipe: SceneRecipe, key: str) -> tuple:
 def _camera(recipe: SceneRecipe, name: str, cam: RecipeCamera) -> DesiredEntity:
     if cam.frame is not None:
         framing = recipe_camera_framing(cam)
-        points = [(_recipe_position(recipe, s), s in recipe.actors) for s in framing.subjects]
+        # A recipe framing names its subjects by key (recipe_camera_framing).
+        names = [s for s in framing.subjects if isinstance(s, str)]
+        points = [(_recipe_position(recipe, s), s in recipe.actors) for s in names]
         pos, aim = framing_transform(points, framing, cam.focal_length,
                                      frame_width_mm=DEFAULT_FRAME_WIDTH_MM, aspect=_aspect(recipe))
         transform = {"position": _t((pos.x, pos.y, pos.z)), "aim": _t((aim.x, aim.y, aim.z)),
                      "rotation": None}
     else:
         look = _aim_point(recipe, cam.look_at) if cam.look_at is not None else None
-        aim = _t((look.x, look.y, look.z)) if look is not None else None
-        transform = {"position": _t(cam.position), "aim": aim,
+        aim_t = _t((look.x, look.y, look.z)) if look is not None else None
+        transform = {"position": _t(cam.position), "aim": aim_t,
                      "rotation": _t(cam.rotation) if cam.rotation is not None else None}
     optics = {"focal_length": float(cam.focal_length), "depth_of_field": bool(cam.depth_of_field),
               "focal_distance": None if cam.focal_distance is None else float(cam.focal_distance)}

@@ -824,7 +824,7 @@ class DazScene:
                 exporter's own defaults and the named args above. See
                 ``DzFbxExporter.getDefaultOptions()`` for the full set of keys.
         """
-        overrides = {
+        overrides: dict[str, object] = {
             "IncludeSelectedOnly": selected_only,
             "IncludeFigures": include_figures,
             "IncludeProps": include_props,
@@ -866,7 +866,7 @@ class DazScene:
                 above. See ``DzObjExporter.getDefaultOptions()`` for the
                 full set of keys.
         """
-        overrides = {
+        overrides: dict[str, object] = {
             "SelectedOnly": selected_only,
             "IgnoreInvisible": ignore_invisible,
             "WriteVN": include_normals,

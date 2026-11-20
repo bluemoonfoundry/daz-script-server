@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Callable
+from typing import Any, Callable, cast
 
 try:
     import httpx
@@ -140,7 +140,7 @@ class AsyncDazClient:
     ) -> "httpx.Response":
         await self._check_server_version()
         merged = {**self._headers, **headers} if headers else self._headers
-        extra = {} if timeout is None else {"timeout": timeout}
+        extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
         try:
             return self._observe(
                 await self._http.post(f"{self._base}{path}", json=payload, headers=merged, **extra)
@@ -500,8 +500,10 @@ class AsyncDazClient:
                 continue
             aid = str(entry["artifact_id"])
             name = _safe_artifact_filename(entry.get("filename") or "artifact")
-            written.append(await self.download_artifact(
-                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}")))
+            # With a dest, download_artifact returns the written path (str).
+            path = await self.download_artifact(
+                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}"))
+            written.append(cast(str, path))
         return written
 
     # ── Render ────────────────────────────────────────────────────────────────

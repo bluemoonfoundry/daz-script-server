@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 from ._client import DazClient
 from .exceptions import ConnectionError, TimeoutError
@@ -30,7 +30,7 @@ class SceneEvent:
     data: dict
 
 
-def _iter_sse_lines(response: object) -> Iterator[str]:
+def _iter_sse_lines(response: Any) -> Iterator[str]:
     """Yield text lines from a streaming SSE response, decoded from UTF-8."""
     buf = b""
     for chunk in response.iter_content(chunk_size=None):
@@ -40,7 +40,7 @@ def _iter_sse_lines(response: object) -> Iterator[str]:
             yield line.decode("utf-8", errors="replace")
 
 
-def _parse_scene_events(response: object) -> Iterator[SceneEvent]:
+def _parse_scene_events(response: Any) -> Iterator[SceneEvent]:
     """Parse ``GET /scene/events`` SSE frames into :class:`SceneEvent` objects.
 
     Comment lines (keepalives, starting with ``:``) and malformed payloads

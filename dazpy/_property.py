@@ -23,6 +23,9 @@ class DazProperty(DazElement):
         property_label: The ``getLabel()`` string of the property.
     """
 
+    _owner_locator: str
+    _property_label: str
+
     def __init__(self, client: "DazClient", owner_locator: str, property_label: str):
         locator = (
             f"(function(){{"

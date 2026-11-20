@@ -30,6 +30,7 @@ Typical usage::
 from __future__ import annotations
 
 import math
+from typing import Any, Mapping
 
 
 # ── Vec3 ──────────────────────────────────────────────────────────────────────
@@ -46,6 +47,9 @@ class Vec3:
     """
 
     __slots__ = ("x", "y", "z")
+    x: float
+    y: float
+    z: float
 
     def __init__(self, x: float, y: float, z: float) -> None:
         object.__setattr__(self, "x", float(x))
@@ -58,7 +62,7 @@ class Vec3:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Vec3":
+    def from_dict(cls, d: Mapping[str, Any]) -> "Vec3":
         """Create from an ``{"x", "y", "z"}`` dict (e.g. from :attr:`~dazpy.DazNode.position`)."""
         return cls(d["x"], d["y"], d["z"])
 
@@ -302,6 +306,10 @@ class Quat:
 
 
     __slots__ = ("x", "y", "z", "w")
+    x: float
+    y: float
+    z: float
+    w: float
 
     def __init__(self, x: float, y: float, z: float, w: float) -> None:
         object.__setattr__(self, "x", float(x))
@@ -320,7 +328,7 @@ class Quat:
         return cls(0.0, 0.0, 0.0, 1.0)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Quat":
+    def from_dict(cls, d: Mapping[str, Any]) -> "Quat":
         """Create from an ``{"x", "y", "z", "w"}`` dict (e.g. from :attr:`~dazpy.DazNode.rotation`)."""
         return cls(d["x"], d["y"], d["z"], d["w"])
 
@@ -527,6 +535,8 @@ class BoundingBox:
     """
 
     __slots__ = ("min", "max")
+    min: Vec3
+    max: Vec3
 
     def __init__(self, min: "Vec3", max: "Vec3") -> None:
         object.__setattr__(self, "min", min)
@@ -538,7 +548,7 @@ class BoundingBox:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, d: dict) -> "BoundingBox":
+    def from_dict(cls, d: Mapping[str, Any]) -> "BoundingBox":
         """Create from the dict returned by :meth:`~dazpy.DazNode.bounding_box`.
 
         Expected shape: ``{"min": {"x":..., "y":..., "z":...}, "max": {...}}``.
@@ -698,6 +708,8 @@ class AxisRemap:
     """
 
     __slots__ = ("_specs", "_rotation_quat")
+    _specs: tuple[tuple[int, float], tuple[int, float], tuple[int, float]]
+    _rotation_quat: Quat | None
 
     def __init__(self, x: str, y: str, z: str) -> None:
         specs = (_parse_axis_spec(x), _parse_axis_spec(y), _parse_axis_spec(z))

@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping, Protocol, cast
 
 import requests as _requests
 
@@ -44,7 +44,20 @@ def _load_token() -> str:
     return ""
 
 
-def _parse_retry_after(resp: _requests.Response) -> float:
+class _HTTPResponse(Protocol):
+    """What the error helpers need from a response: satisfied structurally by
+    both ``requests.Response`` (DazClient) and ``httpx.Response`` (AsyncDazClient)."""
+
+    @property
+    def status_code(self) -> int: ...
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+    @property
+    def text(self) -> str: ...
+    def json(self, **kwargs: Any) -> Any: ...
+
+
+def _parse_retry_after(resp: _HTTPResponse) -> float:
     raw = resp.headers.get("Retry-After", "")
     try:
         return float(raw)
@@ -76,7 +89,7 @@ def _safe_artifact_filename(name: str) -> str:
     return name if name.strip(". ") else "artifact"
 
 
-def _authentication_error(resp: _requests.Response) -> AuthenticationError:
+def _authentication_error(resp: _HTTPResponse) -> AuthenticationError:
     """Build an AuthenticationError for a 401/403 response, keeping the server's
     ``ErrorResponse`` fields (``error_code``, ``detail``, ``retryable``)."""
     status = resp.status_code
@@ -95,7 +108,7 @@ def _authentication_error(resp: _requests.Response) -> AuthenticationError:
     )
 
 
-def _raise_for_error(resp: _requests.Response) -> None:
+def _raise_for_error(resp: _HTTPResponse) -> None:
     """Raise a typed exception for authentication or server-busy responses.
 
     Leaves 2xx responses (and DazScript's own success:false runtime/syntax
@@ -115,7 +128,7 @@ def _raise_for_error(resp: _requests.Response) -> None:
     error_msg = data.get("error") or resp.text[:200] or f"HTTP {status}"
     retry_after = _parse_retry_after(resp)
     if error_code == "STUDIO_BUSY":
-        raise StudioBusyError(error_msg, reason=data.get("detail", error_msg), retry_after=retry_after)
+        raise StudioBusyError(error_msg, reason=str(data.get("detail") or error_msg), retry_after=retry_after)
     if error_code == "CONCURRENT_LIMIT_EXCEEDED":
         raise ConcurrencyLimitError(error_msg, reason=error_msg, retry_after=retry_after)
     raise ServerResponseError(
@@ -930,8 +943,9 @@ class DazClient:
                 continue
             aid = str(entry["artifact_id"])
             name = _safe_artifact_filename(entry.get("filename") or "artifact")
-            written.append(self.download_artifact(
-                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}")))
+            # With a dest, download_artifact returns the written path (str).
+            written.append(cast(str, self.download_artifact(
+                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}"))))
         return written
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -1139,7 +1153,7 @@ class DazClient:
             return False
         return self.cancel_request(request_id)
 
-    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "object | None":
+    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "_requests.Response | None":
         """Open the SSE progress stream for a render request.
 
         Returns a streaming :class:`requests.Response` on success, or ``None``
@@ -1160,7 +1174,7 @@ class DazClient:
         self,
         categories: "list[str] | None" = None,
         stream_timeout: "float | None" = None,
-    ) -> "object | None":
+    ) -> "_requests.Response | None":
         """Open the SSE stream for general scene-change events (GET /scene/events).
 
         Args:

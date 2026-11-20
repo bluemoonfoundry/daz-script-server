@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import TYPE_CHECKING, Iterable, Protocol
+from typing import TYPE_CHECKING, Callable, Iterable, Protocol
 
 from ._camera import DazCamera
 from ._light import DazLight
@@ -367,6 +367,7 @@ class DazSceneOps:
     # ── create / delete ───────────────────────────────────────────────────────
 
     def create(self, entity: DesiredEntity) -> list[str]:
+        make: Callable[[], object]
         if entity.kind in ("actor", "prop"):
             path = self._resolve_asset(entity.create["asset_path"])
             make = lambda: self._client.execute(_load_asset_script(path))  # noqa: E731
@@ -507,7 +508,7 @@ class DazSceneOps:
     def _set_transform(self, ident: NodeIdentifier, kind: EntityKind, t: dict) -> None:
         node = DazCamera(self._client, ident) if kind == "camera" else DazNode(self._client, ident)
         node.set_position(*t["position"])
-        if kind == "camera" and t.get("aim") is not None:
+        if isinstance(node, DazCamera) and t.get("aim") is not None:
             node.aim_at(*t["aim"])
         elif t.get("rotation") is not None:
             node.set_rotation(*t["rotation"])

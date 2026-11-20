@@ -145,7 +145,7 @@ def _dump(obj: Any) -> dict:
     return out
 
 
-_NESTED = {
+_NESTED: dict[Any, Mapping[str, Any]] = {
     ActorSpec: {}, PropSpec: {}, AssetSpec: {}, RecipeLight: {},
     RecipeEnvironment: {}, RecipeCamera: {},
     RecipeRig: {"key": RigLightOverride, "fill": RigLightOverride, "rim": RigLightOverride},

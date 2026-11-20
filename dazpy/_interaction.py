@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 if TYPE_CHECKING:
     from ._skeleton import DazSkeleton
@@ -352,7 +352,7 @@ class FigureRigProfile:
                 return bone
         return None
 
-    def _find_terminal_bone(self, candidates: list[tuple[ChainRole, ChainSide, tuple[str, ...]]]) -> BoneProfile | None:
+    def _find_terminal_bone(self, candidates: Sequence[tuple[str, ChainSide, tuple[str, ...]]]) -> BoneProfile | None:
         for role, side, tokens in candidates:
             for bone in self.bones:
                 if _match_any(bone.name, tokens) and _side_matches(bone.name, side):
@@ -696,7 +696,7 @@ class InteractionPlan:
 
     @classmethod
     def from_dict(cls, data: dict) -> "InteractionPlan":
-        constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget] = []
+        constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget | HandTarget | FootTarget] = []
         for item in data.get("constraints", []):
             kind = item.get("kind")
             if kind == "PoseTarget":
@@ -1013,7 +1013,7 @@ class PreparedInteractionRecipe:
 
             if target_profile is not None and resolved.target_figure is not None:
                 if target_base is not None and resolved.target_point is not None and source_base is None:
-                    world_target = _add_vec3(target_base, resolved.target_point)
+                    world_target = _vec3_add(target_base, resolved.target_point)
                     _append_position(resolved.figure_label, _sub_vec3(world_target, source_bone.local_position))
                     continue
 
@@ -1023,7 +1023,7 @@ class PreparedInteractionRecipe:
                         _append_position(resolved.figure_label, _sub_vec3(contact_center, source_bone.local_position))
                         _append_position(resolved.target_figure, _sub_vec3(contact_center, target_local))
                     elif source_base is None and target_base is not None:
-                        target_world = _add_vec3(target_base, target_local)
+                        target_world = _vec3_add(target_base, target_local)
                         _append_position(resolved.figure_label, _sub_vec3(target_world, source_bone.local_position))
                     elif source_base is not None and target_base is None:
                         source_world = _add_vec3(source_base, source_bone.local_position)
@@ -1047,7 +1047,7 @@ class PreparedInteractionRecipe:
                 sum(point[2] for point in points) / len(points),
             )
 
-        diagnostics = {
+        diagnostics: dict[str, object] = {
             "figure_count": len(averaged_positions),
             "unresolved_target_count": len(unresolved),
         }
@@ -1059,7 +1059,7 @@ class PreparedInteractionRecipe:
 
     def apply(
         self,
-        scene: object,
+        scene: Any,
         *,
         align_limb_targets: bool = False,
         max_iterations: int | None = None,
@@ -1087,7 +1087,7 @@ class PreparedInteractionRecipe:
 
     def align_limb_targets(
         self,
-        scene: object,
+        scene: Any,
         *,
         max_iterations: int | None = None,
         step_degrees: float = 1.0,
@@ -1126,7 +1126,7 @@ class InteractionPosePatch:
     unresolved_targets: list[ResolvedInteractionTarget] = field(default_factory=list)
     diagnostics: dict[str, object] = field(default_factory=dict)
 
-    def apply(self, scene: object) -> None:
+    def apply(self, scene: Any) -> None:
         for figure_label, position in self.figure_positions.items():
             skeleton = scene.find_skeleton_by_label(figure_label)
             skeleton.set_position(*position)
@@ -1199,7 +1199,8 @@ def _rotation_with_axis_limits(rotation: Rotation3, axis_limits: dict[AxisName, 
     if not axis_limits:
         return rotation
     values = [rotation[0], rotation[1], rotation[2]]
-    for index, axis in enumerate(("x", "y", "z")):
+    axes: tuple[AxisName, ...] = ("x", "y", "z")
+    for index, axis in enumerate(axes):
         limit = axis_limits.get(axis)
         if limit is not None:
             values[index] = _clamp(values[index], limit.min_degrees, limit.max_degrees)
@@ -1316,6 +1317,10 @@ def _align_single_limb_batch(
 ) -> "LimbAlignmentResult":
     """Batch IK path: 2 HTTP calls per iteration via evaluate_pose_jacobian."""
 
+    target_point = target.target_point
+    if target_point is None:  # align_single_limb_target returns before calling us
+        raise ValueError("batch limb alignment needs a resolved target_point")
+
     all_rotations = skeleton.bone_rotations()
     current_rotations: dict[str, Rotation3] = {
         name: all_rotations.get(name, (0.0, 0.0, 0.0))
@@ -1336,7 +1341,7 @@ def _align_single_limb_batch(
     base_position: Vector3 = tuple(jac["base_position"])  # type: ignore[assignment]
     columns: list[Vector3] = [tuple(c) for c in jac["columns"]]  # type: ignore[misc]
 
-    initial_error = _vec3_length(_vec3_sub(target.target_point, base_position))
+    initial_error = _vec3_length(_vec3_sub(target_point, base_position))
     if initial_error <= tolerance:
         return LimbAlignmentResult(
             figure_label=target.figure_label,
@@ -1358,7 +1363,7 @@ def _align_single_limb_batch(
 
     for iteration in range(max_iterations):
         iterations = iteration + 1
-        current_error = _vec3_sub(target.target_point, base_position)
+        current_error = _vec3_sub(target_point, base_position)
         if _vec3_length(current_error) <= tolerance:
             converged = True
             final_position = base_position
@@ -1387,7 +1392,7 @@ def _align_single_limb_batch(
             new_rotations[name] = clamped
             current_rotations[name] = clamped
 
-        skeleton.set_bone_rotations(new_rotations)
+        skeleton.set_bone_rotations(dict(new_rotations))
 
         jac = skeleton.evaluate_pose_jacobian(chain_names, target.bone_name, step_degrees)
         if jac is None:
@@ -1396,7 +1401,7 @@ def _align_single_limb_batch(
         columns = [tuple(c) for c in jac["columns"]]  # type: ignore[misc]
         final_position = base_position
 
-    final_error = _vec3_length(_vec3_sub(target.target_point, final_position))
+    final_error = _vec3_length(_vec3_sub(target_point, final_position))
     return LimbAlignmentResult(
         figure_label=target.figure_label,
         anchor_name=target.anchor_name,
@@ -1461,6 +1466,8 @@ def align_single_limb_target(
         )
 
     bones = [skeleton.find_bone(name) for name in chain_names]
+    # Key by the bone's own name, falling back to the chain name it was found by.
+    named_bones = [(bone.name or name, bone) for name, bone in zip(chain_names, bones)]
     effector = skeleton.find_bone(target.bone_name)
     base_position = _bone_world_position(effector)
     if base_position is None:
@@ -1486,7 +1493,7 @@ def align_single_limb_target(
             converged=True,
             initial_error=initial_error,
             final_error=initial_error,
-            applied_rotations={bone.name: _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0) for bone in bones},
+            applied_rotations={name: _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0) for name, bone in named_bones},
             diagnostics={"reason": "already_aligned"},
         )
 
@@ -1504,10 +1511,10 @@ def align_single_limb_target(
 
         columns: list[Vector3] = []
         original_rotations: dict[str, Rotation3] = {}
-        for bone in bones:
+        for name, bone in named_bones:
             current_rotation = _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0)
-            original_rotations[bone.name] = current_rotation
-            profile_bone = profile.bone(bone.name)
+            original_rotations[name] = current_rotation
+            profile_bone = profile.bone(name)
             for axis in range(3):
                 trial_rotation = _set_rotation_axis(current_rotation, axis, _rotation_axis_value(current_rotation, axis) + step_degrees)
                 trial_rotation = _rotation_with_axis_limits(trial_rotation, profile_bone.axis_limits if profile_bone.axis_limits else None)
@@ -1528,22 +1535,22 @@ def align_single_limb_target(
             scale = step_degrees / max_delta
             delta = [value * scale for value in delta]
 
-        for bone_index, bone in enumerate(bones):
-            current_rotation = original_rotations[bone.name]
+        for bone_index, (name, bone) in enumerate(named_bones):
+            current_rotation = original_rotations[name]
             start = bone_index * 3
             next_rotation = (
                 current_rotation[0] + delta[start],
                 current_rotation[1] + delta[start + 1],
                 current_rotation[2] + delta[start + 2],
             )
-            profile_bone = profile.bone(bone.name)
+            profile_bone = profile.bone(name)
             bone.set_local_rotation(*_rotation_with_axis_limits(next_rotation, profile_bone.axis_limits if profile_bone.axis_limits else None))
 
     final_position = _bone_world_position(effector)
     final_error = _vec3_length(_vec3_sub(target.target_point, final_position)) if final_position is not None else None
     applied_rotations = {
-        bone.name: _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0)
-        for bone in bones
+        name: _as_tuple3(getattr(bone, "local_euler", None)) or (0.0, 0.0, 0.0)
+        for name, bone in named_bones
     }
     return LimbAlignmentResult(
         figure_label=target.figure_label,
@@ -1664,7 +1671,7 @@ def prepare_interaction_recipe(
     plan = recipe.to_plan()
     validation_issues = plan.validate(rig_profiles)
     resolved_targets = plan.resolve_targets(rig_profiles)
-    diagnostics = {
+    diagnostics: dict[str, object] = {
         "recipe_kind": recipe.kind,
         "actor_count": len(recipe.actors),
         "constraint_count": len(recipe.constraints),

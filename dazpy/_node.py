@@ -45,6 +45,8 @@ class DazNode(DazElement):
         identifier: Identifies the underlying ``DzNode``.
     """
 
+    _identifier: NodeIdentifier
+
     def __init__(self, client: "DazClient", identifier: NodeIdentifier):
         locator = ScriptBuilder.find_node_expr(identifier)
         super().__init__(client, locator)

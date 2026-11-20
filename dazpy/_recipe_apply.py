@@ -49,7 +49,8 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Callable
+from functools import partial
+from typing import Any, Callable
 
 from ._recipe_desired import DesiredEntity
 from ._recipe_diff import CREATE_KEY, ENVIRONMENT_PATH, Conflict, RecipePlan, Step
@@ -114,26 +115,27 @@ class _Run:
             names = ops.create(d)
             for name in names:
                 self.undo(f"delete created node {name!r} ({step.path})",
-                          lambda n=name: ops.delete(n))
+                          partial(ops.delete, name))
             self.created[step.path] = list(names)
             ops.set_channels(names[0], d.kind, step.channels)
         elif step.op == "modify":
-            node, kind = step.node_name, self.desired[step.path].kind
+            node, kind = step.node, self.desired[step.path].kind
             prior = {ch: v for ch, v in (step.prior or {}).items() if v is not None}
             if prior:
                 self.undo(f"restore {step.path} ({', '.join(prior)}) on {node!r}",
                           lambda: ops.set_channels(node, kind, prior))
             ops.set_channels(node, kind, step.channels)
         elif step.op == "set_environment":
-            prior = (step.prior or {}).get(_ENV_CHANNEL)
-            if prior is None:
-                prior = ops.observe_environment()
-            if prior is not None:
-                self.undo("restore the scene environment", lambda: ops.set_environment(prior))
+            env_prior = (step.prior or {}).get(_ENV_CHANNEL)
+            if env_prior is None:
+                env_prior = ops.observe_environment()
+            if env_prior is not None:
+                restore = env_prior
+                self.undo("restore the scene environment", lambda: ops.set_environment(restore))
             ops.set_environment(step.channels[_ENV_CHANNEL])
         elif step.op == "release":
             entity = self.live.entities[step.path]
-            node, prev = step.node_name, entity.record
+            node, prev = step.node, entity.record
             self.undo(f"restore the ownership record of {step.path} on {node!r}",
                       lambda: ops.write_record(node, prev))
             ops.remove_record(node)
@@ -148,7 +150,7 @@ class _Run:
                           lambda: ops.relabel(node, new, old))
                 ops.relabel(node, old, new)
         elif step.op == "unparent":
-            names, owner = list(step.channels["children"]["names"]), step.node_name
+            names, owner = list(step.channels["children"]["names"]), step.node
             # unparent moves nothing unless every name is found, so it is undone
             # only once it succeeded, and exactly the nodes it moved go back.
             moved = ops.unparent(owner, names)
@@ -159,8 +161,8 @@ class _Run:
 
             self.undo(f"reparent {names} under {owner!r}", reparent)
         elif step.op == "delete":
-            ops.delete(step.node_name, owner_recipe=self.recipe_id)
-            self.deleted_nodes.add(step.node_name)
+            ops.delete(step.node, owner_recipe=self.recipe_id)
+            self.deleted_nodes.add(step.node)
             self.deleted_steps.append(step)
         # adopt: nothing to write to Studio; handled by write_records
 
@@ -201,8 +203,8 @@ class _Run:
     def merged(self, path: str, steps: list[Step], prev: EntityRecord | None,
                node: str | None) -> EntityRecord:
         """*prev* with the channels *steps* changed replaced (per-channel merge)."""
-        desired = copy.deepcopy(prev.desired) if prev else {}
-        observed = copy.deepcopy(prev.observed) if prev else {}
+        desired: dict[str, Any] = copy.deepcopy(prev.desired) if prev else {}
+        observed: dict[str, Any] = copy.deepcopy(prev.observed) if prev else {}
         fresh: dict | None = None
         for s in steps:
             for ch, value in s.channels.items():
@@ -213,6 +215,7 @@ class _Run:
                     observed[ch] = self.ops.observe_environment()
                 else:
                     if fresh is None:
+                        assert node is not None  # only the environment has no node
                         fresh = self.ops.observe(node, self.desired[path].kind)
                     observed[ch] = fresh.get(ch)
         return self.record(path, desired, observed, prev.native if prev else ())

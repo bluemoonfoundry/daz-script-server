@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from ._client import DazClient
 from .exceptions import BatchLimitExceededError
 
@@ -37,7 +39,7 @@ class BatchFuture:
     def __init__(self, key: str):
         self._key = key
         self._resolved = False
-        self._value = None
+        self._value: object = None
 
     @property
     def value(self) -> object:
@@ -213,7 +215,7 @@ class Batch:
     def __enter__(self) -> "Batch":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         if exc_type is None:
             self.execute()
         return False

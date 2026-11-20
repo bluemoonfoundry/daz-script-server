@@ -9,6 +9,7 @@ import sys
 import threading
 import warnings
 from dataclasses import dataclass
+from types import FrameType
 from typing import Callable
 
 from .exceptions import ServerVersionWarning
@@ -160,7 +161,7 @@ class VersionTracker:
                 if key not in self._warned:
                     self._warned.add(key)
                     warn = True
-        if warn:
+        if warn and check.message:
             warnings.warn(check.message, ServerVersionWarning, stacklevel=_first_external_stacklevel())
         if self._callback is not None:
             try:
@@ -197,7 +198,8 @@ def _first_external_stacklevel() -> int:
     """Stack level of the first frame outside dazpy, so the warning points at
     user code regardless of how deep the triggering client call was."""
     # stacklevel=1 is the warnings.warn caller (VersionTracker.finish_check).
-    frame, level = sys._getframe(1), 1
+    frame: FrameType | None = sys._getframe(1)
+    level = 1
     while frame is not None and os.path.abspath(frame.f_code.co_filename).startswith(_PKG_DIR):
         frame, level = frame.f_back, level + 1
     return level

@@ -204,7 +204,7 @@ def observe(recipe: SceneRecipe | dict, scene: "DazScene") -> ObserveReport:
 
 
 def _observation(desired: dict, live: LiveState) -> ObserveReport:
-    accepted = {p: "scene" for p in (live.manifest.deleted if live.manifest else ())
+    accepted: dict[str, Resolution] = {p: "scene" for p in (live.manifest.deleted if live.manifest else ())
                 if p in desired and p not in live.entities}
     p = diff(desired, live, on_conflict="recipe_wins", resolutions=accepted)
     drift = tuple(w for w in p.warnings if w.code == "hand_tweak_kept") + tuple(

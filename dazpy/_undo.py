@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from ._client import DazClient
 from ._script_builder import ScriptBuilder
@@ -31,7 +32,7 @@ class UndoGroup:
         self._client.execute(script)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         if exc_type is None:
             script = ScriptBuilder.iife(f"acceptUndo({json.dumps(self._label)});")
         else:

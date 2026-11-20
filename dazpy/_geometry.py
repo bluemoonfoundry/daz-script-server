@@ -27,6 +27,8 @@ class DazGeometry(DazElement):
         identifier: Identifies the scene node whose geometry to access.
     """
 
+    _identifier: NodeIdentifier
+
     def __init__(self, client: "DazClient", identifier: NodeIdentifier):
         locator = (
             f"(function(){{"

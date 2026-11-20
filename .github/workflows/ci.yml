@@ -34,7 +34,7 @@ jobs:
           if [ -f sdk-coverage.md ]; then cat sdk-coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
 
   lint:
-    name: Python lint (ruff) and type check (mypy, advisory)
+    name: Python lint (ruff) and type check (mypy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -46,9 +46,7 @@ jobs:
       # Rule selection lives in pyproject.toml [tool.ruff.lint].
       - name: ruff check
         run: ruff check --output-format=github dazpy scripts tests
-      # Non-blocking until the existing mypy backlog is worked down.
-      - name: mypy dazpy (advisory)
-        continue-on-error: true
+      - name: mypy dazpy
         run: mypy dazpy
 
   daz-ts:

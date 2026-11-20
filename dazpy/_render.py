@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import warnings
+from typing import Any
 from dataclasses import dataclass
 
 from ._client import DazClient
@@ -60,7 +61,7 @@ def _engine_state_unavailable(
         "reason": reason,
         "render_type": {
             "raw": render_type,
-            "name": _RENDER_TYPE_NAMES.get(render_type),
+            "name": _RENDER_TYPE_NAMES.get(render_type) if render_type is not None else None,
             "provenance": {
                 "kind": provenance_kind,
                 "source": "DzRenderOptions.renderType",
@@ -140,7 +141,7 @@ def _normalize_engine_readback(raw: object) -> dict:
 _HOLDER_FALLBACK_MARKER = "[dazpy-warning:render-element-fallback]"
 
 # (max_samples, max_time_secs, quality, quality_enable)
-_QUALITY_PRESETS = {
+_QUALITY_PRESETS: dict[str, dict[str, Any]] = {
     "draft":   {"max_samples": 100,  "max_time": 300,  "quality_enable": False},
     "preview": {"max_samples": 500,  "max_time": 900,  "quality_enable": True, "quality": 2.0},
     "good":    {"max_samples": 1500, "max_time": 3600, "quality_enable": True, "quality": 1.0},
