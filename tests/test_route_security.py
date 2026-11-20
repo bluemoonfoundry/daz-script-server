@@ -20,6 +20,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PANE_CPP = os.path.join(ROOT, "src", "DzScriptServerPane.cpp")
 ARTIFACT_ROUTES_CPP = os.path.join(ROOT, "src", "ArtifactRoutes.cpp")
+CAPABILITIES_CPP = os.path.join(ROOT, "src", "Capabilities.cpp")
 
 # Routes that are public on purpose (no auth, no whitelist).
 PUBLIC_ROUTES = {("GET", "/status"), ("GET", "/health"), ("GET", "/metrics")}
@@ -155,11 +156,13 @@ class TestRouteSecurity(unittest.TestCase):
     def test_capabilities_route_table_matches_setup_routes(self):
         """GET /capabilities reports kCapabilityRoutes; it must list exactly the
         routes setupRoutes() registers, with auth matching PUBLIC_ROUTES."""
-        start = self.src.index("const CapabilityRoute kCapabilityRoutes[]")
-        end = self.src.index("};", start)
+        with open(CAPABILITIES_CPP, encoding="utf-8") as f:
+            caps_src = f.read()
+        start = caps_src.index("const CapabilityRoute kCapabilityRoutes[]")
+        end = caps_src.index("};", start)
         entries = re.findall(
             r'\{\s*"(\w+)",\s*"([^"]+)",\s*(true|false),\s*"(\w+)"\s*\}',
-            self.src[start:end])
+            caps_src[start:end])
         # The table may name placeholders ({id}, {artifact_id}); compare each
         # ([^/]+) capture against any {name}.
         table = {(m, re.sub(r"\{\w+\}", "{id}", p)): auth == "true"

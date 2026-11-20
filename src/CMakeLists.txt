@@ -24,6 +24,7 @@ add_library(DazScriptServer SHARED
 	ArtifactRoutes.cpp
 	ScriptRegistry.cpp
 	PluginRouteRegistry.cpp
+	Capabilities.cpp
 	ArtifactThumbnail.cpp
 	RequestValidator.cpp
 	SettingsService.cpp
