@@ -4,6 +4,16 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **daz-ts:** `MIN_SERVER_VERSION` (2.11, the oldest plugin daz-ts needs)
+  and `DazClient.checkServerVersion()`, which reads `GET /status` and returns
+  a `VersionCheck` (`compatible`, upgrade `message`). Unlike dazpy, daz-ts
+  never checks on its own; call it when you want to know.
+- `SECURITY.md` (supported versions, private vulnerability reporting, scope)
+  and a docs index at `docs/README.md`. Plans for shipped features moved to
+  `docs/superpowers/plans/archive/`.
+
 ### Fixed
 
 - **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the
@@ -719,7 +729,7 @@ CONCURRENT_LIMIT_EXCEEDED` responses were misreported as
 `render_batch_submit`, and `render_animation_submit`.
 
 Design: `docs/superpowers/specs/2026-07-22-studio-busy-handling-design.md`.
-Plan: `docs/superpowers/plans/2026-07-22-studio-busy-handling.md`.
+Plan: `docs/superpowers/plans/archive/2026-07-22-studio-busy-handling.md`.
 
 ## [2.7.2] - 2026-07-19
 

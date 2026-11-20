@@ -275,7 +275,7 @@ couldn't be compiled. The notes record what I learned.
 - **E12. Duplicate examples stub:** `docs/examples/MOVED.md` duplicates
   `docs/examples/README.md`; delete it.
   - Not a duplicate:
-    `docs/superpowers/plans/2026-08-21-script-call-batching-plan.md` is the
+    `docs/superpowers/plans/archive/2026-08-21-script-call-batching-plan.md` is the
     step-by-step plan for the design spec in `…-batching.md`, and `-plan.md:11`
     links to it. Keep both.
 - **E13. CI caching:**

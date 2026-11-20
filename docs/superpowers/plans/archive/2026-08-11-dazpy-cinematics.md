@@ -1159,7 +1159,7 @@ git commit -m "feat(dazpy): export cinematics symbols from top-level package"
 - [ ] **Step 1: Update `daz-script-server-p1af` notes**
 
 ```bash
-bd update daz-script-server-p1af --notes="dazpy.cinematics static-shots slice shipped (CinematicStaticShot/apply_static_shot, OrbitCamera/apply_orbit_camera, FrameSubject/apply_frame_subject) -- see docs/superpowers/specs/2026-08-11-dazpy-cinematics-design.md and docs/superpowers/plans/2026-08-11-dazpy-cinematics.md. Includes a vertical_offset_cm framing fix for hip-joint root positions (dazpy/_shot_geometry.py resolve_target). Remaining GH #31 domain submodules: dazpy.materials. CinematicAnimatedShot deferred to a separate follow-up pending DazScript keyframe API research."
+bd update daz-script-server-p1af --notes="dazpy.cinematics static-shots slice shipped (CinematicStaticShot/apply_static_shot, OrbitCamera/apply_orbit_camera, FrameSubject/apply_frame_subject) -- see docs/superpowers/specs/2026-08-11-dazpy-cinematics-design.md and docs/superpowers/plans/archive/2026-08-11-dazpy-cinematics.md. Includes a vertical_offset_cm framing fix for hip-joint root positions (dazpy/_shot_geometry.py resolve_target). Remaining GH #31 domain submodules: dazpy.materials. CinematicAnimatedShot deferred to a separate follow-up pending DazScript keyframe API research."
 ```
 
 Do not close the issue — `dazpy.materials` and `CinematicAnimatedShot` remain open slices of this same issue.

@@ -139,6 +139,22 @@ server's Stuck Job Timeout becomes `stale`, which ends the wait with
 `client.cancelRequestDetail(id)` returns the server's cancel response
 (`status` is `cancelled`, `cancel_requested` or `stale`).
 
+### `DazClient.checkServerVersion()`
+
+daz-ts needs DazScriptServer plugin 2.11 or newer (`MIN_SERVER_VERSION`).
+Unlike dazpy, it never checks the plugin version on its own. Call
+`checkServerVersion()` once after connecting if you want to warn about an
+old plugin:
+
+```ts
+const check = await client.checkServerVersion(); // GET /status
+if (check.compatible === false) console.warn(check.message);
+```
+
+`compatible` is `null` when the plugin reports no parseable version.
+`evaluateServerVersion(url, statusBody)` and `parseVersion()` are exported
+for callers that fetch `/status` themselves.
+
 ### `DazClient.capabilities()`
 
 Ask the server what it supports instead of hard-coding versions (requires a

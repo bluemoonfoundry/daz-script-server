@@ -17,6 +17,7 @@ import {
 } from "./exceptions.js";
 import { buildOperationsScript } from "./batch.js";
 import type { ExecutionResult } from "./result.js";
+import { evaluateServerVersion, type VersionCheck } from "./version.js";
 
 const TOKEN_FILE = path.join(os.homedir(), ".daz3d", "dazscriptserver_token.txt");
 const DEFAULT_HOST = "127.0.0.1";
@@ -903,6 +904,17 @@ export class DazClient {
       throw await authenticationError(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * Check the plugin's version (from `GET /status`) against
+   * {@link MIN_SERVER_VERSION}. daz-ts never runs this on its own, so call it
+   * once after connecting if you want to warn users about an old plugin.
+   * Throws only what {@link status} throws: an incompatible plugin comes back
+   * as `compatible: false` with upgrade advice in `message`.
+   */
+  async checkServerVersion(): Promise<VersionCheck> {
+    return evaluateServerVersion(this.baseUrl, await this.status());
   }
 
   /** Return the health check dict from `GET /health`. */
