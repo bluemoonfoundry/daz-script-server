@@ -43,15 +43,15 @@ cmake --build build --config Release
 ```bash
 # Start DAZ Studio and enable the plugin first, then:
 
-# Full integration suite (72 tests)
-python tests.py
+# Raw HTTP API suite
+python tests.py api
 
-# Quick smoke test
-python test-simple.py
+# dazpy SDK integration suite
+python tests.py integration
 
 # Performance benchmarks
-python test-performance.py
-python test-performance.py --quick   # fewer iterations, suitable for CI
+python tests/test_performance.py
+python tests/test_performance.py --quick   # fewer iterations, suitable for CI
 ```
 
 ## Code Style

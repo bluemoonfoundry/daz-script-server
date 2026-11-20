@@ -47,7 +47,9 @@ at build time. `--sdk-version 4` and `--sdk-version 6` use separate build
 directories (`build/` vs `build-sdk6/`), so switching between them never
 reuses a stale CMake cache from the other SDK.
 
-**Test clients:** `test-simple.py`, `tests.py`, `test-client.js`, `test-client.ps1`
+**Tests:** `python tests.py unit|api|integration` (unit needs no server),
+`python tests/test_performance.py [--quick]`. Example clients: `test-client.js`,
+`test-client.ps1`
 
 **Live smoke matrix:** `python tests/smoke_live.py` (DS4/DS6 × Iray/Filament/viewport,
 engine readback after every change, `--record` per release). Use it instead of
@@ -191,7 +193,7 @@ posts SDK coverage to the job summary), as does `tests/test_openapi_parity.py`.
 **Auth:** Enabled by default, token auto-generated
 **Whitelist/Rate limit:** Disabled by default
 
-See `README.md` for full API reference and `FUTURE_ENHANCEMENTS.md` for planned features.
+See `README.md` for the full API reference.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->

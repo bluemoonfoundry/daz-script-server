@@ -1066,8 +1066,9 @@ Four additional examples expanding SDK coverage:
 
 ### 🧪 Test Suite
 
-`tests_dazpy.py` (unit) and `tests_dazpy_integration.py` (requires a live DAZ
-Studio instance) now ship in the repo root.
+`tests/test_dazpy.py` (unit) and `tests/test_dazpy_integration.py` (requires a
+live DAZ Studio instance) now ship in the repo. Run them with
+`python tests.py unit` and `python tests.py integration`.
 
 ### 📖 Docs & Ergonomics
 
@@ -1679,10 +1680,10 @@ The SDK ships with two test suites:
 
 ```bash
 # Unit tests — no DAZ Studio needed (mock-based)
-python tests_dazpy.py
+python tests.py unit
 
 # Integration tests — skip gracefully if server is down
-python tests_dazpy_integration.py
+python tests.py integration
 ```
 
 Tests requiring a live DAZ Studio session are gated with `@skip_no_daz` and
@@ -3108,8 +3109,8 @@ pip install dazpy-*.whl      # from the release page
 ```
 
 **Files:**
-- `tests_dazpy.py` — SDK unit tests (mock-based, no server needed)
-- `tests_dazpy_integration.py` — SDK integration tests (requires running server)
+- `tests/test_dazpy.py` — SDK unit tests (mock-based, no server needed)
+- `tests/test_dazpy_integration.py` — SDK integration tests (requires running server)
 
 **Usage:**
 ```python
@@ -3142,9 +3143,9 @@ result = execute_long(client, "App.getRenderMgr().doRender(); return 'done';",
 ### Python — Raw HTTP
 
 **Files:**
-- `test-simple.py` — Basic raw-HTTP client
-- `tests.py` — Comprehensive server integration test suite (72 tests)
-- `test-performance.py` — Performance benchmarks and load tests
+- `tests.py` — Unified test runner (`unit`, `api`, `integration` suites)
+- `tests/test_api.py` — Raw HTTP API test suite (`python tests.py api`)
+- `tests/test_performance.py` — Performance benchmarks and load tests
 
 **Usage:**
 ```python
@@ -3219,21 +3220,18 @@ $response
 
 **Running examples:**
 ```bash
-# dazpy unit tests (no server needed)
-python tests_dazpy.py
+# Unit tests, including dazpy (no server needed)
+python tests.py unit
 
-# dazpy integration tests (requires server running)
-python tests_dazpy_integration.py
+# Raw HTTP API tests (requires server running)
+python tests.py api
 
-# Server integration tests
-python tests.py
-
-# Python smoke tests
-python test-simple.py
+# dazpy integration tests (requires DAZ Studio running)
+python tests.py integration
 
 # Performance benchmarks and load tests
-python test-performance.py
-python test-performance.py --quick   # fewer iterations, suitable for CI
+python tests/test_performance.py
+python tests/test_performance.py --quick   # fewer iterations, suitable for CI
 
 # Node.js
 node test-client.js
