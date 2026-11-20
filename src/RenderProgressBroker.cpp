@@ -1,7 +1,18 @@
 #include "RenderProgressBroker.h"
+#include "JsonStd.h"
 
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qmutex.h>
+
+namespace {
+// Full JSON string escaping (control chars included): a raw newline in an
+// error message or path would break both the JSON and the SSE "data:" framing.
+QString jsonEscape(const QString& s)
+{
+    const std::string escaped = JsonStd::escape(JsonStd::qstrToStd(s));
+    return QString::fromUtf8(escaped.data(), static_cast<int>(escaped.size()));
+}
+}
 
 RenderProgressBroker::RenderProgressBroker() {}
 
@@ -37,7 +48,7 @@ void RenderProgressBroker::unwatchRequest(const QString& requestId, SubscriberQu
 
 void RenderProgressBroker::notifyStarted(const QString& requestId)
 {
-    QString data = "{\"request_id\":\"" + requestId + "\",\"percent\":0}";
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId) + "\",\"percent\":0}";
     pushEvent(requestId, makeEvent("progress", data));
 }
 
@@ -45,7 +56,7 @@ void RenderProgressBroker::notifyProgress(const QString& requestId, int frame, i
 {
     if (frame < 1 || totalFrames < 1) return;
     double percent = 100.0 * (frame - 1) / totalFrames;
-    QString data = "{\"request_id\":\"" + requestId
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
         + "\",\"percent\":" + QString::number(percent, 'f', 2)
         + ",\"frame\":" + QString::number(frame)
         + ",\"total_frames\":" + QString::number(totalFrames) + "}";
@@ -85,12 +96,8 @@ void RenderProgressBroker::notifyCompleted(const QString& requestId, int duratio
         fileSize = QFileInfo(outputPath).size();
     }
 
-    // Minimal JSON escaping for the path (backslashes on Windows).
-    QString escapedPath = outputPath;
-    escapedPath.replace("\\", "\\\\").replace("\"", "\\\"");
-
-    QString data = "{\"request_id\":\"" + requestId
-        + "\",\"output_path\":\"" + escapedPath
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
+        + "\",\"output_path\":\"" + jsonEscape(outputPath)
         + "\",\"file_size_bytes\":" + QString::number(fileSize)
         + ",\"duration_ms\":"      + QString::number(durationMs) + "}";
     QString event = makeEvent("complete", data);
@@ -100,11 +107,8 @@ void RenderProgressBroker::notifyCompleted(const QString& requestId, int duratio
 
 void RenderProgressBroker::notifyFailed(const QString& requestId, const QString& error, int durationMs)
 {
-    QString escapedError = error;
-    escapedError.replace("\\", "\\\\").replace("\"", "\\\"");
-
-    QString data = "{\"request_id\":\"" + requestId
-        + "\",\"error\":\""     + escapedError
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
+        + "\",\"error\":\""     + jsonEscape(error)
         + "\",\"duration_ms\":" + QString::number(durationMs) + "}";
     QString event = makeEvent("error", data);
 
