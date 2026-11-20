@@ -148,10 +148,3 @@ QString AuthenticationService::getToken() const
     return m_sToken;
 }
 
-void AuthenticationService::setToken(const QString& token)
-{
-    QByteArray ba = token.toUtf8();
-    QWriteLocker lock(&m_tokenLock);
-    m_sToken    = token;
-    m_sTokenStr = std::string(ba.constData(), ba.size());
-}

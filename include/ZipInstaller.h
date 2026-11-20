@@ -29,11 +29,10 @@
 // decompression -- a crafted header cannot lie its way past the second
 // check, which is what actually defends against zip bombs.
 //
-// install() refuses to touch an existing <packagesDir>/<id> --
-// reinstalling over one (e.g. opening a newer version of an already-opened
-// package) is the caller's job via extractToStaging()/commit(): extract and
-// learn the package id without touching the live directory, decide what to
-// do about a same-id collision, *then* commit.
+// Installation is two-phase: extractToStaging() validates and extracts the
+// archive and learns the package id without touching the live directory;
+// the caller decides what to do about a same-id collision (e.g. opening a
+// newer version of an already-opened package), *then* calls commit().
 class ZipInstaller {
 public:
 	struct Limits {
@@ -45,13 +44,6 @@ public:
 		// (the classic zip-bomb shape: a tiny compressed entry inflating to
 		// something enormous).
 		qint64 maxCompressionRatio       = 1024;
-	};
-
-	struct Result {
-		bool    success = false;
-		QString packageId;        // resolved from manifest.json's "id" field
-		QString finalPackageDir;  // <packagesDir>/<packageId>, valid only if success
-		QString errorMessage;     // human-readable reason, valid only if !success
 	};
 
 	// Result of extractToStaging(): the archive has been validated and fully
@@ -82,16 +74,10 @@ public:
 	explicit ZipInstaller(QString packagesDir);
 	ZipInstaller(QString packagesDir, Limits limits);
 
-	// Validates and extracts zipPath into a staging directory, then atomically
-	// renames it into <packagesDir>/<id> once every entry has passed and
-	// manifest.json (required, must contain a string "id" field matching
-	// [A-Za-z0-9_-]+) has been read from the extracted root. Fails outright
-	// -- staging is discarded -- if <packagesDir>/<id> already exists; use
-	// extractToStaging()/commit() for a reinstall-aware caller.
-	Result install(const QString &zipPath) const;
-
 	// Validates and extracts zipPath into a fresh staging directory under
 	// <packagesDir>/.staging/<uuid>/ without touching <packagesDir>/<id>.
+	// manifest.json is required at the extracted root and must contain a
+	// string "id" field matching [A-Za-z0-9_-]+.
 	StageResult extractToStaging(const QString &zipPath) const;
 
 	// Atomically swaps stagingDir into <packagesDir>/<packageId>, replacing

@@ -122,7 +122,7 @@ BodySizeMiddleware::BodySizeMiddleware(const int& maxSizeMB)
 
 bool BodySizeMiddleware::process(HttpContext& ctx)
 {
-    size_t maxSize = static_cast<size_t>(m_maxSizeMB) * 1024 * 1024;
+    size_t maxSize = ServerConfig::mbToBytes(m_maxSizeMB);
     if (ctx.body.size() <= maxSize) return true;
 
     std::string detail =

@@ -216,7 +216,7 @@ class TestRouteSecurity(unittest.TestCase):
         )
         self.assertRegex(
             self.src,
-            r"maxBodyBytes\s*=\s*static_cast<size_t>\(m_nMaxBodySizeMB\)\s*\*\s*1024\s*\*\s*1024",
+            r"maxBodyBytes\s*=\s*ServerConfig::mbToBytes\(m_nMaxBodySizeMB\)",
         )
 
     def test_httplib_413_gets_json_body(self):

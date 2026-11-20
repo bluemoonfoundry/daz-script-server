@@ -78,12 +78,10 @@ endif(WIN32)
 # ─── DAZ SDK ─────────────────────────────────────────────────────────────────
 
 if(DAZ_SDK_VERSION STREQUAL "6")
-	# SDK6 moved the platform directory above lib/bin: x64/lib/dzcore.lib, x64/bin/dpc.exe
+	# SDK6 moved the platform directory above lib: x64/lib/dzcore.lib
 	set(DAZ_SDK_CORE_RELATIVE_PATH "${DZ_MIXED_PLATFORM}/lib/${DZ_LIB_PREFIX}dzcore${DZ_LIB_SUFFIX}")
-	set(DAZ_SDK_DPC_RELATIVE_PATH  "${DZ_MIXED_PLATFORM}/bin/dpc${UTIL_EXT}")
 else()
 	set(DAZ_SDK_CORE_RELATIVE_PATH "lib/${DZ_MIXED_PLATFORM}/${DZ_LIB_PREFIX}dzcore${DZ_LIB_SUFFIX}")
-	set(DAZ_SDK_DPC_RELATIVE_PATH  "bin/${DZ_MIXED_PLATFORM}/dpc${UTIL_EXT}")
 endif()
 
 set(DAZ_SDK_DIR_DEFAULT "")
@@ -141,15 +139,6 @@ if(DAZ_SDK_VERSION STREQUAL "6" AND WIN32)
 	set_property(TARGET dzsdkmemory APPEND PROPERTY IMPORTED_IMPLIB ${DAZ_SDK_MEMORY_LIB})
 	set_property(TARGET dzsdkmemory APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${DZ_SDK_INCLUDE}")
 endif()
-
-# dpc import target (Daz pre-compiler)
-set(DAZ_SDK_DPC_EXE "${DAZ_SDK_DIR}/${DAZ_SDK_DPC_RELATIVE_PATH}" CACHE FILEPATH "Path to SDK dpc")
-if(NOT EXISTS ${DAZ_SDK_DPC_EXE})
-	message(FATAL_ERROR "dpc executable not found — check DAZ_SDK_DIR: ${DAZ_SDK_DIR}")
-	return()
-endif()
-add_executable(dpc IMPORTED)
-set_property(TARGET dpc APPEND PROPERTY IMPORTED_LOCATION ${DAZ_SDK_DPC_EXE})
 
 if(DAZ_SDK_VERSION STREQUAL "4")
 

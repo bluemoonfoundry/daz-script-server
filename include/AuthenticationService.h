@@ -26,7 +26,6 @@ public:
     bool validateToken(const std::string& providedToken) const;
 
     QString getToken() const;
-    void    setToken(const QString& token);
 
     static QString getTokenFilePath();
 

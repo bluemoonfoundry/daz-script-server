@@ -237,11 +237,11 @@ DzScriptServerPane::DzScriptServerPane()
 	: DzPane("Daz Script Server")
 	, m_pServer(nullptr)
 	, m_pServerThread(nullptr)
-	, m_nPort(18811)
+	, m_nPort(ServerSettings().port)
 	, m_sHost("127.0.0.1")
 	, m_bRunning(false)
 	, m_bCapturingLog(false)
-	, m_nTimeoutSec(30)
+	, m_nTimeoutSec(ServerSettings().timeoutSec)
 	, m_nActiveRequests(0)
 	, m_bAutoStart(false)
 	, m_nMaxConcurrentRequests(ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS)
@@ -645,7 +645,7 @@ void DzScriptServerPane::startServer()
 	// httplib buffers up to its 100 MB compile-time default on every route before
 	// any middleware runs. The spin box is disabled while the server is running,
 	// so the value can't change under the worker threads.
-	const size_t maxBodyBytes = static_cast<size_t>(m_nMaxBodySizeMB) * 1024 * 1024;
+	const size_t maxBodyBytes = ServerConfig::mbToBytes(m_nMaxBodySizeMB);
 	m_pServer->set_payload_max_length(maxBodyBytes);
 
 	// New identity for this run. Jobs and idempotency records from an earlier
@@ -754,7 +754,7 @@ void DzScriptServerPane::startServer()
 		delete m_pServer;
 		m_pServer = nullptr;
 		if (m_pServerThread) {
-			m_pServerThread->wait(1000);
+			m_pServerThread->wait(ServerConfig::SERVER_THREAD_REAP_WAIT_MS);
 			delete m_pServerThread;
 			m_pServerThread = nullptr;
 		}
@@ -820,7 +820,7 @@ void DzScriptServerPane::stopServer()
 		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
 			appendLog("[WARN] Server thread did not stop within timeout; forcing termination.");
 			m_pServerThread->terminate();
-			m_pServerThread->wait(1000);
+			m_pServerThread->wait(ServerConfig::SERVER_THREAD_REAP_WAIT_MS);
 		}
 		delete m_pServerThread;
 		m_pServerThread = nullptr;
@@ -1674,12 +1674,11 @@ void DzScriptServerPane::setupRoutes()
 
 		// The chunked content provider is called repeatedly by httplib on the
 		// HTTP handler thread until it returns false or the client disconnects.
-		// Pop timeout (3 s) is kept well under the server's default 5 s write
-		// timeout so that each iteration writes a keepalive before the loop's
-		// wait_writable() check can time out.
+		// The pop timeout is SSE_KEEPALIVE_INTERVAL_MS, so each idle iteration
+		// writes a keepalive (see ServerConfig for the write-timeout bound).
 		res.set_chunked_content_provider("text/event-stream",
 			[queue](size_t /*offset*/, httplib::DataSink& sink) -> bool {
-				QString event = queue->pop(3000 /*ms*/);
+				QString event = queue->pop(ServerConfig::SSE_KEEPALIVE_INTERVAL_MS);
 
 				if (event.isEmpty()) {
 					// Timeout or closed queue — send keepalive to prove the
@@ -1754,11 +1753,11 @@ void DzScriptServerPane::setupRoutes()
 		// onMessagePosted. Poll the job's frame report (ingested here on the
 		// HTTP thread, like status polling) and feed the broker, which drops
 		// frames already sent. Shorter pop so frames show up promptly;
-		// keepalives still go out about every 3 s.
-		const int  popMs          = 500;
+		// keepalives still go out every SSE_KEEPALIVE_INTERVAL_MS.
+		const int  popMs          = ServerConfig::SSE_FRAME_POLL_MS;
 		const bool pollFrames     = true;
 #else
-		const int  popMs          = 3000;
+		const int  popMs          = ServerConfig::SSE_KEEPALIVE_INTERVAL_MS;
 		const bool pollFrames     = false;
 #endif
 		std::shared_ptr<int> idleMs = std::make_shared<int>(0);
@@ -1774,7 +1773,7 @@ void DzScriptServerPane::setupRoutes()
 				if (event.isEmpty()) {
 					if (queue->isClosed()) return false;
 					*idleMs += popMs;
-					if (*idleMs < 3000) return true;
+					if (*idleMs < ServerConfig::SSE_KEEPALIVE_INTERVAL_MS) return true;
 					*idleMs = 0;
 					static const char ka[] = ":keepalive\n\n";
 					return sink.write(ka, sizeof(ka) - 1);

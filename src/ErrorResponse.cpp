@@ -1,5 +1,5 @@
 #include "ErrorResponse.h"
-#include <cstdio>
+#include "JsonStd.h"
 
 const char* ErrorResponse::codeString(ErrorCode code)
 {
@@ -174,31 +174,6 @@ bool ErrorResponse::retryable(ErrorCode code)
     }
 }
 
-std::string ErrorResponse::jsonEscape(const std::string& s)
-{
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (size_t i = 0; i < s.size(); ++i) {
-        unsigned char c = static_cast<unsigned char>(s[i]);
-        switch (c) {
-        case '"':  out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n";  break;
-        case '\r': out += "\\r";  break;
-        case '\t': out += "\\t";  break;
-        default:
-            if (c < 0x20) {
-                char buf[8];
-                snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
-                out += buf;
-            } else {
-                out += static_cast<char>(c);
-            }
-        }
-    }
-    return out;
-}
-
 std::string ErrorResponse::fields(ErrorCode code, const std::string& message)
 {
     std::string json;
@@ -206,7 +181,7 @@ std::string ErrorResponse::fields(ErrorCode code, const std::string& message)
     json += "\"error_code\":\"";
     json += codeString(code);
     json += "\",\"error\":\"";
-    json += jsonEscape(message.empty() ? std::string(defaultMessage(code)) : message);
+    json += JsonStd::escape(message.empty() ? std::string(defaultMessage(code)) : message);
     json += "\",\"retryable\":";
     json += retryable(code) ? "true" : "false";
     return json;
@@ -220,7 +195,7 @@ std::string ErrorResponse::build(ErrorCode code, const std::string& detail)
     json += fields(code);
     if (!detail.empty()) {
         json += ",\"detail\":\"";
-        json += jsonEscape(detail);
+        json += JsonStd::escape(detail);
         json += "\"";
     }
     json += "}";

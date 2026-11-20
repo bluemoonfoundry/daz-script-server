@@ -93,6 +93,4 @@ public:
 
     // Short human-readable message for the code.
     static const char* defaultMessage(ErrorCode code);
-
-    static std::string jsonEscape(const std::string& s);
 };

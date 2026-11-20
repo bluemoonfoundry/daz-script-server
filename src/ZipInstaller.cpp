@@ -121,37 +121,6 @@ ZipInstaller::ZipInstaller(QString packagesDir, Limits limits)
 {
 }
 
-ZipInstaller::Result ZipInstaller::install(const QString &zipPath) const
-{
-	Result result;
-
-	const StageResult staged = extractToStaging(zipPath);
-	if (!staged.success) {
-		result.errorMessage = staged.errorMessage;
-		return result;
-	}
-
-	const QString finalDir = QDir(m_packagesDir).filePath(staged.packageId);
-	if (QFileInfo(finalDir).exists()) {
-		PortableFs::removeRecursively(staged.stagingDir);
-		result.errorMessage = QString::fromLatin1(
-			"Package '%1' is already installed; reinstall is not handled by this installer").arg(staged.packageId);
-		return result;
-	}
-
-	const CommitResult committed = commit(staged.packageId, staged.stagingDir);
-	if (!committed.success) {
-		PortableFs::removeRecursively(staged.stagingDir);
-		result.errorMessage = committed.errorMessage;
-		return result;
-	}
-
-	result.success = true;
-	result.packageId = staged.packageId;
-	result.finalPackageDir = committed.finalPackageDir;
-	return result;
-}
-
 ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath) const
 {
 	StageResult result;

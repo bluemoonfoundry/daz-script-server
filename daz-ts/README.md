@@ -14,7 +14,7 @@ layer (nodes, materials, skeletons, etc.).
 
 `daz-ts` is not yet published to the npm registry, and npm can't install a
 package from a subdirectory of a git repository, so install the
-`daz-ts-*.tgz` tarball attached to a [GitHub release](../../../releases),
+`daz-ts-*.tgz` tarball attached to a [GitHub release](https://github.com/bluemoonfoundry/daz-script-server/releases),
 either downloaded or by URL:
 
 ```bash
