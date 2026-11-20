@@ -23,6 +23,7 @@ add_library(DazScriptServer SHARED
 	ArtifactRoots.cpp
 	ArtifactRoutes.cpp
 	ScriptRegistry.cpp
+	PluginRouteRegistry.cpp
 	ArtifactThumbnail.cpp
 	RequestValidator.cpp
 	SettingsService.cpp
@@ -57,6 +58,7 @@ add_library(DazScriptServer SHARED
 	../include/ArtifactFile.h
 	../include/ArtifactRoots.h
 	../include/ScriptRegistry.h
+	../include/PluginRouteRegistry.h
 	../include/ArtifactThumbnail.h
 	../include/RequestValidator.h
 	../include/common_version.h

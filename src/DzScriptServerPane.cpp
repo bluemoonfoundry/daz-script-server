@@ -1709,31 +1709,6 @@ void DzScriptServerPane::setupRoutes()
 
 // ─── Plugin Route Registration ────────────────────────────────────────────────
 
-namespace {
-bool isValidCompanionName(const QString& name)
-{
-	if (name.isEmpty() || name.size() > 64) return false;
-	for (int i = 0; i < name.size(); ++i) {
-		const QChar c = name.at(i);
-		const bool ok = (c >= QLatin1Char('a') && c <= QLatin1Char('z'))
-			|| (c >= QLatin1Char('A') && c <= QLatin1Char('Z'))
-			|| (c >= QLatin1Char('0') && c <= QLatin1Char('9'))
-			|| c == QLatin1Char('.') || c == QLatin1Char('_') || c == QLatin1Char('-');
-		if (!ok) return false;
-	}
-	return true;
-}
-
-bool isValidCompanionVersion(const QString& version)
-{
-	if (version.isEmpty() || version.size() > 64) return false;
-	for (int i = 0; i < version.size(); ++i) {
-		const ushort u = version.at(i).unicode();
-		if (u < 0x21 || u > 0x7e) return false;  // printable ASCII, no spaces
-	}
-	return true;
-}
-} // namespace
 
 // Keep the busy-time /capabilities snapshot current after the registry
 // changes. buildCapabilitiesJson() reads GUI-owned settings, so only refresh
@@ -1748,27 +1723,10 @@ void DzScriptServerPane::refreshCapabilitiesIfRunning()
 bool DzScriptServerPane::registerCompanionPlugin(const QString& name, const QString& version,
                                                  const QString& description)
 {
-	if (!isValidCompanionName(name) || !isValidCompanionVersion(version)) {
+	if (!m_pluginRegistry.registerCompanion(name, version, description)) {
 		appendLog(QString("[WARNING] Companion plugin registration rejected: invalid name or "
 		                  "version (%1 %2)").arg(name.left(80), version.left(80)));
 		return false;
-	}
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		CompanionPlugin p;
-		p.name        = name;
-		p.version     = version;
-		p.description = description.left(500);
-		bool found = false;
-		for (int i = 0; i < m_companionPlugins.size(); ++i) {
-			if (m_companionPlugins[i].name == name) {
-				m_companionPlugins[i] = p;
-				found = true;
-				break;
-			}
-		}
-		if (!found)
-			m_companionPlugins.append(p);
 	}
 	appendLog(QString("[INFO] Companion plugin registered: %1 %2").arg(name, version));
 	refreshCapabilitiesIfRunning();
@@ -1777,15 +1735,7 @@ bool DzScriptServerPane::registerCompanionPlugin(const QString& name, const QStr
 
 void DzScriptServerPane::unregisterCompanionPlugin(const QString& name)
 {
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		for (int i = m_companionPlugins.size() - 1; i >= 0; --i)
-			if (m_companionPlugins[i].name == name)
-				m_companionPlugins.removeAt(i);
-		for (int i = m_pluginRoutes.size() - 1; i >= 0; --i)
-			if (m_pluginRoutes[i].plugin == name)
-				m_pluginRoutes.removeAt(i);
-	}
+	m_pluginRegistry.unregisterCompanion(name);
 	refreshCapabilitiesIfRunning();
 }
 
@@ -1799,7 +1749,7 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
                                               QObject* receiver, const QString& slotName,
                                               const QString& pluginName)
 {
-	if (!isValidCompanionName(pluginName))
+	if (!PluginRouteRegistry::isValidName(pluginName))
 		return false;
 	return registerPluginRouteImpl(method, path, receiver, slotName, pluginName);
 }
@@ -1808,43 +1758,9 @@ bool DzScriptServerPane::registerPluginRouteImpl(const QString& method, const QS
                                                   QObject* receiver, const QString& slotName,
                                                   const QString& pluginName)
 {
-	if (!receiver || path.isEmpty() || slotName.isEmpty())
+	QString m;
+	if (!m_pluginRegistry.registerRoute(method, path, receiver, slotName, pluginName, &m))
 		return false;
-
-	const QString m = method.toUpper();
-	if (m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "PATCH")
-		return false;
-
-	PluginRoute r;
-	r.method    = m;
-	r.path      = path;
-	r.receiver  = receiver;
-	r.slotName  = slotName;
-	r.plugin    = pluginName;
-
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		if (!pluginName.isEmpty()) {
-			bool known = false;
-			for (int i = 0; i < m_companionPlugins.size(); ++i)
-				if (m_companionPlugins[i].name == pluginName) { known = true; break; }
-			if (!known) {
-				CompanionPlugin p;
-				p.name = pluginName;
-				m_companionPlugins.append(p);
-			}
-		}
-		bool found = false;
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
-				m_pluginRoutes[i] = r;
-				found = true;
-				break;
-			}
-		}
-		if (!found)
-			m_pluginRoutes.append(r);
-	}
 	appendLog(pluginName.isEmpty()
 		? QString("[INFO] Plugin route registered: %1 %2").arg(m).arg(path)
 		: QString("[INFO] Plugin route registered: %1 %2 (%3)").arg(m, path, pluginName));
@@ -1854,42 +1770,14 @@ bool DzScriptServerPane::registerPluginRouteImpl(const QString& method, const QS
 
 void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QString& path)
 {
-	const QString m = method.toUpper();
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
-				m_pluginRoutes.removeAt(i);
-				break;
-			}
-		}
-	}
+	m_pluginRegistry.unregisterRoute(method, path);
 	refreshCapabilitiesIfRunning();
-}
-
-// Match a path-pattern (e.g. "/export/usd/:id") against a concrete path.
-// Fills `params` with captured segment values keyed by the param name (no colon).
-// Returns true on match.  Both arguments must start with '/'.
-static bool matchPluginPath(const QString& pattern, const QString& path,
-                             QMap<QString, QString>& params)
-{
-	const QStringList patParts  = pattern.split('/');
-	const QStringList pathParts = path.split('/');
-	if (patParts.size() != pathParts.size()) return false;
-	params.clear();
-	for (int i = 0; i < patParts.size(); ++i) {
-		if (patParts[i].startsWith(':'))
-			params[patParts[i].mid(1)] = pathParts[i];
-		else if (patParts[i] != pathParts[i])
-			return false;
-	}
-	return true;
 }
 
 void DzScriptServerPane::applyPluginRoutes()
 {
 	// Register a single catch-all handler per HTTP method.  Each handler scans
-	// m_pluginRoutes at request time (mutex-protected) so that routes registered
+	// m_pluginRegistry at request time (mutex-protected) so that routes registered
 	// after server start — and routes that change dynamically — are always
 	// visible without ever touching httplib's handler vectors post-startup.
 	// This avoids the data race that would occur if we called m_pServer->Get/Post
@@ -1902,19 +1790,7 @@ void DzScriptServerPane::applyPluginRoutes()
 
 			QPointer<QObject> receiver;
 			QByteArray        slotBytes;
-			bool              found = false;
-			{
-				QMutexLocker lock(&m_pluginRoutesMutex);
-				for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-					const PluginRoute& r = m_pluginRoutes[i];
-					if (r.method != method) continue;
-					if (!matchPluginPath(r.path, qpath, params)) continue;
-					receiver  = r.receiver;
-					slotBytes = r.slotName.toLatin1();
-					found     = true;
-					break;
-				}
-			}
+			const bool found = m_pluginRegistry.match(method, qpath, &receiver, &slotBytes, &params);
 
 			if (!found) {
 				res.status = 404;
@@ -3783,13 +3659,15 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 
 	bool hasPluginRoutes = false;
 	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
+		QList<PluginRouteRegistry::Route>     pluginRoutes;
+		QList<PluginRouteRegistry::Companion> companions;
+		m_pluginRegistry.snapshot(&pluginRoutes, &companions);
 
 		// Flat list, kept for existing clients; companion_plugins below groups it.
 		json.addKey("plugin_routes");
 		json.startArray();
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			const PluginRoute& r = m_pluginRoutes.at(i);
+		for (int i = 0; i < pluginRoutes.size(); ++i) {
+			const PluginRouteRegistry::Route& r = pluginRoutes.at(i);
 			QVariantMap m;
 			m["method"] = r.method;
 			m["path"]   = r.path;
@@ -3808,13 +3686,13 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 		// JsonBuilder item by item (no QVariantList; see the CRT note above).
 		QStringList groups;      // plugin names, then unattributed owner classes
 		QList<bool> registered;
-		for (int i = 0; i < m_companionPlugins.size(); ++i) {
-			groups << m_companionPlugins.at(i).name;
+		for (int i = 0; i < companions.size(); ++i) {
+			groups << companions.at(i).name;
 			registered << true;
-			hashLines << QString("companion %1").arg(m_companionPlugins.at(i).name);
+			hashLines << QString("companion %1").arg(companions.at(i).name);
 		}
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			const PluginRoute& r = m_pluginRoutes.at(i);
+		for (int i = 0; i < pluginRoutes.size(); ++i) {
+			const PluginRouteRegistry::Route& r = pluginRoutes.at(i);
 			if (!r.plugin.isEmpty()) continue;
 			const QString owner = r.receiver ? QString(r.receiver->metaObject()->className())
 			                                 : QString("unknown");
@@ -3831,17 +3709,17 @@ QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource
 			json.startObjectItem();
 			json.addMember("name", groups.at(g));
 			json.addMember("registered", isRegistered);
-			const CompanionPlugin* info = nullptr;
+			const PluginRouteRegistry::Companion* info = nullptr;
 			if (isRegistered)
-				for (int i = 0; i < m_companionPlugins.size(); ++i)
-					if (m_companionPlugins.at(i).name == groups.at(g)) { info = &m_companionPlugins.at(i); break; }
+				for (int i = 0; i < companions.size(); ++i)
+					if (companions.at(i).name == groups.at(g)) { info = &companions.at(i); break; }
 			if (info && !info->version.isEmpty()) json.addMember("version", info->version);
 			else                                  json.addMemberNull("version");
 			if (info && !info->description.isEmpty()) json.addMember("description", info->description);
 			json.addKey("routes");
 			json.startArray();
-			for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-				const PluginRoute& r = m_pluginRoutes.at(i);
+			for (int i = 0; i < pluginRoutes.size(); ++i) {
+				const PluginRouteRegistry::Route& r = pluginRoutes.at(i);
 				bool belongs;
 				if (isRegistered) {
 					belongs = (r.plugin == groups.at(g));
