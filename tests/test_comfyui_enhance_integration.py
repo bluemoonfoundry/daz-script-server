@@ -11,7 +11,6 @@ import os
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.join(
@@ -25,7 +24,7 @@ sys.modules.pop("workflow_builder", None)
 import requests as _req
 
 from dazpy import DazClient, DazViewport
-from comfyui_client import ComfyUIClient, ComfyUIError
+from comfyui_client import ComfyUIClient
 from workflow_builder import build as build_workflow
 
 # ── Server availability ────────────────────────────────────────────────────────

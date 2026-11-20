@@ -26,6 +26,18 @@ docs = [
 aio = [
     "httpx>=0.24",
 ]
+# Everything the offline unit suites import (python tests.py unit plus the
+# pytest-only suites such as tests/test_dazpy_aio.py).
+test = [
+    "httpx>=0.24",
+    "jsonschema>=4.0",
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "respx>=0.20",
+    "watchdog>=3.0",
+]
 
 [tool.setuptools]
 # Ship only dazpy's MIT license. Without this, setuptools' default glob also

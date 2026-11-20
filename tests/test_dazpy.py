@@ -23,15 +23,11 @@ from dazpy._scene_events import SceneEvent, watch_scene_events, wait_for_scene_e
 from dazpy.exceptions import ConnectionError as DazConnectionError
 from dazpy.exceptions import TimeoutError as DazTimeoutError
 from dazpy import (
-    AnchorTarget,
     AxisLimit,
     BalanceTarget,
-    BoneChain,
     BoneProfile,
-    ContactTarget,
     FigureRigProfile,
     FootTarget,
-    InteractionAnchor,
     InteractionPlan,
     InteractionRecipe,
     InteractionPosePatch,
@@ -54,8 +50,6 @@ from dazpy import (
     build_rig_profile,
     align_hand_target,
     default_axis_limits_for_bone,
-    align_single_limb_target,
-    apply_interaction_recipe_to_scene,
     resolve_interaction_target,
 )
 from dazpy import GeometryFrames, parse_geometry_frames
@@ -6227,26 +6221,28 @@ class TestApplyPose(unittest.TestCase):
 
 
 class TestResetTransforms(unittest.TestCase):
-    def test_reset_transforms_calls_position_rotation_scale_setters(self):
+    def test_reset_transforms_calls_set_transform_once(self):
         from dazpy.poses import reset_transforms
         node = MagicMock()
         reset_transforms(node)
-        node.set_local_position.assert_called_once_with(0.0, 0.0, 0.0)
-        node.set_local_rotation.assert_called_once_with(0.0, 0.0, 0.0)
-        node.set_scale.assert_called_once_with(1.0, 1.0, 1.0)
+        node.set_transform.assert_called_once_with(
+            position=(0.0, 0.0, 0.0),
+            rotation=(0.0, 0.0, 0.0),
+            scale=(1.0, 1.0, 1.0),
+        )
 
-    def test_reset_transforms_works_on_real_node(self):
+    def test_reset_transforms_issues_exactly_one_call(self):
         from dazpy._node import DazNode
         from dazpy.poses import reset_transforms
 
         client = _make_client(None)
         node = DazNode(client, NodeIdentifier("SomeCamera"))
         reset_transforms(node)
-        self.assertEqual(client.execute.call_count, 3)
-        scripts = [call.args[0] for call in client.execute.call_args_list]
-        self.assertTrue(any("setLocalPos" in s for s in scripts))
-        self.assertTrue(any("getXRotControl" in s for s in scripts))
-        self.assertTrue(any("getXScaleControl" in s for s in scripts))
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setLocalPos", script)
+        self.assertIn("getXRotControl", script)
+        self.assertIn("getXScaleControl", script)
 
 
 class TestZeroFigure(unittest.TestCase):
@@ -8018,20 +8014,6 @@ class TestDazNodeSetTransform(unittest.TestCase):
         node = DazNode(client, NodeIdentifier("name", "Camera"))
         node.set_transform()
         client.execute.assert_not_called()
-
-
-class TestResetTransforms(unittest.TestCase):
-    def test_reset_transforms_issues_exactly_one_call(self):
-        client = _make_client(None)
-        from dazpy._node import DazNode, NodeIdentifier
-        from dazpy.poses import reset_transforms
-        node = DazNode(client, NodeIdentifier("name", "Camera"))
-        reset_transforms(node)
-        self.assertEqual(client.execute.call_count, 1)
-        script = client.execute.call_args[0][0]
-        self.assertIn("setLocalPos", script)
-        self.assertIn("getXRotControl", script)
-        self.assertIn("getXScaleControl", script)
 
 
 class TestZeroFigureDefaultPath(unittest.TestCase):

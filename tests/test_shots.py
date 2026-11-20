@@ -1,7 +1,6 @@
 """Unit tests for dazpy.shots (typed Shot / Sequence / CoveragePlan models). No Studio."""
 
 import json
-import math
 import os
 import sys
 import unittest

@@ -97,35 +97,23 @@ class TestLoadSpecValid(unittest.TestCase):
         self.assertAlmostEqual(cfg.comfyui.controlnet_depth.weight, 0.5)
         self.assertAlmostEqual(cfg.comfyui.controlnet_lineart.weight, 0.4)
 
-    def test_face_detailer_defaults(self):
+    def test_lineart_composite_defaults(self):
         path = self.fixture.write_spec(self.fixture.spec_dict())
         cfg = load_spec(path)
-        self.assertTrue(cfg.comfyui.face_detailer_enabled)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_denoise, 0.35)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_guide_size, 512.0)
-        self.assertEqual(cfg.comfyui.face_detailer_bbox_dilation, 100)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_faceid_weight, 1.0)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_normal_weight, 1.4)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_depth_weight, 1.1)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_lineart_weight, 0.9)
+        self.assertAlmostEqual(cfg.comfyui.lineart_composite_opacity, 1.0)
+        self.assertEqual(cfg.comfyui.canny_low_threshold, 150)
+        self.assertEqual(cfg.comfyui.canny_high_threshold, 300)
 
-    def test_face_detailer_overrides_parsed(self):
+    def test_lineart_composite_overrides_parsed(self):
         data = self.fixture.spec_dict()
-        data["comfyui"]["face_detailer"] = {
-            "enabled": False, "denoise": 0.10, "guide_size": 768, "bbox_dilation": 150,
-            "faceid_weight": 0.5, "controlnet_normal_weight": 0.3, "controlnet_depth_weight": 0.2,
-            "controlnet_lineart_weight": 0.1,
-        }
+        data["comfyui"].update(
+            {"lineart_composite_opacity": 0.4, "canny_low_threshold": 80, "canny_high_threshold": 200}
+        )
         path = self.fixture.write_spec(data)
         cfg = load_spec(path)
-        self.assertFalse(cfg.comfyui.face_detailer_enabled)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_denoise, 0.10)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_guide_size, 768.0)
-        self.assertEqual(cfg.comfyui.face_detailer_bbox_dilation, 150)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_faceid_weight, 0.5)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_normal_weight, 0.3)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_depth_weight, 0.2)
-        self.assertAlmostEqual(cfg.comfyui.face_detailer_controlnet_lineart_weight, 0.1)
+        self.assertAlmostEqual(cfg.comfyui.lineart_composite_opacity, 0.4)
+        self.assertEqual(cfg.comfyui.canny_low_threshold, 80)
+        self.assertEqual(cfg.comfyui.canny_high_threshold, 200)
 
     def test_output_dir_resolved_relative_to_spec(self):
         path = self.fixture.write_spec(self.fixture.spec_dict())
@@ -201,9 +189,9 @@ class TestLoadSpecInvalid(unittest.TestCase):
         with self.assertRaises(SpecValidationError):
             load_spec(path)
 
-    def test_face_detailer_denoise_out_of_range_rejected(self):
+    def test_lineart_composite_opacity_out_of_range_rejected(self):
         data = self.fixture.spec_dict()
-        data["comfyui"]["face_detailer"] = {"denoise": 1.5}
+        data["comfyui"]["lineart_composite_opacity"] = 1.5
         path = self.fixture.write_spec(data)
         with self.assertRaises(SpecValidationError):
             load_spec(path)
