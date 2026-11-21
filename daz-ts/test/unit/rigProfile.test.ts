@@ -255,3 +255,13 @@ describe("buildRigProfilesFromSnapshot", () => {
     expect(profiles["Genesis 9"].anchor("r_hand")?.boneName).toBe("r_hand");
   });
 });
+
+describe("FigureRigProfile bone ownership", () => {
+  it("copies the bones array so later caller pushes cannot desync the bone index", () => {
+    const bones = [new BoneProfile({ name: "hip" })];
+    const profile = new FigureRigProfile({ figureLabel: "A", family: "generic", bones });
+    bones.push(new BoneProfile({ name: "l_hand", parentName: "hip" }));
+    expect(profile.boneNames()).toEqual(["hip"]);
+    expect(profile.anchorNames()).not.toContain("l_hand");
+  });
+});

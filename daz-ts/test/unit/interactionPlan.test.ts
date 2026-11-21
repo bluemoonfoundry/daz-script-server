@@ -381,3 +381,24 @@ describe("PreparedInteractionRecipe.apply", () => {
     expect(result.alignmentResults).toEqual([]);
   });
 });
+
+describe("final-review fixes", () => {
+  it("prepareInteractionRecipe reports a missing anchor as a validation issue instead of throwing", () => {
+    const handless = new FigureRigProfile({ figureLabel: "Prop", family: "generic", bones: [new BoneProfile({ name: "root" })] });
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Prop"],
+      constraints: [
+        new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Prop", targetAnchor: "head" }),
+        new HandTarget({ figureLabel: "Prop", anchorName: "l_hand", targetPoint: [0, 0, 0] }),
+      ],
+    });
+    const prepared = prepareInteractionRecipe(recipe, { "Genesis 9": genesis9Profile(), Prop: handless });
+    expect(prepared.isValid).toBe(false);
+    expect(prepared.validationIssues.map((i) => i.message)).toEqual([
+      "Unknown target anchor head on figure Prop",
+      "Unknown anchor l_hand on figure Prop",
+    ]);
+    expect(prepared.resolvedTargets).toEqual([]);
+  });
+});

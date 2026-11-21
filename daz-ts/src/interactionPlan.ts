@@ -443,13 +443,21 @@ export class InteractionPlan {
     return issues;
   }
 
-  /** Resolve every `HandTarget`/`FootTarget` constraint into concrete anchors and points. */
+  /**
+   * Resolve every `HandTarget`/`FootTarget` constraint into concrete anchors and points.
+   * Targets whose figure, anchor or target anchor does not exist are skipped
+   * (`validate()` reports them as issues) rather than thrown, unlike dazpy.
+   */
   resolveTargets(rigProfiles: Record<string, FigureRigProfile>): ResolvedInteractionTarget[] {
     const resolved: ResolvedInteractionTarget[] = [];
     for (const constraint of this.constraints) {
       if (constraint instanceof HandTarget || constraint instanceof FootTarget) {
         const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
-        if (profile === null) continue;
+        if (profile === null || profile.anchor(constraint.anchorName) === null) continue;
+        if (constraint.targetFigure && constraint.targetAnchor) {
+          const targetProfile = lookupRigProfile(rigProfiles, constraint.targetFigure);
+          if (targetProfile !== null && targetProfile.anchor(constraint.targetAnchor) === null) continue;
+        }
         resolved.push(resolveInteractionTarget(constraint, rigProfiles));
       }
     }

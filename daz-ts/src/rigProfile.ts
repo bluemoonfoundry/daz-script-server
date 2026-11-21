@@ -533,7 +533,7 @@ export class FigureRigProfile {
   constructor(init: { figureLabel: string; family: string; bones?: BoneProfile[]; metadata?: Record<string, unknown> }) {
     this.figureLabel = init.figureLabel;
     this.family = init.family;
-    this.bones = init.bones ?? [];
+    this.bones = [...(init.bones ?? [])];
     this.metadata = init.metadata ?? {};
     this.index = new Map(this.bones.map((bone, i) => [bone.name, i]));
   }
