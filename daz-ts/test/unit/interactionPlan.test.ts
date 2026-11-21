@@ -6,14 +6,21 @@ import {
   FootTarget,
   HandTarget,
   InteractionPlan,
+  InteractionPosePatch,
   InteractionRecipe,
+  LimbAlignmentResult,
   LookAtTarget,
   PoseTarget,
+  PreparedInteractionResult,
   resolveInteractionTarget,
   SolveOptions,
   ValidationIssue,
 } from "../../src/interactionPlan.js";
-import { BoneProfile, FigureRigProfile } from "../../src/rigProfile.js";
+import {
+  BoneProfile,
+  FigureRigProfile,
+  ResolvedInteractionTarget,
+} from "../../src/rigProfile.js";
 
 describe("constraint types", () => {
   it("PoseTarget.toDict carries kind and optional fields", () => {
@@ -207,5 +214,55 @@ describe("InteractionRecipe", () => {
     expect(restored.actors).toEqual(["Genesis 9", "Partner"]);
     expect(restored.constraints).toHaveLength(1);
     expect(restored.constraints[0]).toBeInstanceOf(HandTarget);
+  });
+});
+
+describe("InteractionPosePatch", () => {
+  it("apply() calls setPosition once per figure via findSkeletonByLabel", async () => {
+    const calls: Array<{ label: string; position: [number, number, number] }> = [];
+    const scene = {
+      findSkeletonByLabel: async (label: string) => ({
+        setPosition: async (x: number, y: number, z: number) => {
+          calls.push({ label, position: [x, y, z] });
+        },
+      }),
+    } as any;
+
+    const patch = new InteractionPosePatch({ figurePositions: { "Genesis 9": [1.5, 1.5, 1.5] } });
+    await patch.apply(scene);
+
+    expect(calls).toEqual([{ label: "Genesis 9", position: [1.5, 1.5, 1.5] }]);
+  });
+
+  it("toDict carries figurePositions/unresolvedTargets/diagnostics", () => {
+    const patch = new InteractionPosePatch({
+      figurePositions: { "Genesis 9": [1, 2, 3] },
+      unresolvedTargets: [new ResolvedInteractionTarget({ figureLabel: "Partner", anchorName: "r_hand", boneName: "r_hand" })],
+      diagnostics: { figureCount: 1 },
+    });
+    const dict = patch.toDict();
+    expect(dict.figurePositions["Genesis 9"]).toEqual([1, 2, 3]);
+    expect(dict.unresolvedTargets).toHaveLength(1);
+    expect(dict.diagnostics.figureCount).toBe(1);
+  });
+});
+
+describe("LimbAlignmentResult", () => {
+  it("toDict round-trip-shape carries every field with sensible defaults", () => {
+    const result = new LimbAlignmentResult({ figureLabel: "Genesis 9", anchorName: "l_hand", effectorBone: "l_hand", chain: ["hip", "l_hand"] });
+    expect(result.iterations).toBe(0);
+    expect(result.converged).toBe(false);
+    expect(result.toDict().chain).toEqual(["hip", "l_hand"]);
+  });
+});
+
+describe("PreparedInteractionResult", () => {
+  it("toDict nests prepared/posePatch/alignmentResults", () => {
+    // Constructed directly here; PreparedInteractionRecipe wiring is Task 8.
+    const patch = new InteractionPosePatch({ figurePositions: { A: [0, 0, 0] } });
+    const fakePrepared = { toDict: () => ({ stub: true }) } as any;
+    const result = new PreparedInteractionResult({ prepared: fakePrepared, posePatch: patch });
+    expect(result.toDict().posePatch.figurePositions.A).toEqual([0, 0, 0]);
+    expect(result.alignmentResults).toEqual([]);
   });
 });

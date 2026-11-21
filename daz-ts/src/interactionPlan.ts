@@ -509,3 +509,135 @@ export class InteractionRecipe {
     return new InteractionRecipe({ kind: data.kind ?? "custom", actors: plan.actors, constraints: plan.constraints, options: plan.options, metadata: plan.metadata });
   }
 }
+
+// ── InteractionPosePatch ─────────────────────────────────────────────────────
+
+export interface InteractionPosePatchDict {
+  figurePositions: Record<string, Vector3>;
+  unresolvedTargets: ReturnType<ResolvedInteractionTarget["toDict"]>[];
+  diagnostics: Record<string, unknown>;
+}
+
+/** A coarse figure-placement patch built from a prepared interaction. Only translates figures -- does not solve bone rotations. */
+export class InteractionPosePatch {
+  readonly figurePositions: Record<string, Vector3>;
+  readonly unresolvedTargets: ResolvedInteractionTarget[];
+  readonly diagnostics: Record<string, unknown>;
+
+  constructor(init: { figurePositions?: Record<string, Vector3>; unresolvedTargets?: ResolvedInteractionTarget[]; diagnostics?: Record<string, unknown> } = {}) {
+    this.figurePositions = init.figurePositions ?? {};
+    this.unresolvedTargets = init.unresolvedTargets ?? [];
+    this.diagnostics = init.diagnostics ?? {};
+  }
+
+  async apply(scene: Pick<RigSceneSource, "findSkeletonByLabel">): Promise<void> {
+    for (const [figureLabel, position] of Object.entries(this.figurePositions)) {
+      const skeleton = await scene.findSkeletonByLabel(figureLabel);
+      await skeleton.setPosition(position[0], position[1], position[2]);
+    }
+  }
+
+  toDict(): InteractionPosePatchDict {
+    return {
+      figurePositions: { ...this.figurePositions },
+      unresolvedTargets: this.unresolvedTargets.map((t) => t.toDict()),
+      diagnostics: { ...this.diagnostics },
+    };
+  }
+}
+
+// ── LimbAlignmentResult ──────────────────────────────────────────────────────
+
+export interface LimbAlignmentResultDict {
+  figureLabel: string;
+  anchorName: string;
+  effectorBone: string;
+  chain: string[];
+  targetPoint: Vector3 | null;
+  iterations: number;
+  converged: boolean;
+  initialError: number | null;
+  finalError: number | null;
+  appliedRotations: Record<string, Rotation3>;
+  diagnostics: Record<string, unknown>;
+}
+
+/** Result data for a single live target-alignment pass. Produced by `interactionSolve.ts` (Phase 5B); the data shape lives here since `interactionPlan.ts` also needs it (`PreparedInteractionResult.alignmentResults`). */
+export class LimbAlignmentResult {
+  readonly figureLabel: string;
+  readonly anchorName: string;
+  readonly effectorBone: string;
+  readonly chain: string[];
+  readonly targetPoint: Vector3 | null;
+  readonly iterations: number;
+  readonly converged: boolean;
+  readonly initialError: number | null;
+  readonly finalError: number | null;
+  readonly appliedRotations: Record<string, Rotation3>;
+  readonly diagnostics: Record<string, unknown>;
+
+  constructor(init: {
+    figureLabel: string;
+    anchorName: string;
+    effectorBone: string;
+    chain: string[];
+    targetPoint?: Vector3 | null;
+    iterations?: number;
+    converged?: boolean;
+    initialError?: number | null;
+    finalError?: number | null;
+    appliedRotations?: Record<string, Rotation3>;
+    diagnostics?: Record<string, unknown>;
+  }) {
+    this.figureLabel = init.figureLabel;
+    this.anchorName = init.anchorName;
+    this.effectorBone = init.effectorBone;
+    this.chain = [...init.chain];
+    this.targetPoint = init.targetPoint ?? null;
+    this.iterations = init.iterations ?? 0;
+    this.converged = init.converged ?? false;
+    this.initialError = init.initialError ?? null;
+    this.finalError = init.finalError ?? null;
+    this.appliedRotations = init.appliedRotations ?? {};
+    this.diagnostics = init.diagnostics ?? {};
+  }
+
+  toDict(): LimbAlignmentResultDict {
+    return {
+      figureLabel: this.figureLabel,
+      anchorName: this.anchorName,
+      effectorBone: this.effectorBone,
+      chain: [...this.chain],
+      targetPoint: this.targetPoint,
+      iterations: this.iterations,
+      converged: this.converged,
+      initialError: this.initialError,
+      finalError: this.finalError,
+      appliedRotations: { ...this.appliedRotations },
+      diagnostics: { ...this.diagnostics },
+    };
+  }
+}
+
+// ── PreparedInteractionResult ────────────────────────────────────────────────
+
+/** The result of applying a prepared recipe as a live staging pass. `prepared` is typed loosely here (full type declared in Task 8) to avoid a forward reference. */
+export class PreparedInteractionResult {
+  readonly prepared: { toDict(): Record<string, unknown> };
+  readonly posePatch: InteractionPosePatch;
+  alignmentResults: LimbAlignmentResult[];
+
+  constructor(init: { prepared: { toDict(): Record<string, unknown> }; posePatch: InteractionPosePatch; alignmentResults?: LimbAlignmentResult[] }) {
+    this.prepared = init.prepared;
+    this.posePatch = init.posePatch;
+    this.alignmentResults = init.alignmentResults ?? [];
+  }
+
+  toDict() {
+    return {
+      prepared: this.prepared.toDict(),
+      posePatch: this.posePatch.toDict(),
+      alignmentResults: this.alignmentResults.map((r) => r.toDict()),
+    };
+  }
+}
