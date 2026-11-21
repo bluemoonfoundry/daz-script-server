@@ -11,7 +11,9 @@ import {
   LimbAlignmentResult,
   LookAtTarget,
   PoseTarget,
+  PreparedInteractionRecipe,
   PreparedInteractionResult,
+  prepareInteractionRecipe,
   resolveInteractionTarget,
   SolveOptions,
   ValidationIssue,
@@ -258,11 +260,124 @@ describe("LimbAlignmentResult", () => {
 
 describe("PreparedInteractionResult", () => {
   it("toDict nests prepared/posePatch/alignmentResults", () => {
-    // Constructed directly here; PreparedInteractionRecipe wiring is Task 8.
     const patch = new InteractionPosePatch({ figurePositions: { A: [0, 0, 0] } });
-    const fakePrepared = { toDict: () => ({ stub: true }) } as any;
-    const result = new PreparedInteractionResult({ prepared: fakePrepared, posePatch: patch });
+    const prepared = prepareInteractionRecipe(new InteractionRecipe({ kind: "custom", actors: [] }), {});
+    const result = new PreparedInteractionResult({ prepared, posePatch: patch });
+    expect(result.toDict().prepared.diagnostics.recipeKind).toBe("custom");
     expect(result.toDict().posePatch.figurePositions.A).toEqual([0, 0, 0]);
+    expect(result.alignmentResults).toEqual([]);
+  });
+});
+
+function touchRigProfiles() {
+  const sourceProfile = new FigureRigProfile({
+    figureLabel: "Genesis 9",
+    family: "genesis_9",
+    bones: [new BoneProfile({ name: "hip" }), new BoneProfile({ name: "r_hand", parentName: "hip", localPosition: [1, 2, 3] })],
+  });
+  const targetProfile = new FigureRigProfile({
+    figureLabel: "Partner",
+    family: "genesis_9",
+    bones: [new BoneProfile({ name: "hip" }), new BoneProfile({ name: "l_shoulder", parentName: "hip", localPosition: [4, 5, 6] })],
+  });
+  return { "Genesis 9": sourceProfile, Partner: targetProfile };
+}
+
+describe("prepareInteractionRecipe", () => {
+  it("compiles a recipe: validates, resolves targets, and records diagnostics", () => {
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Partner"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
+    });
+    const prepared = prepareInteractionRecipe(recipe, touchRigProfiles());
+
+    expect(prepared).toBeInstanceOf(PreparedInteractionRecipe);
+    expect(prepared.isValid).toBe(true);
+    expect(prepared.diagnostics.recipeKind).toBe("touch");
+    expect(prepared.diagnostics.resolvedTargetCount).toBe(1);
+    expect(prepared.resolvedTargets[0].boneName).toBe("r_hand");
+    expect(prepared.resolvedTargets[0].targetBone).toBe("l_shoulder");
+    expect(prepared.resolvedTargets[0].targetPoint).toEqual([4, 5, 6]);
+  });
+
+  it("accepts compact figure aliases in the rig-profile table", () => {
+    const profile = new FigureRigProfile({
+      figureLabel: "Genesis 9",
+      family: "genesis_9",
+      bones: [new BoneProfile({ name: "hip" }), new BoneProfile({ name: "r_hand", parentName: "hip" })],
+    });
+    const recipe = new InteractionRecipe({
+      kind: "custom",
+      actors: ["Genesis 9"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetPoint: [1, 2, 3] })],
+    });
+    const prepared = prepareInteractionRecipe(recipe, { Genesis9: profile });
+    expect(prepared.isValid).toBe(true);
+    expect(prepared.rigProfiles.Genesis9.figureLabel).toBe("Genesis 9");
+  });
+});
+
+describe("PreparedInteractionRecipe.apply", () => {
+  it("moves both figures to the midpoint between the resolved anchor pair (contact-center staging)", async () => {
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Partner"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
+    });
+    const prepared = prepareInteractionRecipe(recipe, touchRigProfiles());
+
+    const calls: Array<{ label: string; position: [number, number, number] }> = [];
+    const scene = {
+      findSkeletonByLabel: async (label: string) => ({
+        setPosition: async (x: number, y: number, z: number) => {
+          calls.push({ label, position: [x, y, z] });
+        },
+      }),
+    } as any;
+
+    const result = await prepared.apply(scene);
+
+    expect(calls).toEqual([
+      { label: "Genesis 9", position: [1.5, 1.5, 1.5] },
+      { label: "Partner", position: [-1.5, -1.5, -1.5] },
+    ]);
+    expect(result.posePatch.diagnostics.figureCount).toBe(2);
+    expect(result.posePatch.diagnostics.unresolvedTargetCount).toBe(0);
+    expect(result.alignmentResults).toEqual([]);
+  });
+
+  it("stages a BalanceTarget figure toward its support-point centroid", async () => {
+    const profile = new FigureRigProfile({
+      figureLabel: "Genesis 9",
+      family: "genesis_9",
+      bones: [new BoneProfile({ name: "hip", localPosition: [0, 0, 0] })],
+    });
+    const recipe = new InteractionRecipe({
+      kind: "sit",
+      actors: ["Genesis 9"],
+      constraints: [new BalanceTarget({ figureLabel: "Genesis 9", pelvisBone: "pelvis", centerOfMassHint: [0, 1, 2] })],
+    });
+    const prepared = prepareInteractionRecipe(recipe, { "Genesis 9": profile });
+
+    const calls: Array<[number, number, number]> = [];
+    const scene = { findSkeletonByLabel: async () => ({ setPosition: async (x: number, y: number, z: number) => { calls.push([x, y, z]); } }) } as any;
+    await prepared.apply(scene);
+
+    expect(calls).toEqual([[0, 1, 2]]);
+  });
+
+  it("apply({alignLimbTargets: true}) returns no alignment results in 5A (interactionSolve.ts lands in 5B)", async () => {
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Partner"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
+    });
+    const prepared = prepareInteractionRecipe(recipe, touchRigProfiles());
+    const scene = { findSkeletonByLabel: async () => ({ setPosition: async () => {} }) } as any;
+
+    const result = await prepared.apply(scene, { alignLimbTargets: true });
+
     expect(result.alignmentResults).toEqual([]);
   });
 });

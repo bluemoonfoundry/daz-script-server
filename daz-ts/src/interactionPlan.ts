@@ -621,13 +621,13 @@ export class LimbAlignmentResult {
 
 // ── PreparedInteractionResult ────────────────────────────────────────────────
 
-/** The result of applying a prepared recipe as a live staging pass. `prepared` is typed loosely here (full type declared in Task 8) to avoid a forward reference. */
+/** The result of applying a prepared recipe as a live staging pass. */
 export class PreparedInteractionResult {
-  readonly prepared: { toDict(): Record<string, unknown> };
+  readonly prepared: PreparedInteractionRecipe;
   readonly posePatch: InteractionPosePatch;
   alignmentResults: LimbAlignmentResult[];
 
-  constructor(init: { prepared: { toDict(): Record<string, unknown> }; posePatch: InteractionPosePatch; alignmentResults?: LimbAlignmentResult[] }) {
+  constructor(init: { prepared: PreparedInteractionRecipe; posePatch: InteractionPosePatch; alignmentResults?: LimbAlignmentResult[] }) {
     this.prepared = init.prepared;
     this.posePatch = init.posePatch;
     this.alignmentResults = init.alignmentResults ?? [];
@@ -640,4 +640,202 @@ export class PreparedInteractionResult {
       alignmentResults: this.alignmentResults.map((r) => r.toDict()),
     };
   }
+}
+
+// ── PreparedInteractionRecipe ────────────────────────────────────────────────
+
+export interface AlignLimbTargetsOptions {
+  maxIterations?: number | null;
+  stepDegrees?: number;
+  damping?: number;
+  tolerance?: number;
+}
+
+export interface ApplyOptions extends AlignLimbTargetsOptions {
+  alignLimbTargets?: boolean;
+}
+
+/** A compiled recipe ready for a live DAZ session (or a future solver pass). */
+export class PreparedInteractionRecipe {
+  readonly recipe: InteractionRecipe;
+  readonly plan: InteractionPlan;
+  readonly resolvedTargets: ResolvedInteractionTarget[];
+  readonly rigProfiles: Record<string, FigureRigProfile>;
+  readonly validationIssues: ValidationIssue[];
+  readonly diagnostics: Record<string, unknown>;
+
+  constructor(init: {
+    recipe: InteractionRecipe;
+    plan: InteractionPlan;
+    resolvedTargets?: ResolvedInteractionTarget[];
+    rigProfiles?: Record<string, FigureRigProfile>;
+    validationIssues?: ValidationIssue[];
+    diagnostics?: Record<string, unknown>;
+  }) {
+    this.recipe = init.recipe;
+    this.plan = init.plan;
+    this.resolvedTargets = init.resolvedTargets ?? [];
+    this.rigProfiles = init.rigProfiles ?? {};
+    this.validationIssues = init.validationIssues ?? [];
+    this.diagnostics = init.diagnostics ?? {};
+  }
+
+  get isValid(): boolean {
+    return !this.validationIssues.some((issue) => issue.severity === "error");
+  }
+
+  toDict() {
+    return {
+      recipe: this.recipe.toDict(),
+      plan: this.plan.toDict(),
+      resolvedTargets: this.resolvedTargets.map((t) => t.toDict()),
+      rigProfiles: Object.fromEntries(Object.entries(this.rigProfiles).map(([label, profile]) => [label, profile.toDict()])),
+      validationIssues: this.validationIssues.map((issue) => issue.toDict()),
+      diagnostics: { ...this.diagnostics },
+    };
+  }
+
+  /**
+   * Build a coarse live-placement patch from the prepared recipe.
+   *
+   * Intentionally conservative: only translates figures so their anchors
+   * are staged near their requested targets. Does not solve bone rotations
+   * (that's `alignLimbTargets`, Phase 5B).
+   */
+  buildPosePatch(): InteractionPosePatch {
+    const figurePositions: Record<string, Vector3[]> = {};
+    const unresolved: ResolvedInteractionTarget[] = [];
+
+    const appendPosition = (label: string, point: Vector3): void => {
+      (figurePositions[label] ??= []).push(point);
+    };
+    const firstLocalAnchorPosition = (profile: FigureRigProfile, anchorName: string): Vector3 | null => {
+      const anchor = profile.anchor(anchorName);
+      if (anchor === null) return null;
+      return profile.bone(anchor.boneName).localPosition;
+    };
+    const currentFigurePosition = (label: string): Vector3 | null => averageVec3(figurePositions[label]);
+
+    for (const constraint of this.plan.constraints) {
+      if (!(constraint instanceof BalanceTarget)) continue;
+      const profile = lookupRigProfile(this.rigProfiles, constraint.figureLabel);
+      if (profile === null) continue;
+      const pelvisAnchor = profile.anchor(constraint.pelvisBone);
+      if (pelvisAnchor === null) {
+        unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: constraint.pelvisBone }));
+        continue;
+      }
+      const pelvisBone = profile.bone(pelvisAnchor.boneName);
+      let targetPoint = constraint.centerOfMassHint;
+      if (targetPoint === null && constraint.supportPoints.length > 0) {
+        targetPoint = averageVec3(constraint.supportPoints);
+      }
+      if (targetPoint === null || pelvisBone.localPosition === null) {
+        unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: pelvisAnchor.boneName, targetPoint }));
+        continue;
+      }
+      appendPosition(constraint.figureLabel, subVec3(targetPoint, pelvisBone.localPosition));
+    }
+
+    for (const resolved of this.resolvedTargets) {
+      const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
+      if (profile === null) {
+        unresolved.push(resolved);
+        continue;
+      }
+      const sourceAnchor = profile.anchor(resolved.anchorName);
+      if (sourceAnchor === null) {
+        unresolved.push(resolved);
+        continue;
+      }
+      const sourceBone = profile.bone(sourceAnchor.boneName);
+      if (sourceBone.localPosition === null) {
+        unresolved.push(resolved);
+        continue;
+      }
+      const targetProfile = resolved.targetFigure ? lookupRigProfile(this.rigProfiles, resolved.targetFigure) : null;
+      const targetLocal = targetProfile && resolved.targetAnchor ? firstLocalAnchorPosition(targetProfile, resolved.targetAnchor) : null;
+      const sourceBase = currentFigurePosition(resolved.figureLabel);
+      const targetBase = resolved.targetFigure ? currentFigurePosition(resolved.targetFigure) : null;
+
+      if (targetProfile !== null && resolved.targetFigure !== null) {
+        if (targetBase !== null && resolved.targetPoint !== null && sourceBase === null) {
+          const worldTarget = addVec3(targetBase, resolved.targetPoint)!;
+          appendPosition(resolved.figureLabel, subVec3(worldTarget, sourceBone.localPosition));
+          continue;
+        }
+        if (targetLocal !== null) {
+          if (sourceBase === null && targetBase === null) {
+            const contactCenter = midpointVec3(sourceBone.localPosition, targetLocal);
+            appendPosition(resolved.figureLabel, subVec3(contactCenter, sourceBone.localPosition));
+            appendPosition(resolved.targetFigure, subVec3(contactCenter, targetLocal));
+          } else if (sourceBase === null && targetBase !== null) {
+            const targetWorld = addVec3(targetBase, targetLocal)!;
+            appendPosition(resolved.figureLabel, subVec3(targetWorld, sourceBone.localPosition));
+          } else if (sourceBase !== null && targetBase === null) {
+            const sourceWorld = addVec3(sourceBase, sourceBone.localPosition);
+            if (sourceWorld !== null) appendPosition(resolved.targetFigure, subVec3(sourceWorld, targetLocal));
+          }
+          continue;
+        }
+      }
+
+      if (resolved.targetPoint === null) {
+        unresolved.push(resolved);
+        continue;
+      }
+      appendPosition(resolved.figureLabel, subVec3(resolved.targetPoint, sourceBone.localPosition));
+    }
+
+    const averagedPositions: Record<string, Vector3> = {};
+    for (const [label, points] of Object.entries(figurePositions)) {
+      averagedPositions[label] = averageVec3(points)!;
+    }
+
+    return new InteractionPosePatch({
+      figurePositions: averagedPositions,
+      unresolvedTargets: unresolved,
+      diagnostics: { figureCount: Object.keys(averagedPositions).length, unresolvedTargetCount: unresolved.length },
+    });
+  }
+
+  async apply(scene: RigSceneSource, opts: ApplyOptions = {}): Promise<PreparedInteractionResult> {
+    const patch = this.buildPosePatch();
+    await patch.apply(scene);
+    const result = new PreparedInteractionResult({ prepared: this, posePatch: patch });
+    if (opts.alignLimbTargets) {
+      result.alignmentResults = await this.alignLimbTargets(scene, opts);
+    }
+    return result;
+  }
+
+  /**
+   * Apply live limb alignment for resolved hand/foot targets.
+   *
+   * Real IK solving lands in `interactionSolve.ts` (Phase 5B,
+   * `daz-script-server-sf7y.2`) -- until then this returns no results
+   * regardless of how many hand/foot targets were resolved.
+   */
+  async alignLimbTargets(_scene: RigSceneSource, _opts: AlignLimbTargetsOptions = {}): Promise<LimbAlignmentResult[]> {
+    return [];
+  }
+}
+
+export function prepareInteractionRecipe(recipe: InteractionRecipe, rigProfiles: Record<string, FigureRigProfile>): PreparedInteractionRecipe {
+  const plan = recipe.toPlan();
+  const validationIssues = plan.validate(rigProfiles);
+  const resolvedTargets = plan.resolveTargets(rigProfiles);
+  return new PreparedInteractionRecipe({
+    recipe,
+    plan,
+    resolvedTargets,
+    rigProfiles: { ...rigProfiles },
+    validationIssues,
+    diagnostics: {
+      recipeKind: recipe.kind,
+      actorCount: recipe.actors.length,
+      constraintCount: recipe.constraints.length,
+      resolvedTargetCount: resolvedTargets.length,
+    },
+  });
 }
