@@ -67,6 +67,25 @@ def _figure_pixels(path: str):
     return top, bottom
 
 
+def _figure_rows(path: str):
+    """(first, last) image rows holding figure pixels, and the image height."""
+    from PIL import Image
+    im = Image.open(path)
+    w, h = im.size
+    if im.mode == "RGBA" and im.getpixel((1, 1))[3] == 0:
+        def differs(p):
+            return p[3] > 0
+    else:
+        im = im.convert("RGB")
+        corner = im.getpixel((1, 1))
+
+        def differs(p):
+            return sum(abs(a - b) for a, b in zip(p, corner)) > 40
+    px = im.load()
+    rows = [y for y in range(h) if any(differs(px[x, y]) for x in range(0, w, 2))]
+    return rows[0], rows[-1], h
+
+
 @skip_if_down
 @skip_no_daz
 class TestSceneCheckLive(unittest.TestCase):
@@ -129,6 +148,28 @@ class TestSceneCheckLive(unittest.TestCase):
             top, bottom = _figure_pixels(path)
             self.assertEqual("top" in sides, top, (key, report.to_dict()))
             self.assertEqual("bottom" in sides, bottom, (key, report.to_dict()))
+
+    def test_full_body_fits_the_frame_height_at_any_aspect(self):
+        # Studio applies Frame Width to the frame height (nnfk): full_body fits 210 cm
+        # of height whatever the render aspect, so a standing figure fills
+        # ~height/210 of the frame in landscape and portrait alike.
+        fig_h = _CLIENT.execute("""(function(){ for (var i = 0; i < Scene.getNumNodes(); i++) {
+            var n = Scene.getNode(i); if (n.inherits("DzFigure")) { var b = n.getWSBoundingBox();
+            return b.max.y - b.min.y; } } return null; })()""").value
+        from dazpy._render_api import render as render_one
+        fills = {}
+        for w, h in ((320, 240), (240, 320)):
+            path = f"{_OUT}/fit_{w}x{h}.png"
+            render_one(_CLIENT, path, camera=self.cam("full_body"), engine="viewport", width=w,
+                       height=h, timeout=120)
+            top, bottom, rows = _figure_rows(path)
+            self.assertGreater(top, 0, path)
+            self.assertLess(bottom, rows - 1, path)
+            fills[(w, h)] = (bottom - top + 1) / rows
+        expected = fig_h / 210.0
+        for size, fill in fills.items():
+            self.assertAlmostEqual(fill, expected, delta=0.08, msg=(size, fills, fig_h))
+        self.assertAlmostEqual(fills[(320, 240)], fills[(240, 320)], delta=0.03, msg=fills)
 
     def test_head_cut_off(self):
         node = self.scene.find_node_by_label(self.cam("close_up"))
