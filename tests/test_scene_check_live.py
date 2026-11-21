@@ -163,6 +163,22 @@ class TestSceneCheckLive(unittest.TestCase):
             _env(*self.env0)
         self.assertTrue(self.scene.check(self.cam("full_body"), engine="iray").ok)
 
+    def test_dazpy_environment_lookup_finds_the_node(self):
+        # Studio 4 keeps the environment on a scene node, Studio 6 among the
+        # render elements; dazpy's holder must reach it on both (n0bl).
+        from dazpy._recipe_store import observe_environment_script
+        from dazpy._render import DazRenderSettings
+        rs = DazRenderSettings(_CLIENT)
+        try:
+            _env(intensity=0.37)
+            self.assertAlmostEqual(rs._get_environment_property("Environment Intensity"), 0.37, places=4)
+            rs._set_environment_property("Environment Intensity", 0.61)
+            self.assertAlmostEqual(_env()[1], 0.61, places=4)
+            observed = _CLIENT.execute(observe_environment_script(rs._environment_holder())).value
+            self.assertIsNotNone(observed)
+        finally:
+            _env(*self.env0)
+
     def test_missing_camera(self):
         report = self.scene.check("no such camera")
         self.assertEqual([f.code for f in report.errors], ["camera_not_found"])

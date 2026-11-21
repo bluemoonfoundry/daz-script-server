@@ -269,12 +269,21 @@ class DazRenderSettings:
         return result
 
     def _environment_holder(self) -> str:
-        # The "Environment Options" group (DzEnvironmentNode). Historically
-        # index 3 of General Render / Iray / Tonemapper / Environment;
-        # looked up by class so a reorder can't silently retarget writes.
-        return self._render_element_lookup(
+        # The "Environment Options" DzEnvironmentNode. Studio 4 keeps it as a
+        # scene node (created by the first Iray render, gone after
+        # Scene.clear()); Studio 6 exposes it among the render elements
+        # (historically index 3 of General Render / Iray / Tonemapper /
+        # Environment). Scene nodes first, then render elements by class.
+        render_element = self._render_element_lookup(
             "DzEnvironmentNode", "Environment Options", 3
         )
+        return f"""(function () {{
+            for (var _n = 0; _n < Scene.getNumNodes(); _n++) {{
+                var _node = Scene.getNode(_n);
+                if (_node && _node.inherits("DzEnvironmentNode")) return _node;
+            }}
+            return {render_element};
+        }})()"""
 
     def _get_environment_property(self, name: str):
         script = ScriptBuilder.iife(f"""

@@ -2416,6 +2416,14 @@ class TestDazRenderSettingsEnvironment(unittest.TestCase):
         self.assertIn("_objs[3]", script)
         self.assertNotIn("getRenderElementObjects()[3]", script)
 
+    def test_environment_holder_searches_scene_nodes_before_render_elements(self):
+        # Studio 4 keeps the environment on a scene node, not a render element.
+        rs, client = self._make_render(1.0)
+        rs._get_environment_property("Environment Intensity")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getNumNodes()", script)
+        self.assertLess(script.index("Scene.getNode("), script.index("getRenderElementObjects()"))
+
     def test_get_environment_property_reads_named_property(self):
         rs, client = self._make_render(1.0)
         val = rs._get_environment_property("Environment Intensity")
