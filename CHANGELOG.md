@@ -51,6 +51,15 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy on Studio 4:** the environment (Environment Options) is now found
+  on Studio 4, which keeps it as a scene node rather than a render element.
+  `apply_hdri_environment` no longer raises `RenderError`, and recipe
+  environment reads and `set_environment` work there.
+- **Scene recipes:** `recipe.apply()` no longer times out loading a figure on
+  a freshly started Studio (a cold Genesis 9 load takes over 30 s). Asset
+  loads now allow 300 s. `DazClient.execute()` and `AsyncDazClient.execute()`
+  take a per-request `timeout=` for this, and timeout errors report the
+  timeout that applied.
 - **Scene recipes:** changing only an actor's pose no longer moves the figure
   when the pose preset also sets the figure's root transform (common in
   prop-interaction poses). The figure node's transform is kept across the

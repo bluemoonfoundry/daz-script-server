@@ -123,6 +123,11 @@ for (var _i = 0; _i < _nodes.length; _i++) _out.push(_key(_nodes[_i]));
 return _out;""")
 
 
+# HTTP timeout for one asset load. A cold Genesis 9 load takes longer than
+# DazClient's 30 s default (verified 2026-11-20 on fresh DS4 and DS6).
+ASSET_LOAD_TIMEOUT_S = 300.0
+
+
 def _load_asset_script(path: str) -> str:
     """Merge-load *path* with nothing selected.
 
@@ -405,7 +410,8 @@ class DazSceneOps:
         make: Callable[[], object]
         if entity.kind in ("actor", "prop"):
             path = self._resolve_asset(entity.create["asset_path"])
-            make = lambda: self._client.execute(_load_asset_script(path))  # noqa: E731
+            make = lambda: self._client.execute(  # noqa: E731
+                _load_asset_script(path), timeout=ASSET_LOAD_TIMEOUT_S)
         elif entity.kind == "camera":
             make = self._scene.create_camera
         elif entity.kind == "light":

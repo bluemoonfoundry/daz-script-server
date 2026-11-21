@@ -83,9 +83,11 @@ class TestSceneCheckLive(unittest.TestCase):
             raise AssertionError(f"apply failed: {result.error}")
         cls.apply_check = result.check
         # A cleared scene has no environment node until a render creates it.
+        # The first Iray render after Studio starts can take ~9 min to reach
+        # its first sample (seen on DS4 2026-11-20), hence the long timeout.
         from dazpy._render_api import render as render_one
         render_one(_CLIENT, f"{_OUT}/env_seed.png", camera=f"{cls.recipe['id']}:full_body",
-                   engine="iray", width=32, height=24, iray_samples=1, timeout=180)
+                   engine="iray", width=32, height=24, iray_samples=1, timeout=900)
         cls.env0 = _env()
         if cls.env0 is None:
             raise AssertionError("no environment node after an Iray render")

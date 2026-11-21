@@ -310,7 +310,7 @@ class DazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
         except _requests.exceptions.RequestException as e:
             self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
@@ -331,7 +331,7 @@ class DazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
             self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
         except _requests.exceptions.RequestException as e:
             self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
@@ -397,7 +397,8 @@ class DazClient:
                 backoff = min(backoff + 1.0, 5.0)
 
     def execute(
-        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
+        timeout: float | None = None,
     ) -> ExecutionResult:
         """Execute a DazScript string synchronously.
 
@@ -410,6 +411,9 @@ class DazClient:
                 instead of raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
+            timeout: HTTP timeout in seconds for this request, overriding the
+                client's *timeout* (e.g. for a slow scene load). The script
+                keeps running in DAZ Studio after a client-side timeout.
 
         Returns:
             The execution result containing the script return value and any
@@ -432,7 +436,7 @@ class DazClient:
             payload["args"] = args
 
         def _do():
-            resp = self._post("/execute", payload)
+            resp = self._post("/execute", payload, timeout=timeout)
             return _map_response(resp, script=script)
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
@@ -868,7 +872,7 @@ class DazClient:
         except _requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except _requests.exceptions.Timeout as e:
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
         except _requests.exceptions.RequestException as e:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 

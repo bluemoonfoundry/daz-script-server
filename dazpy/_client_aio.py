@@ -150,7 +150,7 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
             self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
         except httpx.HTTPError as e:
             self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
@@ -169,7 +169,7 @@ class AsyncDazClient:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
             self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
         except httpx.HTTPError as e:
             self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
@@ -208,7 +208,8 @@ class AsyncDazClient:
                 backoff = min(backoff + 1.0, 5.0)
 
     async def execute(
-        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0
+        self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
+        timeout: float | None = None,
     ) -> ExecutionResult:
         """Execute a DazScript string. See :meth:`dazpy.DazClient.execute`."""
         payload: dict = {"script": script}
@@ -216,7 +217,7 @@ class AsyncDazClient:
             payload["args"] = args
 
         async def _do():
-            resp = await self._post("/execute", payload)
+            resp = await self._post("/execute", payload, timeout=timeout)
             return _map_response(resp, script=script)
 
         return await self._with_busy_retry(_do, retry_on_busy, max_wait)
@@ -461,7 +462,7 @@ class AsyncDazClient:
         except httpx.ConnectError as e:
             raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
         except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
+            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
         except httpx.HTTPError as e:
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 

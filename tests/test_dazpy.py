@@ -92,6 +92,36 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
         )
 
 
+class TestDazClientExecuteTimeout(unittest.TestCase):
+    """Per-request timeout on execute() (ekkc)."""
+
+    def _client(self):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=200, headers={})
+        response.json.return_value = {"success": True, "result": 1, "output": []}
+        client._session.post.return_value = response
+        return client
+
+    def test_execute_uses_client_timeout_by_default(self):
+        client = self._client()
+        client.execute("1;")
+        self.assertEqual(client._session.post.call_args.kwargs["timeout"], 30.0)
+
+    def test_execute_timeout_overrides_client_timeout(self):
+        client = self._client()
+        client.execute("1;", timeout=300.0)
+        self.assertEqual(client._session.post.call_args.kwargs["timeout"], 300.0)
+
+    def test_timeout_error_reports_the_timeout_that_applied(self):
+        import requests
+        client = self._client()
+        client._session.post.side_effect = requests.exceptions.Timeout("slow")
+        with self.assertRaisesRegex(exceptions.TimeoutError, "after 300.0s"):
+            client.execute("1;", timeout=300.0)
+
+
 class TestDazClientRequestIdentity(unittest.TestCase):
     """Idempotency-Key / X-Correlation-Id headers and the error envelope (5d6f.8)."""
 

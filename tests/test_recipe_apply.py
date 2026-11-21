@@ -457,6 +457,16 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertLess(load.index("Scene.selectAllNodes(false);"), load.index("loadScene"))
         self.assertIn('C:/Lib/g9.duf", DzScene.MergeFile)', load)  # never 0 / OpenNew
 
+    def test_asset_load_outlasts_the_client_default_timeout(self):
+        # A cold Genesis 9 load takes longer than DazClient's 30 s default (ekkc).
+        from dazpy._recipe_ops import ASSET_LOAD_TIMEOUT_S
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", ["Genesis 9"]))
+        ops.create(d_actor("anna"))
+        load = next(c for c in client.execute.call_args_list if "loadScene" in c.args[0])
+        self.assertEqual(load.kwargs.get("timeout"), ASSET_LOAD_TIMEOUT_S)
+        self.assertGreaterEqual(ASSET_LOAD_TIMEOUT_S, 300)
+
     def test_claim_names_a_root_created_without_a_name(self):
         # DS4: a new DzBasicCamera / DzSpotLight has a label but an empty name,
         # and every later step finds nodes by name.
