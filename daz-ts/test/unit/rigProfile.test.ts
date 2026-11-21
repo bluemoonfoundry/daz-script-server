@@ -1,12 +1,15 @@
 // daz-ts/test/unit/rigProfile.test.ts
 import { describe, expect, it } from "vitest";
 import {
-  AxisLimit,
-  BoneProfile,
-  FigureRigProfile,
-  InteractionAnchor,
   addVec3,
   averageVec3,
+  AxisLimit,
+  BoneProfile,
+  buildRigProfile,
+  buildRigProfilesFromSnapshot,
+  defaultAxisLimitsForBone,
+  FigureRigProfile,
+  InteractionAnchor,
   lookupRigProfile,
   midpointVec3,
   subVec3,
@@ -187,5 +190,68 @@ describe("lookupRigProfile", () => {
     expect(lookupRigProfile(table, "Genesis 9")).toBe(profile);
     expect(lookupRigProfile(table, "Genesis9")).toBe(profile);
     expect(lookupRigProfile(table, "Nobody")).toBeNull();
+  });
+});
+
+function fakeMetadataSkeleton(identifierValue: string, label: string | null, bones: Array<Record<string, unknown>>) {
+  return {
+    identifier: { value: identifierValue },
+    label: async () => label,
+    boneMetadata: async () => bones,
+  };
+}
+
+describe("defaultAxisLimitsForBone", () => {
+  it("returns loose limits for a forearm bone, spanning both positive and negative degrees", () => {
+    const limits = defaultAxisLimitsForBone("r_forearm");
+    expect(limits.x).toBeInstanceOf(AxisLimit);
+    expect(limits.x!.minDegrees).toBeLessThan(0);
+    expect(limits.x!.maxDegrees).toBeGreaterThan(0);
+  });
+
+  it("returns {} for a bone name matching no preset", () => {
+    expect(defaultAxisLimitsForBone("some_prop_root")).toEqual({});
+  });
+});
+
+describe("buildRigProfile", () => {
+  it("detects genesis_9 family and resolves snake_case anchors from boneMetadata()", async () => {
+    const skeleton = fakeMetadataSkeleton("Genesis9", "Genesis 9", [
+      { name: "hip", label: "Hip", parent_name: null, rotation_order: "XYZ", local_position: [0, 0, 0], world_position: [0, 0, 0], local_euler: [0, 0, 0] },
+      { name: "l_hand", label: "Left Hand", parent_name: "hip", local_position: [1, 0, 0] },
+      { name: "r_hand", label: "Right Hand", parent_name: "hip", local_position: [-1, 0, 0] },
+      { name: "l_foot", label: "Left Foot", parent_name: "hip" },
+      { name: "r_foot", label: "Right Foot", parent_name: "hip" },
+    ]);
+    const profile = await buildRigProfile(skeleton);
+    expect(profile.figureLabel).toBe("Genesis 9");
+    expect(profile.family).toBe("genesis_9");
+    expect(profile.anchor("r_hand")?.boneName).toBe("r_hand");
+    expect(profile.bone("l_hand").localPosition).toEqual([1, 0, 0]);
+  });
+
+  it("falls back to the identifier value when label() returns null", async () => {
+    const skeleton = fakeMetadataSkeleton("Genesis9", null, [{ name: "hip", parent_name: null }]);
+    const profile = await buildRigProfile(skeleton);
+    expect(profile.figureLabel).toBe("Genesis9");
+  });
+});
+
+describe("buildRigProfilesFromSnapshot", () => {
+  it("builds one profile per skeleton, keyed by both label and internal name", () => {
+    const snapshot = [
+      {
+        name: "Genesis9",
+        label: "Genesis 9",
+        bones: [
+          { name: "hip", label: "Hip", parent_name: null },
+          { name: "r_hand", label: "Right Hand", parent_name: "hip" },
+        ],
+      },
+    ];
+    const profiles = buildRigProfilesFromSnapshot(snapshot);
+    expect(profiles["Genesis 9"]).toBeDefined();
+    expect(profiles["Genesis9"]).toBe(profiles["Genesis 9"]);
+    expect(profiles["Genesis 9"].anchor("r_hand")?.boneName).toBe("r_hand");
   });
 });

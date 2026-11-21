@@ -687,3 +687,81 @@ export class FigureRigProfile {
     });
   }
 }
+
+// ── default axis limits ──────────────────────────────────────────────────────
+
+const AXIS_LIMIT_PRESETS: ReadonlyArray<[readonly string[], Partial<Record<AxisName, [number, number]>>]> = [
+  [["head", "neck"], { x: [-70, 70], y: [-85, 85], z: [-45, 45] }],
+  [["shoulder", "clavicle", "upper_arm"], { x: [-120, 120], y: [-120, 120], z: [-140, 140] }],
+  [["forearm", "hand"], { x: [-160, 160], y: [-120, 120], z: [-160, 160] }],
+  [["thigh", "shin", "calf"], { x: [-140, 140], y: [-80, 80], z: [-140, 140] }],
+  [["foot", "toe"], { x: [-70, 70], y: [-45, 45], z: [-70, 70] }],
+  [["spine", "abdomen", "chest", "hip", "pelvis"], { x: [-45, 45], y: [-45, 45], z: [-45, 45] }],
+];
+
+/** Loose, solver-friendly axis limits for a given bone name. */
+export function defaultAxisLimitsForBone(name: string): Partial<Record<AxisName, AxisLimit>> {
+  const key = normalizeName(name);
+  for (const [tokens, ranges] of AXIS_LIMIT_PRESETS) {
+    if (tokens.some((token) => key.includes(token))) {
+      const limits: Partial<Record<AxisName, AxisLimit>> = {};
+      for (const [axis, range] of Object.entries(ranges) as Array<[AxisName, [number, number]]>) {
+        limits[axis] = new AxisLimit(axis, range[0], range[1]);
+      }
+      return limits;
+    }
+  }
+  return {};
+}
+
+function boneProfileFromRaw(item: Record<string, unknown>): BoneProfile {
+  const name = String(item.name ?? "");
+  const label = (item.label as string | null | undefined) ?? null;
+  return new BoneProfile({
+    name,
+    label,
+    parentName: (item.parent_name as string | null | undefined) ?? null,
+    rotationOrder: (item.rotation_order as string | null | undefined) ?? null,
+    localPosition: asVector3(item.local_position),
+    worldPosition: asVector3(item.world_position),
+    restRotation: asVector3(item.local_euler),
+    axisLimits: defaultAxisLimitsForBone(name),
+    isTwist: looksLikeTwist(name, label),
+    isHelper: looksLikeHelper(name, label),
+  });
+}
+
+/** Inspect a live DAZ skeleton (one `boneMetadata()` HTTP call) and build a solver-friendly rig profile. */
+export async function buildRigProfile(skeleton: RigMetadataSource): Promise<FigureRigProfile> {
+  const label = await skeleton.label();
+  const figureLabel = label ?? skeleton.identifier.value;
+  const raw = await skeleton.boneMetadata();
+  const bones = raw.map((item) => boneProfileFromRaw(item));
+  const family = detectFigureFamily(bones.map((bone) => bone.name));
+  return new FigureRigProfile({
+    figureLabel,
+    family,
+    bones,
+    metadata: { boneCount: bones.length, source: "daz-ts" },
+  });
+}
+
+/**
+ * Build rig profiles for every skeleton from a `sceneSnapshot()` result --
+ * one HTTP call for every figure in the scene. Both the figure label and
+ * internal name are stored as keys so lookup tolerates either.
+ */
+export function buildRigProfilesFromSnapshot(snapshot: Array<Record<string, unknown>>): Record<string, FigureRigProfile> {
+  const profiles: Record<string, FigureRigProfile> = {};
+  for (const skelData of snapshot) {
+    const name = String(skelData.name ?? "");
+    const label = (skelData.label as string | undefined) || name;
+    const rawBones = (skelData.bones as Array<Record<string, unknown>> | undefined) ?? [];
+    const bones = rawBones.map((item) => boneProfileFromRaw(item));
+    const family = detectFigureFamily(bones.map((bone) => bone.name));
+    const profile = new FigureRigProfile({ figureLabel: label, family, bones, metadata: { boneCount: bones.length, source: "snapshot" } });
+    profiles[label] = profile;
+    if (name && name !== label) profiles[name] = profile;
+  }
+  return profiles;
+}
