@@ -43,14 +43,24 @@ def _lights_on(on: bool) -> None:
 
 
 def _figure_pixels(path: str):
-    """(touches top row, touches bottom row) for the non-background pixels of a render."""
-    from PIL import Image
-    im = Image.open(path).convert("RGB")
-    w, h = im.size
-    corner = im.getpixel((1, 1))
+    """(touches top row, touches bottom row) for the non-background pixels of a render.
 
-    def differs(p):
-        return sum(abs(a - b) for a, b in zip(p, corner)) > 40
+    Studio 6 viewport renders have a transparent background (alpha 0) behind a
+    near-black figure, so with alpha the figure is alpha > 0; Studio 4 renders
+    are opaque, so the figure is what differs from the corner colour.
+    """
+    from PIL import Image
+    im = Image.open(path)
+    w, h = im.size
+    if im.mode == "RGBA" and im.getpixel((1, 1))[3] == 0:
+        def differs(p):
+            return p[3] > 0
+    else:
+        im = im.convert("RGB")
+        corner = im.getpixel((1, 1))
+
+        def differs(p):
+            return sum(abs(a - b) for a, b in zip(p, corner)) > 40
 
     top = any(differs(im.getpixel((x, 0))) for x in range(w))
     bottom = any(differs(im.getpixel((x, h - 1))) for x in range(w))
