@@ -651,7 +651,7 @@ export interface AlignLimbTargetsOptions {
   tolerance?: number;
 }
 
-export interface ApplyOptions extends AlignLimbTargetsOptions {
+export interface InteractionApplyOptions extends AlignLimbTargetsOptions {
   alignLimbTargets?: boolean;
 }
 
@@ -799,7 +799,7 @@ export class PreparedInteractionRecipe {
     });
   }
 
-  async apply(scene: RigSceneSource, opts: ApplyOptions = {}): Promise<PreparedInteractionResult> {
+  async apply(scene: RigSceneSource, opts: InteractionApplyOptions = {}): Promise<PreparedInteractionResult> {
     const patch = this.buildPosePatch();
     await patch.apply(scene);
     const result = new PreparedInteractionResult({ prepared: this, posePatch: patch });

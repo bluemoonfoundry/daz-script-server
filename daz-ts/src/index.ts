@@ -113,3 +113,95 @@ export type { SceneEvent } from "./sceneEvents.js";
 
 export { MIN_SERVER_VERSION, parseVersion, evaluateServerVersion } from "./version.js";
 export type { VersionCheck } from "./version.js";
+
+// ── Phase 5A: interaction rig profiles + plan data model ───────────────────
+
+export {
+  AxisLimit,
+  BoneChain,
+  BoneProfile,
+  FigureRigProfile,
+  InteractionAnchor,
+  ResolvedInteractionTarget,
+  addVec3,
+  averageVec3,
+  buildRigProfile,
+  buildRigProfilesFromSnapshot,
+  clamp,
+  defaultAxisLimitsForBone,
+  detectFigureFamily,
+  dotVec3,
+  lengthVec3,
+  lookupRigProfile,
+  looksLikeHelper,
+  looksLikeTwist,
+  midpointVec3,
+  scaleVec3,
+  sideFromName,
+  subVec3,
+} from "./rigProfile.js";
+export type {
+  AnchorRole,
+  AnchorTargetLike,
+  AxisLimitDict,
+  AxisName,
+  BoneChainDict,
+  BoneProfileDict,
+  ChainRole,
+  ChainSide,
+  FigureRigProfileDict,
+  InteractionAnchorDict,
+  ResolvedInteractionTargetDict,
+  RigMetadataSource,
+  RigSceneSource,
+  RigSkeletonSource,
+  Rotation3,
+  Vector3,
+} from "./rigProfile.js";
+
+export {
+  BalanceTarget,
+  ContactTarget,
+  FootTarget,
+  HandTarget,
+  InteractionPlan,
+  InteractionPosePatch,
+  InteractionRecipe,
+  LimbAlignmentResult,
+  LookAtTarget,
+  PoseTarget,
+  PreparedInteractionRecipe,
+  PreparedInteractionResult,
+  SolveOptions,
+  ValidationIssue,
+  prepareInteractionRecipe,
+  resolveInteractionTarget,
+} from "./interactionPlan.js";
+export type {
+  AlignLimbTargetsOptions,
+  AnchorTargetDict,
+  InteractionApplyOptions,
+  BalanceTargetDict,
+  ContactTargetDict,
+  InteractionConstraint,
+  InteractionPlanDict,
+  InteractionPosePatchDict,
+  InteractionRecipeDict,
+  LimbAlignmentResultDict,
+  LookAtTargetDict,
+  PoseTargetDict,
+  RecipeKind,
+  SolveBackend,
+  SolveOptionsDict,
+  ValidationIssueDict,
+} from "./interactionPlan.js";
+
+// Compile-time check: the live classes satisfy the structural sources the
+// interaction modules accept (they never import skeleton.ts/scene.ts).
+type AssertTrue<T extends true> = T;
+export type _DazSkeletonIsRigSkeletonSource = AssertTrue<
+  import("./skeleton.js").DazSkeleton extends import("./rigProfile.js").RigSkeletonSource ? true : false
+>;
+export type _DazSceneIsRigSceneSource = AssertTrue<
+  import("./scene.js").DazScene extends import("./rigProfile.js").RigSceneSource ? true : false
+>;
