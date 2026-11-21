@@ -6,6 +6,19 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **dazpy pre-render checks:** `DazScene.check(camera=None, *, engine,
+  resolution, allow_crop)` and `dazpy.recipe.check(recipe, scene, shots=)`
+  return a `CheckReport` of `CheckFinding`s with a severity. Framing: a figure
+  partly outside the camera's frame (`subject_out_of_frame`, with the edges
+  crossed, so a cut-off head shows as `top`), entirely outside it
+  (`subject_not_in_frame`), or no figure in view at all (`no_subject_in_frame`,
+  error). Lighting: `no_light` (error) when no light is on, the environment is
+  Scene Only or at intensity 0, and the headlamp is off. One Studio script per
+  check. Recipe shots gain `allow_crop` (schema v1, optional) to silence the
+  framing warnings for a deliberate crop. `recipe.apply(..., require_clean=True)`
+  rolls back when the applied scene has check errors (`ApplyResult.check`), and
+  `recipe.render(..., require_clean=True)` raises the new `SceneCheckError`
+  before rendering.
 - **daz-ts:** `MIN_SERVER_VERSION` (2.11, the oldest plugin daz-ts needs)
   and `DazClient.checkServerVersion()`, which reads `GET /status` and returns
   a `VersionCheck` (`compatible`, upgrade `message`). Unlike dazpy, daz-ts

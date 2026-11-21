@@ -3,7 +3,7 @@ Scene recipes
 
 A **scene recipe** is a versioned JSON document that declares what a DAZ Studio
 scene should contain: assets, actors and their placement and poses, lighting,
-cameras, shots and render settings. :mod:`dazpy.recipe` offers five operations
+cameras, shots and render settings. :mod:`dazpy.recipe` offers six operations
 over it:
 
 ==============  =====================================================================
@@ -11,6 +11,7 @@ over it:
 ``plan``        dry run: the steps, conflicts and warnings an apply would produce
 ``apply``       make the scene match the recipe, incrementally and safely
 ``observe``     how the scene differs from the recipe now (reads only)
+``check``       pre-render checks: figures in frame, something lights the render
 ``render``      render the recipe's shots from an applied scene
 ==============  =====================================================================
 
@@ -123,7 +124,9 @@ share one key namespace: a prop key that is also an actor key is a
        the actor's chest (130 cm); a ``look_at`` of ``[x, y, z]`` is used as given.
    * - ``shots[]``
      - ``id``, ``camera``, ``output`` (absolute path on the Studio host; the
-       folder is created), optional ``render`` override.
+       folder is created), optional ``render`` override, optional
+       ``allow_crop`` (``true``: the shot crops figures on purpose, so
+       ``check`` skips its out-of-frame warnings).
    * - ``render``
      - ``engine`` (``iray``, ``filament``, ``viewport``), ``resolution``
        (``[w, h]``), ``iray_samples``. Used only at render time; never written
@@ -159,6 +162,54 @@ renders through the recipe's own camera node (found by its ownership record, so
 renaming it in Studio is fine; normally labelled ``"<id>:<camera key>"``) with
 the shot's ``render`` over the top-level ``render``; unset values use the
 scene's defaults.
+
+Pre-render checks
+-----------------
+
+``check(recipe, scene, shots=None)`` (and :meth:`dazpy.DazScene.check` for any
+scene, recipe or not) runs one Studio script and returns a
+:class:`dazpy.CheckReport`: ``ok`` (no errors) and ``findings``, each a
+:class:`dazpy.CheckFinding` with ``severity`` (``error`` / ``warning``),
+``code``, ``subject``, ``message``, ``camera``, ``shot`` and, for crops,
+``sides``.
+
+=========================  ========  ==========================================================
+Code                       Severity  Meaning
+=========================  ========  ==========================================================
+``subject_out_of_frame``   warning   Part of a figure's bounding box is outside the shot's
+                                     frame. ``sides`` lists the edges crossed (``top`` /
+                                     ``bottom`` is usually a head or feet cut off; ``behind``:
+                                     part of it is behind the camera). Skipped with
+                                     ``allow_crop``.
+``subject_not_in_frame``   warning   A figure is entirely outside the frame. Skipped with
+                                     ``allow_crop``.
+``no_subject_in_frame``    error     The scene has figures and the camera sees none of them.
+``camera_not_found``       error     The shot's camera is not in the scene (apply first).
+``no_light``               error     Nothing lights the render: no light is on, visible and
+                                     above zero intensity, the environment is Scene Only or at
+                                     intensity 0, and the camera headlamp is off. Not checked
+                                     for the ``viewport`` engine. Reported once (``shot`` null)
+                                     when every shot agrees.
+=========================  ========  ==========================================================
+
+Figures are the visible top-level figures (clothing and hair fitted to a figure
+are skipped). Framing uses each shot's camera and resolution (the render
+settings' aspect when the recipe sets none). The test is the figure's world
+bounding box, which is loose: an outstretched arm can leave an empty box corner
+outside the frame, so treat ``subject_out_of_frame`` as a prompt to look.
+Emissive surfaces are not seen by ``no_light``.
+
+To enforce the checks, pass ``require_clean=True``:
+
+* ``apply(..., require_clean=True)`` checks every shot on the applied scene
+  before the manifest is written. Errors roll the apply back like any other
+  failure (``applied=False``, ``rolled_back=True``); ``ApplyResult.check`` has
+  the report either way.
+* ``render(..., require_clean=True)`` checks the shots it would render and
+  raises :class:`dazpy.exceptions.SceneCheckError` (``report`` attribute) on
+  errors, before rendering anything. It is independent of ``force``.
+
+Warnings never block.
 
 ``observe`` reports ``applied`` (the recipe has a manifest in the scene),
 ``in_sync``, ``drift`` (hand edits kept, hand deletions), ``pending`` (what an

@@ -105,6 +105,7 @@ class ShotSpec:
     camera: str
     output: str
     render: Optional[RenderSpec] = None
+    allow_crop: bool = False
 
 
 # ---- generic (de)serialisation ------------------------------------------

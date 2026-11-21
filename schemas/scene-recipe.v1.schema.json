@@ -554,6 +554,10 @@
         "render": {
           "$ref": "#/$defs/render"
         },
+        "allow_crop": {
+          "type": "boolean",
+          "description": "the shot crops figures on purpose: scene checks skip the out-of-frame warnings"
+        },
         "movement": {
           "not": {},
           "description": "reserved; not supported in recipe_version 1"

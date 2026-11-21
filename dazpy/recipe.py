@@ -9,6 +9,7 @@ facade over the layers below it:
 - :func:`plan` - what an apply would do, without touching the scene;
 - :func:`apply` - validate, re-read the live scene, diff, execute with rollback;
 - :func:`observe` - how the scene differs from the recipe now;
+- :func:`check` - pre-render checks (framing, lighting) for the recipe's shots;
 - :func:`render` - render the recipe's shots from an applied scene.
 
 Every result type has a JSON-safe ``to_dict()``.
@@ -16,6 +17,7 @@ Every result type has a JSON-safe ``to_dict()``.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import os
@@ -33,15 +35,17 @@ from ._recipe_ops import DazSceneOps, is_local_pose_file, resolve_files
 from ._recipe_store import LiveState, read_live
 from ._recipe_validate import RecipeIssue, ValidationReport, file_not_found, validate_offline
 from ._render_api import RenderResult
+from ._scene_check import (CheckFinding, CheckReport, engine_name, findings_for_camera, gather,
+                           lighting_findings)
 from ._client import DazClient
 from ._script_builder import ScriptBuilder
-from .exceptions import RecipeNotAppliedError, RecipeValidationError
+from .exceptions import RecipeNotAppliedError, RecipeValidationError, SceneCheckError
 
 if TYPE_CHECKING:
     from ._scene import DazScene
 
-__all__ = ["ObserveReport", "ShotRender", "apply", "observe", "plan", "recipe_schema", "render",
-           "validate"]
+__all__ = ["ObserveReport", "ShotRender", "apply", "check", "observe", "plan", "recipe_schema",
+           "render", "validate"]
 
 _SCHEMA_VERSIONS = (1,)
 
@@ -166,19 +170,26 @@ def plan(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConfli
 
 @_patient
 def apply(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConflict = "ask",
-          resolutions: Mapping[str, Resolution] | None = None) -> ApplyResult:
+          resolutions: Mapping[str, Resolution] | None = None,
+          require_clean: bool = False) -> ApplyResult:
     """Apply *recipe* to *scene*, re-planning against the scene's current state.
 
     Raises :class:`RecipeValidationError` (before touching the scene) when the
     recipe is invalid offline or names a missing file. A conflict under
     ``on_conflict="ask"`` returns ``applied=False`` with the conflicts and writes
     nothing; a failure part-way rolls back (see :class:`ApplyResult`).
+
+    With *require_clean*, :func:`check` runs on the applied scene before the
+    manifest is written; errors roll the apply back (``applied=False``,
+    ``rolled_back=True``) and ``ApplyResult.check`` holds the report either way.
     """
     model = _checked(recipe, scene)
     desired, live = _read(model, scene)
     the_plan = diff(desired, live, on_conflict=on_conflict, resolutions=resolutions)
+    verify = (lambda: _check_shots(model, read_live(scene._client, model.id), scene._client,
+                                   model.shots)) if require_clean else None
     return execute(the_plan, desired, live, DazSceneOps(scene),
-                   recipe_id=model.id, recipe_version=model.recipe_version)
+                   recipe_id=model.id, recipe_version=model.recipe_version, verify=verify)
 
 
 def _pending(the_plan: RecipePlan) -> tuple[str, ...]:
@@ -215,6 +226,76 @@ def _observation(desired: dict, live: LiveState) -> ObserveReport:
     applied = live.manifest is not None
     return ObserveReport(applied=applied, in_sync=applied and not (pending or drift or p.conflicts),
                          drift=drift, pending=pending, conflicts=p.conflicts)
+
+
+def _pick(model: SceneRecipe, shot, name: str):
+    """A shot's render setting *name*, else the recipe's top-level one."""
+    own = shot.render
+    return (getattr(own, name, None) if own is not None else None) or getattr(model.render, name)
+
+
+def _camera_label(model: SceneRecipe, live: LiveState, key: str) -> str:
+    camera = live.entities.get(f"cameras.{key}")
+    return camera.label if camera is not None and camera.label else f"{model.id}:{key}"
+
+
+def _choose(model: SceneRecipe, shots: Sequence[str] | None) -> list:
+    known = [s.id for s in model.shots]
+    if shots is None:
+        return list(model.shots)
+    unknown = [i for i in dict.fromkeys(shots) if i not in known]
+    if unknown:
+        raise ValueError(f"unknown shot id(s): {', '.join(unknown)}; "
+                         f"valid shot ids: {', '.join(known) or '(none)'}")
+    wanted = set(shots)
+    return [s for s in model.shots if s.id in wanted]
+
+
+def _check_shots(model: SceneRecipe, live: LiveState, client, chosen: Sequence) -> CheckReport:
+    """Framing per shot, lighting once per distinct result (one Studio script)."""
+    labels = [_camera_label(model, live, s.camera) for s in chosen]
+    data = gather(client, labels or [None])
+    active = engine_name(data.get("engine"))
+    framing: list[CheckFinding] = []
+    lighting: dict[tuple, list] = {}
+    for shot, cam in zip(chosen, data["cameras"]):
+        res = _pick(model, shot, "resolution")
+        framing += findings_for_camera(data, cam, aspect=res[0] / res[1] if res else None,
+                                       allow_crop=shot.allow_crop, shot=shot.id)
+        for f in lighting_findings(_pick(model, shot, "engine") or active, data["lights"],
+                                   data.get("environment"), bool(cam.get("headlamp"))):
+            lighting.setdefault((f.code, f.message), []).append((shot.id, f))
+    if not chosen:
+        for f in lighting_findings(active, data["lights"], data.get("environment")):
+            lighting.setdefault((f.code, f.message), []).append((None, f))
+    out = list(framing)
+    for hits in lighting.values():
+        if len(hits) == len(chosen) or not chosen:
+            out.append(hits[0][1])  # every shot alike: report once, shot=None
+        else:
+            out += [dataclasses.replace(f, shot=sid) for sid, f in hits]
+    return CheckReport(tuple(out))
+
+
+@_patient
+def check(recipe: SceneRecipe | dict, scene: "DazScene", *,
+          shots: Sequence[str] | None = None) -> CheckReport:
+    """Pre-render checks for the recipe's shots (all, or the ids in *shots*).
+
+    For each shot, from its camera (found like :func:`render` finds it) with
+    the shot's resolution: are the figures in frame (``subject_out_of_frame`` /
+    ``subject_not_in_frame`` warnings, skipped when the shot sets
+    ``allow_crop``; ``no_subject_in_frame`` error; ``camera_not_found`` error
+    when the camera is not in the scene, e.g. before :func:`apply`). Then, per
+    the shot's engine, will anything light the render (``no_light`` error,
+    reported once with ``shot=None`` when every shot agrees). With no shots,
+    only lighting is checked, for the active engine. See
+    :meth:`dazpy.DazScene.check` for the codes. Raises ``ValueError`` for
+    unknown shot ids.
+    """
+    model = _checked(recipe, None)
+    chosen = _choose(model, shots)
+    return _check_shots(model, read_live(scene._client, model.id), scene._client, chosen)
 
 
 @dataclass(frozen=True)
@@ -265,7 +346,8 @@ def _guard(report: ObserveReport, camera_keys: Sequence[str]) -> None:
 
 @_patient
 def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str] | None = None,
-           force: bool = False, wait: bool = True, timeout: float = 300.0) -> list[ShotRender]:
+           force: bool = False, wait: bool = True, timeout: float = 300.0,
+           require_clean: bool = False) -> list[ShotRender]:
     """Render the recipe's shots (all, or the ids in *shots*) in recipe order.
 
     Each shot renders from the recipe's camera node, found through its ownership
@@ -279,40 +361,31 @@ def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str
     Unless *force*, raises :class:`RecipeNotAppliedError` when the recipe is not
     applied, has conflicts or unapplied changes, or a rendered shot's camera was
     changed or deleted in the scene. Raises ``ValueError`` for unknown shot ids.
+    With *require_clean* (independent of *force*), runs :func:`check` on the
+    chosen shots first and raises :class:`~dazpy.exceptions.SceneCheckError`
+    if it finds errors; nothing is rendered.
     """
     model = _checked(recipe, None)
-    known = [s.id for s in model.shots]
-    if shots is not None:
-        unknown = [i for i in dict.fromkeys(shots) if i not in known]
-        if unknown:
-            raise ValueError(f"unknown shot id(s): {', '.join(unknown)}; "
-                             f"valid shot ids: {', '.join(known) or '(none)'}")
-        wanted = set(shots)
-        chosen = [s for s in model.shots if s.id in wanted]
-    else:
-        chosen = list(model.shots)
+    chosen = _choose(model, shots)
     desired, live = _read(model, scene)
     if not force:
         _guard(_observation(desired, live), [s.camera for s in chosen])
     if not chosen:
         return []
+    if require_clean:
+        report = _check_shots(model, live, scene._client, chosen)
+        if not report.ok:
+            raise SceneCheckError(report)
     dirs = list(dict.fromkeys(d for d in (_parent_dir(s.output) for s in chosen) if d))
     if dirs:
         scene._client.execute(_mkdir_script(dirs))
     out: list[ShotRender] = []
     for shot in chosen:
-        top, own = model.render, shot.render
-
-        def pick(name: str):
-            return (getattr(own, name, None) if own is not None else None) or getattr(top, name)
-
-        width, height = pick("resolution") or (0, 0)
-        camera = live.entities.get(f"cameras.{shot.camera}")
-        label = (camera.label if camera is not None and camera.label
-                 else f"{model.id}:{shot.camera}")
+        width, height = _pick(model, shot, "resolution") or (0, 0)
+        label = _camera_label(model, live, shot.camera)
         result = render_api.render(
-            scene._client, shot.output, camera=label, engine=pick("engine") or "",
-            width=width, height=height, iray_samples=pick("iray_samples") or 0,
+            scene._client, shot.output, camera=label, engine=_pick(model, shot, "engine") or "",
+            width=width, height=height, iray_samples=_pick(model, shot, "iray_samples") or 0,
             wait=wait, timeout=timeout)
         out.append(ShotRender(shot.id, label, shot.output, result))
     return out

@@ -207,6 +207,22 @@ class RecipeValidationError(DazError):
             f"scene recipe is invalid ({len(report.errors)} error(s)):\n" + "\n".join(lines))
 
 
+class SceneCheckError(DazError):
+    """Raised when a pre-render scene check required to be clean found errors.
+
+    Raised by ``dazpy.recipe.render(..., require_clean=True)``.
+
+    Attributes:
+        report: The :class:`dazpy.CheckReport` with every finding.
+    """
+
+    def __init__(self, report):
+        self.report = report
+        lines = [f"{f.subject}: [{f.code}] {f.message}" for f in report.errors]
+        super().__init__(
+            f"scene check failed ({len(report.errors)} error(s)):\n" + "\n".join(lines))
+
+
 class RecipeNotAppliedError(DazError):
     """Raised by ``dazpy.recipe.render`` when the scene does not match the recipe.
 

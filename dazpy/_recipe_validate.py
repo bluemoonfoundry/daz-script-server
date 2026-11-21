@@ -367,7 +367,7 @@ class _Validator:
         seen: Dict[str, int] = {}
         for i, s in enumerate(v):
             p = f"{path}[{i}]"
-            if not self.obj(s, p, ("id", "camera", "output", "render"),
+            if not self.obj(s, p, ("id", "camera", "output", "render", "allow_crop"),
                             ("id", "camera", "output"), ("movement",)):
                 continue
             if "id" in s:
@@ -387,6 +387,8 @@ class _Validator:
                 self.string(s["output"], f"{p}.output")
             if "render" in s:
                 self.render(s["render"], f"{p}.render")
+            if "allow_crop" in s:
+                self.boolean(s["allow_crop"], f"{p}.allow_crop")
         return v
 
     # ---- driver ----------------------------------------------------------
