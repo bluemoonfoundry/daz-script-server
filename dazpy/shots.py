@@ -65,7 +65,9 @@ CAMERA_ANGLES: Mapping[str, float] = {
 COMPOSITIONS: Tuple[str, ...] = ("center", "left_third", "right_third")
 
 #: Daz camera "Frame Width" default (mm), and the height/width ratio used when
-#: nothing sets a resolution -- the same defaults scene recipes use.
+#: nothing sets a resolution -- the same defaults scene recipes use. Despite its
+#: name, Studio applies Frame Width to the frame *height* at any aspect
+#: (``getFieldOfView()`` is vertical); the frame width is ``frame_width_mm / aspect``.
 DEFAULT_FRAME_WIDTH_MM = 36.0
 DEFAULT_ASPECT = 3 / 4
 
@@ -769,8 +771,13 @@ def shot_from_recipe_camera(key: str, camera: Mapping[str, Any],
 
 def framing_distance(size: str, focal_length: float, *, frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
                      aspect: float = DEFAULT_ASPECT) -> float:
-    """Distance at which *size*'s fit height fills the frame height at *focal_length*."""
-    return SHOT_SIZES[size][0] * focal_length / (frame_width_mm * aspect)
+    """Distance at which *size*'s fit height fills the frame height at *focal_length*.
+
+    Studio's Frame Width spans the frame height whatever the aspect, so the
+    distance does not depend on *aspect* (kept for signature compatibility).
+    """
+    del aspect
+    return SHOT_SIZES[size][0] * focal_length / frame_width_mm
 
 
 def framing_transform(points: "Iterable[Tuple[Vec3, bool]]", framing: Framing, focal_length: float, *,
@@ -784,8 +791,10 @@ def framing_transform(points: "Iterable[Tuple[Vec3, bool]]", framing: Framing, f
             ``framing.anchor_cm`` (which, when set, raises every point).
         framing: The framing spec.
         focal_length: Lens focal length (mm), used to fit the shot size.
-        frame_width_mm: Camera frame width (mm).
-        aspect: Frame height / width.
+        frame_width_mm: Camera "Frame Width" (mm), which Studio applies to
+            the frame height.
+        aspect: Frame height / width; sets the frame width for a third
+            composition.
     """
     anchor_default = SHOT_SIZES[framing.size][1]
     raised = []
@@ -803,7 +812,7 @@ def framing_transform(points: "Iterable[Tuple[Vec3, bool]]", framing: Framing, f
     right = forward.cross(Vec3(0.0, 1.0, 0.0))
     if right.length() < 1e-9:  # looking straight up/down: no horizon to slide along
         return position, center
-    shift = distance * frame_width_mm / focal_length / 6.0
+    shift = distance * frame_width_mm / aspect / focal_length / 6.0  # a sixth of the frame width
     # Subject on the left third -> aim to its right, and vice versa.
     sign = 1.0 if framing.composition == "left_third" else -1.0
     return position, center + right.normalize() * (shift * sign)

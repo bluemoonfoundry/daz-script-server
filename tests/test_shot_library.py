@@ -117,7 +117,7 @@ class ShotTypeTests(unittest.TestCase):
         self.assertGreater(cam.distance(POS["bob"]), POS["alice"].distance(POS["bob"]))
         self.assertAlmostEqual(cam.y, sl.EYE_HEIGHT_CM - sl.OTS_DROP_CM)
         # Bob on a third, Alice's head on the opposite side of the frame.
-        half = 36.0 / 50.0 / 2  # half frame width over focal length at distance 1
+        half = 36.0 / 50.0 / (3 / 4) / 2  # half frame width over focal length at distance 1
         bx = screen_x(cam, aim, eye("bob")) / half
         ax = screen_x(cam, aim, eye("alice")) / half
         self.assertAlmostEqual(abs(bx), 1 / 3, places=2)
@@ -158,6 +158,9 @@ class ShotTypeTests(unittest.TestCase):
         self.assertIsNone(near.camera.distance_cm)  # recipe-expressible
         far = sl.two_shot(LineOfAction.between({"a": Vec3(0, 0, 0), "b": Vec3(600, 0, 0)}, "a", "b"))
         self.assertGreater(far.camera.distance_cm, 600)
+        # The fit is horizontal: (600 + body) cm across a frame 36/aspect mm wide at f.
+        f = far.lens.focal_length
+        self.assertAlmostEqual(far.camera.distance_cm, (600 + sl.BODY_WIDTH_CM) * f * (3 / 4) / 36)
 
     def test_establishing_master(self):
         est = sl.establishing(line())
@@ -299,7 +302,10 @@ class PrimitiveTests(unittest.TestCase):
         cam, target = Vec3(0, 160, 300), Vec3(0, 160, 0)
         for x in (sl.THIRD_X, -sl.THIRD_X, sl.GOLDEN_X, 0.0):
             aim = sl.compose_aim(cam, target, x, 50)
-            self.assertAlmostEqual(screen_x(cam, aim, target) / (36 / 50 / 2), x, places=6)
+            # 36 mm spans the frame height; the half width is that / aspect (3/4) / 2.
+            self.assertAlmostEqual(screen_x(cam, aim, target) / (36 / 50 / (3 / 4) / 2), x, places=6)
+            portrait = sl.compose_aim(cam, target, x, 50, aspect=1.5)
+            self.assertAlmostEqual(screen_x(cam, portrait, target) / (36 / 50 / 1.5 / 2), x, places=6)
         self.assertAlmostEqual(sl.GOLDEN_X, 0.2361, places=4)
 
     def test_look_rotation_roll(self):

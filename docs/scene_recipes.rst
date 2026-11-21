@@ -106,9 +106,11 @@ share one key namespace: a prop key that is also an actor key is a
        ``focal_length``, ``depth_of_field``, ``focal_distance``. Framing
        assumes a standing human: each ``shot_type`` aims at a height above the
        actor's position and stands back so a height of subject fills the frame
-       at the camera's ``focal_length`` and the recipe's ``render.resolution``
-       (4:3 if unset; a shot's own ``render`` override does not reframe its
-       camera). Sizes (aim cm / fit cm): ``extreme_wide`` 90/600, ``wide``
+       height at the camera's ``focal_length`` (Studio applies the 36 mm Frame
+       Width to the frame height at any aspect, so the distance does not
+       depend on the resolution). ``composition`` thirds use the frame width,
+       which follows the recipe's ``render.resolution`` (4:3 if unset; a shot's
+       own ``render`` override does not reframe its camera). Sizes (aim cm / fit cm): ``extreme_wide`` 90/600, ``wide``
        90/350, ``full_body`` 90/210, ``medium_wide`` 115/140, ``medium``
        130/100, ``medium_close_up`` 145/60, ``close_up`` 160/40,
        ``extreme_close_up`` 165/15. ``angle`` names the elevation

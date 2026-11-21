@@ -147,17 +147,19 @@ GOLDEN_X = 1.0 - 2.0 * (1.0 - 2.0 / (1.0 + math.sqrt(5.0)))  # ~0.236: a 0.382 /
 
 
 def compose_aim(position: Vec3, target: Vec3, screen_x: float, focal_length: float, *,
-                frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM) -> Vec3:
+                frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT) -> Vec3:
     """The aim point that puts *target* at horizontal screen position *screen_x*.
 
     *screen_x* runs from ``-1`` (left edge) to ``+1`` (right edge); ``0`` is
     centred, :data:`THIRD_X` the right third, :data:`GOLDEN_X` the right
-    golden section. The camera turns, it does not move.
+    golden section. The camera turns, it does not move. *frame_width_mm*
+    spans the frame height (as in Studio), so the width is that / *aspect*
+    (height / width).
     """
     right = _screen_right(position, target)
     if right is None or not screen_x:
         return target
-    half_width = position.distance(target) * frame_width_mm / focal_length / 2.0
+    half_width = position.distance(target) * frame_width_mm / aspect / focal_length / 2.0
     return target - right * (screen_x * half_width)
 
 
@@ -293,7 +295,7 @@ def _fit_distance(size: str, separation_cm: float, focal_length: float, frame_wi
     """The distance that fits two actors *separation_cm* apart across the frame,
     or ``None`` when the size's own fitted distance already does (which keeps
     the shot recipe-expressible)."""
-    by_width = (separation_cm + BODY_WIDTH_CM) * focal_length / frame_width_mm
+    by_width = (separation_cm + BODY_WIDTH_CM) * focal_length * aspect / frame_width_mm  # width = fw / aspect
     by_size = framing_distance(size, focal_length, frame_width_mm=frame_width_mm, aspect=aspect)
     return by_width if by_width > by_size else None
 
@@ -366,8 +368,8 @@ def over_the_shoulder(line: LineOfAction, foreground: str, subject: str, *,
                       lens: Optional[Union[Lens, float]] = None, back_cm: float = OTS_BACK_CM,
                       side_cm: float = OTS_SIDE_CM, drop_cm: float = OTS_DROP_CM,
                       eye_height: float = EYE_HEIGHT_CM, compose: bool = True,
-                      frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, id: Optional[str] = None,
-                      frame_range: Optional[Tuple[int, int]] = None) -> Shot:
+                      frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT,
+                      id: Optional[str] = None, frame_range: Optional[Tuple[int, int]] = None) -> Shot:
     """Over *foreground*'s shoulder onto *subject*, from the camera side of the line.
 
     The camera stands *back_cm* behind the foreground actor's head and
@@ -388,7 +390,8 @@ def over_the_shoulder(line: LineOfAction, foreground: str, subject: str, *,
     if compose and right is not None:
         # The foreground shoulder is on the -normal side of the camera; the subject goes opposite.
         screen_side = 1.0 if line.normal.dot(right) > 0 else -1.0
-        aim = compose_aim(position, target, screen_side * THIRD_X, ln.focal_length, frame_width_mm=frame_width_mm)
+        aim = compose_aim(position, target, screen_side * THIRD_X, ln.focal_length, frame_width_mm=frame_width_mm,
+                          aspect=aspect)
     return Shot(id=id or shot_name("ots", subject, over=foreground),
                 camera=Placement(position=position, look_at=aim), lens=ln, frame_range=frame_range)
 
@@ -934,7 +937,8 @@ def dialogue_coverage(line: LineOfAction, *, plan_id: Optional[str] = None,
     if "two_shot" in include:
         shots.append(two_shot(line, **kw))
     if "ots" in include:
-        shots += shot_reverse_shot(line, frame_width_mm=kw.get("frame_width_mm", DEFAULT_FRAME_WIDTH_MM))
+        shots += shot_reverse_shot(line, frame_width_mm=kw.get("frame_width_mm", DEFAULT_FRAME_WIDTH_MM),
+                                   aspect=kw.get("aspect", DEFAULT_ASPECT))
     if "singles" in include:
         shots += [single(line, line.a, size=single_size), single(line, line.b, size=single_size)]
     pid = plan_id or f"{_slug(line.a)}_{_slug(line.b)}_dialogue"
@@ -997,7 +1001,8 @@ def conversation(line: LineOfAction, beats: Iterable[DialogueBeat], *, plan_id: 
         listener = line.other(b.speaker)
         rng = (b.start, b.end)
         if style == "ots":
-            s = over_the_shoulder(line, listener, b.speaker, lens=lens, frame_width_mm=fw, frame_range=rng,
+            s = over_the_shoulder(line, listener, b.speaker, lens=lens, frame_width_mm=fw,
+                                  aspect=kw.get("aspect", DEFAULT_ASPECT), frame_range=rng,
                                   id=shot_name("ots", b.speaker, over=listener, index=i))
         else:
             s = single(line, b.speaker, size=single_size, lens=lens, frame_range=rng,

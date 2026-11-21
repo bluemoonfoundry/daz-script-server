@@ -57,7 +57,7 @@ class DesiredTests(unittest.TestCase):
                                                         "focal_length": 85}}))
         t = d["cameras.cu"].channels["transform"]
         self.assertEqual(t["aim"], (-60.0, 160.0, 0.0))
-        self.assertAlmostEqual(dist(t["position"], t["aim"]), 40 * 85 / 27, places=4)
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 40 * 85 / 36, places=4)
         self.assertIsNone(t["rotation"])
 
     def test_full_body_fits_a_standing_figure(self):
@@ -65,15 +65,31 @@ class DesiredTests(unittest.TestCase):
                                         cameras={"w": {"frame": "anna", "shot_type": "full_body"}}))
         t = d["cameras.w"].channels["transform"]
         self.assertEqual(t["aim"], (0.0, 90.0, 0.0))
-        self.assertAlmostEqual(dist(t["position"], t["aim"]), 210 * 50 / 27, places=4)
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 210 * 50 / 36, places=4)
 
-    def test_framing_distance_follows_the_render_aspect(self):
+    def test_framing_distance_ignores_the_render_aspect(self):
+        # Studio applies Frame Width to the frame height at any aspect (live-measured,
+        # nnfk), so a portrait render frames the same height from the same distance.
         r = recipe_with(actors={"anna": {"asset": "g"}},
                         cameras={"m": {"frame": "anna", "shot_type": "medium"}}).to_dict()
-        r["render"] = {"resolution": [600, 900]}  # portrait: 36 * 900/600 = 54 mm vertical
+        r["render"] = {"resolution": [600, 900]}
         t = compute_desired(SceneRecipe.from_dict(r))["cameras.m"].channels["transform"]
         self.assertEqual(t["aim"], (0.0, 130.0, 0.0))
-        self.assertAlmostEqual(dist(t["position"], t["aim"]), 100 * 50 / 54, places=4)
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 100 * 50 / 36, places=4)
+
+    def test_third_composition_follows_the_render_aspect(self):
+        # The frame width is height / aspect, so a portrait render's third sits nearer centre.
+        def shift(res):
+            r = recipe_with(actors={"anna": {"asset": "g"}},
+                            cameras={"m": {"frame": "anna", "shot_type": "medium",
+                                           "composition": "left_third", "azimuth_deg": 0,
+                                           "elevation_deg": 0}}).to_dict()
+            r["render"] = {"resolution": res}
+            t = compute_desired(SceneRecipe.from_dict(r))["cameras.m"].channels["transform"]
+            return abs(t["aim"][0])
+        d = 100 * 50 / 36
+        self.assertAlmostEqual(shift([900, 600]), d * 36 / 50 * 1.5 / 6, places=4)
+        self.assertAlmostEqual(shift([600, 900]), d * 36 / 50 / 1.5 / 6, places=4)
 
     def test_framing_a_prop_aims_at_its_position(self):
         d = compute_desired(recipe_with(props={"chair": {"asset": "chair", "position": [5, 0, 7]}},
@@ -86,7 +102,7 @@ class DesiredTests(unittest.TestCase):
             cameras={"w": {"frame": ["a", "b"], "shot_type": "full_body"}}))
         t = d["cameras.w"].channels["transform"]
         self.assertEqual(t["aim"], (50.0, 90.0, 20.0))
-        self.assertAlmostEqual(dist(t["position"], t["aim"]), 210 * 50 / 27, places=4)
+        self.assertAlmostEqual(dist(t["position"], t["aim"]), 210 * 50 / 36, places=4)
 
     def test_rig_lights_aim_at_the_actors_chest(self):
         d = compute_desired(recipe_with(actors={"anna": {"asset": "g", "position": [0, 0, 0]}},
