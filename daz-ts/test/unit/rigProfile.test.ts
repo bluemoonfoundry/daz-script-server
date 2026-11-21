@@ -1,6 +1,16 @@
 // daz-ts/test/unit/rigProfile.test.ts
 import { describe, expect, it } from "vitest";
-import { AxisLimit, BoneProfile, addVec3, averageVec3, midpointVec3, subVec3 } from "../../src/rigProfile.js";
+import {
+  AxisLimit,
+  BoneProfile,
+  FigureRigProfile,
+  InteractionAnchor,
+  addVec3,
+  averageVec3,
+  lookupRigProfile,
+  midpointVec3,
+  subVec3,
+} from "../../src/rigProfile.js";
 
 describe("rigProfile vector helpers", () => {
   it("addVec3 sums two vectors and passes through when one side is null", () => {
@@ -71,5 +81,111 @@ describe("BoneProfile", () => {
     expect(bone.axisLimits).toEqual({});
     expect(bone.isTwist).toBe(false);
     expect(bone.isHelper).toBe(false);
+  });
+});
+
+
+function genesis9Bones(): BoneProfile[] {
+  const hip = new BoneProfile({ name: "hip" });
+  const spine = new BoneProfile({ name: "spine", parentName: "hip" });
+  const chest = new BoneProfile({ name: "chest", parentName: "spine" });
+  const neck = new BoneProfile({ name: "neck", parentName: "chest" });
+  const head = new BoneProfile({ name: "head", parentName: "neck" });
+  const lHand = new BoneProfile({ name: "l_hand", label: "Left Hand", parentName: "chest" });
+  const rHand = new BoneProfile({ name: "r_hand", label: "Right Hand", parentName: "chest" });
+  const lFoot = new BoneProfile({ name: "l_foot", label: "Left Foot", parentName: "hip" });
+  const rFoot = new BoneProfile({ name: "r_foot", label: "Right Foot", parentName: "hip" });
+  return [hip, spine, chest, neck, head, lHand, rHand, lFoot, rFoot];
+}
+
+function genesis38Bones(): BoneProfile[] {
+  const hip = new BoneProfile({ name: "hip" });
+  const spine = new BoneProfile({ name: "abdomenLower", parentName: "hip" });
+  const chest = new BoneProfile({ name: "chestLower", parentName: "abdomenLower" });
+  const lCollar = new BoneProfile({ name: "lCollar", parentName: "chestLower" });
+  const rCollar = new BoneProfile({ name: "rCollar", parentName: "chestLower" });
+  const lForearmBend = new BoneProfile({ name: "lForearmBend", parentName: "lCollar" });
+  const rForearmBend = new BoneProfile({ name: "rForearmBend", parentName: "rCollar" });
+  const lHand = new BoneProfile({ name: "lHand", label: "Left Hand", parentName: "lForearmBend" });
+  const rHand = new BoneProfile({ name: "rHand", label: "Right Hand", parentName: "rForearmBend" });
+  const lFoot = new BoneProfile({ name: "lFoot", label: "Left Foot", parentName: "hip" });
+  const rFoot = new BoneProfile({ name: "rFoot", label: "Right Foot", parentName: "hip" });
+  return [hip, spine, chest, lCollar, rCollar, lForearmBend, rForearmBend, lHand, rHand, lFoot, rFoot];
+}
+
+describe("FigureRigProfile", () => {
+  it("ancestry/chainTo return root-to-bone order", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: genesis9Bones() });
+    expect(profile.chainTo("head")).toEqual(["hip", "spine", "chest", "neck", "head"]);
+  });
+
+  it("anchorMap resolves canonical snake_case anchors for Genesis 9 naming", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: genesis9Bones() });
+    const anchors = profile.anchorMap();
+    expect(anchors.get("l_hand")?.boneName).toBe("l_hand");
+    expect(anchors.get("r_hand")?.boneName).toBe("r_hand");
+    expect(anchors.get("l_foot")?.role).toBe("foot");
+    expect(profile.anchor("r_hand")).toBeInstanceOf(InteractionAnchor);
+  });
+
+  it("anchorMap resolves camelCase Genesis 3/8 bone names via canonical anchor keys", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Bob Genesis 8", family: "genesis_3_8", bones: genesis38Bones() });
+    const anchors = profile.anchorMap();
+    expect(anchors.get("r_hand")?.boneName).toBe("rHand");
+    expect(anchors.get("l_hand")?.boneName).toBe("lHand");
+    expect(anchors.get("l_foot")?.boneName).toBe("lFoot");
+    expect(anchors.get("r_foot")?.boneName).toBe("rFoot");
+  });
+
+  it("suggestPrimaryChain classifies a hand bone into a hand-role chain ending at that bone", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: genesis9Bones() });
+    const chain = profile.suggestPrimaryChain("r_hand");
+    expect(chain?.role).toBe("hand");
+    expect(chain?.effectorBone).toBe("r_hand");
+    expect(chain?.bones).toEqual(["hip", "spine", "chest", "r_hand"]);
+  });
+
+  it("suggestPrimaryChain returns null for an unknown bone", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: genesis9Bones() });
+    expect(profile.suggestPrimaryChain("nonexistent")).toBeNull();
+  });
+
+  it("requireAnchor throws for an unknown anchor name", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: genesis9Bones() });
+    expect(() => profile.requireAnchor("tail")).toThrow(/Anchor not found/);
+  });
+
+  it("resolveAnchorTarget resolves a same-figure hand target and applies the offset", () => {
+    const bones = genesis9Bones();
+    const rHandIndex = bones.findIndex((b) => b.name === "r_hand");
+    bones[rHandIndex] = new BoneProfile({ ...bones[rHandIndex], localPosition: [10, 20, 30] } as any);
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones });
+    const resolved = profile.resolveAnchorTarget({
+      figureLabel: "Genesis 9",
+      anchorName: "r_hand",
+      targetPoint: [1, 2, 3],
+      offset: [0.5, 0, -0.5],
+    });
+    expect(resolved.boneName).toBe("r_hand");
+    expect(resolved.targetPoint).toEqual([1.5, 2, 2.5]);
+    expect(resolved.targetBone).toBeNull();
+  });
+
+  it("toDict/fromDict round-trips a full profile", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: genesis9Bones() });
+    const restored = FigureRigProfile.fromDict(profile.toDict());
+    expect(restored.figureLabel).toBe("Genesis 9");
+    expect(restored.family).toBe("genesis_9");
+    expect(restored.boneNames()).toEqual(profile.boneNames());
+  });
+});
+
+describe("lookupRigProfile", () => {
+  it("matches by exact key, then by compact-name alias", () => {
+    const profile = new FigureRigProfile({ figureLabel: "Genesis 9", family: "genesis_9", bones: [] });
+    const table = { "Genesis 9": profile };
+    expect(lookupRigProfile(table, "Genesis 9")).toBe(profile);
+    expect(lookupRigProfile(table, "Genesis9")).toBe(profile);
+    expect(lookupRigProfile(table, "Nobody")).toBeNull();
   });
 });

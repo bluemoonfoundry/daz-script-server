@@ -253,3 +253,437 @@ export class BoneProfile {
     });
   }
 }
+
+// ── name-matching heuristics ─────────────────────────────────────────────────
+
+function normalizeName(value: string | null | undefined): string {
+  const text = (value ?? "").trim().toLowerCase();
+  return text.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function compactName(value: string | null | undefined): string {
+  const text = (value ?? "").trim().toLowerCase();
+  return text.replace(/[\s_-]+/g, "");
+}
+
+export function detectFigureFamily(boneNames: string[]): string {
+  const names = boneNames.map((n) => n.trim().toLowerCase());
+  const has = (pred: (n: string) => boolean) => names.some(pred);
+  if (has((n) => n.startsWith("r_") || n.startsWith("l_"))) {
+    if (
+      has((n) => n.includes("forearm")) ||
+      has((n) => n.endsWith("_twist")) ||
+      has((n) => n.includes("_hand")) ||
+      has((n) => n.includes("_foot"))
+    ) {
+      return "genesis_9";
+    }
+  }
+  if (has((n) => n.includes("forearmbend"))) return "genesis_3_8";
+  if (has((n) => n.includes("forearm"))) return "genesis_1_2";
+  return "generic";
+}
+
+export function looksLikeTwist(name: string, label?: string | null): boolean {
+  const lowered = `${name} ${label ?? ""}`.toLowerCase();
+  return lowered.includes("twist") || lowered.endsWith("bendtwist");
+}
+
+export function looksLikeHelper(name: string, label?: string | null): boolean {
+  const lowered = `${name} ${label ?? ""}`.toLowerCase();
+  return ["helper", "end", "end point", "endpoint"].some((token) => lowered.includes(token));
+}
+
+export function sideFromName(name: string): ChainSide {
+  const lowered = normalizeName(name);
+  if (lowered.startsWith("l_") || lowered.startsWith("left_")) return "left";
+  if (lowered.startsWith("r_") || lowered.startsWith("right_")) return "right";
+  // camelCase prefix: rHand, lFoot, rForearmBend (Genesis 3/8 naming)
+  if (name.length > 1 && name[0] === "l" && /^[A-Z]$/.test(name[1])) return "left";
+  if (name.length > 1 && name[0] === "r" && /^[A-Z]$/.test(name[1])) return "right";
+  if (["center_", "c_", "spine", "pelvis", "hip", "head", "neck", "chest"].some((p) => lowered.startsWith(p))) {
+    return "center";
+  }
+  return "unknown";
+}
+
+function matchAny(name: string, tokens: readonly string[]): boolean {
+  const lowered = normalizeName(name);
+  return tokens.some((token) => lowered.includes(token));
+}
+
+function sideMatches(name: string, side: ChainSide): boolean {
+  if (side === "center" || side === "unknown") return true;
+  return sideFromName(name) === side;
+}
+
+// ── BoneChain / InteractionAnchor / ResolvedInteractionTarget ───────────────
+
+/** A solver-friendly chain extracted from a figure rig. */
+export interface BoneChainDict {
+  figureLabel: string;
+  role: ChainRole;
+  side: ChainSide;
+  bones: string[];
+  effectorBone: string;
+  metadata: Record<string, unknown>;
+}
+
+export class BoneChain {
+  readonly figureLabel: string;
+  readonly role: ChainRole;
+  readonly side: ChainSide;
+  readonly bones: string[];
+  readonly effectorBone: string;
+  readonly metadata: Record<string, unknown>;
+
+  constructor(init: {
+    figureLabel: string;
+    role: ChainRole;
+    side: ChainSide;
+    bones: string[];
+    effectorBone: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    this.figureLabel = init.figureLabel;
+    this.role = init.role;
+    this.side = init.side;
+    this.bones = [...init.bones];
+    this.effectorBone = init.effectorBone;
+    this.metadata = init.metadata ?? {};
+  }
+
+  toDict(): BoneChainDict {
+    return {
+      figureLabel: this.figureLabel,
+      role: this.role,
+      side: this.side,
+      bones: [...this.bones],
+      effectorBone: this.effectorBone,
+      metadata: { ...this.metadata },
+    };
+  }
+}
+
+/** A canonical anchor on a figure used for interaction planning. */
+export interface InteractionAnchorDict {
+  name: string;
+  boneName: string;
+  role: AnchorRole;
+  side: ChainSide;
+}
+
+export class InteractionAnchor {
+  readonly name: string;
+  readonly boneName: string;
+  readonly role: AnchorRole;
+  readonly side: ChainSide;
+
+  constructor(init: { name: string; boneName: string; role: AnchorRole; side?: ChainSide }) {
+    this.name = init.name;
+    this.boneName = init.boneName;
+    this.role = init.role;
+    this.side = init.side ?? "unknown";
+  }
+
+  toDict(): InteractionAnchorDict {
+    return { name: this.name, boneName: this.boneName, role: this.role, side: this.side };
+  }
+}
+
+/** A fully resolved anchor target, ready for solver consumption. */
+export interface ResolvedInteractionTargetDict {
+  figureLabel: string;
+  anchorName: string;
+  boneName: string;
+  targetPoint: Vector3 | null;
+  targetFigure: string | null;
+  targetAnchor: string | null;
+  targetBone: string | null;
+  offset: Vector3;
+}
+
+export class ResolvedInteractionTarget {
+  readonly figureLabel: string;
+  readonly anchorName: string;
+  readonly boneName: string;
+  readonly targetPoint: Vector3 | null;
+  readonly targetFigure: string | null;
+  readonly targetAnchor: string | null;
+  readonly targetBone: string | null;
+  readonly offset: Vector3;
+
+  constructor(init: {
+    figureLabel: string;
+    anchorName: string;
+    boneName: string;
+    targetPoint?: Vector3 | null;
+    targetFigure?: string | null;
+    targetAnchor?: string | null;
+    targetBone?: string | null;
+    offset?: Vector3;
+  }) {
+    this.figureLabel = init.figureLabel;
+    this.anchorName = init.anchorName;
+    this.boneName = init.boneName;
+    this.targetPoint = init.targetPoint ?? null;
+    this.targetFigure = init.targetFigure ?? null;
+    this.targetAnchor = init.targetAnchor ?? null;
+    this.targetBone = init.targetBone ?? null;
+    this.offset = init.offset ?? [0, 0, 0];
+  }
+
+  toDict(): ResolvedInteractionTargetDict {
+    return {
+      figureLabel: this.figureLabel,
+      anchorName: this.anchorName,
+      boneName: this.boneName,
+      targetPoint: this.targetPoint,
+      targetFigure: this.targetFigure,
+      targetAnchor: this.targetAnchor,
+      targetBone: this.targetBone,
+      offset: this.offset,
+    };
+  }
+}
+
+/** Structural shape of a `HandTarget`/`FootTarget` (defined in `interactionPlan.ts`) as consumed by {@link FigureRigProfile.resolveAnchorTarget}. */
+export interface AnchorTargetLike {
+  figureLabel: string;
+  anchorName: string;
+  targetFigure?: string | null;
+  targetAnchor?: string | null;
+  targetPoint?: Vector3 | null;
+  offset?: Vector3;
+}
+
+function anchorWorldPointHint(profile: FigureRigProfile, anchorName: string): Vector3 | null {
+  const anchor = profile.anchor(anchorName);
+  if (anchor === null) return null;
+  const bone = profile.bone(anchor.boneName);
+  if (bone.worldPosition !== null) return bone.worldPosition;
+  if (bone.localPosition !== null) return bone.localPosition;
+  return null;
+}
+
+export function lookupRigProfile(
+  rigProfiles: Record<string, FigureRigProfile>,
+  label: string | null | undefined,
+): FigureRigProfile | null {
+  if (label == null) return null;
+  if (label in rigProfiles) return rigProfiles[label];
+  const compact = compactName(label);
+  for (const [key, profile] of Object.entries(rigProfiles)) {
+    if (compactName(key) === compact) return profile;
+  }
+  return null;
+}
+
+// ── FigureRigProfile ─────────────────────────────────────────────────────────
+
+const CHAIN_SUGGESTION_CANDIDATES: ReadonlyArray<[string, ChainRole, ChainSide, readonly string[]]> = [
+  ["pelvis", "pelvis", "center", ["pelvis", "hip"]],
+  ["spine", "spine", "center", ["spine", "abdomen", "torso"]],
+  ["head", "head", "center", ["head"]],
+  ["neck", "neck", "center", ["neck"]],
+  ["l_hand", "hand", "left", ["hand"]],
+  ["r_hand", "hand", "right", ["hand"]],
+  ["l_foot", "foot", "left", ["foot", "toe"]],
+  ["r_foot", "foot", "right", ["foot", "toe"]],
+  ["l_shoulder", "arm", "left", ["shoulder", "clavicle", "upper_arm"]],
+  ["r_shoulder", "arm", "right", ["shoulder", "clavicle", "upper_arm"]],
+  ["l_thigh", "leg", "left", ["thigh", "upper_leg"]],
+  ["r_thigh", "leg", "right", ["thigh", "upper_leg"]],
+];
+
+const ANCHOR_PATTERNS: ReadonlyArray<[string, AnchorRole, ChainSide, readonly string[]]> = [
+  ["pelvis", "pelvis", "center", ["pelvis", "hip"]],
+  ["spine", "spine", "center", ["spine", "abdomen", "torso"]],
+  ["chest", "chest", "center", ["chest", "upperchest", "thorax"]],
+  ["neck", "neck", "center", ["neck"]],
+  ["head", "head", "center", ["head"]],
+  ["l_shoulder", "shoulder", "left", ["shoulder", "clavicle"]],
+  ["r_shoulder", "shoulder", "right", ["shoulder", "clavicle"]],
+  ["l_elbow", "elbow", "left", ["elbow", "forearm"]],
+  ["r_elbow", "elbow", "right", ["elbow", "forearm"]],
+  ["l_hand", "hand", "left", ["hand", "wrist"]],
+  ["r_hand", "hand", "right", ["hand", "wrist"]],
+  ["l_knee", "knee", "left", ["knee", "thigh"]],
+  ["r_knee", "knee", "right", ["knee", "thigh"]],
+  ["l_foot", "foot", "left", ["foot", "toe", "ankle"]],
+  ["r_foot", "foot", "right", ["foot", "toe", "ankle"]],
+];
+
+/** Plain-object schema matching {@link FigureRigProfile.toDict}/{@link FigureRigProfile.fromDict}. */
+export interface FigureRigProfileDict {
+  figureLabel: string;
+  family: string;
+  bones: BoneProfileDict[];
+  metadata: Record<string, unknown>;
+}
+
+/** A DAZ figure expressed as a solver-friendly rig profile. */
+export class FigureRigProfile {
+  readonly figureLabel: string;
+  readonly family: string;
+  readonly bones: BoneProfile[];
+  readonly metadata: Record<string, unknown>;
+  private readonly index: Map<string, number>;
+
+  constructor(init: { figureLabel: string; family: string; bones?: BoneProfile[]; metadata?: Record<string, unknown> }) {
+    this.figureLabel = init.figureLabel;
+    this.family = init.family;
+    this.bones = init.bones ?? [];
+    this.metadata = init.metadata ?? {};
+    this.index = new Map(this.bones.map((bone, i) => [bone.name, i]));
+  }
+
+  boneNames(): string[] {
+    return this.bones.map((bone) => bone.name);
+  }
+
+  bone(name: string): BoneProfile {
+    const i = this.index.get(name);
+    if (i === undefined) throw new Error(`Bone not found in rig profile: ${name}`);
+    return this.bones[i];
+  }
+
+  /** Root-to-bone ancestry for the named bone. */
+  ancestry(boneName: string): BoneProfile[] {
+    const chain: BoneProfile[] = [];
+    let current = this.bone(boneName);
+    const seen = new Set<string>();
+    for (;;) {
+      if (seen.has(current.name)) throw new Error(`Cycle detected in rig profile around ${current.name}`);
+      seen.add(current.name);
+      chain.push(current);
+      if (current.parentName === null) break;
+      current = this.bone(current.parentName);
+    }
+    chain.reverse();
+    return chain;
+  }
+
+  chainTo(boneName: string): string[] {
+    return this.ancestry(boneName).map((bone) => bone.name);
+  }
+
+  chainFor(boneName: string, role: ChainRole, side: ChainSide = "unknown"): BoneChain {
+    return new BoneChain({ figureLabel: this.figureLabel, role, side, bones: this.chainTo(boneName), effectorBone: boneName });
+  }
+
+  private findTerminalBone(candidates: ReadonlyArray<[ChainRole | AnchorRole, ChainSide, readonly string[]]>): BoneProfile | null {
+    for (const [, side, tokens] of candidates) {
+      for (const bone of this.bones) {
+        if (matchAny(bone.name, tokens) && sideMatches(bone.name, side)) return bone;
+      }
+    }
+    return null;
+  }
+
+  /** Solver-friendly chain suggestions for the major interaction lanes. */
+  chainSuggestions(): BoneChain[] {
+    const suggestions: BoneChain[] = [];
+    for (const [, role, side, tokens] of CHAIN_SUGGESTION_CANDIDATES) {
+      const terminal = this.findTerminalBone([[role, side, tokens]]);
+      if (terminal === null) continue;
+      suggestions.push(this.chainFor(terminal.name, role, side));
+    }
+    return suggestions;
+  }
+
+  /** A solver chain for a specific effector bone, classified by name heuristics. */
+  suggestPrimaryChain(boneName: string): BoneChain | null {
+    if (!this.index.has(boneName)) return null;
+    const bone = this.bone(boneName);
+    const side = sideFromName(bone.name);
+    const lowered = normalizeName(bone.name);
+    let role: ChainRole;
+    if (lowered.includes("hand") || lowered.endsWith("wrist")) role = "hand";
+    else if (lowered.includes("foot") || lowered.includes("toe")) role = "foot";
+    else if (lowered.includes("head")) role = "head";
+    else if (lowered.includes("neck")) role = "neck";
+    else if (["thigh", "leg", "shin", "calf"].some((t) => lowered.includes(t))) role = "leg";
+    else if (["shoulder", "clavicle", "arm", "forearm", "elbow"].some((t) => lowered.includes(t))) role = "arm";
+    else if (["spine", "abdomen", "torso", "chest", "pelvis", "hip"].some((t) => lowered.includes(t))) {
+      role = ["spine", "abdomen", "torso", "chest"].some((t) => lowered.includes(t)) ? "spine" : "pelvis";
+    } else {
+      role = "custom";
+    }
+    return this.chainFor(boneName, role, side);
+  }
+
+  /** Canonical interaction anchors for the figure -- an opinionated, stable adapter layer for solver work. */
+  anchorMap(): Map<string, InteractionAnchor> {
+    const anchors = new Map<string, InteractionAnchor>();
+    for (const [key, role, side, tokens] of ANCHOR_PATTERNS) {
+      const bone = this.findTerminalBone([[role, side, tokens]]);
+      if (bone === null) continue;
+      anchors.set(key, new InteractionAnchor({ name: key, boneName: bone.name, role, side }));
+    }
+    return anchors;
+  }
+
+  anchor(name: string): InteractionAnchor | null {
+    return this.anchorMap().get(name) ?? null;
+  }
+
+  anchorNames(): string[] {
+    return [...this.anchorMap().keys()].sort();
+  }
+
+  requireAnchor(name: string): InteractionAnchor {
+    const anchor = this.anchor(name);
+    if (anchor === null) throw new Error(`Anchor not found in rig profile: ${name}`);
+    return anchor;
+  }
+
+  /** Resolve an anchor target into concrete bones and an optional world point. */
+  resolveAnchorTarget(target: AnchorTargetLike, rigProfiles?: Record<string, FigureRigProfile>): ResolvedInteractionTarget {
+    const anchor = this.requireAnchor(target.anchorName);
+    let targetPoint = target.targetPoint ?? null;
+    const targetFigure = target.targetFigure ?? null;
+    const targetAnchor = target.targetAnchor ?? null;
+    let targetBone: string | null = null;
+
+    if (targetFigure && targetAnchor && rigProfiles) {
+      const targetProfile = lookupRigProfile(rigProfiles, targetFigure);
+      if (targetProfile) targetBone = targetProfile.requireAnchor(targetAnchor).boneName;
+    }
+    if (targetPoint === null && targetFigure && targetAnchor && rigProfiles) {
+      const targetProfile = lookupRigProfile(rigProfiles, targetFigure);
+      if (targetProfile) targetPoint = anchorWorldPointHint(targetProfile, targetAnchor);
+    }
+
+    targetPoint = addVec3(targetPoint, target.offset ?? [0, 0, 0]);
+
+    return new ResolvedInteractionTarget({
+      figureLabel: this.figureLabel,
+      anchorName: anchor.name,
+      boneName: anchor.boneName,
+      targetPoint,
+      targetFigure,
+      targetAnchor,
+      targetBone,
+      offset: target.offset ?? [0, 0, 0],
+    });
+  }
+
+  toDict(): FigureRigProfileDict {
+    return {
+      figureLabel: this.figureLabel,
+      family: this.family,
+      bones: this.bones.map((bone) => bone.toDict()),
+      metadata: { ...this.metadata },
+    };
+  }
+
+  static fromDict(data: Partial<FigureRigProfileDict>): FigureRigProfile {
+    return new FigureRigProfile({
+      figureLabel: data.figureLabel ?? "",
+      family: data.family ?? "generic",
+      bones: (data.bones ?? []).map((item) => BoneProfile.fromDict(item)),
+      metadata: { ...(data.metadata ?? {}) },
+    });
+  }
+}
