@@ -6,6 +6,7 @@ import {
   FootTarget,
   HandTarget,
   InteractionPlan,
+  InteractionRecipe,
   LookAtTarget,
   PoseTarget,
   resolveInteractionTarget,
@@ -178,5 +179,33 @@ describe("resolveInteractionTarget", () => {
 
   it("throws for an unknown figure", () => {
     expect(() => resolveInteractionTarget(new HandTarget({ figureLabel: "Nobody", anchorName: "r_hand" }), {})).toThrow(/Unknown figure/);
+  });
+});
+
+describe("InteractionRecipe", () => {
+  it("toPlan carries actors/constraints/options/metadata", () => {
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Partner"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
+      metadata: { scenario: "contact" },
+    });
+    const plan = recipe.toPlan();
+    expect(plan.actors).toEqual(["Genesis 9", "Partner"]);
+    expect(plan.constraints).toHaveLength(1);
+  });
+
+  it("round-trips through toDict/fromDict, preserving kind and constraint types", () => {
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Partner"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
+      metadata: { scenario: "contact" },
+    });
+    const restored = InteractionRecipe.fromDict(recipe.toDict());
+    expect(restored.kind).toBe("touch");
+    expect(restored.actors).toEqual(["Genesis 9", "Partner"]);
+    expect(restored.constraints).toHaveLength(1);
+    expect(restored.constraints[0]).toBeInstanceOf(HandTarget);
   });
 });

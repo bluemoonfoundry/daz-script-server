@@ -463,3 +463,49 @@ export function resolveInteractionTarget(target: AnchorTargetLike, rigProfiles: 
   if (profile === null) throw new Error(`Unknown figure for target resolution: ${target.figureLabel}`);
   return profile.resolveAnchorTarget(target, rigProfiles);
 }
+
+// ── InteractionRecipe ────────────────────────────────────────────────────────
+
+export type RecipeKind = "sit" | "touch" | "kiss" | "fight" | "handshake" | "hug" | "face_each_other" | "custom";
+
+export interface InteractionRecipeDict extends InteractionPlanDict {
+  kind: RecipeKind;
+}
+
+export interface InteractionRecipeInit {
+  kind: RecipeKind;
+  actors: string[];
+  constraints?: InteractionConstraint[];
+  options?: SolveOptions;
+  metadata?: Record<string, unknown>;
+}
+
+/** A higher-level interaction preset that expands into an interaction plan. Recipe builders (`buildSitRecipe`, etc.) land in Phase 5C. */
+export class InteractionRecipe {
+  readonly kind: RecipeKind;
+  readonly actors: string[];
+  readonly constraints: InteractionConstraint[];
+  readonly options: SolveOptions;
+  readonly metadata: Record<string, unknown>;
+
+  constructor(init: InteractionRecipeInit) {
+    this.kind = init.kind;
+    this.actors = [...init.actors];
+    this.constraints = init.constraints ? [...init.constraints] : [];
+    this.options = init.options ?? new SolveOptions();
+    this.metadata = init.metadata ?? {};
+  }
+
+  toPlan(): InteractionPlan {
+    return new InteractionPlan({ actors: [...this.actors], constraints: [...this.constraints], options: this.options, metadata: { ...this.metadata } });
+  }
+
+  toDict(): InteractionRecipeDict {
+    return { kind: this.kind, ...this.toPlan().toDict() };
+  }
+
+  static fromDict(data: Partial<InteractionRecipeDict>): InteractionRecipe {
+    const plan = InteractionPlan.fromDict(data);
+    return new InteractionRecipe({ kind: data.kind ?? "custom", actors: plan.actors, constraints: plan.constraints, options: plan.options, metadata: plan.metadata });
+  }
+}
