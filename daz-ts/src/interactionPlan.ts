@@ -10,7 +10,7 @@
  */
 
 import type { AnchorTargetLike, FigureRigProfile, RigSceneSource, Vector3, Rotation3 } from "./rigProfile.js";
-import { addVec3, averageVec3, lookupRigProfile, midpointVec3, subVec3 } from "./rigProfile.js";
+import { addVec3, asVector3, averageVec3, lookupRigProfile, midpointVec3, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
 
 // ── constraint types ─────────────────────────────────────────────────────────
 
@@ -284,4 +284,182 @@ export class SolveOptions {
   static fromDict(data: Partial<SolveOptionsDict>): SolveOptions {
     return new SolveOptions(data);
   }
+}
+
+// ── InteractionPlan ──────────────────────────────────────────────────────────
+
+export interface InteractionPlanDict {
+  actors: string[];
+  constraints: Array<Record<string, unknown>>;
+  options: SolveOptionsDict;
+  metadata: Record<string, unknown>;
+}
+
+export interface InteractionPlanInit {
+  actors: string[];
+  constraints?: InteractionConstraint[];
+  options?: SolveOptions;
+  metadata?: Record<string, unknown>;
+}
+
+/** A collection of interaction constraints across one or more figures. */
+export class InteractionPlan {
+  readonly actors: string[];
+  readonly constraints: InteractionConstraint[];
+  readonly options: SolveOptions;
+  readonly metadata: Record<string, unknown>;
+
+  constructor(init: InteractionPlanInit) {
+    this.actors = [...init.actors];
+    this.constraints = init.constraints ? [...init.constraints] : [];
+    this.options = init.options ?? new SolveOptions();
+    this.metadata = init.metadata ?? {};
+  }
+
+  toDict(): InteractionPlanDict {
+    return {
+      actors: [...this.actors],
+      constraints: this.constraints.map((c) => ({ ...c.toDict() })),
+      options: this.options.toDict(),
+      metadata: { ...this.metadata },
+    };
+  }
+
+  static fromDict(data: Partial<InteractionPlanDict>): InteractionPlan {
+    const constraints: InteractionConstraint[] = [];
+    for (const item of data.constraints ?? []) {
+      const kind = item.kind as string | undefined;
+      if (kind === "PoseTarget") {
+        constraints.push(
+          new PoseTarget({
+            figureLabel: String(item.figureLabel ?? ""),
+            boneName: String(item.boneName ?? ""),
+            position: asVector3(item.position),
+            orientation: asVector3(item.orientation),
+          }),
+        );
+      } else if (kind === "HandTarget" || kind === "FootTarget") {
+        const init = {
+          figureLabel: String(item.figureLabel ?? ""),
+          anchorName: String(item.anchorName ?? ""),
+          targetFigure: (item.targetFigure as string | null | undefined) ?? null,
+          targetAnchor: (item.targetAnchor as string | null | undefined) ?? null,
+          targetPoint: asVector3(item.targetPoint),
+          offset: asVector3(item.offset) ?? ([0, 0, 0] as Vector3),
+        };
+        constraints.push(kind === "HandTarget" ? new HandTarget(init) : new FootTarget(init));
+      } else if (kind === "ContactTarget") {
+        constraints.push(
+          new ContactTarget({
+            sourceFigure: String(item.sourceFigure ?? ""),
+            sourceBone: String(item.sourceBone ?? ""),
+            targetFigure: (item.targetFigure as string | null | undefined) ?? null,
+            targetBone: (item.targetBone as string | null | undefined) ?? null,
+            targetPoint: asVector3(item.targetPoint),
+          }),
+        );
+      } else if (kind === "LookAtTarget") {
+        const targetPoint = asVector3(item.targetPoint);
+        if (targetPoint === null) continue;
+        constraints.push(new LookAtTarget({ figureLabel: String(item.figureLabel ?? ""), boneName: String(item.boneName ?? ""), targetPoint }));
+      } else if (kind === "BalanceTarget") {
+        const rawSupport = (item.supportPoints as unknown[] | undefined) ?? [];
+        constraints.push(
+          new BalanceTarget({
+            figureLabel: String(item.figureLabel ?? ""),
+            pelvisBone: String(item.pelvisBone ?? ""),
+            supportPoints: rawSupport.map((p) => asVector3(p)).filter((p): p is Vector3 => p !== null),
+            centerOfMassHint: asVector3(item.centerOfMassHint),
+          }),
+        );
+      }
+    }
+    return new InteractionPlan({
+      actors: [...(data.actors ?? [])],
+      constraints,
+      options: SolveOptions.fromDict(data.options ?? {}),
+      metadata: { ...(data.metadata ?? {}) },
+    });
+  }
+
+  /** Validate that every referenced figure/bone/anchor exists. Never throws -- unresolvable references become `ValidationIssue`s. */
+  validate(rigProfiles: Record<string, FigureRigProfile>): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    this.constraints.forEach((constraint, index) => {
+      if (constraint instanceof PoseTarget || constraint instanceof LookAtTarget) {
+        const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
+        if (profile === null) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown figure ${constraint.figureLabel}`));
+          return;
+        }
+        if (!profile.boneNames().includes(constraint.boneName)) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown bone ${constraint.boneName} on figure ${constraint.figureLabel}`));
+        }
+      } else if (constraint instanceof ContactTarget) {
+        const profile = lookupRigProfile(rigProfiles, constraint.sourceFigure);
+        if (profile === null) {
+          issues.push(new ValidationIssue("error", constraint.sourceFigure, index, `Unknown source figure ${constraint.sourceFigure}`));
+          return;
+        }
+        if (!profile.boneNames().includes(constraint.sourceBone)) {
+          issues.push(new ValidationIssue("error", constraint.sourceFigure, index, `Unknown source bone ${constraint.sourceBone} on figure ${constraint.sourceFigure}`));
+        }
+        if (constraint.targetFigure && constraint.targetBone) {
+          const targetProfile = lookupRigProfile(rigProfiles, constraint.targetFigure);
+          if (targetProfile === null) {
+            issues.push(new ValidationIssue("error", constraint.targetFigure, index, `Unknown target figure ${constraint.targetFigure}`));
+          } else if (!targetProfile.boneNames().includes(constraint.targetBone)) {
+            issues.push(new ValidationIssue("error", constraint.targetFigure, index, `Unknown target bone ${constraint.targetBone} on figure ${constraint.targetFigure}`));
+          }
+        }
+      } else if (constraint instanceof BalanceTarget) {
+        const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
+        if (profile === null) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown figure ${constraint.figureLabel}`));
+          return;
+        }
+        if (!profile.boneNames().includes(constraint.pelvisBone)) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown pelvis bone ${constraint.pelvisBone} on figure ${constraint.figureLabel}`));
+        }
+      } else if (constraint instanceof HandTarget || constraint instanceof FootTarget) {
+        const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
+        if (profile === null) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown figure ${constraint.figureLabel}`));
+          return;
+        }
+        if (!profile.anchorNames().includes(constraint.anchorName)) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown anchor ${constraint.anchorName} on figure ${constraint.figureLabel}`));
+        }
+        if (constraint.targetFigure && constraint.targetAnchor) {
+          const targetProfile = lookupRigProfile(rigProfiles, constraint.targetFigure);
+          if (targetProfile === null) {
+            issues.push(new ValidationIssue("error", constraint.targetFigure, index, `Unknown target figure ${constraint.targetFigure}`));
+          } else if (!targetProfile.anchorNames().includes(constraint.targetAnchor)) {
+            issues.push(new ValidationIssue("error", constraint.targetFigure, index, `Unknown target anchor ${constraint.targetAnchor} on figure ${constraint.targetFigure}`));
+          }
+        }
+      }
+    });
+    return issues;
+  }
+
+  /** Resolve every `HandTarget`/`FootTarget` constraint into concrete anchors and points. */
+  resolveTargets(rigProfiles: Record<string, FigureRigProfile>): ResolvedInteractionTarget[] {
+    const resolved: ResolvedInteractionTarget[] = [];
+    for (const constraint of this.constraints) {
+      if (constraint instanceof HandTarget || constraint instanceof FootTarget) {
+        const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
+        if (profile === null) continue;
+        resolved.push(resolveInteractionTarget(constraint, rigProfiles));
+      }
+    }
+    return resolved;
+  }
+}
+
+/** Resolve a hand/foot interaction target against the available rig profiles. Throws if the figure is unknown. */
+export function resolveInteractionTarget(target: AnchorTargetLike, rigProfiles: Record<string, FigureRigProfile>): ResolvedInteractionTarget {
+  const profile = lookupRigProfile(rigProfiles, target.figureLabel);
+  if (profile === null) throw new Error(`Unknown figure for target resolution: ${target.figureLabel}`);
+  return profile.resolveAnchorTarget(target, rigProfiles);
 }
