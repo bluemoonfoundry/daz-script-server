@@ -112,9 +112,19 @@ def _looks_like_twist(name: str, label: str | None = None) -> bool:
     return "twist" in lowered or lowered.endswith("bendtwist")
 
 
+def _name_words(text: str) -> list[str]:
+    """Split a bone name/label into lowercase words (camelCase, snake_case, spaces)."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    return re.findall(r"[a-z0-9]+", spaced.lower())
+
+
 def _looks_like_helper(name: str, label: str | None = None) -> bool:
-    lowered = f"{name} {label or ''}".lower()
-    return any(token in lowered for token in ("helper", "end", "end point", "endpoint"))
+    # 'end' must be a whole word: substring matching flagged every Genesis 3/8
+    # *Bend bone (lForearmBend, lShldrBend, lThighBend) as a helper.
+    text = f"{name} {label or ''}"
+    if "helper" in text.lower():
+        return True
+    return any(word in ("end", "endpoint") for word in _name_words(text))
 
 
 def _side_from_name(name: str) -> ChainSide:
@@ -372,8 +382,8 @@ class FigureRigProfile:
             ("r_hand", "hand", "right", ("hand",)),
             ("l_foot", "foot", "left", ("foot", "toe")),
             ("r_foot", "foot", "right", ("foot", "toe")),
-            ("l_shoulder", "arm", "left", ("shoulder", "clavicle", "upper_arm")),
-            ("r_shoulder", "arm", "right", ("shoulder", "clavicle", "upper_arm")),
+            ("l_shoulder", "arm", "left", ("shoulder", "shldr", "clavicle", "upper_arm")),
+            ("r_shoulder", "arm", "right", ("shoulder", "shldr", "clavicle", "upper_arm")),
             ("l_thigh", "leg", "left", ("thigh", "upper_leg")),
             ("r_thigh", "leg", "right", ("thigh", "upper_leg")),
         ]
@@ -402,7 +412,7 @@ class FigureRigProfile:
             role = "neck"
         elif "thigh" in lowered or "leg" in lowered or "shin" in lowered or "calf" in lowered:
             role = "leg"
-        elif "shoulder" in lowered or "clavicle" in lowered or "arm" in lowered or "forearm" in lowered or "elbow" in lowered:
+        elif "shoulder" in lowered or "shldr" in lowered or "clavicle" in lowered or "arm" in lowered or "forearm" in lowered or "elbow" in lowered:
             role = "arm"
         elif any(token in lowered for token in ("spine", "abdomen", "torso", "chest", "pelvis", "hip")):
             role = "spine" if "spine" in lowered or "abdomen" in lowered or "torso" in lowered or "chest" in lowered else "pelvis"
@@ -426,8 +436,8 @@ class FigureRigProfile:
             ("chest", "chest", "center", ("chest", "upperchest", "thorax")),
             ("neck", "neck", "center", ("neck",)),
             ("head", "head", "center", ("head",)),
-            ("l_shoulder", "shoulder", "left", ("shoulder", "clavicle")),
-            ("r_shoulder", "shoulder", "right", ("shoulder", "clavicle")),
+            ("l_shoulder", "shoulder", "left", ("shoulder", "shldr", "clavicle")),
+            ("r_shoulder", "shoulder", "right", ("shoulder", "shldr", "clavicle")),
             ("l_elbow", "elbow", "left", ("elbow", "forearm")),
             ("r_elbow", "elbow", "right", ("elbow", "forearm")),
             ("l_hand", "hand", "left", ("hand", "wrist")),
@@ -1930,7 +1940,7 @@ def default_axis_limits_for_bone(name: str, family: str = "generic") -> dict[Axi
     limits: dict[AxisName, AxisLimit] = {}
     presets: list[tuple[tuple[str, ...], dict[AxisName, tuple[float, float]]]] = [
         (("head", "neck"), {"x": (-70.0, 70.0), "y": (-85.0, 85.0), "z": (-45.0, 45.0)}),
-        (("shoulder", "clavicle", "upper_arm"), {"x": (-120.0, 120.0), "y": (-120.0, 120.0), "z": (-140.0, 140.0)}),
+        (("shoulder", "shldr", "clavicle", "upper_arm"), {"x": (-120.0, 120.0), "y": (-120.0, 120.0), "z": (-140.0, 140.0)}),
         (("forearm", "hand"), {"x": (-160.0, 160.0), "y": (-120.0, 120.0), "z": (-160.0, 160.0)}),
         (("thigh", "shin", "calf"), {"x": (-140.0, 140.0), "y": (-80.0, 80.0), "z": (-140.0, 140.0)}),
         (("foot", "toe"), {"x": (-70.0, 70.0), "y": (-45.0, 45.0), "z": (-70.0, 70.0)}),

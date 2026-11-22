@@ -289,9 +289,17 @@ export function looksLikeTwist(name: string, label?: string | null): boolean {
   return lowered.includes("twist") || lowered.endsWith("bendtwist");
 }
 
+/** Split a bone name/label into lowercase words (camelCase, snake_case, spaces). */
+function nameWords(text: string): string[] {
+  return text.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().match(/[a-z0-9]+/g) ?? [];
+}
+
 export function looksLikeHelper(name: string, label?: string | null): boolean {
-  const lowered = `${name} ${label ?? ""}`.toLowerCase();
-  return ["helper", "end", "end point", "endpoint"].some((token) => lowered.includes(token));
+  // 'end' must be a whole word: substring matching flagged every Genesis 3/8
+  // *Bend bone (lForearmBend, lShldrBend, lThighBend) as a helper.
+  const text = `${name} ${label ?? ""}`;
+  if (text.toLowerCase().includes("helper")) return true;
+  return nameWords(text).some((word) => word === "end" || word === "endpoint");
 }
 
 export function sideFromName(name: string): ChainSide {
@@ -490,8 +498,8 @@ const CHAIN_SUGGESTION_CANDIDATES: ReadonlyArray<[string, ChainRole, ChainSide, 
   ["r_hand", "hand", "right", ["hand"]],
   ["l_foot", "foot", "left", ["foot", "toe"]],
   ["r_foot", "foot", "right", ["foot", "toe"]],
-  ["l_shoulder", "arm", "left", ["shoulder", "clavicle", "upper_arm"]],
-  ["r_shoulder", "arm", "right", ["shoulder", "clavicle", "upper_arm"]],
+  ["l_shoulder", "arm", "left", ["shoulder", "shldr", "clavicle", "upper_arm"]],
+  ["r_shoulder", "arm", "right", ["shoulder", "shldr", "clavicle", "upper_arm"]],
   ["l_thigh", "leg", "left", ["thigh", "upper_leg"]],
   ["r_thigh", "leg", "right", ["thigh", "upper_leg"]],
 ];
@@ -502,8 +510,8 @@ const ANCHOR_PATTERNS: ReadonlyArray<[string, AnchorRole, ChainSide, readonly st
   ["chest", "chest", "center", ["chest", "upperchest", "thorax"]],
   ["neck", "neck", "center", ["neck"]],
   ["head", "head", "center", ["head"]],
-  ["l_shoulder", "shoulder", "left", ["shoulder", "clavicle"]],
-  ["r_shoulder", "shoulder", "right", ["shoulder", "clavicle"]],
+  ["l_shoulder", "shoulder", "left", ["shoulder", "shldr", "clavicle"]],
+  ["r_shoulder", "shoulder", "right", ["shoulder", "shldr", "clavicle"]],
   ["l_elbow", "elbow", "left", ["elbow", "forearm"]],
   ["r_elbow", "elbow", "right", ["elbow", "forearm"]],
   ["l_hand", "hand", "left", ["hand", "wrist"]],
@@ -604,7 +612,7 @@ export class FigureRigProfile {
     else if (lowered.includes("head")) role = "head";
     else if (lowered.includes("neck")) role = "neck";
     else if (["thigh", "leg", "shin", "calf"].some((t) => lowered.includes(t))) role = "leg";
-    else if (["shoulder", "clavicle", "arm", "forearm", "elbow"].some((t) => lowered.includes(t))) role = "arm";
+    else if (["shoulder", "shldr", "clavicle", "arm", "forearm", "elbow"].some((t) => lowered.includes(t))) role = "arm";
     else if (["spine", "abdomen", "torso", "chest", "pelvis", "hip"].some((t) => lowered.includes(t))) {
       role = ["spine", "abdomen", "torso", "chest"].some((t) => lowered.includes(t)) ? "spine" : "pelvis";
     } else {
@@ -692,7 +700,7 @@ export class FigureRigProfile {
 
 const AXIS_LIMIT_PRESETS: ReadonlyArray<[readonly string[], Partial<Record<AxisName, [number, number]>>]> = [
   [["head", "neck"], { x: [-70, 70], y: [-85, 85], z: [-45, 45] }],
-  [["shoulder", "clavicle", "upper_arm"], { x: [-120, 120], y: [-120, 120], z: [-140, 140] }],
+  [["shoulder", "shldr", "clavicle", "upper_arm"], { x: [-120, 120], y: [-120, 120], z: [-140, 140] }],
   [["forearm", "hand"], { x: [-160, 160], y: [-120, 120], z: [-160, 160] }],
   [["thigh", "shin", "calf"], { x: [-140, 140], y: [-80, 80], z: [-140, 140] }],
   [["foot", "toe"], { x: [-70, 70], y: [-45, 45], z: [-70, 70] }],

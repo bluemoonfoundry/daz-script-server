@@ -11,6 +11,7 @@ import {
   FigureRigProfile,
   InteractionAnchor,
   lookupRigProfile,
+  looksLikeHelper,
   midpointVec3,
   subVec3,
 } from "../../src/rigProfile.js";
@@ -263,5 +264,53 @@ describe("FigureRigProfile bone ownership", () => {
     bones.push(new BoneProfile({ name: "l_hand", parentName: "hip" }));
     expect(profile.boneNames()).toEqual(["hip"]);
     expect(profile.anchorNames()).not.toContain("l_hand");
+  });
+});
+
+describe("Genesis 8 limb classification (i9b6)", () => {
+  it("looksLikeHelper treats 'end' as a whole word, so *Bend bones are not helpers", () => {
+    for (const [name, label] of [
+      ["lForearmBend", "Left Forearm Bend"],
+      ["rShldrBend", "Right Shoulder Bend"],
+      ["lThighBend", "Left Thigh Bend"],
+    ]) {
+      expect(looksLikeHelper(name, label), name).toBe(false);
+    }
+    for (const [name, label] of [
+      ["lEyeEnd", null],
+      ["hand_end", null],
+      ["tip", "End Point"],
+      ["Endpoint", null],
+      ["hipHelper", null],
+    ] as const) {
+      expect(looksLikeHelper(name, label), name).toBe(true);
+    }
+  });
+
+  it("maps lShldrBend to the shoulder anchor, arm chain, and arm axis limits", async () => {
+    const raw: Array<Record<string, unknown>> = [
+      { name: "hip", label: "Hip", parent_name: null },
+      { name: "chestUpper", label: "Chest Upper", parent_name: "hip" },
+    ];
+    for (const [side, word] of [["l", "Left"], ["r", "Right"]]) {
+      raw.push(
+        { name: `${side}Collar`, label: `${word} Collar`, parent_name: "chestUpper" },
+        { name: `${side}ShldrBend`, label: `${word} Shoulder Bend`, parent_name: `${side}Collar` },
+        { name: `${side}ShldrTwist`, label: `${word} Shoulder Twist`, parent_name: `${side}ShldrBend` },
+        { name: `${side}ForearmBend`, label: `${word} Forearm Bend`, parent_name: `${side}ShldrTwist` },
+        { name: `${side}ForearmTwist`, label: `${word} Forearm Twist`, parent_name: `${side}ForearmBend` },
+        { name: `${side}Hand`, label: `${word} Hand`, parent_name: `${side}ForearmTwist` },
+      );
+    }
+    const profile = await buildRigProfile(fakeMetadataSkeleton("Genesis8Male", "Bob Genesis 8", raw));
+
+    expect(profile.bone("lForearmBend").isHelper).toBe(false);
+    expect(profile.bone("lShldrBend").isHelper).toBe(false);
+    expect(profile.anchor("l_shoulder")?.boneName).toBe("lShldrBend");
+    expect(profile.anchor("r_shoulder")?.boneName).toBe("rShldrBend");
+    const armEffectors = profile.chainSuggestions().filter((c) => c.role === "arm").map((c) => c.effectorBone).sort();
+    expect(armEffectors).toEqual(["lShldrBend", "rShldrBend"]);
+    expect(profile.suggestPrimaryChain("lShldrBend")?.role).toBe("arm");
+    expect(Object.keys(profile.bone("lShldrBend").axisLimits).length).toBeGreaterThan(0);
   });
 });

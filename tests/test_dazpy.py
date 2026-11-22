@@ -990,6 +990,56 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(profile.anchor("r_hand").bone_name, "rHand")
         self.assertEqual(profile.anchor("l_foot").bone_name, "lFoot")
 
+    def test_looks_like_helper_ignores_bend_bones(self):
+        """'end' is a whole token, not a substring: G3/G8 *Bend bones are real joints (i9b6)."""
+        from dazpy._interaction import _looks_like_helper
+
+        for name, label in (
+            ("lForearmBend", "Left Forearm Bend"),
+            ("rShldrBend", "Right Shoulder Bend"),
+            ("lThighBend", "Left Thigh Bend"),
+        ):
+            self.assertFalse(_looks_like_helper(name, label), name)
+        for name, label in (
+            ("lEyeEnd", None),
+            ("hand_end", None),
+            ("tip", "End Point"),
+            ("Endpoint", None),
+            ("hipHelper", None),
+        ):
+            self.assertTrue(_looks_like_helper(name, label), name)
+
+    def test_build_rig_profile_genesis_8_shoulder_and_bend_chain(self):
+        """G8 lShldrBend is the shoulder anchor/arm chain, and Bend bones stay in the alignment chain (i9b6)."""
+        from dazpy._interaction import _alignment_chain_names
+
+        hip = _FakeBone("hip", "Hip")
+        chest = _FakeBone("chestUpper", "Chest Upper", parent=hip)
+        bones = [hip, chest]
+        for side, word in (("l", "Left"), ("r", "Right")):
+            collar = _FakeBone(f"{side}Collar", f"{word} Collar", parent=chest)
+            shldr_bend = _FakeBone(f"{side}ShldrBend", f"{word} Shoulder Bend", parent=collar)
+            shldr_twist = _FakeBone(f"{side}ShldrTwist", f"{word} Shoulder Twist", parent=shldr_bend)
+            fore_bend = _FakeBone(f"{side}ForearmBend", f"{word} Forearm Bend", parent=shldr_twist)
+            fore_twist = _FakeBone(f"{side}ForearmTwist", f"{word} Forearm Twist", parent=fore_bend)
+            hand = _FakeBone(f"{side}Hand", f"{word} Hand", parent=fore_twist)
+            bones += [collar, shldr_bend, shldr_twist, fore_bend, fore_twist, hand]
+        profile = build_rig_profile(_FakeSkeleton("Bob Genesis 8", bones))
+
+        self.assertFalse(profile.bone("lForearmBend").is_helper)
+        self.assertEqual(profile.anchor("l_shoulder").bone_name, "lShldrBend")
+        self.assertEqual(profile.anchor("r_shoulder").bone_name, "rShldrBend")
+        arm_chains = [c for c in profile.chain_suggestions() if c.role == "arm"]
+        self.assertEqual(sorted(c.effector_bone for c in arm_chains), ["lShldrBend", "rShldrBend"])
+        self.assertEqual(profile.suggest_primary_chain("lShldrBend").role, "arm")
+        self.assertTrue(default_axis_limits_for_bone("lShldrBend"))
+
+        hand_chain = profile.suggest_primary_chain("lHand")
+        self.assertEqual(
+            _alignment_chain_names(profile, hand_chain),
+            ["lShldrBend", "lShldrTwist", "lForearmBend", "lForearmTwist"],
+        )
+
     def test_interaction_plan_validate_and_round_trip(self):
         profile = FigureRigProfile(
             figure_label="Genesis 9",
