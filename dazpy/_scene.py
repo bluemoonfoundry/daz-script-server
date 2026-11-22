@@ -372,7 +372,8 @@ class DazScene:
         """Return full skeleton and bone metadata for the scene in one HTTP call.
 
         Each entry in the returned list represents one skeleton and contains:
-        ``name``, ``label``, and ``bones`` — a list of dicts with ``name``,
+        ``name``, ``label``, ``position`` (the figure node's world position,
+        ``{"x", "y", "z"}``), and ``bones`` — a list of dicts with ``name``,
         ``label``, ``parent_name``, ``rotation_order``, ``local_position``,
         ``world_position``, and ``local_euler``.
 
@@ -428,9 +429,11 @@ class DazScene:
                         }}
                     }});
                 }}
+                var _spos = _skel.getWSPos();
                 _result.push({{
                     name: _skel.getName(),
                     label: _skel.getLabel(),
+                    position: {{x: _spos.x, y: _spos.y, z: _spos.z}},
                     bones: _boneList
                 }});
             }}

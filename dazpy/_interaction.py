@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import re
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
@@ -315,9 +315,24 @@ class FigureRigProfile:
     family: str
     bones: list[BoneProfile] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
+    figure_position: Vector3 | None = None
+    """World position of the figure node itself (what ``set_position`` moves)."""
 
     def __post_init__(self) -> None:
         self._index = {bone.name: i for i, bone in enumerate(self.bones)}
+
+    def bone_offset(self, name: str) -> Vector3 | None:
+        """Offset of a bone from the figure's origin, in world axes.
+
+        ``world_position - figure_position`` when both are known (live
+        profiles). Otherwise falls back to ``local_position``, which hand-built
+        profiles use for this offset. Live ``local_position`` is the bone's
+        translation channel (zero on an unposed figure), not an offset.
+        """
+        bone = self.bone(name)
+        if self.figure_position is not None and bone.world_position is not None:
+            return _sub_vec3(bone.world_position, self.figure_position)
+        return bone.local_position
 
     def bone_names(self) -> list[str]:
         return [bone.name for bone in self.bones]
@@ -512,6 +527,7 @@ class FigureRigProfile:
             "family": self.family,
             "bones": [bone.to_dict() for bone in self.bones],
             "metadata": dict(self.metadata),
+            "figure_position": list(self.figure_position) if self.figure_position is not None else None,
         }
 
     @classmethod
@@ -521,6 +537,7 @@ class FigureRigProfile:
             family=data.get("family", "generic"),
             bones=[BoneProfile.from_dict(item) for item in data.get("bones", [])],
             metadata=dict(data.get("metadata", {})),
+            figure_position=_as_tuple3(data.get("figure_position")),
         )
 
 
@@ -948,21 +965,36 @@ class PreparedInteractionRecipe:
         solve bone rotations yet.
         """
 
-        figure_positions: dict[str, list[Vector3]] = {}
+        # Each staged position records whether it sets the figure's height.
+        # Hand/foot targets are floor-locked (X/Z only; IK handles reach), a
+        # BalanceTarget (sit) sets full 3D.
+        figure_positions: dict[str, list[tuple[Vector3, bool]]] = {}
         unresolved: list[ResolvedInteractionTarget] = []
 
-        def _append_position(label: str, point: Vector3) -> None:
-            figure_positions.setdefault(label, []).append(point)
+        def _floor_height(label: str) -> float:
+            profile = _lookup_rig_profile(self.rig_profiles, label)
+            if profile is not None and profile.figure_position is not None:
+                return profile.figure_position[1]
+            return 0.0
 
-        def _first_local_anchor_position(profile: FigureRigProfile, anchor_name: str) -> Vector3 | None:
+        def _append_position(label: str, point: Vector3, sets_height: bool = False) -> None:
+            figure_positions.setdefault(label, []).append((point, sets_height))
+
+        def _staged_position(label: str | None) -> Vector3 | None:
+            if not label or not figure_positions.get(label):
+                return None
+            entries = figure_positions[label]
+            xz = _average_vec3([point for point, _ in entries])
+            assert xz is not None  # entries is non-empty
+            heights = [point[1] for point, sets_height in entries if sets_height]
+            y = sum(heights) / len(heights) if heights else _floor_height(label)
+            return (xz[0], y, xz[2])
+
+        def _anchor_offset(profile: FigureRigProfile, anchor_name: str) -> Vector3 | None:
             anchor = profile.anchor(anchor_name)
             if anchor is None:
                 return None
-            bone = profile.bone(anchor.bone_name)
-            return bone.local_position
-
-        def _current_figure_position(label: str) -> Vector3 | None:
-            return _average_vec3(figure_positions.get(label))
+            return profile.bone_offset(anchor.bone_name)
 
         for constraint in self.plan.constraints:
             if isinstance(constraint, BalanceTarget):
@@ -979,16 +1011,11 @@ class PreparedInteractionRecipe:
                         )
                     )
                     continue
-                pelvis_bone = profile.bone(pelvis_anchor.bone_name)
+                pelvis_offset = profile.bone_offset(pelvis_anchor.bone_name)
                 target_point = constraint.center_of_mass_hint
                 if target_point is None and constraint.support_points:
-                    support = constraint.support_points
-                    target_point = (
-                        sum(point[0] for point in support) / len(support),
-                        sum(point[1] for point in support) / len(support),
-                        sum(point[2] for point in support) / len(support),
-                    )
-                if target_point is None or pelvis_bone.local_position is None:
+                    target_point = _average_vec3(list(constraint.support_points))
+                if target_point is None or pelvis_offset is None:
                     unresolved.append(
                         ResolvedInteractionTarget(
                             figure_label=constraint.figure_label,
@@ -998,14 +1025,7 @@ class PreparedInteractionRecipe:
                         )
                     )
                     continue
-                _append_position(
-                    constraint.figure_label,
-                    (
-                        target_point[0] - pelvis_bone.local_position[0],
-                        target_point[1] - pelvis_bone.local_position[1],
-                        target_point[2] - pelvis_bone.local_position[2],
-                    ),
-                )
+                _append_position(constraint.figure_label, _sub_vec3(target_point, pelvis_offset), sets_height=True)
 
         for resolved in self.resolved_targets:
             profile = _lookup_rig_profile(self.rig_profiles, resolved.figure_label)
@@ -1016,51 +1036,44 @@ class PreparedInteractionRecipe:
             if source_anchor is None:
                 unresolved.append(resolved)
                 continue
-            source_bone = profile.bone(source_anchor.bone_name)
-            if source_bone.local_position is None:
+            source_offset = profile.bone_offset(source_anchor.bone_name)
+            if source_offset is None:
                 unresolved.append(resolved)
                 continue
             target_profile = _lookup_rig_profile(self.rig_profiles, resolved.target_figure) if resolved.target_figure else None
-            target_local = _first_local_anchor_position(target_profile, resolved.target_anchor) if (target_profile and resolved.target_anchor) else None
-            source_base = _current_figure_position(resolved.figure_label)
-            target_base = _current_figure_position(resolved.target_figure) if resolved.target_figure else None
+            target_offset = _anchor_offset(target_profile, resolved.target_anchor) if (target_profile and resolved.target_anchor) else None
+            source_base = _staged_position(resolved.figure_label)
+            target_base = _staged_position(resolved.target_figure)
 
             if target_profile is not None and resolved.target_figure is not None:
                 if target_base is not None and resolved.target_point is not None and source_base is None:
                     world_target = _vec3_add(target_base, resolved.target_point)
-                    _append_position(resolved.figure_label, _sub_vec3(world_target, source_bone.local_position))
+                    _append_position(resolved.figure_label, _sub_vec3(world_target, source_offset))
                     continue
 
-                if target_local is not None:
+                if target_offset is not None:
                     if source_base is None and target_base is None:
-                        contact_center = _midpoint_vec3(source_bone.local_position, target_local)
-                        _append_position(resolved.figure_label, _sub_vec3(contact_center, source_bone.local_position))
-                        _append_position(resolved.target_figure, _sub_vec3(contact_center, target_local))
+                        contact_center = _midpoint_vec3(source_offset, target_offset)
+                        _append_position(resolved.figure_label, _sub_vec3(contact_center, source_offset))
+                        _append_position(resolved.target_figure, _sub_vec3(contact_center, target_offset))
                     elif source_base is None and target_base is not None:
-                        target_world = _vec3_add(target_base, target_local)
-                        _append_position(resolved.figure_label, _sub_vec3(target_world, source_bone.local_position))
+                        target_world = _vec3_add(target_base, target_offset)
+                        _append_position(resolved.figure_label, _sub_vec3(target_world, source_offset))
                     elif source_base is not None and target_base is None:
-                        source_world = _add_vec3(source_base, source_bone.local_position)
-                        if source_world is not None:
-                            _append_position(resolved.target_figure, _sub_vec3(source_world, target_local))
+                        source_world = _vec3_add(source_base, source_offset)
+                        _append_position(resolved.target_figure, _sub_vec3(source_world, target_offset))
                     continue
 
             if resolved.target_point is None:
                 unresolved.append(resolved)
                 continue
-            _append_position(
-                resolved.figure_label,
-                _sub_vec3(resolved.target_point, source_bone.local_position),
-            )
+            _append_position(resolved.figure_label, _sub_vec3(resolved.target_point, source_offset))
 
         averaged_positions: dict[str, Vector3] = {}
-        for label, points in figure_positions.items():
-            averaged_positions[label] = (
-                sum(point[0] for point in points) / len(points),
-                sum(point[1] for point in points) / len(points),
-                sum(point[2] for point in points) / len(points),
-            )
-
+        for label in figure_positions:
+            staged = _staged_position(label)
+            if staged is not None:
+                averaged_positions[label] = staged
         diagnostics: dict[str, object] = {
             "figure_count": len(averaged_positions),
             "unresolved_target_count": len(unresolved),
@@ -1096,8 +1109,19 @@ class PreparedInteractionRecipe:
                 step_degrees=step_degrees,
                 damping=damping,
                 tolerance=tolerance,
+                figure_displacements=self._staging_displacements(patch),
             )
         return result
+
+    def _staging_displacements(self, patch: "InteractionPosePatch") -> dict[str, Vector3]:
+        """How far the patch moved each figure whose original position is known."""
+
+        displacements: dict[str, Vector3] = {}
+        for label, position in patch.figure_positions.items():
+            profile = _lookup_rig_profile(self.rig_profiles, label)
+            if profile is not None and profile.figure_position is not None:
+                displacements[label] = _sub_vec3(position, profile.figure_position)
+        return displacements
 
     def align_limb_targets(
         self,
@@ -1107,13 +1131,32 @@ class PreparedInteractionRecipe:
         step_degrees: float = 1.0,
         damping: float = 0.25,
         tolerance: float = 0.15,
+        figure_displacements: dict[str, Vector3] | None = None,
     ) -> list["LimbAlignmentResult"]:
-        """Apply live limb alignment for resolved hand and foot targets."""
+        """Apply live limb alignment for resolved hand and foot targets.
+
+        ``figure_displacements`` (label -> how far staging moved that figure)
+        shifts targets that point at another figure's anchor, whose resolved
+        point was captured before staging. ``apply`` passes it.
+        """
 
         alignment_results: list[LimbAlignmentResult] = []
         for resolved in self.resolved_targets:
             if resolved.target_point is None:
                 continue
+            if figure_displacements and resolved.target_figure and resolved.target_anchor:
+                # Match by resolved profile, so label aliases ("Genesis9") still match.
+                target_profile = _lookup_rig_profile(self.rig_profiles, resolved.target_figure)
+                shift = next(
+                    (
+                        displacement
+                        for label, displacement in figure_displacements.items()
+                        if target_profile is not None and _lookup_rig_profile(self.rig_profiles, label) is target_profile
+                    ),
+                    None,
+                )
+                if shift is not None:
+                    resolved = replace(resolved, target_point=_vec3_add(resolved.target_point, shift))
             skeleton = scene.find_skeleton_by_label(resolved.figure_label)
             profile = _lookup_rig_profile(self.rig_profiles, resolved.figure_label)
             if profile is None:
@@ -2022,6 +2065,7 @@ def build_rig_profiles_from_snapshot(snapshot: list[dict]) -> dict[str, "FigureR
             family=family,
             bones=bones,
             metadata={"bone_count": len(bones), "source": "snapshot"},
+            figure_position=_as_tuple3(skel_data.get("position")),
         )
         profiles[label] = profile
         if name and name != label:
@@ -2034,8 +2078,12 @@ def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
 
     figure_label = skeleton.label or skeleton._identifier.value
     bones: list[BoneProfile] = []
+    figure_position: Vector3 | None = None
     if hasattr(skeleton, "bone_metadata"):
         raw_bones = skeleton.bone_metadata()
+        # Bone world positions only become figure-relative offsets with the
+        # figure's own world position (one extra call).
+        figure_position = _as_tuple3(getattr(skeleton, "position", None))
         for item in raw_bones:
             bones.append(
                 BoneProfile(
@@ -2081,4 +2129,5 @@ def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
         family=family,
         bones=bones,
         metadata={"bone_count": len(bones), "source": "dazpy"},
+        figure_position=figure_position,
     )

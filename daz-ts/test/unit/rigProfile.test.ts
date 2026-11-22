@@ -231,6 +231,24 @@ describe("buildRigProfile", () => {
     expect(profile.bone("l_hand").localPosition).toEqual([1, 0, 0]);
   });
 
+  it("reads the figure's world position so bone offsets are figure-relative (6r3b)", async () => {
+    const skeleton = {
+      ...fakeMetadataSkeleton("Genesis9", "Genesis 9", [
+        { name: "hip", parent_name: null, local_position: { x: 0, y: 0, z: 0 }, world_position: { x: 10, y: 95, z: 5 } },
+        { name: "r_hand", parent_name: "hip", local_position: { x: 0, y: 0, z: 0 }, world_position: { x: -41, y: 100, z: 7 } },
+      ]),
+      position: async () => ({ x: 10, y: 0, z: 5 }),
+    };
+    const profile = await buildRigProfile(skeleton);
+    expect(profile.figurePosition).toEqual([10, 0, 5]);
+    expect(profile.boneOffset("r_hand")).toEqual([-51, 100, 2]);
+  });
+
+  it("leaves figurePosition null when the source has no position()", async () => {
+    const profile = await buildRigProfile(fakeMetadataSkeleton("Genesis9", "Genesis 9", [{ name: "hip", parent_name: null }]));
+    expect(profile.figurePosition).toBeNull();
+  });
+
   it("falls back to the identifier value when label() returns null", async () => {
     const skeleton = fakeMetadataSkeleton("Genesis9", null, [{ name: "hip", parent_name: null }]);
     const profile = await buildRigProfile(skeleton);
@@ -254,6 +272,19 @@ describe("buildRigProfilesFromSnapshot", () => {
     expect(profiles["Genesis 9"]).toBeDefined();
     expect(profiles["Genesis9"]).toBe(profiles["Genesis 9"]);
     expect(profiles["Genesis 9"].anchor("r_hand")?.boneName).toBe("r_hand");
+    expect(profiles["Genesis 9"].figurePosition).toBeNull();
+  });
+
+  it("reads each skeleton's position from the snapshot (6r3b)", () => {
+    const snapshot = [
+      {
+        name: "Genesis9",
+        label: "Genesis 9",
+        position: { x: 10, y: 0, z: 5 },
+        bones: [{ name: "r_hand", parent_name: null, local_position: { x: 0, y: 0, z: 0 }, world_position: { x: -41, y: 100, z: 7 } }],
+      },
+    ];
+    expect(buildRigProfilesFromSnapshot(snapshot)["Genesis 9"].boneOffset("r_hand")).toEqual([-51, 100, 2]);
   });
 });
 

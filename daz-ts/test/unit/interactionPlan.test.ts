@@ -23,6 +23,7 @@ import {
   FigureRigProfile,
   ResolvedInteractionTarget,
 } from "../../src/rigProfile.js";
+import type { Vector3 } from "../../src/rigProfile.js";
 
 describe("constraint types", () => {
   it("PoseTarget.toDict carries kind and optional fields", () => {
@@ -365,9 +366,10 @@ describe("PreparedInteractionRecipe.apply", () => {
 
     const result = await prepared.apply(scene);
 
+    // Hand/foot staging is floor-locked: X/Z only, height kept (0 when unknown).
     expect(calls).toEqual([
-      { label: "Genesis 9", position: [1.5, 1.5, 1.5] },
-      { label: "Partner", position: [-1.5, -1.5, -1.5] },
+      { label: "Genesis 9", position: [1.5, 0, 1.5] },
+      { label: "Partner", position: [-1.5, 0, -1.5] },
     ]);
     expect(result.posePatch.diagnostics.figureCount).toBe(2);
     expect(result.posePatch.diagnostics.unresolvedTargetCount).toBe(0);
@@ -407,6 +409,102 @@ describe("PreparedInteractionRecipe.apply", () => {
     const result = await prepared.apply(scene);
 
     expect(result.alignmentResults).toEqual([]);
+  });
+});
+
+// 6r3b: live boneMetadata/sceneSnapshot report localPosition as the bone's
+// translation channel (zero on an unposed figure); offsets have to come from
+// worldPosition - figurePosition.
+function liveProfile(label: string, figurePosition: Vector3, worldPositions: Record<string, Vector3>): FigureRigProfile {
+  const { hip = [0, 0, 0] as Vector3, ...rest } = worldPositions;
+  return new FigureRigProfile({
+    figureLabel: label,
+    family: "genesis_9",
+    figurePosition,
+    bones: [
+      new BoneProfile({ name: "hip", localPosition: [0, 0, 0], worldPosition: hip }),
+      ...Object.entries(rest).map(([name, world]) => new BoneProfile({ name, parentName: "hip", localPosition: [0, 0, 0], worldPosition: world })),
+    ],
+  });
+}
+
+describe("staging from live-shaped profiles (6r3b)", () => {
+  it("boneOffset is worldPosition - figurePosition, falling back to localPosition", () => {
+    const profile = liveProfile("A", [10, 0, 5], { r_hand: [-41, 100, 7] });
+    expect(profile.boneOffset("r_hand")).toEqual([-51, 100, 2]);
+    const handBuilt = new FigureRigProfile({ figureLabel: "B", family: "genesis_9", bones: [new BoneProfile({ name: "r_hand", localPosition: [1, 2, 3] })] });
+    expect(handBuilt.boneOffset("r_hand")).toEqual([1, 2, 3]);
+  });
+
+  it("figurePosition round-trips through toDict/fromDict", () => {
+    const restored = FigureRigProfile.fromDict(liveProfile("A", [10, 0, 5], { r_hand: [-41, 100, 7] }).toDict());
+    expect(restored.figurePosition).toEqual([10, 0, 5]);
+    expect(restored.boneOffset("r_hand")).toEqual([-51, 100, 2]);
+  });
+
+  it("a live touch recipe separates the figures on the floor", () => {
+    const profiles = {
+      A: liveProfile("A", [0, 0, 0], { r_hand: [-51.5, 99.8, 2.3] }),
+      B: liveProfile("B", [0, 0, 0], { l_shoulder: [3.5, 135.5, -3.6] }),
+    };
+    const recipe = new InteractionRecipe({ kind: "touch", actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder" })] });
+    const { A: pa, B: pb } = prepareInteractionRecipe(recipe, profiles).buildPosePatch().figurePositions;
+    expect([pa[1], pb[1]]).toEqual([0, 0]);
+    expect(pa[0] - 51.5).toBeCloseTo(pb[0] + 3.5, 9);
+    expect(pa[2] + 2.3).toBeCloseTo(pb[2] - 3.6, 9);
+    expect(Math.abs(pa[0] - pb[0])).toBeGreaterThan(50);
+  });
+
+  it("floor lock keeps each figure's current height", () => {
+    const profiles = { A: liveProfile("A", [0, 12, 0], { r_hand: [-51.5, 111.8, 2.3] }) };
+    const recipe = new InteractionRecipe({ kind: "custom", actors: ["A"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetPoint: [0, 150, 40] })] });
+    const patch = prepareInteractionRecipe(recipe, profiles).buildPosePatch();
+    expect(patch.figurePositions.A[0]).toBeCloseTo(51.5, 9);
+    expect(patch.figurePositions.A[1]).toBe(12);
+    expect(patch.figurePositions.A[2]).toBeCloseTo(37.7, 9);
+  });
+
+  it("a BalanceTarget sets height and wins over the floor lock", () => {
+    const profiles = { A: liveProfile("A", [0, 0, 0], { hip: [0, 95, 0], r_hand: [-51.5, 99.8, 2.3] }) };
+    const recipe = new InteractionRecipe({
+      kind: "sit",
+      actors: ["A"],
+      constraints: [
+        new BalanceTarget({ figureLabel: "A", pelvisBone: "pelvis", centerOfMassHint: [0, 50, 0] }),
+        new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetPoint: [-51.5, 60, 2.3] }),
+      ],
+    });
+    expect(prepareInteractionRecipe(recipe, profiles).buildPosePatch().figurePositions.A[1]).toBe(-45);
+  });
+
+  it("apply() shifts cross-figure targets by how far staging moved the target figure", async () => {
+    const profiles = {
+      A: liveProfile("A", [0, 0, 0], { r_hand: [-51.5, 99.8, 2.3] }),
+      B: liveProfile("B", [0, 0, 0], { l_shoulder: [3.5, 135.5, -3.6] }),
+    };
+    const recipe = new InteractionRecipe({ kind: "touch", actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder" })] });
+    const prepared = prepareInteractionRecipe(recipe, profiles);
+    const moved: Record<string, Vector3> = {};
+    const scene = {
+      findSkeletonByLabel: async (label: string) => ({
+        setPosition: async (x: number, y: number, z: number) => {
+          moved[label] = [x, y, z];
+        },
+        boneRotations: async () => ({}),
+        setBoneRotations: async () => {},
+        evaluatePoseJacobian: async (chain: string[]) => ({ basePosition: [0, 0, 0] as Vector3, columns: chain.flatMap(() => [[1, 0, 0], [0, 1, 0], [0, 0, 1]] as Vector3[]) }),
+      }),
+    } as any;
+
+    // The result records the target the solver was given.
+    const result = await prepared.apply(scene, { alignLimbTargets: true, maxIterations: 1 });
+
+    const target = result.alignmentResults[0].targetPoint!;
+    expect(target[0]).toBeCloseTo(3.5 + moved.B[0], 9);
+    expect(target[1]).toBeCloseTo(135.5 + moved.B[1], 9);
+    expect(target[2]).toBeCloseTo(-3.6 + moved.B[2], 9);
+    // ...which is where A's staged hand sits in X/Z.
+    expect(target[0]).toBeCloseTo(moved.A[0] - 51.5, 9);
   });
 });
 

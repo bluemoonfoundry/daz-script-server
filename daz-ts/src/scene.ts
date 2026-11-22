@@ -285,7 +285,9 @@ export class DazScene {
   // ---------------------------------------------------------------------
 
   /**
-   * Full skeleton and bone metadata for the scene in one HTTP call.
+   * Full skeleton and bone metadata for the scene in one HTTP call. Each
+   * entry has `name`, `label`, `position` (the figure node's world position)
+   * and `bones`.
    * @param skeletonLabels Optional subset of skeleton names/labels to include; omit to return every skeleton.
    */
   async sceneSnapshot(skeletonLabels?: string[]): Promise<Array<Record<string, unknown>>> {
@@ -330,9 +332,11 @@ export class DazScene {
                         }
                     });
                 }
+                var _spos = _skel.getWSPos();
                 _result.push({
                     name: _skel.getName(),
                     label: _skel.getLabel(),
+                    position: {x: _spos.x, y: _spos.y, z: _spos.z},
                     bones: _boneList
                 });
             }

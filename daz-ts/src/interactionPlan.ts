@@ -591,6 +591,12 @@ export interface AlignLimbTargetsOptions {
   stepDegrees?: number;
   damping?: number;
   tolerance?: number;
+  /**
+   * Figure label -> how far staging moved that figure. Shifts targets that
+   * point at another figure's anchor, whose point was resolved before
+   * staging. `apply()` passes this.
+   */
+  figureDisplacements?: Record<string, Vector3>;
 }
 
 export interface InteractionApplyOptions extends AlignLimbTargetsOptions {
@@ -641,22 +647,34 @@ export class PreparedInteractionRecipe {
    * Build a coarse live-placement patch from the prepared recipe.
    *
    * Intentionally conservative: only translates figures so their anchors
-   * are staged near their requested targets. Does not solve bone rotations
-   * (that's `alignLimbTargets`).
+   * are staged near their requested targets. Hand/foot targets move figures
+   * in X/Z only and keep their height (IK handles reach); a `BalanceTarget`
+   * also sets height. Does not solve bone rotations (that's
+   * `alignLimbTargets`).
    */
   buildPosePatch(): InteractionPosePatch {
-    const figurePositions: Record<string, Vector3[]> = {};
+    // Each staged position records whether it sets the figure's height.
+    // Hand/foot targets are floor-locked (X/Z only; IK handles reach), a
+    // BalanceTarget (sit) sets full 3D.
+    const figurePositions: Record<string, Array<{ point: Vector3; setsHeight: boolean }>> = {};
     const unresolved: ResolvedInteractionTarget[] = [];
 
-    const appendPosition = (label: string, point: Vector3): void => {
-      (figurePositions[label] ??= []).push(point);
+    const floorHeight = (label: string): number => lookupRigProfile(this.rigProfiles, label)?.figurePosition?.[1] ?? 0;
+    const appendPosition = (label: string, point: Vector3, setsHeight = false): void => {
+      (figurePositions[label] ??= []).push({ point, setsHeight });
     };
-    const firstLocalAnchorPosition = (profile: FigureRigProfile, anchorName: string): Vector3 | null => {
+    const stagedPosition = (label: string | null): Vector3 | null => {
+      const entries = label ? figurePositions[label] : undefined;
+      if (!label || !entries || entries.length === 0) return null;
+      const xz = averageVec3(entries.map((e) => e.point))!;
+      const heights = entries.filter((e) => e.setsHeight).map((e) => e.point[1]);
+      const y = heights.length > 0 ? heights.reduce((a, b) => a + b, 0) / heights.length : floorHeight(label);
+      return [xz[0], y, xz[2]];
+    };
+    const anchorOffset = (profile: FigureRigProfile, anchorName: string): Vector3 | null => {
       const anchor = profile.anchor(anchorName);
-      if (anchor === null) return null;
-      return profile.bone(anchor.boneName).localPosition;
+      return anchor === null ? null : profile.boneOffset(anchor.boneName);
     };
-    const currentFigurePosition = (label: string): Vector3 | null => averageVec3(figurePositions[label]);
 
     for (const constraint of this.plan.constraints) {
       if (!(constraint instanceof BalanceTarget)) continue;
@@ -667,16 +685,16 @@ export class PreparedInteractionRecipe {
         unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: constraint.pelvisBone }));
         continue;
       }
-      const pelvisBone = profile.bone(pelvisAnchor.boneName);
+      const pelvisOffset = profile.boneOffset(pelvisAnchor.boneName);
       let targetPoint = constraint.centerOfMassHint;
       if (targetPoint === null && constraint.supportPoints.length > 0) {
         targetPoint = averageVec3(constraint.supportPoints);
       }
-      if (targetPoint === null || pelvisBone.localPosition === null) {
+      if (targetPoint === null || pelvisOffset === null) {
         unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: pelvisAnchor.boneName, targetPoint }));
         continue;
       }
-      appendPosition(constraint.figureLabel, subVec3(targetPoint, pelvisBone.localPosition));
+      appendPosition(constraint.figureLabel, subVec3(targetPoint, pelvisOffset), true);
     }
 
     for (const resolved of this.resolvedTargets) {
@@ -690,33 +708,31 @@ export class PreparedInteractionRecipe {
         unresolved.push(resolved);
         continue;
       }
-      const sourceBone = profile.bone(sourceAnchor.boneName);
-      if (sourceBone.localPosition === null) {
+      const sourceOffset = profile.boneOffset(sourceAnchor.boneName);
+      if (sourceOffset === null) {
         unresolved.push(resolved);
         continue;
       }
       const targetProfile = resolved.targetFigure ? lookupRigProfile(this.rigProfiles, resolved.targetFigure) : null;
-      const targetLocal = targetProfile && resolved.targetAnchor ? firstLocalAnchorPosition(targetProfile, resolved.targetAnchor) : null;
-      const sourceBase = currentFigurePosition(resolved.figureLabel);
-      const targetBase = resolved.targetFigure ? currentFigurePosition(resolved.targetFigure) : null;
+      const targetOffset = targetProfile && resolved.targetAnchor ? anchorOffset(targetProfile, resolved.targetAnchor) : null;
+      const sourceBase = stagedPosition(resolved.figureLabel);
+      const targetBase = stagedPosition(resolved.targetFigure);
 
       if (targetProfile !== null && resolved.targetFigure !== null) {
         if (targetBase !== null && resolved.targetPoint !== null && sourceBase === null) {
           const worldTarget = addVec3(targetBase, resolved.targetPoint)!;
-          appendPosition(resolved.figureLabel, subVec3(worldTarget, sourceBone.localPosition));
+          appendPosition(resolved.figureLabel, subVec3(worldTarget, sourceOffset));
           continue;
         }
-        if (targetLocal !== null) {
+        if (targetOffset !== null) {
           if (sourceBase === null && targetBase === null) {
-            const contactCenter = midpointVec3(sourceBone.localPosition, targetLocal);
-            appendPosition(resolved.figureLabel, subVec3(contactCenter, sourceBone.localPosition));
-            appendPosition(resolved.targetFigure, subVec3(contactCenter, targetLocal));
+            const contactCenter = midpointVec3(sourceOffset, targetOffset);
+            appendPosition(resolved.figureLabel, subVec3(contactCenter, sourceOffset));
+            appendPosition(resolved.targetFigure, subVec3(contactCenter, targetOffset));
           } else if (sourceBase === null && targetBase !== null) {
-            const targetWorld = addVec3(targetBase, targetLocal)!;
-            appendPosition(resolved.figureLabel, subVec3(targetWorld, sourceBone.localPosition));
+            appendPosition(resolved.figureLabel, subVec3(addVec3(targetBase, targetOffset)!, sourceOffset));
           } else if (sourceBase !== null && targetBase === null) {
-            const sourceWorld = addVec3(sourceBase, sourceBone.localPosition);
-            if (sourceWorld !== null) appendPosition(resolved.targetFigure, subVec3(sourceWorld, targetLocal));
+            appendPosition(resolved.targetFigure, subVec3(addVec3(sourceBase, sourceOffset)!, targetOffset));
           }
           continue;
         }
@@ -726,12 +742,12 @@ export class PreparedInteractionRecipe {
         unresolved.push(resolved);
         continue;
       }
-      appendPosition(resolved.figureLabel, subVec3(resolved.targetPoint, sourceBone.localPosition));
+      appendPosition(resolved.figureLabel, subVec3(resolved.targetPoint, sourceOffset));
     }
 
     const averagedPositions: Record<string, Vector3> = {};
-    for (const [label, points] of Object.entries(figurePositions)) {
-      averagedPositions[label] = averageVec3(points)!;
+    for (const label of Object.keys(figurePositions)) {
+      averagedPositions[label] = stagedPosition(label)!;
     }
 
     return new InteractionPosePatch({
@@ -746,9 +762,19 @@ export class PreparedInteractionRecipe {
     await patch.apply(scene);
     const result = new PreparedInteractionResult({ prepared: this, posePatch: patch });
     if (opts.alignLimbTargets) {
-      result.alignmentResults = await this.alignLimbTargets(scene, opts);
+      result.alignmentResults = await this.alignLimbTargets(scene, { ...opts, figureDisplacements: this.stagingDisplacements(patch) });
     }
     return result;
+  }
+
+  /** How far `patch` moves each figure whose original position is known. */
+  private stagingDisplacements(patch: InteractionPosePatch): Record<string, Vector3> {
+    const displacements: Record<string, Vector3> = {};
+    for (const [label, position] of Object.entries(patch.figurePositions)) {
+      const figurePosition = lookupRigProfile(this.rigProfiles, label)?.figurePosition ?? null;
+      if (figurePosition !== null) displacements[label] = subVec3(position, figurePosition);
+    }
+    return displacements;
   }
 
   /**
@@ -758,8 +784,10 @@ export class PreparedInteractionRecipe {
    */
   async alignLimbTargets(scene: Pick<RigSceneSource, "findSkeletonByLabel">, opts: AlignLimbTargetsOptions = {}): Promise<LimbAlignmentResult[]> {
     const results: LimbAlignmentResult[] = [];
-    for (const resolved of this.resolvedTargets) {
+    for (let resolved of this.resolvedTargets) {
       if (resolved.targetPoint === null) continue;
+      const shift = this.displacementFor(resolved, opts.figureDisplacements);
+      if (shift !== null) resolved = new ResolvedInteractionTarget({ ...resolved, targetPoint: addVec3(resolved.targetPoint, shift) });
       const skeleton = await scene.findSkeletonByLabel(resolved.figureLabel);
       const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
       if (profile === null) continue;
@@ -773,6 +801,17 @@ export class PreparedInteractionRecipe {
       );
     }
     return results;
+  }
+
+  /** Staging displacement of the figure a cross-figure anchor target points at (matched by resolved profile, so aliases work). */
+  private displacementFor(resolved: ResolvedInteractionTarget, displacements: Record<string, Vector3> | undefined): Vector3 | null {
+    if (!displacements || !resolved.targetFigure || !resolved.targetAnchor) return null;
+    const targetProfile = lookupRigProfile(this.rigProfiles, resolved.targetFigure);
+    if (targetProfile === null) return null;
+    for (const [label, displacement] of Object.entries(displacements)) {
+      if (lookupRigProfile(this.rigProfiles, label) === targetProfile) return displacement;
+    }
+    return null;
   }
 }
 

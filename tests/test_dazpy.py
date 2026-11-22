@@ -48,6 +48,7 @@ from dazpy import (
     SolveOptions,
     ValidationIssue,
     build_rig_profile,
+    build_rig_profiles_from_snapshot,
     align_hand_target,
     default_axis_limits_for_bone,
     resolve_interaction_target,
@@ -1324,12 +1325,101 @@ class TestInteractionAdapter(unittest.TestCase):
 
         self.assertIsInstance(result, PreparedInteractionResult)
         self.assertIsInstance(result.pose_patch, InteractionPosePatch)
-        self.assertEqual(source_skel.position_calls, [(1.5, 1.5, 1.5)])
-        self.assertEqual(target_skel.position_calls, [(-1.5, -1.5, -1.5)])
+        # Hand/foot staging is floor-locked: X/Z only, height kept (0 when unknown).
+        self.assertEqual(source_skel.position_calls, [(1.5, 0.0, 1.5)])
+        self.assertEqual(target_skel.position_calls, [(-1.5, 0.0, -1.5)])
         self.assertEqual(result.pose_patch.diagnostics["figure_count"], 2)
         self.assertEqual(result.pose_patch.diagnostics["unresolved_target_count"], 0)
-        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [1.5, 1.5, 1.5])
-        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Partner"], [-1.5, -1.5, -1.5])
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Genesis 9"], [1.5, 0.0, 1.5])
+        self.assertEqual(result.to_dict()["pose_patch"]["figure_positions"]["Partner"], [-1.5, 0.0, -1.5])
+
+    # -- 6r3b: staging from live-shaped profiles --------------------------------
+    # Live boneMetadata/scene_snapshot report local_position as the bone's
+    # translation channel (zero on an unposed figure); offsets have to come
+    # from world_position - figure_position.
+
+    @staticmethod
+    def _live_profile(label, figure_position, world_positions):
+        hip_world = world_positions.pop("hip", (0.0, 0.0, 0.0))
+        bones = [BoneProfile(name="hip", local_position=(0.0, 0.0, 0.0), world_position=hip_world)]
+        for name, world in world_positions.items():
+            bones.append(BoneProfile(name=name, parent_name="hip", local_position=(0.0, 0.0, 0.0), world_position=world))
+        return FigureRigProfile(figure_label=label, family="genesis_9", bones=bones, figure_position=figure_position)
+
+    def test_bone_offset_uses_world_minus_figure_position(self):
+        profile = self._live_profile("A", (10.0, 0.0, 5.0), {"r_hand": (-41.0, 100.0, 7.0)})
+        self.assertEqual(profile.bone_offset("r_hand"), (-51.0, 100.0, 2.0))
+        hand_built = FigureRigProfile(figure_label="B", family="genesis_9", bones=[BoneProfile(name="r_hand", local_position=(1.0, 2.0, 3.0))])
+        self.assertEqual(hand_built.bone_offset("r_hand"), (1.0, 2.0, 3.0))
+
+    def test_figure_position_round_trips(self):
+        profile = self._live_profile("A", (10.0, 0.0, 5.0), {"r_hand": (-41.0, 100.0, 7.0)})
+        restored = FigureRigProfile.from_dict(profile.to_dict())
+        self.assertEqual(restored.figure_position, (10.0, 0.0, 5.0))
+        self.assertEqual(restored.bone_offset("r_hand"), (-51.0, 100.0, 2.0))
+
+    def test_live_touch_staging_separates_figures_on_the_floor(self):
+        # Both figures at the origin, as freshly loaded (the 6r3b live case).
+        a = self._live_profile("A", (0.0, 0.0, 0.0), {"r_hand": (-51.5, 99.8, 2.3)})
+        b = self._live_profile("B", (0.0, 0.0, 0.0), {"l_shoulder": (3.5, 135.5, -3.6)})
+        recipe = InteractionRecipe(kind="touch", actors=["A", "B"], constraints=[HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder")])
+
+        patch = prepare_interaction_recipe(recipe, {"A": a, "B": b}).build_pose_patch()
+
+        pa, pb = patch.figure_positions["A"], patch.figure_positions["B"]
+        self.assertEqual((pa[1], pb[1]), (0.0, 0.0))
+        # Horizontally, A's hand lands on B's shoulder.
+        self.assertAlmostEqual(pa[0] + -51.5, pb[0] + 3.5)
+        self.assertAlmostEqual(pa[2] + 2.3, pb[2] + -3.6)
+        self.assertGreater(abs(pa[0] - pb[0]), 50.0)
+
+    def test_floor_lock_keeps_each_figures_current_height(self):
+        a = self._live_profile("A", (0.0, 12.0, 0.0), {"r_hand": (-51.5, 111.8, 2.3)})
+        recipe = InteractionRecipe(kind="custom", actors=["A"], constraints=[HandTarget("A", "r_hand", target_point=(0.0, 150.0, 40.0))])
+        patch = prepare_interaction_recipe(recipe, {"A": a}).build_pose_patch()
+        self.assertEqual(patch.figure_positions["A"], (51.5, 12.0, 37.7))
+
+    def test_balance_target_sets_height_and_wins_over_floor_lock(self):
+        a = self._live_profile("A", (0.0, 0.0, 0.0), {"hip": (0.0, 95.0, 0.0), "r_hand": (-51.5, 99.8, 2.3)})
+        recipe = InteractionRecipe(
+            kind="sit",
+            actors=["A"],
+            constraints=[
+                BalanceTarget("A", "pelvis", center_of_mass_hint=(0.0, 50.0, 0.0)),
+                HandTarget("A", "r_hand", target_point=(-51.5, 60.0, 2.3)),
+            ],
+        )
+        patch = prepare_interaction_recipe(recipe, {"A": a}).build_pose_patch()
+        self.assertEqual(patch.figure_positions["A"][1], -45.0)
+
+    def test_apply_shifts_cross_figure_targets_by_staging_displacement(self):
+        a = self._live_profile("A", (0.0, 0.0, 0.0), {"r_hand": (-51.5, 99.8, 2.3)})
+        b = self._live_profile("B", (0.0, 0.0, 0.0), {"l_shoulder": (3.5, 135.5, -3.6)})
+        recipe = InteractionRecipe(kind="touch", actors=["A", "B"], constraints=[HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder")])
+        prepared = prepare_interaction_recipe(recipe, {"A": a, "B": b})
+        moved = {}
+        scene = MagicMock()
+        scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(set_position=lambda x, y, z, label=label: moved.__setitem__(label, (x, y, z)))
+        seen = []
+        with patch("dazpy._interaction.align_single_limb_target", side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or MagicMock()):
+            prepared.apply(scene, align_limb_targets=True)
+
+        expected = (3.5 + moved["B"][0], 135.5 + moved["B"][1], -3.6 + moved["B"][2])
+        for got, want in zip(seen[0], expected):
+            self.assertAlmostEqual(got, want)
+        # The hand target now coincides with the staged hand in X/Z.
+        self.assertAlmostEqual(seen[0][0], moved["A"][0] - 51.5)
+
+    def test_profile_builders_read_figure_position(self):
+        snapshot = [{"name": "G9", "label": "A", "position": {"x": 10.0, "y": 0.0, "z": 5.0},
+                     "bones": [{"name": "r_hand", "local_position": {"x": 0, "y": 0, "z": 0}, "world_position": {"x": -41.0, "y": 100.0, "z": 7.0}}]}]
+        self.assertEqual(build_rig_profiles_from_snapshot(snapshot)["A"].bone_offset("r_hand"), (-51.0, 100.0, 2.0))
+
+        skel = MagicMock()
+        skel.label = "A"
+        skel.position = {"x": 10.0, "y": 0.0, "z": 5.0}
+        skel.bone_metadata.return_value = snapshot[0]["bones"]
+        self.assertEqual(build_rig_profile(skel).figure_position, (10.0, 0.0, 5.0))
 
     def test_prepared_recipe_live_alignment_reduces_error(self):
         hip = _KinematicFakeBone("hip", "Hip", local_position=(0.0, 0.0, 0.0))

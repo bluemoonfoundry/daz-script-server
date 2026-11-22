@@ -38,6 +38,8 @@ export interface RigMetadataSource {
   readonly identifier: { value: string };
   label(): Promise<string | null>;
   boneMetadata(): Promise<Array<Record<string, unknown>>>;
+  /** World position of the figure node. Optional: without it, bone offsets fall back to `localPosition`. */
+  position?(): Promise<{ x: number; y: number; z: number } | null>;
 }
 
 /** Everything the interaction package needs from a live skeleton (superset of {@link RigMetadataSource}). */
@@ -528,6 +530,7 @@ export interface FigureRigProfileDict {
   family: string;
   bones: BoneProfileDict[];
   metadata: Record<string, unknown>;
+  figurePosition: Vector3 | null;
 }
 
 /** A DAZ figure expressed as a solver-friendly rig profile. */
@@ -536,14 +539,30 @@ export class FigureRigProfile {
   readonly family: string;
   readonly bones: BoneProfile[];
   readonly metadata: Record<string, unknown>;
+  /** World position of the figure node itself (what `setPosition` moves). */
+  readonly figurePosition: Vector3 | null;
   private readonly index: Map<string, number>;
 
-  constructor(init: { figureLabel: string; family: string; bones?: BoneProfile[]; metadata?: Record<string, unknown> }) {
+  constructor(init: { figureLabel: string; family: string; bones?: BoneProfile[]; metadata?: Record<string, unknown>; figurePosition?: Vector3 | null }) {
     this.figureLabel = init.figureLabel;
     this.family = init.family;
     this.bones = [...(init.bones ?? [])];
     this.metadata = init.metadata ?? {};
+    this.figurePosition = init.figurePosition ?? null;
     this.index = new Map(this.bones.map((bone, i) => [bone.name, i]));
+  }
+
+  /**
+   * Offset of a bone from the figure's origin, in world axes:
+   * `worldPosition - figurePosition` when both are known (live profiles),
+   * else `localPosition` (what hand-built profiles use for this offset). Live
+   * `localPosition` is the bone's translation channel -- zero on an unposed
+   * figure -- not an offset.
+   */
+  boneOffset(name: string): Vector3 | null {
+    const bone = this.bone(name);
+    if (this.figurePosition !== null && bone.worldPosition !== null) return subVec3(bone.worldPosition, this.figurePosition);
+    return bone.localPosition;
   }
 
   boneNames(): string[] {
@@ -686,6 +705,7 @@ export class FigureRigProfile {
       family: this.family,
       bones: this.bones.map((bone) => bone.toDict()),
       metadata: { ...this.metadata },
+      figurePosition: this.figurePosition,
     };
   }
 
@@ -695,6 +715,7 @@ export class FigureRigProfile {
       family: data.family ?? "generic",
       bones: (data.bones ?? []).map((item) => BoneProfile.fromDict(item)),
       metadata: { ...(data.metadata ?? {}) },
+      figurePosition: asVector3(data.figurePosition),
     });
   }
 }
@@ -747,6 +768,9 @@ export async function buildRigProfile(skeleton: RigMetadataSource): Promise<Figu
   const label = await skeleton.label();
   const figureLabel = label ?? skeleton.identifier.value;
   const raw = await skeleton.boneMetadata();
+  // Bone world positions only become figure-relative offsets with the
+  // figure's own world position (one extra call).
+  const figurePosition = skeleton.position ? asVector3(await skeleton.position()) : null;
   const bones = raw.map((item) => boneProfileFromRaw(item));
   const family = detectFigureFamily(bones.map((bone) => bone.name));
   return new FigureRigProfile({
@@ -754,6 +778,7 @@ export async function buildRigProfile(skeleton: RigMetadataSource): Promise<Figu
     family,
     bones,
     metadata: { boneCount: bones.length, source: "daz-ts" },
+    figurePosition,
   });
 }
 
@@ -770,7 +795,7 @@ export function buildRigProfilesFromSnapshot(snapshot: Array<Record<string, unkn
     const rawBones = (skelData.bones as Array<Record<string, unknown>> | undefined) ?? [];
     const bones = rawBones.map((item) => boneProfileFromRaw(item));
     const family = detectFigureFamily(bones.map((bone) => bone.name));
-    const profile = new FigureRigProfile({ figureLabel: label, family, bones, metadata: { boneCount: bones.length, source: "snapshot" } });
+    const profile = new FigureRigProfile({ figureLabel: label, family, bones, metadata: { boneCount: bones.length, source: "snapshot" }, figurePosition: asVector3(skelData.position) });
     profiles[label] = profile;
     if (name && name !== label) profiles[name] = profile;
   }
