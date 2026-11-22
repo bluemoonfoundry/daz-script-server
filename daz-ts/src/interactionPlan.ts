@@ -10,9 +10,9 @@
  */
 
 import type { AnchorTargetLike, FigureRigProfile, RigSceneSource, Vector3, Rotation3 } from "./rigProfile.js";
-import { addVec3, asVector3, averageVec3, lookupRigProfile, midpointVec3, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
+import { addVec3, asVector3, averageVec3, lengthVec3, lookupRigProfile, midpointVec3, scaleVec3, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
 import type { LimbAlignmentResult } from "./interactionSolve.js";
-import { alignSingleLimbTarget } from "./interactionSolve.js";
+import { alignmentChainNames, alignSingleLimbTarget } from "./interactionSolve.js";
 
 // `LimbAlignmentResult` lives in interactionSolve.ts (which must not import
 // this file); re-exported here so Phase 5A import paths keep working.
@@ -55,6 +55,14 @@ export interface AnchorTargetInit {
   targetAnchor?: string | null;
   targetPoint?: Vector3 | null;
   offset?: Vector3;
+  /**
+   * How far the effector joint stops short of the target (cm). Null/omitted
+   * picks one for anchor-to-anchor targets: the target anchor's body radius
+   * plus the effector's hand/foot length, so the hand lands on the skin
+   * instead of inside the partner. 0 aims at the joint centre. Explicit
+   * `targetPoint` targets default to 0.
+   */
+  surfaceStandoff?: number | null;
 }
 
 export interface AnchorTargetDict {
@@ -65,6 +73,7 @@ export interface AnchorTargetDict {
   targetAnchor: string | null;
   targetPoint: Vector3 | null;
   offset: Vector3;
+  surfaceStandoff: number | null;
 }
 
 abstract class AnchorTargetBase implements AnchorTargetLike {
@@ -75,6 +84,7 @@ abstract class AnchorTargetBase implements AnchorTargetLike {
   readonly targetAnchor: string | null;
   readonly targetPoint: Vector3 | null;
   readonly offset: Vector3;
+  readonly surfaceStandoff: number | null;
 
   constructor(init: AnchorTargetInit) {
     this.figureLabel = init.figureLabel;
@@ -83,6 +93,7 @@ abstract class AnchorTargetBase implements AnchorTargetLike {
     this.targetAnchor = init.targetAnchor ?? null;
     this.targetPoint = init.targetPoint ?? null;
     this.offset = init.offset ?? [0, 0, 0];
+    this.surfaceStandoff = init.surfaceStandoff ?? null;
   }
 
   toDict(): AnchorTargetDict {
@@ -94,6 +105,7 @@ abstract class AnchorTargetBase implements AnchorTargetLike {
       targetAnchor: this.targetAnchor,
       targetPoint: this.targetPoint,
       offset: this.offset,
+      surfaceStandoff: this.surfaceStandoff,
     };
   }
 }
@@ -353,6 +365,7 @@ export class InteractionPlan {
           targetAnchor: (item.targetAnchor as string | null | undefined) ?? null,
           targetPoint: asVector3(item.targetPoint),
           offset: asVector3(item.offset) ?? ([0, 0, 0] as Vector3),
+          surfaceStandoff: typeof item.surfaceStandoff === "number" ? item.surfaceStandoff : null,
         };
         constraints.push(kind === "HandTarget" ? new HandTarget(init) : new FootTarget(init));
       } else if (kind === "ContactTarget") {
@@ -725,14 +738,26 @@ export class PreparedInteractionRecipe {
           continue;
         }
         if (targetOffset !== null) {
+          // Stage the effector a surface standoff short of the target joint,
+          // on the source limb's side, so IK starts at the contact point
+          // instead of folding the arm back to it.
+          const rootOffset = limbRootOffset(profile, sourceAnchor.boneName);
+          const standoff = resolved.surfaceStandoff;
           if (sourceBase === null && targetBase === null) {
             const contactCenter = midpointVec3(sourceOffset, targetOffset);
-            appendPosition(resolved.figureLabel, subVec3(contactCenter, sourceOffset));
-            appendPosition(resolved.targetFigure, subVec3(contactCenter, targetOffset));
+            const sourcePosition = subVec3(contactCenter, sourceOffset);
+            const targetPosition = subVec3(contactCenter, targetOffset);
+            const gap = standoffShift(contactCenter, sourcePosition, rootOffset, standoff);
+            appendPosition(resolved.figureLabel, addVec3(sourcePosition, scaleVec3(gap, 0.5))!);
+            appendPosition(resolved.targetFigure, subVec3(targetPosition, scaleVec3(gap, 0.5)));
           } else if (sourceBase === null && targetBase !== null) {
-            appendPosition(resolved.figureLabel, subVec3(addVec3(targetBase, targetOffset)!, sourceOffset));
+            const targetWorld = addVec3(targetBase, targetOffset)!;
+            const sourcePosition = subVec3(targetWorld, sourceOffset);
+            appendPosition(resolved.figureLabel, addVec3(sourcePosition, standoffShift(targetWorld, sourcePosition, rootOffset, standoff))!);
           } else if (sourceBase !== null && targetBase === null) {
-            appendPosition(resolved.targetFigure, subVec3(addVec3(sourceBase, sourceOffset)!, targetOffset));
+            const sourceWorld = addVec3(sourceBase, sourceOffset)!;
+            const gap = standoffShift(sourceWorld, sourceBase, rootOffset, standoff);
+            appendPosition(resolved.targetFigure, subVec3(subVec3(sourceWorld, targetOffset), gap));
           }
           continue;
         }
@@ -791,16 +816,32 @@ export class PreparedInteractionRecipe {
       const skeleton = await scene.findSkeletonByLabel(resolved.figureLabel);
       const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
       if (profile === null) continue;
-      results.push(
-        await alignSingleLimbTarget(skeleton, profile, resolved, {
-          maxIterations: opts.maxIterations || this.plan.options.maxIterations,
-          stepDegrees: opts.stepDegrees,
-          damping: opts.damping,
-          tolerance: opts.tolerance,
-        }),
-      );
+      const jointPoint = resolved.targetPoint!;
+      if (resolved.surfaceStandoff > 0) {
+        const sourceShift = this.profileDisplacement(profile, opts.figureDisplacements);
+        resolved = new ResolvedInteractionTarget({ ...resolved, targetPoint: surfaceContactPoint(profile, resolved, sourceShift) });
+      }
+      const result = await alignSingleLimbTarget(skeleton, profile, resolved, {
+        maxIterations: opts.maxIterations || this.plan.options.maxIterations,
+        stepDegrees: opts.stepDegrees,
+        damping: opts.damping,
+        tolerance: opts.tolerance,
+      });
+      if (resolved.surfaceStandoff > 0) {
+        result.diagnostics.surfaceStandoff = resolved.surfaceStandoff;
+        result.diagnostics.targetJointPoint = jointPoint;
+      }
+      results.push(result);
     }
     return results;
+  }
+
+  /** Staging displacement of `profile`'s figure (matched by profile, so aliases work). */
+  private profileDisplacement(profile: FigureRigProfile, displacements: Record<string, Vector3> | undefined): Vector3 | null {
+    for (const [label, displacement] of Object.entries(displacements ?? {})) {
+      if (lookupRigProfile(this.rigProfiles, label) === profile) return displacement;
+    }
+    return null;
   }
 
   /** Staging displacement of the figure a cross-figure anchor target points at (matched by resolved profile, so aliases work). */
@@ -813,6 +854,59 @@ export class PreparedInteractionRecipe {
     }
     return null;
   }
+}
+
+/** Root of the effector's alignment chain (shoulder for a hand, hip for a foot). */
+function limbRootBone(profile: FigureRigProfile, effectorBone: string): string | null {
+  const chain = profile.suggestPrimaryChain(effectorBone);
+  const chainNames = chain !== null ? alignmentChainNames(profile, chain) : [];
+  return chainNames.length > 0 ? chainNames[0] : null;
+}
+
+function limbRootOffset(profile: FigureRigProfile, effectorBone: string): Vector3 | null {
+  const root = limbRootBone(profile, effectorBone);
+  return root !== null ? profile.boneOffset(root) : null;
+}
+
+/** Unit direction from a target joint toward the source limb root, horizontal when possible. */
+function approachDirection(joint: Vector3, root: Vector3): Vector3 | null {
+  const horizontal: Vector3 = [root[0] - joint[0], 0, root[2] - joint[2]];
+  const flat = lengthVec3(horizontal);
+  if (flat >= 1e-6) return scaleVec3(horizontal, 1 / flat);
+  const full = subVec3(root, joint);
+  const length = lengthVec3(full);
+  return length >= 1e-6 ? scaleVec3(full, 1 / length) : null;
+}
+
+/** How far to move the source figure (staged at `sourcePosition`) away from `joint`. */
+function standoffShift(joint: Vector3, sourcePosition: Vector3, rootOffset: Vector3 | null, standoff: number): Vector3 {
+  if (standoff <= 0) return [0, 0, 0];
+  const root = rootOffset !== null ? addVec3(sourcePosition, rootOffset)! : sourcePosition;
+  const direction = approachDirection(joint, root);
+  return direction !== null ? scaleVec3(direction, standoff) : [0, 0, 0];
+}
+
+/**
+ * Pull `target.targetPoint` back toward the source limb by
+ * `target.surfaceStandoff`. The approach direction runs (horizontally, as
+ * staging does) from the target joint to the root of the source limb's
+ * alignment chain (shoulder for a hand, hip for a foot), at its staged
+ * position, so the effector stops on the near side of the partner's body.
+ * Falls back to the figure origin; returns the point unchanged when neither
+ * position is known or they coincide.
+ */
+function surfaceContactPoint(profile: FigureRigProfile, target: ResolvedInteractionTarget, sourceShift: Vector3 | null): Vector3 {
+  const point = target.targetPoint!;
+  const rootBone = limbRootBone(profile, target.boneName);
+  let root: Vector3 | null = rootBone !== null ? profile.bone(rootBone).worldPosition : null;
+  if (root === null && profile.figurePosition !== null) root = [profile.figurePosition[0], point[1], profile.figurePosition[2]];
+  if (root === null) return point;
+  if (sourceShift !== null) root = addVec3(root, sourceShift)!;
+  const direction = approachDirection(point, root);
+  if (direction === null) return point;
+  // Never past the limb root: on overlapping figures that would aim behind the source.
+  const reach = Math.min(target.surfaceStandoff, lengthVec3(subVec3(root, point)));
+  return addVec3(point, scaleVec3(direction, reach))!;
 }
 
 export function prepareInteractionRecipe(recipe: InteractionRecipe, rigProfiles: Record<string, FigureRigProfile>): PreparedInteractionRecipe {

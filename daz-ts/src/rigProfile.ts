@@ -411,6 +411,7 @@ export interface ResolvedInteractionTargetDict {
   targetAnchor: string | null;
   targetBone: string | null;
   offset: Vector3;
+  surfaceStandoff: number;
 }
 
 export class ResolvedInteractionTarget {
@@ -422,6 +423,13 @@ export class ResolvedInteractionTarget {
   readonly targetAnchor: string | null;
   readonly targetBone: string | null;
   readonly offset: Vector3;
+  /**
+   * How far the effector bone stops short of `targetPoint` (cm). `targetPoint`
+   * is the target anchor's joint centre (plus `offset`); the standoff is
+   * applied at alignment time, toward the source limb, once staging has
+   * fixed where the figures stand.
+   */
+  readonly surfaceStandoff: number;
 
   constructor(init: {
     figureLabel: string;
@@ -432,6 +440,7 @@ export class ResolvedInteractionTarget {
     targetAnchor?: string | null;
     targetBone?: string | null;
     offset?: Vector3;
+    surfaceStandoff?: number;
   }) {
     this.figureLabel = init.figureLabel;
     this.anchorName = init.anchorName;
@@ -441,6 +450,7 @@ export class ResolvedInteractionTarget {
     this.targetAnchor = init.targetAnchor ?? null;
     this.targetBone = init.targetBone ?? null;
     this.offset = init.offset ?? [0, 0, 0];
+    this.surfaceStandoff = init.surfaceStandoff ?? 0;
   }
 
   toDict(): ResolvedInteractionTargetDict {
@@ -453,6 +463,7 @@ export class ResolvedInteractionTarget {
       targetAnchor: this.targetAnchor,
       targetBone: this.targetBone,
       offset: this.offset,
+      surfaceStandoff: this.surfaceStandoff,
     };
   }
 }
@@ -465,6 +476,7 @@ export interface AnchorTargetLike {
   targetAnchor?: string | null;
   targetPoint?: Vector3 | null;
   offset?: Vector3;
+  surfaceStandoff?: number | null;
 }
 
 function anchorWorldPointHint(profile: FigureRigProfile, anchorName: string): Vector3 | null {
@@ -505,6 +517,39 @@ const CHAIN_SUGGESTION_CANDIDATES: ReadonlyArray<[string, ChainRole, ChainSide, 
   ["l_thigh", "leg", "left", ["thigh", "upper_leg"]],
   ["r_thigh", "leg", "right", ["thigh", "upper_leg"]],
 ];
+
+const SHOULDER_JOINT_TOKENS = ["upperarm", "upper_arm", "shldrbend"] as const;
+const KNEE_JOINT_TOKENS = ["shin", "calf", "knee"] as const;
+
+/**
+ * Anchor tokens tried before {@link ANCHOR_PATTERNS}: Genesis 9's `l_shoulder`
+ * bone is the clavicle (origin by the sternum), so the shoulder anchor is the
+ * upper-arm joint; `*thigh` starts at the hip, so the knee is the shin.
+ */
+const PREFERRED_ANCHOR_TOKENS: Readonly<Record<string, readonly string[]>> = {
+  l_shoulder: SHOULDER_JOINT_TOKENS,
+  r_shoulder: SHOULDER_JOINT_TOKENS,
+  l_knee: KNEE_JOINT_TOKENS,
+  r_knee: KNEE_JOINT_TOKENS,
+};
+
+/** Approximate body radius (cm, adult figure) from an anchor's joint centre to its skin. */
+export const ANCHOR_SURFACE_RADIUS: Readonly<Record<AnchorRole, number>> = {
+  pelvis: 12,
+  spine: 12,
+  chest: 12,
+  neck: 6,
+  head: 10,
+  shoulder: 6,
+  elbow: 4,
+  hand: 3,
+  knee: 5,
+  foot: 5,
+  custom: 0,
+};
+
+/** Wrist-to-fingers / ankle-to-toes reach (cm) when the profile has no descendant positions. */
+export const EFFECTOR_REACH_FALLBACK: Readonly<{ hand: number; foot: number }> = { hand: 15, foot: 12 };
 
 const ANCHOR_PATTERNS: ReadonlyArray<[string, AnchorRole, ChainSide, readonly string[]]> = [
   ["pelvis", "pelvis", "center", ["pelvis", "hip"]],
@@ -563,6 +608,30 @@ export class FigureRigProfile {
     const bone = this.bone(name);
     if (this.figurePosition !== null && bone.worldPosition !== null) return subVec3(bone.worldPosition, this.figurePosition);
     return bone.localPosition;
+  }
+
+  /**
+   * Distance from a bone to its farthest descendant (wrist to finger joints,
+   * ankle to toes). Null when the bone or its descendants have no world
+   * positions.
+   */
+  effectorReach(boneName: string): number | null {
+    const origin = this.bone(boneName).worldPosition;
+    if (origin === null) return null;
+    let reach: number | null = null;
+    for (const bone of this.bones) {
+      if (bone.name === boneName || bone.worldPosition === null) continue;
+      let parent = bone.parentName;
+      const seen = new Set<string>();
+      while (parent !== null && parent !== boneName && !seen.has(parent) && this.index.has(parent)) {
+        seen.add(parent);
+        parent = this.bones[this.index.get(parent)!].parentName;
+      }
+      if (parent !== boneName) continue;
+      const distance = lengthVec3(subVec3(bone.worldPosition, origin));
+      reach = reach === null ? distance : Math.max(reach, distance);
+    }
+    return reach;
   }
 
   boneNames(): string[] {
@@ -644,7 +713,8 @@ export class FigureRigProfile {
   anchorMap(): Map<string, InteractionAnchor> {
     const anchors = new Map<string, InteractionAnchor>();
     for (const [key, role, side, tokens] of ANCHOR_PATTERNS) {
-      const bone = this.findTerminalBone([[role, side, tokens]]);
+      const preferred = PREFERRED_ANCHOR_TOKENS[key];
+      const bone = this.findTerminalBone(preferred ? [[role, side, preferred], [role, side, tokens]] : [[role, side, tokens]]);
       if (bone === null) continue;
       anchors.set(key, new InteractionAnchor({ name: key, boneName: bone.name, role, side }));
     }
@@ -672,15 +742,30 @@ export class FigureRigProfile {
     const targetFigure = target.targetFigure ?? null;
     const targetAnchor = target.targetAnchor ?? null;
     let targetBone: string | null = null;
+    let targetRole: AnchorRole | null = null;
+    let anchorPointHint = false;
 
     if (targetFigure && targetAnchor && rigProfiles) {
       const targetProfile = lookupRigProfile(rigProfiles, targetFigure);
-      if (targetProfile) targetBone = targetProfile.requireAnchor(targetAnchor).boneName;
+      if (targetProfile) {
+        const resolved = targetProfile.requireAnchor(targetAnchor);
+        targetBone = resolved.boneName;
+        targetRole = resolved.role;
+      }
     }
     if (targetPoint === null && targetFigure && targetAnchor && rigProfiles) {
       const targetProfile = lookupRigProfile(rigProfiles, targetFigure);
-      if (targetProfile) targetPoint = anchorWorldPointHint(targetProfile, targetAnchor);
+      if (targetProfile) {
+        targetPoint = anchorWorldPointHint(targetProfile, targetAnchor);
+        anchorPointHint = targetPoint !== null;
+      }
     }
+
+    // Only an anchor's joint-centre hint needs pushing out to the skin; an
+    // explicit targetPoint is taken as the contact point itself.
+    let surfaceStandoff = 0;
+    if (target.surfaceStandoff !== undefined && target.surfaceStandoff !== null) surfaceStandoff = Math.max(0, target.surfaceStandoff);
+    else if (anchorPointHint && targetRole !== null) surfaceStandoff = this.defaultSurfaceStandoff(anchor, targetRole);
 
     // The offset shifts a resolved point; it is not a point on its own.
     // Leaving targetPoint null lets buildPosePatch report the target as
@@ -696,7 +781,25 @@ export class FigureRigProfile {
       targetAnchor,
       targetBone,
       offset: target.offset ?? [0, 0, 0],
+      surfaceStandoff,
     });
+  }
+
+  /**
+   * Joint-to-joint gap for skin contact: target body radius + the source
+   * effector's reach. A hand or foot effector is its wrist/ankle joint, so it
+   * stops a whole hand/foot short of the skin; hand-to-hand (handshake) stops
+   * half a hand short so the palms meet.
+   */
+  private defaultSurfaceStandoff(source: InteractionAnchor, targetRole: AnchorRole): number {
+    let reach: number;
+    if (source.role === "hand" || source.role === "foot") {
+      reach = this.effectorReach(source.boneName) ?? EFFECTOR_REACH_FALLBACK[source.role];
+    } else {
+      reach = ANCHOR_SURFACE_RADIUS[source.role];
+    }
+    if (source.role === "hand" && targetRole === "hand") return reach * 0.5;
+    return ANCHOR_SURFACE_RADIUS[targetRole] + reach;
   }
 
   toDict(): FigureRigProfileDict {

@@ -37,6 +37,8 @@ from ._batch import Batch, BatchFuture
 from ._interaction import (
     AxisLimit,
     BalanceTarget,
+    ANCHOR_SURFACE_RADIUS,
+    EFFECTOR_REACH_FALLBACK,
     BoneChain,
     BoneProfile,
     AnchorTarget,
@@ -165,6 +167,8 @@ __all__ = [
     "BatchFuture",
     "AxisLimit",
     "BalanceTarget",
+    "ANCHOR_SURFACE_RADIUS",
+    "EFFECTOR_REACH_FALLBACK",
     "BoneChain",
     "BoneProfile",
     "AnchorTarget",

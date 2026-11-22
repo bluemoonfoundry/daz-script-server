@@ -19,7 +19,9 @@ import {
   ValidationIssue,
 } from "../../src/interactionPlan.js";
 import {
+  ANCHOR_SURFACE_RADIUS,
   BoneProfile,
+  EFFECTOR_REACH_FALLBACK,
   FigureRigProfile,
   ResolvedInteractionTarget,
 } from "../../src/rigProfile.js";
@@ -351,7 +353,8 @@ describe("PreparedInteractionRecipe.apply", () => {
     const recipe = new InteractionRecipe({
       kind: "touch",
       actors: ["Genesis 9", "Partner"],
-      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
+      // Joint-to-joint staging (no surface standoff) keeps the numbers simple.
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder", surfaceStandoff: 0 })],
     });
     const prepared = prepareInteractionRecipe(recipe, touchRigProfiles());
 
@@ -448,10 +451,14 @@ describe("staging from live-shaped profiles (6r3b)", () => {
       B: liveProfile("B", [0, 0, 0], { l_shoulder: [3.5, 135.5, -3.6] }),
     };
     const recipe = new InteractionRecipe({ kind: "touch", actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder" })] });
-    const { A: pa, B: pb } = prepareInteractionRecipe(recipe, profiles).buildPosePatch().figurePositions;
+    const prepared = prepareInteractionRecipe(recipe, profiles);
+    const { A: pa, B: pb } = prepared.buildPosePatch().figurePositions;
     expect([pa[1], pb[1]]).toEqual([0, 0]);
-    expect(pa[0] - 51.5).toBeCloseTo(pb[0] + 3.5, 9);
-    expect(pa[2] + 2.3).toBeCloseTo(pb[2] - 3.6, 9);
+    // Horizontally, A's hand lands a surface standoff short of B's shoulder (kwpq), on A's side.
+    const hand = [pa[0] - 51.5, pa[2] + 2.3];
+    const shoulder = [pb[0] + 3.5, pb[2] - 3.6];
+    expect(Math.hypot(hand[0] - shoulder[0], hand[1] - shoulder[1])).toBeCloseTo(prepared.resolvedTargets[0].surfaceStandoff, 9);
+    expect(hand[0]).toBeGreaterThan(shoulder[0]);
     expect(Math.abs(pa[0] - pb[0])).toBeGreaterThan(50);
   });
 
@@ -482,7 +489,7 @@ describe("staging from live-shaped profiles (6r3b)", () => {
       A: liveProfile("A", [0, 0, 0], { r_hand: [-51.5, 99.8, 2.3] }),
       B: liveProfile("B", [0, 0, 0], { l_shoulder: [3.5, 135.5, -3.6] }),
     };
-    const recipe = new InteractionRecipe({ kind: "touch", actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder" })] });
+    const recipe = new InteractionRecipe({ kind: "touch", actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder", surfaceStandoff: 0 })] });
     const prepared = prepareInteractionRecipe(recipe, profiles);
     const moved: Record<string, Vector3> = {};
     const scene = {
@@ -505,6 +512,99 @@ describe("staging from live-shaped profiles (6r3b)", () => {
     expect(target[2]).toBeCloseTo(-3.6 + moved.B[2], 9);
     // ...which is where A's staged hand sits in X/Z.
     expect(target[0]).toBeCloseTo(moved.A[0] - 51.5, 9);
+  });
+});
+
+/** A Genesis 9 arm (clavicle -> upper arm -> forearm -> hand -> finger) on a figure at figurePosition. */
+function armProfile(label: string, figurePosition: Vector3, side: "l" | "r", xSign: number): FigureRigProfile {
+  const [fx, fy, fz] = figurePosition;
+  const chain: Array<[string, string | null, Vector3]> = [
+    ["hip", null, [0, 100, 0]],
+    [`${side}_shoulder`, "hip", [xSign * 3, 145, -2]],
+    [`${side}_upperarm`, `${side}_shoulder`, [xSign * 17, 140, -4]],
+    [`${side}_forearm`, `${side}_upperarm`, [xSign * 45, 140, -4]],
+    [`${side}_hand`, `${side}_forearm`, [xSign * 70, 140, -4]],
+    [`${side}_mid3`, `${side}_hand`, [xSign * 84, 140, -4]],
+  ];
+  const bones = chain.map(([name, parentName, [x, y, z]]) => new BoneProfile({ name, parentName, localPosition: [0, 0, 0], worldPosition: [fx + x, fy + y, fz + z] }));
+  return new FigureRigProfile({ figureLabel: label, family: "genesis_9", bones, figurePosition });
+}
+
+describe("surface contact (kwpq)", () => {
+  it("Genesis 9's shoulder anchor is the upper-arm joint and the knee is the shin", () => {
+    const names = ["hip", "l_shoulder", "l_upperarm", "l_forearm", "l_hand", "l_thigh", "l_shin", "l_foot"];
+    const profile = new FigureRigProfile({ figureLabel: "G9", family: "genesis_9", bones: names.map((name) => new BoneProfile({ name })) });
+    expect(profile.anchor("l_shoulder")?.boneName).toBe("l_upperarm");
+    expect(profile.anchor("l_knee")?.boneName).toBe("l_shin");
+    // Rigs without an upper-arm bone keep their shoulder bone.
+    const generic = new FigureRigProfile({ figureLabel: "X", family: "generic", bones: ["hip", "l_shoulder", "l_hand"].map((name) => new BoneProfile({ name })) });
+    expect(generic.anchor("l_shoulder")?.boneName).toBe("l_shoulder");
+  });
+
+  it("effectorReach is the distance to the farthest descendant", () => {
+    expect(armProfile("A", [0, 0, 0], "r", -1).effectorReach("r_hand")).toBeCloseTo(14, 9);
+    expect(new FigureRigProfile({ figureLabel: "B", family: "generic", bones: [new BoneProfile({ name: "r_hand" })] }).effectorReach("r_hand")).toBeNull();
+  });
+
+  it("an anchor-to-anchor target resolves a surface standoff", () => {
+    const a = armProfile("A", [60, 0, 0], "r", -1);
+    const b = armProfile("B", [0, 0, 0], "l", 1);
+    const profiles = { A: a, B: b };
+    const touch = (extra: Partial<ConstructorParameters<typeof HandTarget>[0]> = {}) =>
+      new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder", ...extra });
+    const resolved = resolveInteractionTarget(touch(), profiles);
+    expect(resolved.targetBone).toBe("l_upperarm");
+    expect(resolved.targetPoint).toEqual([17, 140, -4]); // still the joint centre
+    expect(resolved.surfaceStandoff).toBeCloseTo(ANCHOR_SURFACE_RADIUS.shoulder + 14, 9);
+    // Hand-to-hand meets palm to palm: half the hand's reach.
+    const handshake = resolveInteractionTarget(touch({ targetAnchor: "r_hand" }), { A: a, B: armProfile("B", [0, 0, 0], "r", -1) });
+    expect(handshake.surfaceStandoff).toBeCloseTo(7, 9);
+    // An explicit point is the contact point; an explicit standoff wins.
+    expect(resolveInteractionTarget(touch({ targetPoint: [1, 2, 3] }), profiles).surfaceStandoff).toBe(0);
+    expect(resolveInteractionTarget(touch({ surfaceStandoff: 4.5 }), profiles).surfaceStandoff).toBe(4.5);
+    // No finger bones: fall back to a nominal hand length.
+    const bare = new FigureRigProfile({ figureLabel: "C", family: "genesis_9", bones: [new BoneProfile({ name: "r_hand", worldPosition: [0, 0, 0] })] });
+    const fallback = resolveInteractionTarget(new HandTarget({ figureLabel: "C", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder" }), { C: bare, B: b });
+    expect(fallback.surfaceStandoff).toBeCloseTo(ANCHOR_SURFACE_RADIUS.shoulder + EFFECTOR_REACH_FALLBACK.hand, 9);
+  });
+
+  it("surfaceStandoff round-trips through the plan dict", () => {
+    const plan = new InteractionPlan({ actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder", surfaceStandoff: 2.5 })] });
+    expect((InteractionPlan.fromDict(plan.toDict()).constraints[0] as HandTarget).surfaceStandoff).toBe(2.5);
+    const unset = new InteractionPlan({ actors: ["A"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand" })] });
+    expect((InteractionPlan.fromDict(unset.toDict()).constraints[0] as HandTarget).surfaceStandoff).toBeNull();
+  });
+
+  it("apply() aims the hand at the partner's skin, not the joint", async () => {
+    const a = armProfile("A", [60, 0, 0], "r", -1);
+    const b = armProfile("B", [0, 0, 0], "l", 1);
+    const recipe = new InteractionRecipe({ kind: "touch", actors: ["A", "B"], constraints: [new HandTarget({ figureLabel: "A", anchorName: "r_hand", targetFigure: "B", targetAnchor: "l_shoulder" })] });
+    const prepared = prepareInteractionRecipe(recipe, { A: a, B: b });
+    const standoff = prepared.resolvedTargets[0].surfaceStandoff;
+    const moved: Record<string, Vector3> = {};
+    const scene = {
+      findSkeletonByLabel: async (label: string) => ({
+        setPosition: async (x: number, y: number, z: number) => {
+          moved[label] = [x, y, z];
+        },
+        boneRotations: async () => ({}),
+        setBoneRotations: async () => {},
+        evaluatePoseJacobian: async (chain: string[]) => ({ basePosition: [0, 0, 0] as Vector3, columns: chain.flatMap(() => [[1, 0, 0], [0, 1, 0], [0, 0, 1]] as Vector3[]) }),
+      }),
+    } as any;
+
+    const result = await prepared.apply(scene, { alignLimbTargets: true, maxIterations: 1 });
+
+    const target = result.alignmentResults[0].targetPoint!;
+    const shiftB = moved.B.map((v, i) => v - b.figurePosition![i]);
+    const joint: Vector3 = [17 + shiftB[0], 140 + shiftB[1], -4 + shiftB[2]];
+    expect(Math.hypot(target[0] - joint[0], target[1] - joint[1], target[2] - joint[2])).toBeCloseTo(standoff, 9);
+    // Pulled toward A's upper arm (A stands on +X of B), not deeper into B.
+    const aRootX = a.bone("r_upperarm").worldPosition![0] + moved.A[0] - a.figurePosition![0];
+    expect(target[0]).toBeGreaterThan(joint[0]);
+    expect(target[0]).toBeLessThanOrEqual(aRootX + 1e-9);
+    expect(result.alignmentResults[0].diagnostics.surfaceStandoff).toBeCloseTo(standoff, 9);
+    expect(result.alignmentResults[0].diagnostics.targetJointPoint).toEqual(joint);
   });
 });
 

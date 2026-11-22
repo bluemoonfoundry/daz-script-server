@@ -8,6 +8,7 @@ Via runner:      python tests.py unit
 """
 
 import json
+import math
 import os
 import sys
 import unittest
@@ -23,6 +24,8 @@ from dazpy._scene_events import SceneEvent, watch_scene_events, wait_for_scene_e
 from dazpy.exceptions import ConnectionError as DazConnectionError
 from dazpy.exceptions import TimeoutError as DazTimeoutError
 from dazpy import (
+    ANCHOR_SURFACE_RADIUS,
+    EFFECTOR_REACH_FALLBACK,
     AxisLimit,
     BalanceTarget,
     BoneProfile,
@@ -1316,10 +1319,13 @@ class TestInteractionAdapter(unittest.TestCase):
 
         source_profile = build_rig_profile(source_skel)
         target_profile = build_rig_profile(target_skel)
-        prepared = prepare_interaction_recipe(
-            build_touch_recipe("Genesis 9", "Partner", source_anchor="r_hand", target_anchor="l_shoulder"),
-            {"Genesis 9": source_profile, "Partner": target_profile},
+        # Joint-to-joint staging (no surface standoff) keeps the numbers simple.
+        recipe = InteractionRecipe(
+            kind="touch",
+            actors=["Genesis 9", "Partner"],
+            constraints=[HandTarget("Genesis 9", "r_hand", target_figure="Partner", target_anchor="l_shoulder", surface_standoff=0.0)],
         )
+        prepared = prepare_interaction_recipe(recipe, {"Genesis 9": source_profile, "Partner": target_profile})
 
         result = prepared.apply(scene)
 
@@ -1364,13 +1370,16 @@ class TestInteractionAdapter(unittest.TestCase):
         b = self._live_profile("B", (0.0, 0.0, 0.0), {"l_shoulder": (3.5, 135.5, -3.6)})
         recipe = InteractionRecipe(kind="touch", actors=["A", "B"], constraints=[HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder")])
 
-        patch = prepare_interaction_recipe(recipe, {"A": a, "B": b}).build_pose_patch()
+        prepared = prepare_interaction_recipe(recipe, {"A": a, "B": b})
+        patch = prepared.build_pose_patch()
 
         pa, pb = patch.figure_positions["A"], patch.figure_positions["B"]
         self.assertEqual((pa[1], pb[1]), (0.0, 0.0))
-        # Horizontally, A's hand lands on B's shoulder.
-        self.assertAlmostEqual(pa[0] + -51.5, pb[0] + 3.5)
-        self.assertAlmostEqual(pa[2] + 2.3, pb[2] + -3.6)
+        # Horizontally, A's hand lands a surface standoff short of B's shoulder (kwpq), on A's side.
+        hand = (pa[0] - 51.5, pa[2] + 2.3)
+        shoulder = (pb[0] + 3.5, pb[2] - 3.6)
+        self.assertAlmostEqual(math.dist(hand, shoulder), prepared.resolved_targets[0].surface_standoff)
+        self.assertGreater(hand[0], shoulder[0])
         self.assertGreater(abs(pa[0] - pb[0]), 50.0)
 
     def test_floor_lock_keeps_each_figures_current_height(self):
@@ -1395,7 +1404,7 @@ class TestInteractionAdapter(unittest.TestCase):
     def test_apply_shifts_cross_figure_targets_by_staging_displacement(self):
         a = self._live_profile("A", (0.0, 0.0, 0.0), {"r_hand": (-51.5, 99.8, 2.3)})
         b = self._live_profile("B", (0.0, 0.0, 0.0), {"l_shoulder": (3.5, 135.5, -3.6)})
-        recipe = InteractionRecipe(kind="touch", actors=["A", "B"], constraints=[HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder")])
+        recipe = InteractionRecipe(kind="touch", actors=["A", "B"], constraints=[HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder", surface_standoff=0.0)])
         prepared = prepare_interaction_recipe(recipe, {"A": a, "B": b})
         moved = {}
         scene = MagicMock()
@@ -1409,6 +1418,96 @@ class TestInteractionAdapter(unittest.TestCase):
             self.assertAlmostEqual(got, want)
         # The hand target now coincides with the staged hand in X/Z.
         self.assertAlmostEqual(seen[0][0], moved["A"][0] - 51.5)
+
+    @staticmethod
+    def _arm_profile(label, figure_position, side, x_sign):
+        """A Genesis 9 arm (clavicle -> upper arm -> forearm -> hand -> finger) on a figure at figure_position."""
+        fx, fy, fz = figure_position
+        chain = [
+            ("hip", None, (0.0, 100.0, 0.0)),
+            (f"{side}_shoulder", "hip", (x_sign * 3.0, 145.0, -2.0)),
+            (f"{side}_upperarm", f"{side}_shoulder", (x_sign * 17.0, 140.0, -4.0)),
+            (f"{side}_forearm", f"{side}_upperarm", (x_sign * 45.0, 140.0, -4.0)),
+            (f"{side}_hand", f"{side}_forearm", (x_sign * 70.0, 140.0, -4.0)),
+            (f"{side}_mid3", f"{side}_hand", (x_sign * 84.0, 140.0, -4.0)),
+        ]
+        bones = [
+            BoneProfile(name=name, parent_name=parent, local_position=(0.0, 0.0, 0.0), world_position=(fx + x, fy + y, fz + z))
+            for name, parent, (x, y, z) in chain
+        ]
+        return FigureRigProfile(figure_label=label, family="genesis_9", bones=bones, figure_position=figure_position)
+
+    def test_genesis9_shoulder_anchor_is_the_upper_arm_joint_and_knee_the_shin(self):
+        # G9's l_shoulder bone is the clavicle (origin by the sternum); kwpq.
+        names = ["hip", "l_shoulder", "l_upperarm", "l_forearm", "l_hand", "l_thigh", "l_shin", "l_foot"]
+        profile = FigureRigProfile(figure_label="G9", family="genesis_9", bones=[BoneProfile(name=n) for n in names])
+        self.assertEqual(profile.anchor("l_shoulder").bone_name, "l_upperarm")
+        self.assertEqual(profile.anchor("l_knee").bone_name, "l_shin")
+        # Rigs without an upper-arm bone keep their shoulder bone.
+        generic = FigureRigProfile(figure_label="X", family="generic", bones=[BoneProfile(name=n) for n in ["hip", "l_shoulder", "l_hand"]])
+        self.assertEqual(generic.anchor("l_shoulder").bone_name, "l_shoulder")
+
+    def test_effector_reach_is_distance_to_farthest_descendant(self):
+        profile = self._arm_profile("A", (0.0, 0.0, 0.0), "r", -1.0)
+        self.assertAlmostEqual(profile.effector_reach("r_hand"), 14.0)
+        self.assertIsNone(FigureRigProfile(figure_label="B", family="generic", bones=[BoneProfile(name="r_hand")]).effector_reach("r_hand"))
+
+    def test_anchor_to_anchor_target_resolves_a_surface_standoff(self):
+        a = self._arm_profile("A", (60.0, 0.0, 0.0), "r", -1.0)
+        b = self._arm_profile("B", (0.0, 0.0, 0.0), "l", 1.0)
+        profiles = {"A": a, "B": b}
+        resolved = resolve_interaction_target(HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder"), profiles)
+        self.assertEqual(resolved.target_bone, "l_upperarm")
+        self.assertEqual(resolved.target_point, (17.0, 140.0, -4.0))  # still the joint centre
+        self.assertAlmostEqual(resolved.surface_standoff, ANCHOR_SURFACE_RADIUS["shoulder"] + 14.0)
+        # Hand-to-hand meets palm to palm: half the hand's reach.
+        b_hand = self._arm_profile("B", (0.0, 0.0, 0.0), "r", -1.0)
+        handshake = resolve_interaction_target(HandTarget("A", "r_hand", target_figure="B", target_anchor="r_hand"), {"A": a, "B": b_hand})
+        self.assertAlmostEqual(handshake.surface_standoff, 7.0)
+        # An explicit point is the contact point; an explicit standoff wins.
+        explicit = resolve_interaction_target(HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder", target_point=(1.0, 2.0, 3.0)), profiles)
+        self.assertEqual(explicit.surface_standoff, 0.0)
+        override = resolve_interaction_target(HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder", surface_standoff=4.5), profiles)
+        self.assertEqual(override.surface_standoff, 4.5)
+        # No finger bones: fall back to a nominal hand length.
+        bare = FigureRigProfile(figure_label="C", family="genesis_9", bones=[BoneProfile(name="r_hand", world_position=(0.0, 0.0, 0.0))])
+        fallback = resolve_interaction_target(HandTarget("C", "r_hand", target_figure="B", target_anchor="l_shoulder"), {"C": bare, "B": b})
+        self.assertAlmostEqual(fallback.surface_standoff, ANCHOR_SURFACE_RADIUS["shoulder"] + EFFECTOR_REACH_FALLBACK["hand"])
+
+    def test_surface_standoff_round_trips(self):
+        plan = InteractionPlan(actors=["A", "B"], constraints=[HandTarget("A", "r_hand", target_figure="B", target_anchor="l_shoulder", surface_standoff=2.5)])
+        restored = InteractionPlan.from_dict(plan.to_dict())
+        self.assertEqual(restored.constraints[0].surface_standoff, 2.5)
+        self.assertIsNone(InteractionPlan.from_dict(InteractionPlan(actors=["A"], constraints=[HandTarget("A", "r_hand")]).to_dict()).constraints[0].surface_standoff)
+
+    def test_apply_aims_the_hand_at_the_partners_skin_not_the_joint(self):
+        a = self._arm_profile("A", (60.0, 0.0, 0.0), "r", -1.0)
+        b = self._arm_profile("B", (0.0, 0.0, 0.0), "l", 1.0)
+        recipe = build_touch_recipe("A", "B")
+        prepared = prepare_interaction_recipe(recipe, {"A": a, "B": b})
+        standoff = prepared.resolved_targets[0].surface_standoff
+        moved = {}
+        scene = MagicMock()
+        scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(set_position=lambda x, y, z, label=label: moved.__setitem__(label, (x, y, z)))
+        seen = []
+        with patch(
+            "dazpy._interaction.align_single_limb_target",
+            side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or LimbAlignmentResult(resolved.figure_label, resolved.anchor_name, resolved.bone_name, [], resolved.target_point),
+        ):
+            result = prepared.apply(scene, align_limb_targets=True)
+
+        shift_b = tuple(moved["B"][i] - b.figure_position[i] for i in range(3))
+        joint = (17.0 + shift_b[0], 140.0 + shift_b[1], -4.0 + shift_b[2])
+        gap = [seen[0][i] - joint[i] for i in range(3)]
+        self.assertAlmostEqual(math.sqrt(sum(g * g for g in gap)), standoff)
+        # Pulled toward A's upper arm (A stands on +X of B), not deeper into B.
+        shift_a = tuple(moved["A"][i] - a.figure_position[i] for i in range(3))
+        a_root_x = a.bone("r_upperarm").world_position[0] + shift_a[0]
+        self.assertGreater(seen[0][0], joint[0])
+        self.assertLess(seen[0][0], a_root_x + 1e-9)
+        diagnostics = result.alignment_results[0].diagnostics
+        self.assertAlmostEqual(diagnostics["surface_standoff"], standoff)
+        self.assertEqual(diagnostics["target_joint_point"], list(joint))
 
     def test_profile_builders_read_figure_position(self):
         snapshot = [{"name": "G9", "label": "A", "position": {"x": 10.0, "y": 0.0, "z": 5.0},

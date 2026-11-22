@@ -77,6 +77,10 @@ def _add_vec3(a: Vector3 | None, b: Vector3 | None) -> Vector3 | None:
     return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
 
 
+def _as_optional_float(value: object | None) -> float | None:
+    return None if value is None else float(value)  # type: ignore[arg-type]
+
+
 def _sub_vec3(a: Vector3, b: Vector3) -> Vector3:
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
@@ -157,6 +161,27 @@ def _side_matches(name: str, side: ChainSide) -> bool:
     if side in ("center", "unknown"):
         return True
     return _side_from_name(name) == side
+
+
+_SHOULDER_JOINT_TOKENS = ("upperarm", "upper_arm", "shldrbend")
+_KNEE_JOINT_TOKENS = ("shin", "calf", "knee")
+
+ANCHOR_SURFACE_RADIUS: dict[str, float] = {
+    "pelvis": 12.0,
+    "spine": 12.0,
+    "chest": 12.0,
+    "neck": 6.0,
+    "head": 10.0,
+    "shoulder": 6.0,
+    "elbow": 4.0,
+    "hand": 3.0,
+    "knee": 5.0,
+    "foot": 5.0,
+}
+"""Approximate body radius (cm, adult figure) from an anchor's joint centre to its skin."""
+
+EFFECTOR_REACH_FALLBACK: dict[str, float] = {"hand": 15.0, "foot": 12.0}
+"""Wrist-to-fingers / ankle-to-toes reach (cm) when the profile has no descendant positions."""
 
 
 @dataclass(frozen=True)
@@ -293,6 +318,13 @@ class ResolvedInteractionTarget:
     target_anchor: str | None = None
     target_bone: str | None = None
     offset: Vector3 = (0.0, 0.0, 0.0)
+    surface_standoff: float = 0.0
+    """How far the effector bone stops short of ``target_point`` (cm).
+
+    ``target_point`` is the target anchor's joint centre (plus ``offset``).
+    The standoff is applied at alignment time, toward the source limb, once
+    staging has fixed where the figures stand.
+    """
 
     def to_dict(self) -> dict:
         return {
@@ -304,6 +336,7 @@ class ResolvedInteractionTarget:
             "target_anchor": self.target_anchor,
             "target_bone": self.target_bone,
             "offset": list(self.offset),
+            "surface_standoff": self.surface_standoff,
         }
 
 
@@ -333,6 +366,29 @@ class FigureRigProfile:
         if self.figure_position is not None and bone.world_position is not None:
             return _sub_vec3(bone.world_position, self.figure_position)
         return bone.local_position
+
+    def effector_reach(self, bone_name: str) -> float | None:
+        """Distance from a bone to its farthest descendant (wrist to finger joints, ankle to toes).
+
+        None when the bone or its descendants have no world positions.
+        """
+        origin = self.bone(bone_name).world_position
+        if origin is None:
+            return None
+        reach: float | None = None
+        for bone in self.bones:
+            if bone.name == bone_name or bone.world_position is None:
+                continue
+            parent = bone.parent_name
+            seen: set[str] = set()
+            while parent is not None and parent != bone_name and parent not in seen and parent in self._index:
+                seen.add(parent)
+                parent = self.bones[self._index[parent]].parent_name
+            if parent != bone_name:
+                continue
+            distance = _vec3_length(_vec3_sub(bone.world_position, origin))
+            reach = distance if reach is None else max(reach, distance)
+        return reach
 
     def bone_names(self) -> list[str]:
         return [bone.name for bone in self.bones]
@@ -445,6 +501,15 @@ class FigureRigProfile:
         """
 
         anchors: dict[str, InteractionAnchor] = {}
+        # Preferred tokens are tried first: Genesis 9's ``l_shoulder`` bone is
+        # the clavicle (origin by the sternum), so the shoulder anchor is the
+        # upper-arm joint; ``*thigh`` starts at the hip, so the knee is the shin.
+        preferred: dict[str, tuple[str, ...]] = {
+            "l_shoulder": _SHOULDER_JOINT_TOKENS,
+            "r_shoulder": _SHOULDER_JOINT_TOKENS,
+            "l_knee": _KNEE_JOINT_TOKENS,
+            "r_knee": _KNEE_JOINT_TOKENS,
+        }
         patterns: list[tuple[str, AnchorRole, ChainSide, tuple[str, ...]]] = [
             ("pelvis", "pelvis", "center", ("pelvis", "hip")),
             ("spine", "spine", "center", ("spine", "abdomen", "torso")),
@@ -463,7 +528,10 @@ class FigureRigProfile:
             ("r_foot", "foot", "right", ("foot", "toe", "ankle")),
         ]
         for key, role, side, tokens in patterns:
-            bone = self._find_terminal_bone([(role if role != "custom" else "custom", side, tokens)])
+            candidates = [(role, side, tokens)]
+            if key in preferred:
+                candidates.insert(0, (role, side, preferred[key]))
+            bone = self._find_terminal_bone(candidates)
             if bone is None:
                 continue
             anchors[key] = InteractionAnchor(name=key, bone_name=bone.name, role=role, side=side)
@@ -493,16 +561,29 @@ class FigureRigProfile:
         target_figure = target.target_figure
         target_anchor = target.target_anchor
         target_bone = None
+        target_role: AnchorRole | None = None
+        anchor_point_hint = False
 
         if target_figure and target_anchor and rig_profiles is not None:
             target_profile = _lookup_rig_profile(rig_profiles, target_figure)
             if target_profile is not None:
                 resolved = target_profile.require_anchor(target_anchor)
                 target_bone = resolved.bone_name
+                target_role = resolved.role
         if target_point is None and target_figure is not None and target_anchor is not None and rig_profiles is not None:
             target_profile = _lookup_rig_profile(rig_profiles, target_figure)
             if target_profile is not None:
                 target_point = _anchor_world_point_hint(target_profile, target_anchor)
+                anchor_point_hint = target_point is not None
+
+        if target.surface_standoff is not None:
+            surface_standoff = max(0.0, float(target.surface_standoff))
+        elif anchor_point_hint and target_role is not None:
+            # Only an anchor's joint-centre hint needs pushing out to the skin;
+            # an explicit target_point is taken as the contact point itself.
+            surface_standoff = self._default_surface_standoff(anchor, target_role)
+        else:
+            surface_standoff = 0.0
 
         # The offset shifts a resolved point; it is not a point on its own.
         # Leaving target_point None lets build_pose_patch report the target as
@@ -519,7 +600,25 @@ class FigureRigProfile:
             target_anchor=target_anchor,
             target_bone=target_bone,
             offset=target.offset,
+            surface_standoff=surface_standoff,
         )
+
+    def _default_surface_standoff(self, source: InteractionAnchor, target_role: AnchorRole) -> float:
+        """Joint-to-joint gap for skin contact: target body radius + the source effector's reach.
+
+        A hand or foot effector is its wrist/ankle joint, so it stops a whole
+        hand/foot short of the skin; hand-to-hand (handshake) stops half a hand
+        short so the palms meet.
+        """
+        if source.role in ("hand", "foot"):
+            reach = self.effector_reach(source.bone_name)
+            if reach is None:
+                reach = EFFECTOR_REACH_FALLBACK[source.role]
+        else:
+            reach = ANCHOR_SURFACE_RADIUS.get(source.role, 0.0)
+        if source.role == "hand" and target_role == "hand":
+            return reach * 0.5
+        return ANCHOR_SURFACE_RADIUS.get(target_role, 0.0) + reach
 
     def to_dict(self) -> dict:
         return {
@@ -592,6 +691,14 @@ class AnchorTarget:
     target_anchor: str | None = None
     target_point: Vector3 | None = None
     offset: Vector3 = (0.0, 0.0, 0.0)
+    surface_standoff: float | None = None
+    """How far the effector joint stops short of the target (cm).
+
+    None (default) picks one for anchor-to-anchor targets: the target anchor's
+    body radius plus the effector's hand/foot length, so the hand lands on the
+    skin instead of inside the partner. 0 aims at the joint centre. Explicit
+    ``target_point`` targets default to 0.
+    """
 
     def to_dict(self) -> dict:
         return {
@@ -602,6 +709,7 @@ class AnchorTarget:
             "target_anchor": self.target_anchor,
             "target_point": list(self.target_point) if self.target_point else None,
             "offset": list(self.offset),
+            "surface_standoff": self.surface_standoff,
         }
 
 
@@ -748,6 +856,7 @@ class InteractionPlan:
                         target_anchor=item.get("target_anchor"),
                         target_point=_as_tuple3(item.get("target_point")),
                         offset=_as_tuple3(item.get("offset")) or (0.0, 0.0, 0.0),
+                        surface_standoff=_as_optional_float(item.get("surface_standoff")),
                     )
                 )
             elif kind == "FootTarget":
@@ -759,6 +868,7 @@ class InteractionPlan:
                         target_anchor=item.get("target_anchor"),
                         target_point=_as_tuple3(item.get("target_point")),
                         offset=_as_tuple3(item.get("offset")) or (0.0, 0.0, 0.0),
+                        surface_standoff=_as_optional_float(item.get("surface_standoff")),
                     )
                 )
             elif kind == "ContactTarget":
@@ -1052,16 +1162,27 @@ class PreparedInteractionRecipe:
                     continue
 
                 if target_offset is not None:
+                    # Stage the effector a surface standoff short of the target
+                    # joint, on the source limb's side, so IK starts at the
+                    # contact point instead of folding the arm back to it.
+                    root_offset = _limb_root_offset(profile, source_anchor.bone_name)
                     if source_base is None and target_base is None:
                         contact_center = _midpoint_vec3(source_offset, target_offset)
-                        _append_position(resolved.figure_label, _sub_vec3(contact_center, source_offset))
-                        _append_position(resolved.target_figure, _sub_vec3(contact_center, target_offset))
+                        source_position = _sub_vec3(contact_center, source_offset)
+                        target_position = _sub_vec3(contact_center, target_offset)
+                        gap = _standoff_shift(contact_center, source_position, root_offset, resolved.surface_standoff)
+                        _append_position(resolved.figure_label, _vec3_add(source_position, _vec3_scale(gap, 0.5)))
+                        _append_position(resolved.target_figure, _vec3_sub(target_position, _vec3_scale(gap, 0.5)))
                     elif source_base is None and target_base is not None:
                         target_world = _vec3_add(target_base, target_offset)
-                        _append_position(resolved.figure_label, _sub_vec3(target_world, source_offset))
+                        source_position = _sub_vec3(target_world, source_offset)
+                        gap = _standoff_shift(target_world, source_position, root_offset, resolved.surface_standoff)
+                        _append_position(resolved.figure_label, _vec3_add(source_position, gap))
                     elif source_base is not None and target_base is None:
                         source_world = _vec3_add(source_base, source_offset)
-                        _append_position(resolved.target_figure, _sub_vec3(source_world, target_offset))
+                        target_world = _sub_vec3(source_world, target_offset)
+                        gap = _standoff_shift(source_world, source_base, root_offset, resolved.surface_standoff)
+                        _append_position(resolved.target_figure, _vec3_sub(target_world, gap))
                     continue
 
             if resolved.target_point is None:
@@ -1161,18 +1282,100 @@ class PreparedInteractionRecipe:
             profile = _lookup_rig_profile(self.rig_profiles, resolved.figure_label)
             if profile is None:
                 continue
-            alignment_results.append(
-                align_single_limb_target(
-                    skeleton,
-                    profile,
-                    resolved,
-                    max_iterations=max_iterations or self.plan.options.max_iterations,
-                    step_degrees=step_degrees,
-                    damping=damping,
-                    tolerance=tolerance,
-                )
+            joint_point = resolved.target_point
+            if resolved.surface_standoff > 0.0:
+                source_shift = _displacement_for_profile(self.rig_profiles, profile, figure_displacements)
+                resolved = replace(resolved, target_point=_surface_contact_point(profile, resolved, source_shift))
+            result = align_single_limb_target(
+                skeleton,
+                profile,
+                resolved,
+                max_iterations=max_iterations or self.plan.options.max_iterations,
+                step_degrees=step_degrees,
+                damping=damping,
+                tolerance=tolerance,
             )
+            if resolved.surface_standoff > 0.0:
+                result.diagnostics["surface_standoff"] = resolved.surface_standoff
+                result.diagnostics["target_joint_point"] = list(joint_point)
+            alignment_results.append(result)
         return alignment_results
+
+
+def _displacement_for_profile(
+    rig_profiles: dict[str, FigureRigProfile],
+    profile: FigureRigProfile,
+    figure_displacements: dict[str, Vector3] | None,
+) -> Vector3 | None:
+    """Staging displacement of ``profile``'s figure, matched by profile so label aliases work."""
+    for label, displacement in (figure_displacements or {}).items():
+        if _lookup_rig_profile(rig_profiles, label) is profile:
+            return displacement
+    return None
+
+
+def _limb_root_bone(profile: FigureRigProfile, effector_bone: str) -> str | None:
+    """Root of the effector's alignment chain (shoulder for a hand, hip for a foot)."""
+    chain = profile.suggest_primary_chain(effector_bone)
+    chain_names = _alignment_chain_names(profile, chain) if chain is not None else []
+    return chain_names[0] if chain_names else None
+
+
+def _limb_root_offset(profile: FigureRigProfile, effector_bone: str) -> Vector3 | None:
+    root = _limb_root_bone(profile, effector_bone)
+    return profile.bone_offset(root) if root is not None else None
+
+
+def _approach_direction(joint: Vector3, root: Vector3) -> Vector3 | None:
+    """Unit direction from a target joint toward the source limb root, horizontal when possible."""
+    horizontal = (root[0] - joint[0], 0.0, root[2] - joint[2])
+    length = _vec3_length(horizontal)
+    if length >= 1e-6:
+        return _vec3_scale(horizontal, 1.0 / length)
+    full = _vec3_sub(root, joint)
+    length = _vec3_length(full)
+    return _vec3_scale(full, 1.0 / length) if length >= 1e-6 else None
+
+
+def _standoff_shift(joint: Vector3, source_position: Vector3, root_offset: Vector3 | None, standoff: float) -> Vector3:
+    """How far to move the source figure (staged at ``source_position``) away from ``joint``."""
+    if standoff <= 0.0:
+        return (0.0, 0.0, 0.0)
+    root = _vec3_add(source_position, root_offset) if root_offset is not None else source_position
+    direction = _approach_direction(joint, root)
+    return _vec3_scale(direction, standoff) if direction is not None else (0.0, 0.0, 0.0)
+
+
+def _surface_contact_point(
+    profile: FigureRigProfile,
+    target: ResolvedInteractionTarget,
+    source_shift: Vector3 | None,
+) -> Vector3:
+    """Pull ``target.target_point`` back toward the source limb by ``target.surface_standoff``.
+
+    The approach direction runs (horizontally, as staging does) from the
+    target joint to the root of the source limb's alignment chain (shoulder
+    for a hand, hip for a foot), at its staged position, so the effector
+    stops on the near side of the partner's body. Falls back to the figure
+    origin; returns the point unchanged when neither position is known or
+    they coincide.
+    """
+    point = target.target_point
+    assert point is not None
+    root_bone = _limb_root_bone(profile, target.bone_name)
+    root = profile.bone(root_bone).world_position if root_bone is not None else None
+    if root is None and profile.figure_position is not None:
+        root = (profile.figure_position[0], point[1], profile.figure_position[2])
+    if root is None:
+        return point
+    if source_shift is not None:
+        root = _vec3_add(root, source_shift)
+    direction = _approach_direction(point, root)
+    if direction is None:
+        return point
+    # Never past the limb root: on overlapping figures that would aim behind the source.
+    reach = min(target.surface_standoff, _vec3_length(_vec3_sub(root, point)))
+    return _vec3_add(point, _vec3_scale(direction, reach))
 
 
 @dataclass

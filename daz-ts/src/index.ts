@@ -117,6 +117,7 @@ export type { VersionCheck } from "./version.js";
 // ── Phase 5A: interaction rig profiles + plan data model ───────────────────
 
 export {
+  ANCHOR_SURFACE_RADIUS,
   AxisLimit,
   BoneChain,
   BoneProfile,
@@ -131,6 +132,7 @@ export {
   defaultAxisLimitsForBone,
   detectFigureFamily,
   dotVec3,
+  EFFECTOR_REACH_FALLBACK,
   lengthVec3,
   lookupRigProfile,
   looksLikeHelper,
