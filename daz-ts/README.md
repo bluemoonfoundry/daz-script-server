@@ -263,7 +263,7 @@ accessor, since accessors can't be `async`.
 scope. dazpy's `DazSkeleton.hand_to_target`/`foot_to_target` are standalone
 functions in daz-ts — `alignHandTarget(skeleton, point)` /
 `alignFootTarget(skeleton, point)` from the Phase 5 IK solver
-(`interactionSolve.ts`); `DazScene.applyInteractionRecipe` lands in Phase 5C.
+(`interactionSolve.ts`); see Phase 5 below for `DazScene.applyInteractionRecipe`.
 
 See `test/integration/proxies.integration.test.ts` for a live-server
 integration suite covering these classes (gated on `DAZ_SERVER_URL`, same
@@ -375,5 +375,51 @@ blocking-dialog-avoidance pattern — a bad path reaching DAZ Studio's
 underlying `setMap()`/environment-map call can hang or crash the app via a
 modal file-not-found dialog rather than raising a script error.
 
-Not ported in Phase 4: `_interaction.py` (multi-figure IK posing) — that's
-Phase 5 (`daz-script-server-sf7y`).
+`_interaction.py` (multi-figure IK posing) is Phase 5, below.
+
+## Phase 5: Interaction / IK (multi-figure posing)
+
+Phase 5 ports dazpy's `_interaction.py`: stage two figures relative to each
+other and pull their hands/feet onto contact points with a
+damped-least-squares IK pass.
+
+```ts
+import { DazScene, buildHugRecipe } from "daz-ts";
+
+const scene = new DazScene();
+const result = await scene.applyInteractionRecipe(buildHugRecipe("Genesis 9", "Genesis 9 (2)"), {
+  alignLimbTargets: true, // run the IK pass after staging
+});
+if (!result.prepared.isValid) console.warn(result.prepared.validationIssues.map((i) => i.message));
+for (const r of result.alignmentResults) console.log(r.effectorBone, r.converged, r.finalError);
+```
+
+- **Recipe builders** (`interactionPlan.ts`) — `buildSitRecipe`,
+  `buildTouchRecipe`, `buildKissRecipe`, `buildHandshakeRecipe`,
+  `buildHugRecipe`, `buildFaceEachOtherRecipe`, `buildFightRecipe`. Each
+  returns an `InteractionRecipe` whose constraints match dazpy's
+  `build_*_recipe` for the same inputs (options are camelCase:
+  `{ seatPoint, supportPoints, aAnchor, strikeAnchor, ... }`). dazpy's
+  `build_kiss_recipe` `b_anchor` argument is always overwritten, so
+  `buildKissRecipe` doesn't take one.
+- **Applying** — `DazScene.applyInteractionRecipe(recipe, opts)` /
+  `applyInteractionRecipeToScene(scene, recipe, opts)`: one `sceneSnapshot()`
+  call builds every figure's rig profile (pass `opts.rigProfiles` to skip
+  it), the recipe is validated and resolved, figures are staged toward their
+  contact points, and `opts.alignLimbTargets` runs the IK pass
+  (`maxIterations`, `stepDegrees`, `damping`, `tolerance`). Unknown
+  figures/anchors come back as `result.prepared.validationIssues`, not
+  exceptions.
+- **Lower-level pieces** — `prepareInteractionRecipe()` /
+  `PreparedInteractionRecipe` (validate, resolve, `buildPosePatch()`,
+  `apply()`), `InteractionPlan` and the constraint classes (`HandTarget`,
+  `FootTarget`, `LookAtTarget`, `BalanceTarget`, `ContactTarget`,
+  `PoseTarget`) for custom recipes; `buildRigProfile()` /
+  `FigureRigProfile` (`rigProfile.ts`) for rig-family detection, bone
+  chains and anchors; `alignHandTarget()` / `alignFootTarget()` /
+  `alignSingleLimbTarget()` (`interactionSolve.ts`) for one-off IK.
+
+Unlike dazpy, the IK solver is batch-only (every `DazSkeleton` has
+`evaluatePoseJacobian()`), so dazpy's per-bone-perturbation fallback path
+isn't ported. See
+`docs/superpowers/specs/2026-09-07-daz-ts-phase5-interaction-design.md`.

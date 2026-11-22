@@ -258,7 +258,7 @@ export class BoneProfile {
 
 // ── name-matching heuristics ─────────────────────────────────────────────────
 
-function normalizeName(value: string | null | undefined): string {
+export function normalizeName(value: string | null | undefined): string {
   const text = (value ?? "").trim().toLowerCase();
   return text.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }

@@ -3,6 +3,7 @@ import { DazClient } from "./client.js";
 import { NodeNotFoundError, ScriptRuntimeError } from "./exceptions.js";
 import { DazLight } from "./light.js";
 import { DazNode, type NodeIdentifier } from "./node.js";
+import { applyInteractionRecipeToScene, type ApplyInteractionRecipeOptions, type InteractionRecipe, type PreparedInteractionResult } from "./interactionPlan.js";
 import { executeLong } from "./polling.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 import { DazSkeleton } from "./skeleton.js";
@@ -25,10 +26,6 @@ function sleep(seconds: number): Promise<void> {
  * This file covers node/camera/light/skeleton factories and selection
  * (Phase 2 Task 12); later tasks (13-14) add bulk scene snapshots and
  * I/O/playback/undo/dForce methods to this same class.
- *
- * @remarks
- * `applyInteractionRecipe()` (dazpy's multi-figure IK recipe application) is
- * Phase 5 scope (`daz-script-server-sf7y`), not implemented here.
  */
 export class DazScene {
   private readonly client: DazClient;
@@ -282,6 +279,17 @@ export class DazScene {
 
   // ---------------------------------------------------------------------
   // Bulk scene snapshots
+  /**
+   * Prepare and apply a multi-figure interaction recipe (e.g. from
+   * `buildHugRecipe`) to this scene: rig profiles come from one
+   * `sceneSnapshot()` call unless `opts.rigProfiles` is given, figures are
+   * staged toward their contact points, and `opts.alignLimbTargets` runs the
+   * IK pass. See `applyInteractionRecipeToScene`.
+   */
+  async applyInteractionRecipe(recipe: InteractionRecipe, opts: ApplyInteractionRecipeOptions = {}): Promise<PreparedInteractionResult> {
+    return applyInteractionRecipeToScene(this, recipe, opts);
+  }
+
   // ---------------------------------------------------------------------
 
   /**

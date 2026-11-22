@@ -10,7 +10,7 @@
  */
 
 import type { AnchorTargetLike, FigureRigProfile, RigSceneSource, Vector3, Rotation3 } from "./rigProfile.js";
-import { addVec3, asVector3, averageVec3, lengthVec3, lookupRigProfile, midpointVec3, scaleVec3, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
+import { addVec3, asVector3, averageVec3, buildRigProfilesFromSnapshot, lengthVec3, lookupRigProfile, midpointVec3, normalizeName, scaleVec3, sideFromName, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
 import type { LimbAlignmentResult } from "./interactionSolve.js";
 import { alignmentChainNames, alignSingleLimbTarget } from "./interactionSolve.js";
 
@@ -508,7 +508,7 @@ export interface InteractionRecipeInit {
   metadata?: Record<string, unknown>;
 }
 
-/** A higher-level interaction preset that expands into an interaction plan. Recipe builders (`buildSitRecipe`, etc.) land in Phase 5C. */
+/** A higher-level interaction preset that expands into an interaction plan. Build one directly or with a canned builder (`buildSitRecipe`, `buildHugRecipe`, ...). */
 export class InteractionRecipe {
   readonly kind: RecipeKind;
   readonly actors: string[];
@@ -925,5 +925,169 @@ export function prepareInteractionRecipe(recipe: InteractionRecipe, rigProfiles:
       constraintCount: recipe.constraints.length,
       resolvedTargetCount: resolvedTargets.length,
     },
+  });
+}
+
+// ── scene integration ────────────────────────────────────────────────────────
+
+export interface ApplyInteractionRecipeOptions extends InteractionApplyOptions {
+  /** Pre-built rig profiles keyed by figure label; omit to build them from one `sceneSnapshot()` call. */
+  rigProfiles?: Record<string, FigureRigProfile>;
+}
+
+/**
+ * Prepare and apply an interaction recipe against a live scene: builds rig
+ * profiles from `scene.sceneSnapshot()` (one HTTP call) unless
+ * `opts.rigProfiles` is given, then `prepareInteractionRecipe(...).apply()`.
+ * Unknown figures/anchors surface as `result.prepared.validationIssues`, not
+ * exceptions. `DazScene.applyInteractionRecipe` delegates here.
+ */
+export async function applyInteractionRecipeToScene(
+  scene: Pick<RigSceneSource, "sceneSnapshot" | "findSkeletonByLabel">,
+  recipe: InteractionRecipe,
+  opts: ApplyInteractionRecipeOptions = {},
+): Promise<PreparedInteractionResult> {
+  const { rigProfiles, ...applyOpts } = opts;
+  const profiles = rigProfiles ?? buildRigProfilesFromSnapshot(await scene.sceneSnapshot());
+  return prepareInteractionRecipe(recipe, profiles).apply(scene, applyOpts);
+}
+
+// ── recipe builders ──────────────────────────────────────────────────────────
+
+/** The opposite-side shoulder anchor to `anchorName` (right hand -> left shoulder). */
+function farShoulder(anchorName: string): string {
+  return sideFromName(anchorName) === "right" ? "l_shoulder" : "r_shoulder";
+}
+
+function mutualLookAt(actorA: string, actorB: string): LookAtTarget[] {
+  return [new LookAtTarget(actorA, "head", [0, 0, 0]), new LookAtTarget(actorB, "head", [0, 0, 0])];
+}
+
+function targetAnchorFromStrikeAnchor(anchorName: string): string {
+  const lowered = normalizeName(anchorName);
+  if (lowered.includes("hand")) return "l_shoulder";
+  if (lowered.includes("foot")) return "l_hip";
+  return "chest";
+}
+
+/** Build a seat/lean preset for a single character. */
+export function buildSitRecipe(
+  actorLabel: string,
+  opts: { seatPoint?: Vector3 | null; supportPoints?: Vector3[] | null; footAnchors?: [string, string] } = {},
+): InteractionRecipe {
+  const seatPoint = opts.seatPoint ?? null;
+  const supportPoints = opts.supportPoints ?? [];
+  const constraints: InteractionConstraint[] = [
+    new BalanceTarget({
+      figureLabel: actorLabel,
+      pelvisBone: "pelvis",
+      supportPoints: supportPoints.length > 0 ? [...supportPoints] : seatPoint === null ? [] : [seatPoint],
+      centerOfMassHint: seatPoint,
+    }),
+  ];
+  (opts.footAnchors ?? ["l_foot", "r_foot"]).forEach((anchorName, index) => {
+    const targetPoint = supportPoints.length > 0 ? supportPoints[Math.min(index, supportPoints.length - 1)] : seatPoint;
+    constraints.push(new FootTarget({ figureLabel: actorLabel, anchorName, targetPoint }));
+  });
+  return new InteractionRecipe({ kind: "sit", actors: [actorLabel], constraints, metadata: { seatPoint: seatPoint ? [...seatPoint] : null } });
+}
+
+/** Build a touch/contact preset between two figures. */
+export function buildTouchRecipe(
+  sourceLabel: string,
+  targetLabel: string,
+  opts: { sourceAnchor?: string; targetAnchor?: string; targetPoint?: Vector3 | null } = {},
+): InteractionRecipe {
+  const sourceAnchor = opts.sourceAnchor ?? "r_hand";
+  const targetAnchor = opts.targetAnchor ?? "l_shoulder";
+  return new InteractionRecipe({
+    kind: "touch",
+    actors: [sourceLabel, targetLabel],
+    constraints: [new HandTarget({ figureLabel: sourceLabel, anchorName: sourceAnchor, targetFigure: targetLabel, targetAnchor, targetPoint: opts.targetPoint ?? null })],
+    metadata: { sourceAnchor, targetAnchor },
+  });
+}
+
+/**
+ * Build a face-to-face preset with a stabilizing contact plan: mutual
+ * look-at, A's `aAnchor` hand on B's opposite shoulder, and B's mirrored hand
+ * on A's same shoulder. (dazpy's `b_anchor` parameter is always overwritten
+ * from `a_anchor`'s side, so it is not offered here.)
+ */
+export function buildKissRecipe(actorA: string, actorB: string, opts: { aAnchor?: string } = {}): InteractionRecipe {
+  const aAnchor = opts.aAnchor ?? "r_hand";
+  const right = sideFromName(aAnchor) === "right";
+  const shoulder = right ? "l_shoulder" : "r_shoulder";
+  return new InteractionRecipe({
+    kind: "kiss",
+    actors: [actorA, actorB],
+    constraints: [
+      ...mutualLookAt(actorA, actorB),
+      new HandTarget({ figureLabel: actorA, anchorName: aAnchor, targetFigure: actorB, targetAnchor: shoulder }),
+      new HandTarget({ figureLabel: actorB, anchorName: right ? "l_hand" : "r_hand", targetFigure: actorA, targetAnchor: shoulder }),
+    ],
+    metadata: { interaction: "kiss" },
+  });
+}
+
+/** Build a mirrored hand-to-hand greeting preset for two figures. */
+export function buildHandshakeRecipe(actorA: string, actorB: string, opts: { aAnchor?: string; bAnchor?: string } = {}): InteractionRecipe {
+  const aAnchor = opts.aAnchor ?? "r_hand";
+  const bAnchor = opts.bAnchor ?? "r_hand";
+  return new InteractionRecipe({
+    kind: "handshake",
+    actors: [actorA, actorB],
+    constraints: [
+      ...mutualLookAt(actorA, actorB),
+      new HandTarget({ figureLabel: actorA, anchorName: aAnchor, targetFigure: actorB, targetAnchor: bAnchor }),
+      new HandTarget({ figureLabel: actorB, anchorName: bAnchor, targetFigure: actorA, targetAnchor: aAnchor }),
+    ],
+    metadata: { interaction: "handshake" },
+  });
+}
+
+/** Build a mutual arms-around-each-other embrace: each hand reaches the partner's far shoulder. */
+export function buildHugRecipe(actorA: string, actorB: string, opts: { aAnchor?: string; bAnchor?: string } = {}): InteractionRecipe {
+  const aAnchor = opts.aAnchor ?? "r_hand";
+  const bAnchor = opts.bAnchor ?? "r_hand";
+  return new InteractionRecipe({
+    kind: "hug",
+    actors: [actorA, actorB],
+    constraints: [
+      ...mutualLookAt(actorA, actorB),
+      new HandTarget({ figureLabel: actorA, anchorName: aAnchor, targetFigure: actorB, targetAnchor: farShoulder(aAnchor) }),
+      new HandTarget({ figureLabel: actorB, anchorName: bAnchor, targetFigure: actorA, targetAnchor: farShoulder(bAnchor) }),
+    ],
+    metadata: { interaction: "hug" },
+  });
+}
+
+/** Build a mutual eye-contact preset for two figures, with no limb contact. */
+export function buildFaceEachOtherRecipe(actorA: string, actorB: string): InteractionRecipe {
+  return new InteractionRecipe({
+    kind: "face_each_other",
+    actors: [actorA, actorB],
+    constraints: mutualLookAt(actorA, actorB),
+    metadata: { interaction: "face_each_other" },
+  });
+}
+
+/**
+ * Build a simple strike/contact preset for fight choreography. A strike
+ * anchor containing "foot" becomes a `FootTarget` (kick); anything else a
+ * `HandTarget`. `metadata.strikeTarget` records dazpy's suggested defender
+ * anchor for the strike type (hand -> `l_shoulder`, foot -> `l_hip`, else
+ * `chest`); the constraint itself aims at `targetAnchor`.
+ */
+export function buildFightRecipe(attacker: string, defender: string, opts: { strikeAnchor?: string; targetAnchor?: string } = {}): InteractionRecipe {
+  const strikeAnchor = opts.strikeAnchor ?? "r_hand";
+  const targetAnchor = opts.targetAnchor ?? "head";
+  const init: AnchorTargetInit = { figureLabel: attacker, anchorName: strikeAnchor, targetFigure: defender, targetAnchor };
+  const strike = normalizeName(strikeAnchor).includes("foot") ? new FootTarget(init) : new HandTarget(init);
+  return new InteractionRecipe({
+    kind: "fight",
+    actors: [attacker, defender],
+    constraints: [strike, ...mutualLookAt(attacker, defender)],
+    metadata: { strikeAnchor, targetAnchor, strikeTarget: targetAnchorFromStrikeAnchor(strikeAnchor) },
   });
 }
