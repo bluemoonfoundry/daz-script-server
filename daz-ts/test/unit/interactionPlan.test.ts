@@ -367,16 +367,17 @@ describe("PreparedInteractionRecipe.apply", () => {
     expect(calls).toEqual([[0, 1, 2]]);
   });
 
-  it("apply({alignLimbTargets: true}) returns no alignment results in 5A (interactionSolve.ts lands in 5B)", async () => {
+  it("apply() without alignLimbTargets only stages figures (no IK calls)", async () => {
     const recipe = new InteractionRecipe({
       kind: "touch",
       actors: ["Genesis 9", "Partner"],
       constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Partner", targetAnchor: "l_shoulder" })],
     });
     const prepared = prepareInteractionRecipe(recipe, touchRigProfiles());
+    // No boneRotations/evaluatePoseJacobian on the fake: any IK call would throw.
     const scene = { findSkeletonByLabel: async () => ({ setPosition: async () => {} }) } as any;
 
-    const result = await prepared.apply(scene, { alignLimbTargets: true });
+    const result = await prepared.apply(scene);
 
     expect(result.alignmentResults).toEqual([]);
   });

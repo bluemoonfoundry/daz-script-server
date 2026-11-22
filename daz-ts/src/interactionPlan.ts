@@ -4,13 +4,20 @@
  * Interaction-plan data model: constraints (pose/anchor/contact/look-at/
  * balance targets), `InteractionPlan`/`InteractionRecipe`, validation,
  * target resolution, and coarse pose-patch staging. Ports the non-solver
- * half of dazpy's `_interaction.py`. Live IK alignment (`alignLimbTargets`)
- * is filled in by `interactionSolve.ts` in Phase 5B
- * (`daz-script-server-sf7y.2`) -- this file only stages figure positions.
+ * half of dazpy's `_interaction.py`. Live IK alignment
+ * (`PreparedInteractionRecipe.alignLimbTargets`) delegates to the solver in
+ * `interactionSolve.ts`.
  */
 
 import type { AnchorTargetLike, FigureRigProfile, RigSceneSource, Vector3, Rotation3 } from "./rigProfile.js";
 import { addVec3, asVector3, averageVec3, lookupRigProfile, midpointVec3, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
+import type { LimbAlignmentResult } from "./interactionSolve.js";
+import { alignSingleLimbTarget } from "./interactionSolve.js";
+
+// `LimbAlignmentResult` lives in interactionSolve.ts (which must not import
+// this file); re-exported here so Phase 5A import paths keep working.
+export { LimbAlignmentResult } from "./interactionSolve.js";
+export type { LimbAlignmentResultDict } from "./interactionSolve.js";
 
 // ── constraint types ─────────────────────────────────────────────────────────
 
@@ -249,7 +256,7 @@ export interface SolveOptionsDict {
   orientationWeight: number;
 }
 
-/** Tunable options for the solver phase (`interactionSolve.ts`, Phase 5B). */
+/** Tunable solver options. `alignLimbTargets` reads `maxIterations`; the other fields are carried for parity with dazpy. */
 export class SolveOptions {
   readonly backend: SolveBackend;
   readonly maxIterations: number;
@@ -554,79 +561,6 @@ export class InteractionPosePatch {
   }
 }
 
-// ── LimbAlignmentResult ──────────────────────────────────────────────────────
-
-export interface LimbAlignmentResultDict {
-  figureLabel: string;
-  anchorName: string;
-  effectorBone: string;
-  chain: string[];
-  targetPoint: Vector3 | null;
-  iterations: number;
-  converged: boolean;
-  initialError: number | null;
-  finalError: number | null;
-  appliedRotations: Record<string, Rotation3>;
-  diagnostics: Record<string, unknown>;
-}
-
-/** Result data for a single live target-alignment pass. Produced by `interactionSolve.ts` (Phase 5B); the data shape lives here since `interactionPlan.ts` also needs it (`PreparedInteractionResult.alignmentResults`). */
-export class LimbAlignmentResult {
-  readonly figureLabel: string;
-  readonly anchorName: string;
-  readonly effectorBone: string;
-  readonly chain: string[];
-  readonly targetPoint: Vector3 | null;
-  readonly iterations: number;
-  readonly converged: boolean;
-  readonly initialError: number | null;
-  readonly finalError: number | null;
-  readonly appliedRotations: Record<string, Rotation3>;
-  readonly diagnostics: Record<string, unknown>;
-
-  constructor(init: {
-    figureLabel: string;
-    anchorName: string;
-    effectorBone: string;
-    chain: string[];
-    targetPoint?: Vector3 | null;
-    iterations?: number;
-    converged?: boolean;
-    initialError?: number | null;
-    finalError?: number | null;
-    appliedRotations?: Record<string, Rotation3>;
-    diagnostics?: Record<string, unknown>;
-  }) {
-    this.figureLabel = init.figureLabel;
-    this.anchorName = init.anchorName;
-    this.effectorBone = init.effectorBone;
-    this.chain = [...init.chain];
-    this.targetPoint = init.targetPoint ?? null;
-    this.iterations = init.iterations ?? 0;
-    this.converged = init.converged ?? false;
-    this.initialError = init.initialError ?? null;
-    this.finalError = init.finalError ?? null;
-    this.appliedRotations = init.appliedRotations ?? {};
-    this.diagnostics = init.diagnostics ?? {};
-  }
-
-  toDict(): LimbAlignmentResultDict {
-    return {
-      figureLabel: this.figureLabel,
-      anchorName: this.anchorName,
-      effectorBone: this.effectorBone,
-      chain: [...this.chain],
-      targetPoint: this.targetPoint,
-      iterations: this.iterations,
-      converged: this.converged,
-      initialError: this.initialError,
-      finalError: this.finalError,
-      appliedRotations: { ...this.appliedRotations },
-      diagnostics: { ...this.diagnostics },
-    };
-  }
-}
-
 // ── PreparedInteractionResult ────────────────────────────────────────────────
 
 /** The result of applying a prepared recipe as a live staging pass. */
@@ -708,7 +642,7 @@ export class PreparedInteractionRecipe {
    *
    * Intentionally conservative: only translates figures so their anchors
    * are staged near their requested targets. Does not solve bone rotations
-   * (that's `alignLimbTargets`, Phase 5B).
+   * (that's `alignLimbTargets`).
    */
   buildPosePatch(): InteractionPosePatch {
     const figurePositions: Record<string, Vector3[]> = {};
@@ -807,7 +741,7 @@ export class PreparedInteractionRecipe {
     });
   }
 
-  async apply(scene: RigSceneSource, opts: InteractionApplyOptions = {}): Promise<PreparedInteractionResult> {
+  async apply(scene: Pick<RigSceneSource, "findSkeletonByLabel">, opts: InteractionApplyOptions = {}): Promise<PreparedInteractionResult> {
     const patch = this.buildPosePatch();
     await patch.apply(scene);
     const result = new PreparedInteractionResult({ prepared: this, posePatch: patch });
@@ -818,14 +752,27 @@ export class PreparedInteractionRecipe {
   }
 
   /**
-   * Apply live limb alignment for resolved hand/foot targets.
-   *
-   * Real IK solving lands in `interactionSolve.ts` (Phase 5B,
-   * `daz-script-server-sf7y.2`) -- until then this returns no results
-   * regardless of how many hand/foot targets were resolved.
+   * Apply live limb alignment for resolved hand/foot targets: one
+   * `alignSingleLimbTarget` IK pass per target that has a target point and a
+   * known rig profile, in resolution order.
    */
-  async alignLimbTargets(_scene: RigSceneSource, _opts: AlignLimbTargetsOptions = {}): Promise<LimbAlignmentResult[]> {
-    return [];
+  async alignLimbTargets(scene: Pick<RigSceneSource, "findSkeletonByLabel">, opts: AlignLimbTargetsOptions = {}): Promise<LimbAlignmentResult[]> {
+    const results: LimbAlignmentResult[] = [];
+    for (const resolved of this.resolvedTargets) {
+      if (resolved.targetPoint === null) continue;
+      const skeleton = await scene.findSkeletonByLabel(resolved.figureLabel);
+      const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
+      if (profile === null) continue;
+      results.push(
+        await alignSingleLimbTarget(skeleton, profile, resolved, {
+          maxIterations: opts.maxIterations || this.plan.options.maxIterations,
+          stepDegrees: opts.stepDegrees,
+          damping: opts.damping,
+          tolerance: opts.tolerance,
+        }),
+      );
+    }
+    return results;
   }
 }
 

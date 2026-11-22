@@ -167,7 +167,6 @@ export {
   InteractionPlan,
   InteractionPosePatch,
   InteractionRecipe,
-  LimbAlignmentResult,
   LookAtTarget,
   PoseTarget,
   PreparedInteractionRecipe,
@@ -187,7 +186,6 @@ export type {
   InteractionPlanDict,
   InteractionPosePatchDict,
   InteractionRecipeDict,
-  LimbAlignmentResultDict,
   LookAtTargetDict,
   PoseTargetDict,
   RecipeKind,
@@ -195,6 +193,28 @@ export type {
   SolveOptionsDict,
   ValidationIssueDict,
 } from "./interactionPlan.js";
+
+// ── Phase 5B: IK solver ─────────────────────────────────────────────────────
+
+export {
+  LimbAlignmentResult,
+  alignFootTarget,
+  alignHandTarget,
+  alignSingleLimbTarget,
+  alignmentChainNames,
+  dampedLeastSquaresStep,
+  invert3x3,
+  mul3x3Vec,
+  rotationWithAxisLimits,
+} from "./interactionSolve.js";
+export type {
+  AlignAnchorOptions,
+  AlignOptions,
+  AlignableSkeleton,
+  JacobianSource,
+  LimbAlignmentResultDict,
+  Matrix3,
+} from "./interactionSolve.js";
 
 // Compile-time check: the live classes satisfy the structural sources the
 // interaction modules accept (they never import skeleton.ts/scene.ts).

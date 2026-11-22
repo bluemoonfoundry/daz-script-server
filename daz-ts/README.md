@@ -259,10 +259,11 @@ accessor, since accessors can't be `async`.
   `with scene.undo(label): ...` context manager (TS has no `with`
   statement).
 
-`capture_sprite()` (dazpy's `rembg`-based background removal) and
-IK-dependent methods (`DazSkeleton.handToTarget`/`.footToTarget`,
-`DazScene.applyInteractionRecipe`) are out of scope for this phase — they
-require the Phase 5 IK solver.
+`capture_sprite()` (dazpy's `rembg`-based background removal) is out of
+scope. dazpy's `DazSkeleton.hand_to_target`/`foot_to_target` are standalone
+functions in daz-ts — `alignHandTarget(skeleton, point)` /
+`alignFootTarget(skeleton, point)` from the Phase 5 IK solver
+(`interactionSolve.ts`); `DazScene.applyInteractionRecipe` lands in Phase 5C.
 
 See `test/integration/proxies.integration.test.ts` for a live-server
 integration suite covering these classes (gated on `DAZ_SERVER_URL`, same
