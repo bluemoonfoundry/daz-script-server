@@ -189,6 +189,33 @@ describe("resolveInteractionTarget", () => {
   it("throws for an unknown figure", () => {
     expect(() => resolveInteractionTarget(new HandTarget({ figureLabel: "Nobody", anchorName: "r_hand" }), {})).toThrow(/Unknown figure/);
   });
+
+  it("leaves targetPoint null when nothing resolved a point (i4yf: offset is not a point)", () => {
+    const profiles = { "Genesis 9": genesis9Profile() };
+    const noPoint = resolveInteractionTarget(new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", offset: [0.5, 0, 0] }), profiles);
+    const unknownFigure = resolveInteractionTarget(
+      new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Nobody", targetAnchor: "r_hand" }),
+      profiles,
+    );
+    expect(noPoint.targetPoint).toBeNull();
+    expect(unknownFigure.targetPoint).toBeNull();
+  });
+
+  it("buildPosePatch lists an unknown target figure as unresolved instead of staging at the origin", () => {
+    const profile = new FigureRigProfile({
+      figureLabel: "Genesis 9",
+      family: "genesis_9",
+      bones: [new BoneProfile({ name: "hip" }), new BoneProfile({ name: "r_hand", parentName: "hip", localPosition: [10, 20, 30] })],
+    });
+    const recipe = new InteractionRecipe({
+      kind: "touch",
+      actors: ["Genesis 9", "Nobody"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand", targetFigure: "Nobody", targetAnchor: "r_hand" })],
+    });
+    const patch = prepareInteractionRecipe(recipe, { "Genesis 9": profile }).buildPosePatch();
+    expect(patch.figurePositions).toEqual({});
+    expect(patch.unresolvedTargets).toHaveLength(1);
+  });
 });
 
 describe("InteractionRecipe", () => {

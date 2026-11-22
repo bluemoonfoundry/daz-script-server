@@ -1171,6 +1171,36 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(resolved.target_bone, "r_hand")
         self.assertEqual(resolved.target_point, (4.0, 5.0, 6.0))
 
+    def test_resolve_interaction_target_without_point_stays_unresolved(self):
+        # i4yf: the offset must not become the target point when nothing resolved one.
+        hip = _FakeBone("hip", "Hip")
+        hand = _FakeBone("r_hand", "Right Hand", parent=hip, local_position=(10.0, 20.0, 30.0))
+        profile = build_rig_profile(_FakeSkeleton("Genesis 9", [hip, hand]))
+        profiles = {"Genesis 9": profile}
+
+        no_point = resolve_interaction_target(HandTarget("Genesis 9", "r_hand", offset=(0.5, 0.0, 0.0)), profiles)
+        unknown_figure = resolve_interaction_target(
+            HandTarget("Genesis 9", "r_hand", target_figure="Nobody", target_anchor="r_hand"), profiles
+        )
+
+        self.assertIsNone(no_point.target_point)
+        self.assertIsNone(unknown_figure.target_point)
+
+    def test_pose_patch_lists_unknown_target_figure_as_unresolved(self):
+        hip = _FakeBone("hip", "Hip")
+        hand = _FakeBone("r_hand", "Right Hand", parent=hip, local_position=(10.0, 20.0, 30.0))
+        profile = build_rig_profile(_FakeSkeleton("Genesis 9", [hip, hand]))
+        recipe = InteractionRecipe(
+            kind="touch",
+            actors=["Genesis 9", "Nobody"],
+            constraints=[HandTarget("Genesis 9", "r_hand", target_figure="Nobody", target_anchor="r_hand")],
+        )
+
+        patch = prepare_interaction_recipe(recipe, {"Genesis 9": profile}).build_pose_patch()
+
+        self.assertEqual(patch.figure_positions, {})
+        self.assertEqual(len(patch.unresolved_targets), 1)
+
     def test_interaction_recipe_round_trip(self):
         recipe = InteractionRecipe(
             kind="touch",

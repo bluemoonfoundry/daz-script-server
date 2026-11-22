@@ -663,7 +663,10 @@ export class FigureRigProfile {
       if (targetProfile) targetPoint = anchorWorldPointHint(targetProfile, targetAnchor);
     }
 
-    targetPoint = addVec3(targetPoint, target.offset ?? [0, 0, 0]);
+    // The offset shifts a resolved point; it is not a point on its own.
+    // Leaving targetPoint null lets buildPosePatch report the target as
+    // unresolved and alignSingleLimbTarget return missing_target_point.
+    if (targetPoint !== null) targetPoint = addVec3(targetPoint, target.offset ?? [0, 0, 0]);
 
     return new ResolvedInteractionTarget({
       figureLabel: this.figureLabel,

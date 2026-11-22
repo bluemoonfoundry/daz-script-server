@@ -489,7 +489,11 @@ class FigureRigProfile:
             if target_profile is not None:
                 target_point = _anchor_world_point_hint(target_profile, target_anchor)
 
-        target_point = _add_vec3(target_point, target.offset)
+        # The offset shifts a resolved point; it is not a point on its own.
+        # Leaving target_point None lets build_pose_patch report the target as
+        # unresolved and align_single_limb_target return missing_target_point.
+        if target_point is not None:
+            target_point = _add_vec3(target_point, target.offset)
 
         return ResolvedInteractionTarget(
             figure_label=self.figure_label,

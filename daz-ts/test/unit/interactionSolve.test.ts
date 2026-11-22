@@ -15,7 +15,7 @@ import {
   invert3x3,
   rotationWithAxisLimits,
 } from "../../src/interactionSolve.js";
-import { HandTarget, InteractionRecipe, LimbAlignmentResult as ReexportedResult, PreparedInteractionRecipe, SolveOptions, prepareInteractionRecipe } from "../../src/interactionPlan.js";
+import { HandTarget, InteractionRecipe, LimbAlignmentResult as ReexportedResult, SolveOptions, prepareInteractionRecipe } from "../../src/interactionPlan.js";
 import { AxisLimit, BoneProfile, FigureRigProfile, ResolvedInteractionTarget } from "../../src/rigProfile.js";
 import type { AxisName, Rotation3, Vector3 } from "../../src/rigProfile.js";
 
@@ -302,6 +302,13 @@ describe("alignHandTarget / alignFootTarget", () => {
   it("alignFootTarget throws when the rig has no foot anchor", async () => {
     await expect(alignFootTarget(new LinearSkeleton(), [0, 0, 0])).rejects.toThrow(/Anchor not found/);
   });
+
+  it("a null target point yields missing_target_point, not a pull toward the origin", async () => {
+    const skeleton = new LinearSkeleton();
+    const result = await alignHandTarget(skeleton, null);
+    expect(result.diagnostics.reason).toBe("missing_target_point");
+    expect(skeleton.calls).toEqual(["meta"]);
+  });
 });
 
 // ── PreparedInteractionRecipe wiring ─────────────────────────────────────────
@@ -353,15 +360,13 @@ describe("PreparedInteractionRecipe.alignLimbTargets", () => {
   });
 
   it("skips resolved targets without a target point", async () => {
-    // Built directly: resolveAnchorTarget currently turns a missing point into
-    // the offset ([0,0,0]) -- see daz-script-server-i4yf.
-    const recipe = new InteractionRecipe({ kind: "custom", actors: ["Genesis 9"] });
-    const prepared = new PreparedInteractionRecipe({
-      recipe,
-      plan: recipe.toPlan(),
-      resolvedTargets: [handTarget(null)],
-      rigProfiles: { "Genesis 9": armProfile() },
+    const recipe = new InteractionRecipe({
+      kind: "custom",
+      actors: ["Genesis 9"],
+      constraints: [new HandTarget({ figureLabel: "Genesis 9", anchorName: "r_hand" })],
     });
+    const prepared = prepareInteractionRecipe(recipe, { "Genesis 9": armProfile() });
+    expect(prepared.resolvedTargets[0].targetPoint).toBeNull();
     const scene = sceneWith(new LinearSkeleton());
     expect(await prepared.alignLimbTargets(scene as any)).toEqual([]);
     expect(scene.lookups).toEqual([]);
