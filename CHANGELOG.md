@@ -42,6 +42,10 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy / daz-ts:** `DazViewport.capture` failed on Studio 6 ("Property
+  'updateGL' ... is not a function"): Qt6's `Dz3DViewport` has no
+  `updateGL()`. The capture scripts now call `update()` when `updateGL()` is
+  missing.
 - **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the
   server's `ErrorResponse` fields: `status_code`/`error_code`/`detail`/
   `retryable` in dazpy, `statusCode`/`errorCode`/`detail`/`retryable` in

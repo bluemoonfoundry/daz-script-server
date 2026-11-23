@@ -165,7 +165,7 @@ export class DazViewport {
                 if (tnNode)  tnNode.setVisibleInViewport(false);
                 if (envNode) envNode.setVisibleInViewport(false);
 
-                vp.updateGL();
+                if (typeof vp.updateGL === "function") vp.updateGL(); else vp.update();
 
                 return {
                     axesOn: prevAxes, floorStyle: prevFloor, showPoseTool: prevPose,
@@ -196,7 +196,7 @@ export class DazViewport {
                 var img = null;
 
                 if (vp) {
-                    vp.updateGL();
+                    if (typeof vp.updateGL === "function") vp.updateGL(); else vp.update();
                     img = vp.captureImage();
 
                     vp.axesOn        = prev.axesOn;
@@ -222,7 +222,7 @@ export class DazViewport {
                 if (tnNode  && prev.tnVisible  !== null) tnNode.setVisibleInViewport(prev.tnVisible);
                 if (envNode && prev.envVisible !== null) envNode.setVisibleInViewport(prev.envVisible);
 
-                if (vp) vp.updateGL();
+                if (vp && typeof vp.updateGL === "function") vp.updateGL(); else if (vp) vp.update();
 
                 if (!img) return null;
                 img.save(${jsPath});
@@ -237,7 +237,7 @@ export class DazViewport {
             if (!vp) return null;
             ${bgCaptureJs}
             ${bgApplyJs}
-            vp.updateGL();
+            if (typeof vp.updateGL === "function") vp.updateGL(); else vp.update();
             return {"ok": true${bgReturnField}};
         `);
     const prepResult = ((await this.client.execute(prepareScript)).value as Record<string, unknown>) ?? {};
@@ -254,10 +254,10 @@ export class DazViewport {
     const finishScript = ScriptBuilder.iife(`
             var vp = ${VIEWPORT_EXPR};
             if (!vp) return null;
-            vp.updateGL();
+            if (typeof vp.updateGL === "function") vp.updateGL(); else vp.update();
             var img = vp.captureImage();
             ${restoreBgJs}
-            vp.updateGL();
+            if (typeof vp.updateGL === "function") vp.updateGL(); else vp.update();
             if (!img) return null;
             img.save(${jsPath});
             return ${jsPath};
