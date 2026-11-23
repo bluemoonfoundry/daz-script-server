@@ -1627,7 +1627,27 @@ class TestInteractionAdapter(unittest.TestCase):
             facing = plan_facing(build("Genesis 9", "Partner").to_plan(), self._facing_profiles())
             self.assertEqual({k: v.to_dict() for k, v in facing.items()}, {"Partner": {"anchor": "Genesis 9", "yaw_degrees": 180.0}})
         self.assertEqual(plan_facing(build_touch_recipe("Genesis 9", "Partner").to_plan(), self._facing_profiles()), {})
-        self.assertEqual(plan_facing(build_face_each_other_recipe("Genesis 9", "Partner").to_plan(), self._facing_profiles()), {})
+
+    def test_face_each_other_turns_second_actor_in_place_toward_first(self):
+        from dazpy._interaction import figure_forward
+
+        # Partner at x=+100 faces +Z; Genesis 9 is at x=-100, so it turns to -X.
+        prepared = prepare_interaction_recipe(build_face_each_other_recipe("Genesis 9", "Partner"), self._facing_profiles())
+        self.assertEqual({k: v.to_dict() for k, v in prepared.facing.items()}, {"Partner": {"anchor": "Genesis 9", "yaw_degrees": -90.0}})
+        self.assertAlmostEqual(figure_forward(prepared.rig_profiles["Partner"])[0], -1.0)
+        patch = prepared.build_pose_patch()
+        self.assertEqual(patch.figure_yaw_degrees, {"Partner": -90.0})
+        self.assertEqual(patch.figure_positions, {})
+
+    def test_face_each_other_coincident_origins_face_back_along_first_actor(self):
+        from dataclasses import replace
+
+        from dazpy._interaction import plan_facing
+
+        profiles = self._facing_profiles()
+        together = {label: replace(profile, figure_position=(0.0, 0.0, 0.0)) for label, profile in profiles.items()}
+        facing = plan_facing(build_face_each_other_recipe("Genesis 9", "Partner").to_plan(), together)
+        self.assertEqual({k: v.to_dict() for k, v in facing.items()}, {"Partner": {"anchor": "Genesis 9", "yaw_degrees": 180.0}})
 
     def test_hug_stages_turned_partner_in_front(self):
         from dazpy._interaction import FACING_MIN_SEPARATION, figure_forward

@@ -19,10 +19,11 @@ import {
   buildKissRecipe,
   buildSitRecipe,
   buildTouchRecipe,
+  figureForward,
   type PreparedInteractionResult,
 } from "../../src/interactionPlan.js";
 import type { LimbAlignmentResult } from "../../src/interactionSolve.js";
-import type { Vector3 } from "../../src/rigProfile.js";
+import { buildRigProfilesFromSnapshot, type Vector3 } from "../../src/rigProfile.js";
 
 const SERVER_URL = process.env.DAZ_SERVER_URL;
 const A = "Genesis 9";
@@ -96,12 +97,24 @@ describe.skipIf(!SERVER_URL)("daz-ts Phase 5C recipes against a live DAZ Studio 
     return result.alignmentResults;
   }
 
-  it("face_each_other: validates on two Genesis 9 figures, stages nothing, runs no IK", async () => {
+  it("face_each_other: turns B in place toward A, moves nobody, runs no IK", async () => {
     if (!ready) return;
+    const before = await (await scene.findSkeletonByLabel(B)).position();
     const result = await scene.applyInteractionRecipe(buildFaceEachOtherRecipe(A, B), IK);
     expect(result.prepared.isValid).toBe(true);
     expect(result.posePatch.figurePositions).toEqual({});
     expect(result.alignmentResults).toEqual([]);
+    expect(Object.keys(result.posePatch.figureYawDegrees)).toEqual([B]);
+    const live = await (await scene.findSkeletonByLabel(B)).position();
+    expect(distance([live!.x, live!.y, live!.z], [before!.x, before!.y, before!.z])).toBeLessThan(0.01);
+    // B's live shoulders now face A's origin (or back along A's forward when the origins coincide).
+    const profiles = buildRigProfilesFromSnapshot(await scene.sceneSnapshot([A, B]));
+    const forward = figureForward(profiles[B])!;
+    const a = profiles[A].figurePosition!;
+    const b = profiles[B].figurePosition!;
+    const gap = Math.hypot(a[0] - b[0], a[2] - b[2]);
+    const expected = gap >= 1 ? [(a[0] - b[0]) / gap, (a[2] - b[2]) / gap] : [-figureForward(profiles[A])![0], -figureForward(profiles[A])![2]];
+    expect(forward[0] * expected[0] + forward[2] * expected[1]).toBeGreaterThan(0.999);
   });
 
   it("touch: stages both figures on the floor and IK brings A's hand to B's shoulder", async () => {

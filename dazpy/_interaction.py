@@ -1055,7 +1055,8 @@ class PreparedInteractionRecipe:
     diagnostics: dict[str, object] = field(default_factory=dict)
     # Partner figure label -> the figure it is turned to face and by how much.
     # ``rig_profiles`` (and so ``resolved_targets``) already have these turns
-    # applied; ``build_pose_patch`` stages each partner in front of its anchor.
+    # applied; ``build_pose_patch`` stages each partner a limb target links in
+    # front of its anchor (a look-only partner is only turned).
     facing: dict[str, "FacingAssignment"] = field(default_factory=dict)
 
     @property
@@ -1670,13 +1671,21 @@ def rotate_rig_profile(profile: FigureRigProfile, degrees: float) -> FigureRigPr
     return replace(profile, bones=bones, metadata={**profile.metadata, "facing_yaw_degrees": degrees})
 
 
+# Closer than this (cm, horizontally), a look-only partner faces back along its anchor's forward instead of toward its origin.
+LOOK_TOWARD_MIN_DISTANCE = 1.0
+
+
 def plan_facing(plan: "InteractionPlan", rig_profiles: dict[str, FigureRigProfile]) -> dict[str, FacingAssignment]:
     """Which figures to turn to face a partner.
 
-    A pair qualifies when a hand/foot target links them and both have a
-    ``LookAtTarget`` (the hug, kiss, handshake and fight recipes). The pair's
-    earlier actor (in ``plan.actors``) keeps its orientation; the other turns
-    to face it. A figure turns at most once.
+    A pair qualifies when both have a ``LookAtTarget``. When a hand/foot
+    target links them (the hug, kiss, handshake and fight recipes) the
+    partner turns to face back along its anchor's forward and
+    ``build_pose_patch`` stages it in front. Lookers no limb target links
+    (face_each_other) pair up in actor order and the partner just turns in
+    place toward its anchor. The pair's earlier actor (in ``plan.actors``)
+    keeps its orientation; the other turns to face it. A figure turns at most
+    once.
     """
     lookers: set[int] = set()
     for constraint in plan.constraints:
@@ -1715,6 +1724,33 @@ def plan_facing(plan: "InteractionPlan", rig_profiles: dict[str, FigureRigProfil
         yaw = _wrap_degrees(_yaw_of(_vec3_scale(anchor_forward, -1.0)) - _yaw_of(partner_forward))
         facing[partner_label] = FacingAssignment(anchor=anchor_label, yaw_degrees=yaw)
         involved.update((id(partner_profile), id(anchor_profile)))
+
+    # Look-only pairs (face_each_other): lookers no limb target links, paired
+    # in actor order. Nothing stages them, so the partner turns in place toward
+    # its anchor's origin (or, when the origins coincide, to face back along
+    # the anchor's forward).
+    pending: list[tuple[str, FigureRigProfile]] = []
+    for actor in plan.actors:
+        profile = _lookup_rig_profile(rig_profiles, actor)
+        if profile is None or id(profile) not in lookers or id(profile) in involved or any(p is profile for _, p in pending):
+            continue
+        pending.append((actor, profile))
+    for i in range(0, len(pending) - 1, 2):
+        (anchor_label, anchor_profile), (partner_label, partner_profile) = pending[i], pending[i + 1]
+        partner_forward = figure_forward(partner_profile)
+        if partner_forward is None:
+            continue
+        toward: Vector3 | None = None
+        if anchor_profile.figure_position is not None and partner_profile.figure_position is not None:
+            gap = _vec3_sub(anchor_profile.figure_position, partner_profile.figure_position)
+            if math.hypot(gap[0], gap[2]) >= LOOK_TOWARD_MIN_DISTANCE:
+                toward = (gap[0], 0.0, gap[2])
+        if toward is None:
+            anchor_forward = figure_forward(anchor_profile)
+            if anchor_forward is None:
+                continue
+            toward = _vec3_scale(anchor_forward, -1.0)
+        facing[partner_label] = FacingAssignment(anchor=anchor_label, yaw_degrees=_wrap_degrees(_yaw_of(toward) - _yaw_of(partner_forward)))
     return facing
 
 

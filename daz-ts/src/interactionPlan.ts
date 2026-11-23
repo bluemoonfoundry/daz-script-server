@@ -666,7 +666,8 @@ export class PreparedInteractionRecipe {
   /**
    * Partner figure label -> the figure it is turned to face, and by how
    * much. `rigProfiles` (and so `resolvedTargets`) already have these turns
-   * applied; `buildPosePatch` stages each partner in front of its anchor.
+   * applied; `buildPosePatch` stages each partner a limb target links in
+   * front of its anchor (a look-only partner is only turned).
    */
   readonly facing: Record<string, FacingAssignment>;
 
@@ -1171,12 +1172,18 @@ export function rotateRigProfile(profile: FigureRigProfile, degrees: number): Fi
   });
 }
 
+/** Closer than this (cm, horizontally), a look-only partner faces back along its anchor's forward instead of toward its origin. */
+const LOOK_TOWARD_MIN_DISTANCE = 1;
+
 /**
- * Which figures to turn to face a partner. A pair qualifies when a hand/foot
- * target links them and both have a `LookAtTarget` (the hug, kiss,
- * handshake and fight recipes). The pair's earlier actor (in `plan.actors`)
- * keeps its orientation; the other turns to face it. A figure turns at most
- * once.
+ * Which figures to turn to face a partner. A pair qualifies when both have a
+ * `LookAtTarget`. When a hand/foot target links them (the hug, kiss,
+ * handshake and fight recipes) the partner turns to face back along its
+ * anchor's forward and `buildPosePatch` stages it in front. Lookers no limb
+ * target links (face_each_other) pair up in actor order and the partner just
+ * turns in place toward its anchor. The pair's earlier actor (in
+ * `plan.actors`) keeps its orientation; the other turns to face it. A figure
+ * turns at most once.
  */
 export function planFacing(plan: InteractionPlan, rigProfiles: Record<string, FigureRigProfile>): Record<string, FacingAssignment> {
   const lookers = new Set<FigureRigProfile>();
@@ -1207,6 +1214,34 @@ export function planFacing(plan: InteractionPlan, rigProfiles: Record<string, Fi
     facing[partnerLabel] = { anchor: anchorLabel, yawDegrees: wrapDegrees(yawOf(scaleVec3(anchorForward, -1)) - yawOf(partnerForward)) };
     involved.add(partnerProfile);
     involved.add(anchorProfile);
+  }
+
+  // Look-only pairs (face_each_other): lookers no limb target links, paired
+  // in actor order. Nothing stages them, so the partner turns in place toward
+  // its anchor's origin (or, when the origins coincide, to face back along
+  // the anchor's forward).
+  const pending: Array<{ label: string; profile: FigureRigProfile }> = [];
+  for (const actor of plan.actors) {
+    const profile = lookupRigProfile(rigProfiles, actor);
+    if (profile === null || !lookers.has(profile) || involved.has(profile) || pending.some((p) => p.profile === profile)) continue;
+    pending.push({ label: actor, profile });
+  }
+  for (let i = 0; i + 1 < pending.length; i += 2) {
+    const anchor = pending[i];
+    const partner = pending[i + 1];
+    const partnerForward = figureForward(partner.profile);
+    if (partnerForward === null) continue;
+    let toward: Vector3 | null = null;
+    if (anchor.profile.figurePosition !== null && partner.profile.figurePosition !== null) {
+      const gap = subVec3(anchor.profile.figurePosition, partner.profile.figurePosition);
+      if (Math.hypot(gap[0], gap[2]) >= LOOK_TOWARD_MIN_DISTANCE) toward = [gap[0], 0, gap[2]];
+    }
+    if (toward === null) {
+      const anchorForward = figureForward(anchor.profile);
+      if (anchorForward === null) continue;
+      toward = scaleVec3(anchorForward, -1);
+    }
+    facing[partner.label] = { anchor: anchor.label, yawDegrees: wrapDegrees(yawOf(toward) - yawOf(partnerForward)) };
   }
   return facing;
 }

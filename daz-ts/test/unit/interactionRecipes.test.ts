@@ -288,7 +288,21 @@ describe("facing staging", () => {
       expect(planFacing(build("Genesis 9", "Partner").toPlan(), profiles())).toEqual({ Partner: { anchor: "Genesis 9", yawDegrees: 180 } });
     }
     expect(planFacing(buildTouchRecipe("Genesis 9", "Partner").toPlan(), profiles())).toEqual({});
-    expect(planFacing(buildFaceEachOtherRecipe("Genesis 9", "Partner").toPlan(), profiles())).toEqual({});
+  });
+
+  it("face_each_other: the second actor turns in place toward the first (2dnz)", () => {
+    // Partner at x=+100 faces +Z; Genesis 9 is at x=-100, so it turns to -X.
+    const prepared = prepareInteractionRecipe(buildFaceEachOtherRecipe("Genesis 9", "Partner"), profiles());
+    expect(prepared.facing).toEqual({ Partner: { anchor: "Genesis 9", yawDegrees: -90 } });
+    expect(figureForward(prepared.rigProfiles.Partner)![0]).toBeCloseTo(-1, 12);
+    const patch = prepared.buildPosePatch();
+    expect(patch.figureYawDegrees).toEqual({ Partner: -90 });
+    expect(patch.figurePositions).toEqual({});
+  });
+
+  it("face_each_other: coincident origins fall back to facing back along the first actor's forward", () => {
+    const together = buildRigProfilesFromSnapshot([snapshotEntry("Genesis 9", 0), snapshotEntry("Partner", 0)]);
+    expect(planFacing(buildFaceEachOtherRecipe("Genesis 9", "Partner").toPlan(), together)).toEqual({ Partner: { anchor: "Genesis 9", yawDegrees: 180 } });
   });
 
   it("hug: the turned partner stands in front, where both hands reach the far shoulder's surface", () => {

@@ -23,6 +23,11 @@ All notable changes to DazScript Server are documented here.
 
 ### Changed
 
+- **dazpy / daz-ts:** the face_each_other recipe now turns the second actor
+  in place to face the first figure's origin (or, when both stand at the same
+  spot, to face back along the first figure's heading). It moves nobody and
+  runs no IK. Before, it validated but left both figures as they were. The
+  pose patch's `figureYawDegrees` / `figure_yaw_degrees` carries the turn.
 - **dazpy / daz-ts:** the hug, kiss, handshake and fight interaction recipes
   now turn the second actor to face the first before staging and place it
   straight in front, at a distance the limbs can reach (0.85 of an arm's
