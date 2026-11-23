@@ -1914,6 +1914,25 @@ class TestErrorMapping(unittest.TestCase):
         resp.text = ""
         return resp
 
+    def test_execute_uses_client_timeout_by_default(self):
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._success_resp()
+        client.execute("1+1;")
+        self.assertEqual(mock_session.post.call_args.kwargs["timeout"], client._timeout)
+
+    def test_execute_timeout_overrides_client_timeout_for_one_call(self):
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.return_value = self._success_resp()
+        client.execute("1+1;", timeout=300.0)
+        self.assertEqual(mock_session.post.call_args.kwargs["timeout"], 300.0)
+
+    def test_execute_timeout_error_names_the_timeout_that_expired(self):
+        import requests as req
+        client, mock_session = self._client_with_mock_session()
+        mock_session.post.side_effect = req.exceptions.ReadTimeout()
+        with self.assertRaisesRegex(exceptions.TimeoutError, r"after 300\.0s"):
+            client.execute("1+1;", timeout=300.0)
+
     def test_execute_without_retry_on_busy_raises_immediately(self):
         client, mock_session = self._client_with_mock_session()
         mock_session.post.return_value = self._busy_resp()

@@ -108,6 +108,12 @@ class SceneOps(Protocol):
     def write_manifest(self, manifest: Manifest) -> None: ...
 
 
+# HTTP timeout for a call that opens a content file (asset merge-load, pose
+# preset).  The client default (30s) is too short for the first load after
+# Studio starts: on DS4 a Genesis 9 load takes ~15s warm but 19-32s cold, and a
+# timeout there rolls the whole apply back (y33z).
+ASSET_LOAD_TIMEOUT_S = 300.0
+
 # Node keys: element ID when the API exposes it (survives duplicate names),
 # else the node name.
 _KEY_JS = """
@@ -370,7 +376,8 @@ class DazSceneOps:
         make: Callable[[], object]
         if entity.kind in ("actor", "prop"):
             path = self._resolve_asset(entity.create["asset_path"])
-            make = lambda: self._client.execute(_load_asset_script(path))  # noqa: E731
+            make = lambda: self._client.execute(  # noqa: E731
+                _load_asset_script(path), timeout=ASSET_LOAD_TIMEOUT_S)
         elif entity.kind == "camera":
             make = self._scene.create_camera
         elif entity.kind == "light":
@@ -495,7 +502,8 @@ class DazSceneOps:
             apply_pose(skeleton, path)
         elif ext in _POSE_PRESET_EXTS:
             resolved = self._resolve_asset(path)
-            result = self._client.execute(_pose_preset_script(node_name, resolved)).value
+            result = self._client.execute(_pose_preset_script(node_name, resolved),
+                                          timeout=ASSET_LOAD_TIMEOUT_S).value
             if result == "node_not_found":
                 raise NodeNotFoundError(f"Cannot apply pose preset, node not found: {node_name!r}")
             if result is not True:

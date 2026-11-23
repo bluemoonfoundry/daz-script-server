@@ -61,6 +61,11 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy:** the first scene-recipe `apply` after Daz Studio starts could fail
+  and roll back: the first Genesis 9 load on a cold DS4 takes 19–32s (warm:
+  ~15s), past the client's 30s HTTP timeout. Recipe asset loads and pose-preset
+  opens now wait up to 300s. `DazClient.execute()` takes a per-call `timeout`,
+  and timeout errors report the timeout that actually expired.
 - **dazpy / daz-ts:** `DazCamera.depth_of_field` / `depthOfField()` returned
   the bool property's raw `1`/`0` instead of `True`/`False` (typed `bool`).
   Found by the new shot live tests (`tests/test_shots_live.py` and
