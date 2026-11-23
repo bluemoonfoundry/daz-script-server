@@ -61,6 +61,10 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy / daz-ts:** `DazCamera.depth_of_field` / `depthOfField()` returned
+  the bool property's raw `1`/`0` instead of `True`/`False` (typed `bool`).
+  Found by the new shot live tests (`tests/test_shots_live.py` and
+  `daz-ts/test/integration/shots.integration.test.ts`, same scenarios).
 - **dazpy / daz-ts:** `DazViewport.capture` failed on Studio 6 ("Property
   'updateGL' ... is not a function"): Qt6's `Dz3DViewport` has no
   `updateGL()`. The capture scripts now call `update()` when `updateGL()` is

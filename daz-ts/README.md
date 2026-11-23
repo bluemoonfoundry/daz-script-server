@@ -382,7 +382,10 @@ domain-helper modules, which apply typed configuration objects to the Phase
   differences: the pure helpers take key/`Vec3` targets only (a live node's
   position is an HTTP round trip here), and `cameraMove("handheld")` uses
   its own seeded PRNG, so its jitter is repeatable per seed but differs from
-  dazpy's.
+  dazpy's. Live check: `test/integration/shots.integration.test.ts` (twin of
+  dazpy's `tests/test_shots_live.py`, same scenarios) applies each kind of
+  shot and reads the camera back at its keyed frames; it leaves the open
+  scene as it found it.
 - `sceneEvents.ts` (from `_scene_events.py`) — `watchSceneEvents`/
   `waitForSceneEvent`, typed SSE parsing over `GET /scene/events`, reusing
   `client.ts`'s `parseSseStream`/`streamSceneEvents` already added in

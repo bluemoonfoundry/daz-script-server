@@ -42,6 +42,16 @@ describe("DazCamera", () => {
     );
   });
 
+  it.each([
+    [1, true],
+    [0, false],
+    [null, null],
+  ])("depthOfField returns a real boolean for raw %s (getValue() reports 1/0, seen live on Studio 6)", async (raw, expected) => {
+    stub(raw);
+    const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });
+    expect(await cam.depthOfField()).toBe(expected);
+  });
+
   it("depthOfField getter uses findPropertyByLabel", async () => {
     const fetchMock = stub(true);
     const cam = new DazCamera(new DazClient({ token: "" }), { value: "Camera", kind: "name" });

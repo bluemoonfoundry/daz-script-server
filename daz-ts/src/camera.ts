@@ -20,9 +20,13 @@ export class DazCamera extends DazNode {
     return (await this.client.execute(this.nodeScript("return _node.getFieldOfView();"))).value as number | null;
   }
 
-  /** Whether depth-of-field simulation is enabled (read/write). */
+  /**
+   * Whether depth-of-field simulation is enabled (read/write). The bool
+   * property's `getValue()` reports `1`/`0`; it is returned as a real boolean.
+   */
   async depthOfField(): Promise<boolean | null> {
-    return (await this.getProperty("Depth of Field")) as boolean | null;
+    const value = await this.getProperty("Depth of Field");
+    return value === null || value === undefined ? null : Boolean(value);
   }
 
   async setDepthOfField(value: boolean): Promise<void> {

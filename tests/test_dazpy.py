@@ -2031,6 +2031,12 @@ class TestDazCameraScriptGeneration(unittest.TestCase):
         self.assertNotIn("get_property", script)
         self.assertNotIn("Focal Length", script)
 
+    def test_depth_of_field_is_a_real_bool(self):
+        # The bool property's getValue() reports 1/0 (seen live on Studio 6).
+        for raw, expected in ((1, True), (0, False), (None, None)):
+            cam = self.DazCamera(_make_client(raw), NodeIdentifier("Camera 1"))
+            self.assertIs(cam.depth_of_field, expected)
+
     def test_focal_length_setter_uses_direct_property(self):
         client = _make_client(None)
         cam = self.DazCamera(client, NodeIdentifier("Camera 1"))
