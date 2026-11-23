@@ -484,6 +484,19 @@ describe("staging from live-shaped profiles (6r3b)", () => {
     expect(prepareInteractionRecipe(recipe, profiles).buildPosePatch().figurePositions.A[1]).toBe(-45);
   });
 
+  it("BalanceTarget.pelvisBone accepts an anchor name or a bone name in validate and the patch (kz3t)", () => {
+    const profiles = { A: liveProfile("A", [0, 0, 0], { hip: [0, 95, 0] }) };
+    for (const pelvisBone of ["pelvis", "hip"]) {
+      const constraints = [new BalanceTarget({ figureLabel: "A", pelvisBone, centerOfMassHint: [0, 50, 0] })];
+      expect(new InteractionPlan({ actors: ["A"], constraints }).validate(profiles)).toEqual([]);
+      const patch = prepareInteractionRecipe(new InteractionRecipe({ kind: "sit", actors: ["A"], constraints }), profiles).buildPosePatch();
+      expect(patch.figurePositions.A[1]).toBe(-45);
+      expect(patch.diagnostics.unresolvedTargetCount).toBe(0);
+    }
+    const bad = new InteractionPlan({ actors: ["A"], constraints: [new BalanceTarget({ figureLabel: "A", pelvisBone: "nope", centerOfMassHint: [0, 50, 0] })] });
+    expect(bad.validate(profiles).map((issue) => issue.severity)).toEqual(["error"]);
+  });
+
   it("apply() shifts cross-figure targets by how far staging moved the target figure", async () => {
     const profiles = {
       A: liveProfile("A", [0, 0, 0], { r_hand: [-51.5, 99.8, 2.3] }),

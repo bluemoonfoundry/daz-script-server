@@ -1401,6 +1401,20 @@ class TestInteractionAdapter(unittest.TestCase):
         patch = prepare_interaction_recipe(recipe, {"A": a}).build_pose_patch()
         self.assertEqual(patch.figure_positions["A"][1], -45.0)
 
+    def test_balance_target_pelvis_accepts_anchor_or_bone_name(self):
+        # kz3t: validate and build_pose_patch must agree on what pelvis_bone means.
+        a = self._live_profile("A", (0.0, 0.0, 0.0), {"hip": (0.0, 95.0, 0.0)})
+        for name in ("pelvis", "hip"):
+            with self.subTest(pelvis_bone=name):
+                plan = InteractionPlan(actors=["A"], constraints=[BalanceTarget("A", name, center_of_mass_hint=(0.0, 50.0, 0.0))])
+                self.assertEqual(plan.validate({"A": a}), [])
+                recipe = InteractionRecipe(kind="sit", actors=["A"], constraints=list(plan.constraints))
+                patch = prepare_interaction_recipe(recipe, {"A": a}).build_pose_patch()
+                self.assertEqual(patch.figure_positions["A"][1], -45.0)
+                self.assertEqual(patch.diagnostics.get("unresolved_target_count", 0), 0)
+        bad = InteractionPlan(actors=["A"], constraints=[BalanceTarget("A", "nope", center_of_mass_hint=(0.0, 50.0, 0.0))])
+        self.assertEqual([issue.severity for issue in bad.validate({"A": a})], ["error"])
+
     def test_apply_shifts_cross_figure_targets_by_staging_displacement(self):
         a = self._live_profile("A", (0.0, 0.0, 0.0), {"r_hand": (-51.5, 99.8, 2.3)})
         b = self._live_profile("B", (0.0, 0.0, 0.0), {"l_shoulder": (3.5, 135.5, -3.6)})

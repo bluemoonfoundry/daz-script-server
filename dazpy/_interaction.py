@@ -547,6 +547,13 @@ class FigureRigProfile:
     def anchor_names(self) -> list[str]:
         return sorted(self.anchor_map().keys())
 
+    def anchor_or_bone(self, name: str) -> str | None:
+        """Resolve an anchor key (``pelvis``) or a raw bone name (``hip``) to a bone name."""
+        anchor = self.anchor(name)
+        if anchor is not None:
+            return anchor.bone_name
+        return name if name in self._index else None
+
     def require_anchor(self, name: str) -> InteractionAnchor:
         anchor = self.anchor(name)
         if anchor is None:
@@ -978,10 +985,10 @@ class InteractionPlan:
                         ValidationIssue("error", constraint.figure_label, index, f"Unknown figure {constraint.figure_label!r}")
                     )
                     continue
-                if constraint.pelvis_bone not in profile.bone_names():
-                        issues.append(
-                            ValidationIssue("error", constraint.figure_label, index, f"Unknown pelvis bone {constraint.pelvis_bone!r} on figure {constraint.figure_label!r}")
-                        )
+                if profile.anchor_or_bone(constraint.pelvis_bone) is None:
+                    issues.append(
+                        ValidationIssue("error", constraint.figure_label, index, f"Unknown pelvis anchor or bone {constraint.pelvis_bone!r} on figure {constraint.figure_label!r}")
+                    )
             elif isinstance(constraint, (HandTarget, FootTarget)):
                 profile = _lookup_rig_profile(rig_profiles, constraint.figure_label)
                 if profile is None:
@@ -1129,8 +1136,8 @@ class PreparedInteractionRecipe:
                 profile = _lookup_rig_profile(self.rig_profiles, constraint.figure_label)
                 if profile is None:
                     continue
-                pelvis_anchor = profile.anchor(constraint.pelvis_bone)
-                if pelvis_anchor is None:
+                pelvis_bone = profile.anchor_or_bone(constraint.pelvis_bone)
+                if pelvis_bone is None:
                     unresolved.append(
                         ResolvedInteractionTarget(
                             figure_label=constraint.figure_label,
@@ -1139,7 +1146,7 @@ class PreparedInteractionRecipe:
                         )
                     )
                     continue
-                pelvis_offset = profile.bone_offset(pelvis_anchor.bone_name)
+                pelvis_offset = profile.bone_offset(pelvis_bone)
                 target_point = constraint.center_of_mass_hint
                 if target_point is None and constraint.support_points:
                     target_point = _average_vec3(list(constraint.support_points))
@@ -1148,7 +1155,7 @@ class PreparedInteractionRecipe:
                         ResolvedInteractionTarget(
                             figure_label=constraint.figure_label,
                             anchor_name=constraint.pelvis_bone,
-                            bone_name=pelvis_anchor.bone_name,
+                            bone_name=pelvis_bone,
                             target_point=target_point,
                         )
                     )

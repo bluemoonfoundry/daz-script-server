@@ -739,7 +739,14 @@ export class FigureRigProfile {
     return [...this.anchorMap().keys()].sort();
   }
 
-  requireAnchor(name: string): InteractionAnchor {
+  /** Resolve an anchor key (`pelvis`) or a raw bone name (`hip`) to a bone name. */
+  anchorOrBone(name: string): string | null {
+    const anchor = this.anchor(name);
+    if (anchor !== null) return anchor.boneName;
+    return this.boneNames().includes(name) ? name : null;
+  }
+
+    requireAnchor(name: string): InteractionAnchor {
     const anchor = this.anchor(name);
     if (anchor === null) throw new Error(`Anchor not found in rig profile: ${name}`);
     return anchor;

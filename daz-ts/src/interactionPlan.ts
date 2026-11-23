@@ -466,8 +466,8 @@ export class InteractionPlan {
           issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown figure ${constraint.figureLabel}`));
           return;
         }
-        if (!profile.boneNames().includes(constraint.pelvisBone)) {
-          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown pelvis bone ${constraint.pelvisBone} on figure ${constraint.figureLabel}`));
+        if (profile.anchorOrBone(constraint.pelvisBone) === null) {
+          issues.push(new ValidationIssue("error", constraint.figureLabel, index, `Unknown pelvis anchor or bone ${constraint.pelvisBone} on figure ${constraint.figureLabel}`));
         }
       } else if (constraint instanceof HandTarget || constraint instanceof FootTarget) {
         const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
@@ -752,18 +752,18 @@ export class PreparedInteractionRecipe {
       if (!(constraint instanceof BalanceTarget)) continue;
       const profile = lookupRigProfile(this.rigProfiles, constraint.figureLabel);
       if (profile === null) continue;
-      const pelvisAnchor = profile.anchor(constraint.pelvisBone);
-      if (pelvisAnchor === null) {
+      const pelvisBone = profile.anchorOrBone(constraint.pelvisBone);
+      if (pelvisBone === null) {
         unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: constraint.pelvisBone }));
         continue;
       }
-      const pelvisOffset = profile.boneOffset(pelvisAnchor.boneName);
+      const pelvisOffset = profile.boneOffset(pelvisBone);
       let targetPoint = constraint.centerOfMassHint;
       if (targetPoint === null && constraint.supportPoints.length > 0) {
         targetPoint = averageVec3(constraint.supportPoints);
       }
       if (targetPoint === null || pelvisOffset === null) {
-        unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: pelvisAnchor.boneName, targetPoint }));
+        unresolved.push(new ResolvedInteractionTarget({ figureLabel: constraint.figureLabel, anchorName: constraint.pelvisBone, boneName: pelvisBone, targetPoint }));
         continue;
       }
       appendPosition(constraint.figureLabel, subVec3(targetPoint, pelvisOffset), true);
