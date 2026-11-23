@@ -6,6 +6,13 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **daz-ts:** ports of `dazpy.shots` and `dazpy.shot_library` as the
+  `shots` and `shotLibrary` modules: typed shot/coverage models with
+  `applyShot`, the shot builders, line-of-action and thirty-degree
+  continuity checks, camera moves, rack focus, dialogue coverage and
+  `applyCoverage`. Plans serialise to dazpy's JSON format, so either SDK
+  reads the other's. `DazCamera` gains `setFocalDistanceAtFrame()` and
+  `clearFocalDistanceKeys()`.
 - **daz-ts:** `MIN_SERVER_VERSION` (2.11, the oldest plugin daz-ts needs)
   and `DazClient.checkServerVersion()`, which reads `GET /status` and returns
   a `VersionCheck` (`compatible`, upgrade `message`). Unlike dazpy, daz-ts

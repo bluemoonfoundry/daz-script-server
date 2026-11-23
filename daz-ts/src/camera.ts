@@ -88,6 +88,25 @@ export class DazCamera extends DazNode {
     await this.client.execute(this.nodeScript(`_node.focalDistance = ${ScriptBuilder.serializeArg(value)};`));
   }
 
+  /**
+   * Write a real keyframe for the focal distance at timeline `frame` (a focus
+   * pull), via `getFocalDistanceControl().setDoubleValue(tm, value)` -- the
+   * same keyed-write surface as `setPositionAtFrame`.
+   */
+  async setFocalDistanceAtFrame(frame: number, value: number): Promise<void> {
+    await this.client.execute(
+      this.nodeScript(
+        `var _tm = ${ScriptBuilder.serializeArg(Math.trunc(frame))} * Scene.getTimeStep(); ` +
+          `_node.getFocalDistanceControl().setDoubleValue(_tm, ${ScriptBuilder.serializeArg(value)});`,
+      ),
+    );
+  }
+
+  /** Remove all keyframes from the focal distance control. */
+  async clearFocalDistanceKeys(): Promise<void> {
+    await this.client.execute(this.nodeScript("_node.getFocalDistanceControl().deleteAllKeys();"));
+  }
+
   /** Render aspect ratio width component (read/write). */
   async aspectWidth(): Promise<number | null> {
     return (await this.client.execute(this.nodeScript("return _node.aspectWidth;"))).value as number | null;

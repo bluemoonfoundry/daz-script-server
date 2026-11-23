@@ -363,6 +363,26 @@ domain-helper modules, which apply typed configuration objects to the Phase
   effect), `applyFrameSubject` (shot-distance presets), and
   `applyAnimatedShot` (real DAZ Studio keyframes via
   `setPositionAtFrame`/`setRotationAtFrame`, letting DAZ Studio interpolate).
+- `shots.ts` (from `shots.py`) — typed, immutable shot models (`Shot`,
+  `Framing`, `Placement`, `Lens`, `Orbit`, `Keyframed`, `FocusPull`,
+  `Sequence`, `CoveragePlan`, ...) and `applyShot`. `toDict()`/`fromDict()`
+  use **dazpy's wire format** (snake_case keys, `[x, y, z]` vectors), so a
+  plan saved by either SDK loads in the other. Static shots convert to and
+  from scene-recipe cameras (`Shot.toRecipe`, `CoveragePlan.mergeIntoRecipe`).
+  Namespaced as `shots` (`shots.CameraKeyframe` is the model class; the flat
+  `CameraKeyframe` stays cinematics' interface); core types are also flat.
+- `shotLibrary.ts` (from `shot_library.py`), namespaced as `shotLibrary` —
+  pure shot builders (`establishing`, `master`, `twoShot`, `single`,
+  `overTheShoulder`, `shotReverseShot`, `pov`, `insert`), the 180-degree
+  `LineOfAction` with `checkAxis`/`checkThirtyDegree`/`checkPlan`, camera
+  moves (`pushIn`/`pullOut`, `arc`, `cameraMove`), `rackFocus`/
+  `withRackFocus`, coverage (`subjectCoverage`, `dialogueCoverage`,
+  `conversation`), `shotName`, and `applyCoverage`. Keyword arguments become
+  an options object (`single(line, "bob", { size: "close_up" })`). Two
+  differences: the pure helpers take key/`Vec3` targets only (a live node's
+  position is an HTTP round trip here), and `cameraMove("handheld")` uses
+  its own seeded PRNG, so its jitter is repeatable per seed but differs from
+  dazpy's.
 - `sceneEvents.ts` (from `_scene_events.py`) — `watchSceneEvents`/
   `waitForSceneEvent`, typed SSE parsing over `GET /scene/events`, reusing
   `client.ts`'s `parseSseStream`/`streamSceneEvents` already added in

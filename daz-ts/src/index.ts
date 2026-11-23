@@ -108,6 +108,39 @@ export type {
   OrbitCamera,
 } from "./cinematics.js";
 
+// Typed shot models (dazpy.shots) and the cinematic shot library
+// (dazpy.shot_library). The full modules are namespaced -- `shots.CameraKeyframe`
+// (the class; the flat `CameraKeyframe` above is cinematics' interface) and
+// `shotLibrary.single(...)` etc.; the core types are also exported flat.
+export * as shots from "./shots.js";
+export * as shotLibrary from "./shotLibrary.js";
+export {
+  AspectSettings,
+  BlockingBeat,
+  CAMERA_ANGLES,
+  CoveragePlan,
+  FocusKey,
+  FocusPull,
+  Framing,
+  GazeBeat,
+  Keyframed,
+  Lens,
+  Orbit,
+  Placement,
+  RenderOutput,
+  SHOT_SIZES,
+  Sequence,
+  Shot,
+  Storyboard,
+  applyShot,
+  framingDistance,
+  framingTransform,
+  shotFromRecipeCamera,
+} from "./shots.js";
+export type { ApplyShotOptions, CameraAngle, Composition, ShotSize, Target as ShotTarget } from "./shots.js";
+export { ContinuityIssue, DialogueBeat, LineOfAction, applyCoverage, shotName } from "./shotLibrary.js";
+export type { Positions as ShotPositions } from "./shotLibrary.js";
+
 export { watchSceneEvents, waitForSceneEvent } from "./sceneEvents.js";
 export type { SceneEvent } from "./sceneEvents.js";
 
