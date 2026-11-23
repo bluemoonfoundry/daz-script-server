@@ -12,10 +12,16 @@ import {
   buildKissRecipe,
   buildSitRecipe,
   buildTouchRecipe,
+  FACING_MIN_SEPARATION,
+  FACING_REACH_FRACTION,
+  figureForward,
   InteractionRecipe,
+  planFacing,
+  prepareInteractionRecipe,
+  rotateAboutY,
   PreparedInteractionResult,
 } from "../../src/interactionPlan.js";
-import { BoneProfile, FigureRigProfile } from "../../src/rigProfile.js";
+import { BoneProfile, buildRigProfilesFromSnapshot, FigureRigProfile } from "../../src/rigProfile.js";
 import { DazClient } from "../../src/client.js";
 import { DazScene } from "../../src/scene.js";
 
@@ -87,7 +93,7 @@ describe("buildKissRecipe", () => {
       lookAt("A"),
       lookAt("B"),
       anchor("HandTarget", "A", "r_hand", { targetFigure: "B", targetAnchor: "l_shoulder" }),
-      anchor("HandTarget", "B", "l_hand", { targetFigure: "A", targetAnchor: "l_shoulder" }),
+      anchor("HandTarget", "B", "l_hand", { targetFigure: "A", targetAnchor: "r_shoulder" }),
     ]);
     expect(recipe.metadata).toEqual({ interaction: "kiss" });
   });
@@ -95,7 +101,7 @@ describe("buildKissRecipe", () => {
   it("mirrors sides for a left-hand lead", () => {
     const dicts = constraintsOf(buildKissRecipe("A", "B", { aAnchor: "l_hand" }));
     expect(dicts[2]).toMatchObject({ anchorName: "l_hand", targetAnchor: "r_shoulder" });
-    expect(dicts[3]).toMatchObject({ anchorName: "r_hand", targetAnchor: "r_shoulder" });
+    expect(dicts[3]).toMatchObject({ anchorName: "r_hand", targetAnchor: "l_shoulder" });
   });
 });
 
@@ -186,6 +192,7 @@ function snapshotEntry(label: string, x: number) {
 
 function fakeScene(snapshot: unknown[]) {
   const positions: Array<{ label: string; position: number[] }> = [];
+  const rotations: Array<{ label: string; rotation: number[] }> = [];
   const scene = {
     skeletons: vi.fn(async () => []),
     sceneSnapshot: vi.fn(async () => snapshot as Array<Record<string, unknown>>),
@@ -193,14 +200,18 @@ function fakeScene(snapshot: unknown[]) {
       setPosition: async (x: number, y: number, z: number) => {
         positions.push({ label, position: [x, y, z] });
       },
+      localEuler: async () => [0, 10, 0] as [number, number, number],
+      setRotation: async (x: number, y: number, z: number) => {
+        rotations.push({ label, rotation: [x, y, z] });
+      },
     })),
   };
-  return { scene, positions };
+  return { scene, positions, rotations };
 }
 
 describe("applyInteractionRecipeToScene", () => {
-  it("builds rig profiles from one sceneSnapshot() call, then stages every actor", async () => {
-    const { scene, positions } = fakeScene([snapshotEntry("Genesis 9", -100), snapshotEntry("Partner", 100)]);
+  it("builds rig profiles from one sceneSnapshot() call, then turns and stages the partner", async () => {
+    const { scene, positions, rotations } = fakeScene([snapshotEntry("Genesis 9", -100), snapshotEntry("Partner", 100)]);
 
     const result = await applyInteractionRecipeToScene(scene as any, buildHandshakeRecipe("Genesis 9", "Partner"));
 
@@ -208,7 +219,13 @@ describe("applyInteractionRecipeToScene", () => {
     expect(scene.sceneSnapshot).toHaveBeenCalledTimes(1);
     expect(result.prepared.isValid).toBe(true);
     expect(result.prepared.resolvedTargets).toHaveLength(2);
-    expect(positions.map((p) => p.label).sort()).toEqual(["Genesis 9", "Partner"]);
+    // Handshake faces the figures: Genesis 9 stays put, Partner turns 180 and stands in front (+Z) of it.
+    expect(rotations).toEqual([{ label: "Partner", rotation: [0, 190, 0] }]);
+    expect(positions.map((p) => p.label)).toEqual(["Partner"]);
+    const [x, y, z] = positions[0].position;
+    expect(x).toBeCloseTo(-100, 9);
+    expect(y).toBe(0);
+    expect(z).toBeGreaterThanOrEqual(FACING_MIN_SEPARATION);
     expect(result.alignmentResults).toEqual([]);
   });
 
@@ -244,5 +261,76 @@ describe("DazScene.applyInteractionRecipe", () => {
     expect(snapshot).toHaveBeenCalledTimes(1);
     expect(result.prepared.recipe.kind).toBe("touch");
     expect(staged.sort()).toEqual(["Genesis 9", "Partner"]);
+  });
+});
+
+// ── facing (y1td) ────────────────────────────────────────────────────────────
+
+describe("facing staging", () => {
+  // Both figures face +Z, side by side: the rest-pose setup that left the
+  // second actor's cross-body reach behind it.
+  const profiles = () => buildRigProfilesFromSnapshot([snapshotEntry("Genesis 9", -100), snapshotEntry("Partner", 100)]);
+  const distance = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  it("rotateAboutY turns +Z into +X at +90 degrees", () => {
+    const v = rotateAboutY([0, 5, 1], 90);
+    expect(v[0]).toBeCloseTo(1, 12);
+    expect(v[1]).toBe(5);
+    expect(v[2]).toBeCloseTo(0, 12);
+  });
+
+  it("figureForward reads +Z from left/right shoulders", () => {
+    expect(figureForward(profiles()["Genesis 9"])).toEqual([-0, 0, 1]);
+  });
+
+  it("turns the second actor of a recipe with mutual look-at; touch (no look-at) turns nobody", () => {
+    for (const build of [buildHugRecipe, buildKissRecipe, buildHandshakeRecipe, buildFightRecipe]) {
+      expect(planFacing(build("Genesis 9", "Partner").toPlan(), profiles())).toEqual({ Partner: { anchor: "Genesis 9", yawDegrees: 180 } });
+    }
+    expect(planFacing(buildTouchRecipe("Genesis 9", "Partner").toPlan(), profiles())).toEqual({});
+    expect(planFacing(buildFaceEachOtherRecipe("Genesis 9", "Partner").toPlan(), profiles())).toEqual({});
+  });
+
+  it("hug: the turned partner stands in front, where both hands reach the far shoulder's surface", () => {
+    const prepared = prepareInteractionRecipe(buildHugRecipe("Genesis 9", "Partner"), profiles());
+    expect(figureForward(prepared.rigProfiles.Partner)![2]).toBeCloseTo(-1, 12);
+    const patch = prepared.buildPosePatch();
+    expect(patch.figureYawDegrees).toEqual({ Partner: 180 });
+    expect(Object.keys(patch.figurePositions)).toEqual(["Partner"]);
+    const [x, y, z] = patch.figurePositions.Partner;
+    expect([x, y]).toEqual([-100, 0]);
+    expect(z).toBeGreaterThanOrEqual(FACING_MIN_SEPARATION);
+    // B's right hand -> A's left shoulder is now on B's near side, not behind it.
+    const bTarget = prepared.resolvedTargets[1];
+    expect(bTarget.figureLabel).toBe("Partner");
+    expect(bTarget.targetPoint![0]).toBeGreaterThan(-100);
+  });
+
+  it("handshake: both hands aim at one meeting point between the figures, within reach", async () => {
+    const prepared = prepareInteractionRecipe(buildHandshakeRecipe("Genesis 9", "Partner"), profiles());
+    const scene = {
+      findSkeletonByLabel: async () => ({
+        setPosition: async () => {},
+        localEuler: async () => [0, 0, 0] as [number, number, number],
+        setRotation: async () => {},
+        boneRotations: async () => ({}),
+        setBoneRotations: async () => {},
+        // Effector parked far away: one iteration, then the step budget runs out.
+        evaluatePoseJacobian: async (chain: string[]) => ({ basePosition: [0, -500, 0], columns: chain.flatMap(() => [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) }),
+      }),
+    };
+    const result = await prepared.apply(scene as any, { alignLimbTargets: true, maxIterations: 1 });
+    const [a, b] = result.alignmentResults;
+    expect(a.diagnostics.meetingPoint).toEqual(b.diagnostics.meetingPoint);
+    const meeting = a.diagnostics.meetingPoint as number[];
+    const partnerZ = result.posePatch.figurePositions.Partner[2];
+    expect(meeting[0]).toBeCloseTo(-100, 9);
+    expect(meeting[2]).toBeCloseTo(partnerZ / 2, 9);
+    // Each wrist stops short of the meeting point, toward its own figure.
+    expect(a.targetPoint![2]).toBeLessThan(meeting[2]);
+    expect(b.targetPoint![2]).toBeGreaterThan(meeting[2]);
+    // Reach runs from the start of the last two long segments (r_shoulder -> r_upperarm -> r_hand), not the hip.
+    const reach = distance([-10, 145, 0], [-20, 140, 0]) + distance([-20, 140, 0], [-50, 100, 0]);
+    expect(distance(a.targetPoint!, [-110, 145, 0])).toBeCloseTo(reach * FACING_REACH_FRACTION, 6);
   });
 });

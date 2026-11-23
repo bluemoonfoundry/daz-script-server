@@ -9,8 +9,24 @@
  * `interactionSolve.ts`.
  */
 
-import type { AnchorTargetLike, FigureRigProfile, RigSceneSource, Vector3, Rotation3 } from "./rigProfile.js";
-import { addVec3, asVector3, averageVec3, buildRigProfilesFromSnapshot, lengthVec3, lookupRigProfile, midpointVec3, normalizeName, scaleVec3, sideFromName, subVec3, ResolvedInteractionTarget } from "./rigProfile.js";
+import type { AnchorTargetLike, RigSceneSource, Vector3, Rotation3 } from "./rigProfile.js";
+import {
+  addVec3,
+  ANCHOR_SURFACE_RADIUS,
+  asVector3,
+  averageVec3,
+  BoneProfile,
+  buildRigProfilesFromSnapshot,
+  FigureRigProfile,
+  lengthVec3,
+  lookupRigProfile,
+  midpointVec3,
+  normalizeName,
+  scaleVec3,
+  sideFromName,
+  subVec3,
+  ResolvedInteractionTarget,
+} from "./rigProfile.js";
 import type { LimbAlignmentResult } from "./interactionSolve.js";
 import { alignmentChainNames, alignSingleLimbTarget } from "./interactionSolve.js";
 
@@ -542,23 +558,45 @@ export class InteractionRecipe {
 
 export interface InteractionPosePatchDict {
   figurePositions: Record<string, Vector3>;
+  figureYawDegrees: Record<string, number>;
   unresolvedTargets: ReturnType<ResolvedInteractionTarget["toDict"]>[];
   diagnostics: Record<string, unknown>;
 }
 
-/** A coarse figure-placement patch built from a prepared interaction. Only translates figures -- does not solve bone rotations. */
+/**
+ * A coarse figure-placement patch built from a prepared interaction: figure
+ * translations, plus yaw turns for figures staged to face a partner. Does not
+ * solve bone rotations.
+ */
 export class InteractionPosePatch {
   readonly figurePositions: Record<string, Vector3>;
+  /** Figure label -> degrees to add to the figure's Y rotation (turning it to face its partner). */
+  readonly figureYawDegrees: Record<string, number>;
   readonly unresolvedTargets: ResolvedInteractionTarget[];
   readonly diagnostics: Record<string, unknown>;
 
-  constructor(init: { figurePositions?: Record<string, Vector3>; unresolvedTargets?: ResolvedInteractionTarget[]; diagnostics?: Record<string, unknown> } = {}) {
+  constructor(
+    init: {
+      figurePositions?: Record<string, Vector3>;
+      figureYawDegrees?: Record<string, number>;
+      unresolvedTargets?: ResolvedInteractionTarget[];
+      diagnostics?: Record<string, unknown>;
+    } = {},
+  ) {
     this.figurePositions = init.figurePositions ?? {};
+    this.figureYawDegrees = init.figureYawDegrees ?? {};
     this.unresolvedTargets = init.unresolvedTargets ?? [];
     this.diagnostics = init.diagnostics ?? {};
   }
 
   async apply(scene: Pick<RigSceneSource, "findSkeletonByLabel">): Promise<void> {
+    for (const [figureLabel, yaw] of Object.entries(this.figureYawDegrees)) {
+      if (Math.abs(yaw) < 1e-6) continue;
+      const skeleton = await scene.findSkeletonByLabel(figureLabel);
+      if (!skeleton.localEuler || !skeleton.setRotation) throw new Error(`Cannot turn ${figureLabel} to face its partner: skeleton has no localEuler/setRotation`);
+      const [x, y, z] = (await skeleton.localEuler()) ?? [0, 0, 0];
+      await skeleton.setRotation(x, y + yaw, z);
+    }
     for (const [figureLabel, position] of Object.entries(this.figurePositions)) {
       const skeleton = await scene.findSkeletonByLabel(figureLabel);
       await skeleton.setPosition(position[0], position[1], position[2]);
@@ -568,6 +606,7 @@ export class InteractionPosePatch {
   toDict(): InteractionPosePatchDict {
     return {
       figurePositions: { ...this.figurePositions },
+      figureYawDegrees: { ...this.figureYawDegrees },
       unresolvedTargets: this.unresolvedTargets.map((t) => t.toDict()),
       diagnostics: { ...this.diagnostics },
     };
@@ -624,6 +663,12 @@ export class PreparedInteractionRecipe {
   readonly rigProfiles: Record<string, FigureRigProfile>;
   readonly validationIssues: ValidationIssue[];
   readonly diagnostics: Record<string, unknown>;
+  /**
+   * Partner figure label -> the figure it is turned to face, and by how
+   * much. `rigProfiles` (and so `resolvedTargets`) already have these turns
+   * applied; `buildPosePatch` stages each partner in front of its anchor.
+   */
+  readonly facing: Record<string, FacingAssignment>;
 
   constructor(init: {
     recipe: InteractionRecipe;
@@ -632,6 +677,7 @@ export class PreparedInteractionRecipe {
     rigProfiles?: Record<string, FigureRigProfile>;
     validationIssues?: ValidationIssue[];
     diagnostics?: Record<string, unknown>;
+    facing?: Record<string, FacingAssignment>;
   }) {
     this.recipe = init.recipe;
     this.plan = init.plan;
@@ -639,6 +685,7 @@ export class PreparedInteractionRecipe {
     this.rigProfiles = init.rigProfiles ?? {};
     this.validationIssues = init.validationIssues ?? [];
     this.diagnostics = init.diagnostics ?? {};
+    this.facing = init.facing ?? {};
   }
 
   get isValid(): boolean {
@@ -653,16 +700,19 @@ export class PreparedInteractionRecipe {
       rigProfiles: Object.fromEntries(Object.entries(this.rigProfiles).map(([label, profile]) => [label, profile.toDict()])),
       validationIssues: this.validationIssues.map((issue) => issue.toDict()),
       diagnostics: { ...this.diagnostics },
+      facing: Object.fromEntries(Object.entries(this.facing).map(([label, f]) => [label, { ...f }])),
     };
   }
 
   /**
    * Build a coarse live-placement patch from the prepared recipe.
    *
-   * Intentionally conservative: only translates figures so their anchors
-   * are staged near their requested targets. Hand/foot targets move figures
-   * in X/Z only and keep their height (IK handles reach); a `BalanceTarget`
-   * also sets height. Does not solve bone rotations (that's
+   * Intentionally conservative: translates figures so their anchors are
+   * staged near their requested targets. Hand/foot targets move figures in
+   * X/Z only and keep their height (IK handles reach); a `BalanceTarget` also
+   * sets height. A faced partner (see `facing`) is turned and placed straight
+   * in front of its anchor figure, as far as the shortest limb between them
+   * comfortably reaches. Does not solve bone rotations (that's
    * `alignLimbTargets`).
    */
   buildPosePatch(): InteractionPosePatch {
@@ -683,10 +733,6 @@ export class PreparedInteractionRecipe {
       const heights = entries.filter((e) => e.setsHeight).map((e) => e.point[1]);
       const y = heights.length > 0 ? heights.reduce((a, b) => a + b, 0) / heights.length : floorHeight(label);
       return [xz[0], y, xz[2]];
-    };
-    const anchorOffset = (profile: FigureRigProfile, anchorName: string): Vector3 | null => {
-      const anchor = profile.anchor(anchorName);
-      return anchor === null ? null : profile.boneOffset(anchor.boneName);
     };
 
     for (const constraint of this.plan.constraints) {
@@ -710,7 +756,37 @@ export class PreparedInteractionRecipe {
       appendPosition(constraint.figureLabel, subVec3(targetPoint, pelvisOffset), true);
     }
 
+    // Faced pairs: the partner goes straight in front of its anchor figure.
+    const facedTargets = new Set<ResolvedInteractionTarget>();
+    const figureYawDegrees: Record<string, number> = {};
+    for (const [partnerLabel, assignment] of Object.entries(this.facing)) {
+      figureYawDegrees[partnerLabel] = assignment.yawDegrees;
+      const anchorProfile = lookupRigProfile(this.rigProfiles, assignment.anchor);
+      const partnerProfile = lookupRigProfile(this.rigProfiles, partnerLabel);
+      if (anchorProfile === null || partnerProfile === null || partnerProfile.figurePosition === null) continue;
+      const forward = figureForward(anchorProfile);
+      const anchorBase = stagedPosition(assignment.anchor) ?? anchorProfile.figurePosition;
+      if (forward === null || anchorBase === null) continue;
+      const partnerY = partnerProfile.figurePosition[1];
+      const partnerBase = (d: number): Vector3 => [anchorBase[0] + forward[0] * d, partnerY, anchorBase[2] + forward[2] * d];
+      const between = this.resolvedTargets.filter((t) => {
+        const source = lookupRigProfile(this.rigProfiles, t.figureLabel);
+        const target = lookupRigProfile(this.rigProfiles, t.targetFigure);
+        return t.targetAnchor !== null && ((source === anchorProfile && target === partnerProfile) || (source === partnerProfile && target === anchorProfile));
+      });
+      const separations: number[] = [];
+      for (const target of between) {
+        const separation = this.facedSeparation(target, (d) => new Map([[anchorProfile, anchorBase], [partnerProfile, partnerBase(d)]]));
+        if (separation !== null) separations.push(separation);
+      }
+      if (separations.length === 0) continue;
+      const separation = Math.max(FACING_MIN_SEPARATION, Math.min(...separations));
+      appendPosition(partnerLabel, partnerBase(separation));
+      between.forEach((t) => facedTargets.add(t));
+    }
+
     for (const resolved of this.resolvedTargets) {
+      if (facedTargets.has(resolved)) continue;
       const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
       if (profile === null) {
         unresolved.push(resolved);
@@ -727,7 +803,7 @@ export class PreparedInteractionRecipe {
         continue;
       }
       const targetProfile = resolved.targetFigure ? lookupRigProfile(this.rigProfiles, resolved.targetFigure) : null;
-      const targetOffset = targetProfile && resolved.targetAnchor ? anchorOffset(targetProfile, resolved.targetAnchor) : null;
+      const targetOffset = targetProfile && resolved.targetAnchor ? anchorBoneOffset(targetProfile, resolved.targetAnchor) : null;
       const sourceBase = stagedPosition(resolved.figureLabel);
       const targetBase = stagedPosition(resolved.targetFigure);
 
@@ -777,6 +853,7 @@ export class PreparedInteractionRecipe {
 
     return new InteractionPosePatch({
       figurePositions: averagedPositions,
+      figureYawDegrees,
       unresolvedTargets: unresolved,
       diagnostics: { figureCount: Object.keys(averagedPositions).length, unresolvedTargetCount: unresolved.length },
     });
@@ -817,7 +894,12 @@ export class PreparedInteractionRecipe {
       const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
       if (profile === null) continue;
       const jointPoint = resolved.targetPoint!;
-      if (resolved.surfaceStandoff > 0) {
+      // Hand-to-hand both ways (handshake): both hands meet halfway instead
+      // of chasing each other's rest positions.
+      const meeting = this.mutualTarget(resolved) !== null ? this.contactGeometry(resolved, this.stagedBases(opts.figureDisplacements)) : null;
+      if (meeting !== null) {
+        resolved = new ResolvedInteractionTarget({ ...resolved, targetPoint: meeting.stop });
+      } else if (resolved.surfaceStandoff > 0) {
         const sourceShift = this.profileDisplacement(profile, opts.figureDisplacements);
         resolved = new ResolvedInteractionTarget({ ...resolved, targetPoint: surfaceContactPoint(profile, resolved, sourceShift) });
       }
@@ -827,6 +909,7 @@ export class PreparedInteractionRecipe {
         damping: opts.damping,
         tolerance: opts.tolerance,
       });
+      if (meeting !== null) result.diagnostics.meetingPoint = meeting.joint;
       if (resolved.surfaceStandoff > 0) {
         result.diagnostics.surfaceStandoff = resolved.surfaceStandoff;
         result.diagnostics.targetJointPoint = jointPoint;
@@ -834,6 +917,92 @@ export class PreparedInteractionRecipe {
       results.push(result);
     }
     return results;
+  }
+
+  /** The reverse target of a hand/foot-to-hand/foot target (B's hand -> A's hand for A's hand -> B's hand), if the plan has one. */
+  private mutualTarget(target: ResolvedInteractionTarget): ResolvedInteractionTarget | null {
+    if (target.targetFigure === null || target.targetAnchor === null) return null;
+    const source = lookupRigProfile(this.rigProfiles, target.figureLabel);
+    const partner = lookupRigProfile(this.rigProfiles, target.targetFigure);
+    if (source === null || partner === null || source === partner) return null;
+    return (
+      this.resolvedTargets.find(
+        (other) =>
+          other !== target &&
+          other.anchorName === target.targetAnchor &&
+          other.targetAnchor === target.anchorName &&
+          lookupRigProfile(this.rigProfiles, other.figureLabel) === partner &&
+          lookupRigProfile(this.rigProfiles, other.targetFigure) === source,
+      ) ?? null
+    );
+  }
+
+  /** Figure origins after staging: each profile's position plus its displacement. */
+  private stagedBases(displacements: Record<string, Vector3> | undefined): Map<FigureRigProfile, Vector3> {
+    const bases = new Map<FigureRigProfile, Vector3>();
+    for (const profile of new Set(Object.values(this.rigProfiles))) {
+      if (profile.figurePosition === null) continue;
+      bases.set(profile, addVec3(profile.figurePosition, this.profileDisplacement(profile, displacements))!);
+    }
+    return bases;
+  }
+
+  /**
+   * Where `target`'s effector should stop with the figures' origins at
+   * `bases` (unlisted figures stay put): the target joint pulled back toward
+   * the source limb root by the surface standoff. For a mutual hand-to-hand
+   * pair the joint is the meeting point between both shoulders. Also returns
+   * the reach root (shoulder/hip joint) and the limb's reach. Null when the
+   * geometry is unknown.
+   */
+  private contactGeometry(target: ResolvedInteractionTarget, bases: Map<FigureRigProfile, Vector3>): { root: Vector3; joint: Vector3; stop: Vector3; limbLength: number } | null {
+    const source = lookupRigProfile(this.rigProfiles, target.figureLabel);
+    const partner = lookupRigProfile(this.rigProfiles, target.targetFigure);
+    if (source === null || partner === null || target.targetAnchor === null) return null;
+    const limb = limbGeometry(source, target.boneName, bases.get(source) ?? source.figurePosition);
+    if (limb === null) return null;
+    const partnerBase = bases.get(partner) ?? partner.figurePosition;
+    let joint: Vector3 | null = null;
+    const mutual = this.mutualTarget(target);
+    if (mutual !== null) {
+      const other = limbGeometry(partner, mutual.boneName, partnerBase);
+      if (other !== null) joint = meetingPoint(limb.reachRoot, limb.reach, other.reachRoot, other.reach);
+    } else {
+      const offset = anchorBoneOffset(partner, target.targetAnchor);
+      if (offset !== null && partnerBase !== null) joint = addVec3(addVec3(partnerBase, offset), target.offset);
+    }
+    if (joint === null) return null;
+    return { root: limb.reachRoot, joint, stop: pullTowardRoot(joint, limb.chainRoot, target.surfaceStandoff), limbLength: limb.reach };
+  }
+
+  /**
+   * How far in front of its anchor a faced partner can stand (origin to
+   * origin, cm) for `target`'s limb to reach its stop point at
+   * `FACING_REACH_FRACTION` (`FACING_FOOT_REACH_FRACTION` for a leg) of its
+   * reach. `basesAt(d)` places the figures
+   * for separation `d`. Never closer than `FACING_MIN_SEPARATION`.
+   */
+  private facedSeparation(target: ResolvedInteractionTarget, basesAt: (d: number) => Map<FigureRigProfile, Vector3>): number | null {
+    const role = lookupRigProfile(this.rigProfiles, target.figureLabel)?.suggestPrimaryChain(target.boneName)?.role;
+    const fraction = role === "foot" || role === "leg" ? FACING_FOOT_REACH_FRACTION : FACING_REACH_FRACTION;
+    const gapAt = (d: number): { gap: number; reach: number } | null => {
+      const geometry = this.contactGeometry(target, basesAt(d));
+      return geometry === null ? null : { gap: lengthVec3(subVec3(geometry.stop, geometry.root)), reach: geometry.limbLength * fraction };
+    };
+    let low = FACING_MIN_SEPARATION;
+    let high = FACING_MAX_SEPARATION;
+    const atLow = gapAt(low);
+    if (atLow === null) return null;
+    if (atLow.gap >= atLow.reach) return low;
+    const atHigh = gapAt(high)!;
+    if (atHigh.gap <= atHigh.reach) return high;
+    for (let i = 0; i < 40; i++) {
+      const mid = (low + high) / 2;
+      const atMid = gapAt(mid)!;
+      if (atMid.gap <= atMid.reach) low = mid;
+      else high = mid;
+    }
+    return low;
   }
 
   /** Staging displacement of `profile`'s figure (matched by profile, so aliases work). */
@@ -902,28 +1071,217 @@ function surfaceContactPoint(profile: FigureRigProfile, target: ResolvedInteract
   if (root === null && profile.figurePosition !== null) root = [profile.figurePosition[0], point[1], profile.figurePosition[2]];
   if (root === null) return point;
   if (sourceShift !== null) root = addVec3(root, sourceShift)!;
+  return pullTowardRoot(point, root, target.surfaceStandoff);
+}
+
+/** `point` moved `standoff` toward `root` (horizontally when possible), never past the root: on overlapping figures that would aim behind the source. */
+function pullTowardRoot(point: Vector3, root: Vector3, standoff: number): Vector3 {
+  if (standoff <= 0) return point;
   const direction = approachDirection(point, root);
   if (direction === null) return point;
-  // Never past the limb root: on overlapping figures that would aim behind the source.
-  const reach = Math.min(target.surfaceStandoff, lengthVec3(subVec3(root, point)));
+  const reach = Math.min(standoff, lengthVec3(subVec3(root, point)));
   return addVec3(point, scaleVec3(direction, reach))!;
 }
 
+// ── facing ───────────────────────────────────────────────────────────────────
+
+/** Fraction of an arm's reach a faced partner is staged to need: short of full extension, where IK steps stall. */
+export const FACING_REACH_FRACTION = 0.85;
+/** The same for a leg (kick): nearly extended, since a folded high kick is hard for the solver to find from a straight rest leg. */
+export const FACING_FOOT_REACH_FRACTION = 0.95;
+/** Closest two faced figures' origins are staged (cm): two torso radii plus clearance. */
+export const FACING_MIN_SEPARATION = 2 * ANCHOR_SURFACE_RADIUS.spine + 6;
+const FACING_MAX_SEPARATION = 400;
+/** A mutual hand-to-hand meeting point sits this fraction of the arm's reach below the shoulder joints (about navel height). */
+const MEETING_DROP_FRACTION = 0.8;
+/** Chain segments shorter than this (cm) are joint offsets (twist bones, etc.), not limb segments. */
+const LIMB_SEGMENT_MIN_LENGTH = 2;
+
+/** A partner figure turned to face another before staging. */
+export interface FacingAssignment {
+  /** The figure it faces (which keeps its own orientation). */
+  anchor: string;
+  /** Degrees added to the partner's Y rotation. */
+  yawDegrees: number;
+}
+
+const FORWARD_ANCHOR_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["l_shoulder", "r_shoulder"],
+  ["l_knee", "r_knee"],
+  ["l_foot", "r_foot"],
+];
+
+function anchorBoneOffset(profile: FigureRigProfile, anchorName: string): Vector3 | null {
+  const anchor = profile.anchor(anchorName);
+  return anchor === null ? null : profile.boneOffset(anchor.boneName);
+}
+
+/**
+ * Horizontal unit vector a figure faces, from its left/right shoulders (then
+ * knees, then feet): left minus right, crossed with up. A Genesis figure at
+ * rest faces +Z. Null when no pair resolves.
+ */
+export function figureForward(profile: FigureRigProfile): Vector3 | null {
+  for (const [left, right] of FORWARD_ANCHOR_PAIRS) {
+    const l = anchorBoneOffset(profile, left);
+    const r = anchorBoneOffset(profile, right);
+    if (l === null || r === null) continue;
+    const across: Vector3 = [l[0] - r[0], 0, l[2] - r[2]];
+    const length = lengthVec3(across);
+    if (length < 1e-6) continue;
+    return [-across[2] / length, 0, across[0] / length];
+  }
+  return null;
+}
+
+/** Rotate `v` by `degrees` about +Y (right-handed: +90 turns +Z into +X), as a figure's Y rotation does. */
+export function rotateAboutY(v: Vector3, degrees: number): Vector3 {
+  const radians = (degrees * Math.PI) / 180;
+  const c = Math.cos(radians);
+  const s = Math.sin(radians);
+  return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c];
+}
+
+function yawOf(direction: Vector3): number {
+  return (Math.atan2(direction[0], direction[2]) * 180) / Math.PI;
+}
+
+function wrapDegrees(degrees: number): number {
+  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
+  return wrapped === -180 ? 180 : wrapped;
+}
+
+/** A copy of `profile` with the figure turned `degrees` about its origin: bone world positions (and, without a figure position, local offsets) rotated. */
+export function rotateRigProfile(profile: FigureRigProfile, degrees: number): FigureRigProfile {
+  const pivot = profile.figurePosition ?? [0, 0, 0];
+  const turn = (p: Vector3 | null): Vector3 | null => (p === null ? null : addVec3(pivot, rotateAboutY(subVec3(p, pivot), degrees)));
+  const bones = profile.bones.map((bone) =>
+    BoneProfile.fromDict({
+      ...bone.toDict(),
+      worldPosition: turn(bone.worldPosition),
+      localPosition: profile.figurePosition === null && bone.localPosition !== null ? rotateAboutY(bone.localPosition, degrees) : bone.localPosition,
+    }),
+  );
+  return new FigureRigProfile({
+    figureLabel: profile.figureLabel,
+    family: profile.family,
+    bones,
+    metadata: { ...profile.metadata, facingYawDegrees: degrees },
+    figurePosition: profile.figurePosition,
+  });
+}
+
+/**
+ * Which figures to turn to face a partner. A pair qualifies when a hand/foot
+ * target links them and both have a `LookAtTarget` (the hug, kiss,
+ * handshake and fight recipes). The pair's earlier actor (in `plan.actors`)
+ * keeps its orientation; the other turns to face it. A figure turns at most
+ * once.
+ */
+export function planFacing(plan: InteractionPlan, rigProfiles: Record<string, FigureRigProfile>): Record<string, FacingAssignment> {
+  const lookers = new Set<FigureRigProfile>();
+  for (const constraint of plan.constraints) {
+    if (!(constraint instanceof LookAtTarget)) continue;
+    const profile = lookupRigProfile(rigProfiles, constraint.figureLabel);
+    if (profile !== null) lookers.add(profile);
+  }
+  const actorOrder = (label: string): number => {
+    const profile = lookupRigProfile(rigProfiles, label);
+    const index = plan.actors.findIndex((actor) => lookupRigProfile(rigProfiles, actor) === profile);
+    return index < 0 ? Number.POSITIVE_INFINITY : index;
+  };
+  const facing: Record<string, FacingAssignment> = {};
+  const involved = new Set<FigureRigProfile>();
+  for (const constraint of plan.constraints) {
+    if (!(constraint instanceof HandTarget || constraint instanceof FootTarget) || !constraint.targetFigure || !constraint.targetAnchor) continue;
+    const source = lookupRigProfile(rigProfiles, constraint.figureLabel);
+    const target = lookupRigProfile(rigProfiles, constraint.targetFigure);
+    if (source === null || target === null || source === target || !lookers.has(source) || !lookers.has(target)) continue;
+    const sourceFirst = actorOrder(constraint.figureLabel) <= actorOrder(constraint.targetFigure);
+    const [anchorLabel, partnerLabel] = sourceFirst ? [constraint.figureLabel, constraint.targetFigure] : [constraint.targetFigure, constraint.figureLabel];
+    const [anchorProfile, partnerProfile] = sourceFirst ? [source, target] : [target, source];
+    if (involved.has(partnerProfile)) continue;
+    const anchorForward = figureForward(anchorProfile);
+    const partnerForward = figureForward(partnerProfile);
+    if (anchorForward === null || partnerForward === null) continue;
+    facing[partnerLabel] = { anchor: anchorLabel, yawDegrees: wrapDegrees(yawOf(scaleVec3(anchorForward, -1)) - yawOf(partnerForward)) };
+    involved.add(partnerProfile);
+    involved.add(anchorProfile);
+  }
+  return facing;
+}
+
+/** `rigProfiles` with each faced partner's profile (under every key it has) replaced by its turned copy. */
+function applyFacing(rigProfiles: Record<string, FigureRigProfile>, facing: Record<string, FacingAssignment>): Record<string, FigureRigProfile> {
+  const turned = { ...rigProfiles };
+  for (const [partnerLabel, assignment] of Object.entries(facing)) {
+    const original = lookupRigProfile(rigProfiles, partnerLabel);
+    if (original === null) continue;
+    const rotated = rotateRigProfile(original, assignment.yawDegrees);
+    for (const [key, profile] of Object.entries(rigProfiles)) {
+      if (profile === original) turned[key] = rotated;
+    }
+  }
+  return turned;
+}
+
+/**
+ * Limb geometry with the figure origin at `base`: `chainRoot` is the
+ * alignment chain's first bone (where the standoff pull aims, as in
+ * `surfaceContactPoint`); `reachRoot` starts the limb's last two long
+ * segments (the upper-arm or thigh joint) and `reach` is the path length
+ * from it to the effector. Torso links (spine -> collar) barely add reach, so
+ * counting them would stage partners out of range.
+ */
+function limbGeometry(profile: FigureRigProfile, effectorBone: string, base: Vector3 | null): { chainRoot: Vector3; reachRoot: Vector3; reach: number } | null {
+  if (base === null) return null;
+  const chain = profile.suggestPrimaryChain(effectorBone);
+  const names = chain !== null ? [...alignmentChainNames(profile, chain), effectorBone] : [];
+  if (names.length < 2) return null;
+  const offsets = names.map((name) => profile.boneOffset(name));
+  if (offsets.some((offset) => offset === null)) return null;
+  const points = offsets as Vector3[];
+  let reach = 0;
+  let longSegments = 0;
+  let rootIndex = 0;
+  for (let i = points.length - 1; i > 0 && longSegments < 2; i--) {
+    const segment = lengthVec3(subVec3(points[i], points[i - 1]));
+    reach += segment;
+    if (segment >= LIMB_SEGMENT_MIN_LENGTH) longSegments++;
+    rootIndex = i - 1;
+  }
+  return { chainRoot: addVec3(base, points[0])!, reachRoot: addVec3(base, points[rootIndex])!, reach };
+}
+
+/** Where two hands reaching for each other meet: horizontally between both shoulders, `MEETING_DROP_FRACTION` of the mean reach below them. */
+function meetingPoint(rootA: Vector3, lengthA: number, rootB: Vector3, lengthB: number): Vector3 {
+  const middle = midpointVec3(rootA, rootB);
+  return [middle[0], middle[1] - MEETING_DROP_FRACTION * ((lengthA + lengthB) / 2), middle[2]];
+}
+
+/**
+ * Compile a recipe against rig profiles: plan facing (turned partners' profiles
+ * replace the originals in `rigProfiles`), validate, and resolve targets.
+ */
 export function prepareInteractionRecipe(recipe: InteractionRecipe, rigProfiles: Record<string, FigureRigProfile>): PreparedInteractionRecipe {
   const plan = recipe.toPlan();
-  const validationIssues = plan.validate(rigProfiles);
-  const resolvedTargets = plan.resolveTargets(rigProfiles);
+  const facing = planFacing(plan, rigProfiles);
+  const profiles = applyFacing(rigProfiles, facing);
+  const validationIssues = plan.validate(profiles);
+  const resolvedTargets = plan.resolveTargets(profiles);
   return new PreparedInteractionRecipe({
     recipe,
     plan,
     resolvedTargets,
-    rigProfiles: { ...rigProfiles },
+    rigProfiles: profiles,
     validationIssues,
+    facing,
     diagnostics: {
       recipeKind: recipe.kind,
       actorCount: recipe.actors.length,
       constraintCount: recipe.constraints.length,
       resolvedTargetCount: resolvedTargets.length,
+      facedFigureCount: Object.keys(facing).length,
     },
   });
 }
@@ -1011,8 +1369,9 @@ export function buildTouchRecipe(
 /**
  * Build a face-to-face preset with a stabilizing contact plan: mutual
  * look-at, A's `aAnchor` hand on B's opposite shoulder, and B's mirrored hand
- * on A's same shoulder. (dazpy's `b_anchor` parameter is always overwritten
- * from `a_anchor`'s side, so it is not offered here.)
+ * on A's opposite shoulder (each hand straight ahead once they face each
+ * other). (dazpy's `b_anchor` parameter is always overwritten from
+ * `a_anchor`'s side, so it is not offered here.)
  */
 export function buildKissRecipe(actorA: string, actorB: string, opts: { aAnchor?: string } = {}): InteractionRecipe {
   const aAnchor = opts.aAnchor ?? "r_hand";
@@ -1024,7 +1383,7 @@ export function buildKissRecipe(actorA: string, actorB: string, opts: { aAnchor?
     constraints: [
       ...mutualLookAt(actorA, actorB),
       new HandTarget({ figureLabel: actorA, anchorName: aAnchor, targetFigure: actorB, targetAnchor: shoulder }),
-      new HandTarget({ figureLabel: actorB, anchorName: right ? "l_hand" : "r_hand", targetFigure: actorA, targetAnchor: shoulder }),
+      new HandTarget({ figureLabel: actorB, anchorName: right ? "l_hand" : "r_hand", targetFigure: actorA, targetAnchor: right ? "r_shoulder" : "l_shoulder" }),
     ],
     metadata: { interaction: "kiss" },
   });

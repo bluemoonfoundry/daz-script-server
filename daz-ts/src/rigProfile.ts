@@ -52,6 +52,9 @@ export interface RigSkeletonSource extends RigMetadataSource {
     stepDegrees: number,
   ): Promise<{ basePosition: Vector3; columns: Vector3[] } | null>;
   setPosition(x: number, y: number, z: number): Promise<void>;
+  /** Node Euler rotation (degrees). Optional; staging needs it (with `setRotation`) only to turn faced figures. */
+  localEuler?(): Promise<[number, number, number] | null>;
+  setRotation?(x: number, y: number, z: number): Promise<void>;
 }
 
 /** Everything the interaction package needs from a live scene. */

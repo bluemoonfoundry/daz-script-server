@@ -21,6 +21,20 @@ All notable changes to DazScript Server are documented here.
   `package-lock.json` in step. The release tarball is now
   `bluemoonfoundry-daz-ts-*.tgz`.
 
+### Changed
+
+- **dazpy / daz-ts:** the hug, kiss, handshake and fight interaction recipes
+  now turn the second actor to face the first before staging and place it
+  straight in front, at a distance the limbs can reach (0.85 of an arm's
+  reach from the shoulder joint, 0.95 of a leg's from the hip). Before, staging only moved figures sideways, so in a hug or kiss
+  the second actor's hand had to reach behind its own body. Handshake hands
+  now aim at one meeting point between the two figures. In the kiss recipe,
+  B's hand now goes to A's opposite shoulder (`r_shoulder` for B's
+  `l_hand`), not the cross-body one. The pose patch has
+  a new `figureYawDegrees` / `figure_yaw_degrees` field. Applying it needs a
+  skeleton with `localEuler`/`setRotation` (`local_euler`/`set_rotation`),
+  which `DazSkeleton` has. Touch and sit staging is unchanged (y1td).
+
 ### Fixed
 
 - **dazpy / daz-ts:** `AuthenticationError` (HTTP 401/403) now keeps the

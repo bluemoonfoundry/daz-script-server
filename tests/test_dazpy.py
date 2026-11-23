@@ -1587,6 +1587,98 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(len(result.alignment_results), 1)
         self.assertLess(result.alignment_results[0].final_error, result.alignment_results[0].initial_error)
 
+    # ── facing (y1td) ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _facing_profiles():
+        """Two figures side by side, both facing +Z (the rest-pose live setup)."""
+
+        def entry(label, x):
+            def bone(name, parent, world):
+                return {"name": name, "label": name, "parent_name": parent, "local_position": [0, 0, 0], "world_position": world}
+
+            return {
+                "name": label.replace(" ", ""),
+                "label": label,
+                "position": [x, 0, 0],
+                "bones": [
+                    bone("hip", None, [x, 100, 0]),
+                    bone("r_shoulder", "hip", [x - 10, 145, 0]),
+                    bone("r_upperarm", "r_shoulder", [x - 20, 140, 0]),
+                    bone("r_hand", "r_upperarm", [x - 50, 100, 0]),
+                    bone("l_shoulder", "hip", [x + 10, 145, 0]),
+                    bone("l_upperarm", "l_shoulder", [x + 20, 140, 0]),
+                    bone("l_hand", "l_upperarm", [x + 50, 100, 0]),
+                    bone("head", "hip", [x, 165, 0]),
+                ],
+            }
+
+        return build_rig_profiles_from_snapshot([entry("Genesis 9", -100), entry("Partner", 100)])
+
+    def test_facing_turns_second_actor_of_look_at_recipes_only(self):
+        from dazpy._interaction import figure_forward, plan_facing, rotate_about_y
+
+        x, y, z = rotate_about_y((0.0, 5.0, 1.0), 90.0)
+        self.assertAlmostEqual(x, 1.0)
+        self.assertEqual(y, 5.0)
+        self.assertAlmostEqual(z, 0.0)
+        self.assertEqual(figure_forward(self._facing_profiles()["Genesis 9"]), (-0.0, 0.0, 1.0))
+        for build in (build_hug_recipe, build_kiss_recipe, build_handshake_recipe, build_fight_recipe):
+            facing = plan_facing(build("Genesis 9", "Partner").to_plan(), self._facing_profiles())
+            self.assertEqual({k: v.to_dict() for k, v in facing.items()}, {"Partner": {"anchor": "Genesis 9", "yaw_degrees": 180.0}})
+        self.assertEqual(plan_facing(build_touch_recipe("Genesis 9", "Partner").to_plan(), self._facing_profiles()), {})
+        self.assertEqual(plan_facing(build_face_each_other_recipe("Genesis 9", "Partner").to_plan(), self._facing_profiles()), {})
+
+    def test_hug_stages_turned_partner_in_front(self):
+        from dazpy._interaction import FACING_MIN_SEPARATION, figure_forward
+
+        prepared = prepare_interaction_recipe(build_hug_recipe("Genesis 9", "Partner"), self._facing_profiles())
+        self.assertAlmostEqual(figure_forward(prepared.rig_profiles["Partner"])[2], -1.0)
+        patch = prepared.build_pose_patch()
+        self.assertEqual(patch.figure_yaw_degrees, {"Partner": 180.0})
+        self.assertEqual(list(patch.figure_positions), ["Partner"])
+        x, y, z = patch.figure_positions["Partner"]
+        self.assertEqual((x, y), (-100.0, 0.0))
+        self.assertGreaterEqual(z, FACING_MIN_SEPARATION)
+        # B's right hand -> A's left shoulder is on B's near side now, not behind it.
+        self.assertEqual(prepared.resolved_targets[1].figure_label, "Partner")
+        self.assertGreater(prepared.resolved_targets[1].target_point[0], -100.0)
+
+        turns, moves = [], []
+        scene = MagicMock()
+        scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(
+            local_euler=(0.0, 10.0, 0.0),
+            set_rotation=lambda *r, label=label: turns.append((label, r)),
+            set_position=lambda *p, label=label: moves.append(label),
+        )
+        patch.apply(scene)
+        self.assertEqual(turns, [("Partner", (0.0, 190.0, 0.0))])
+        self.assertEqual(moves, ["Partner"])
+
+    def test_handshake_hands_aim_at_one_meeting_point(self):
+        from dazpy._interaction import FACING_REACH_FRACTION
+
+        prepared = prepare_interaction_recipe(build_handshake_recipe("Genesis 9", "Partner"), self._facing_profiles())
+        scene = MagicMock()
+        scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(local_euler=(0.0, 0.0, 0.0))
+        seen = []
+        with patch(
+            "dazpy._interaction.align_single_limb_target",
+            side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or LimbAlignmentResult(resolved.figure_label, resolved.anchor_name, resolved.bone_name, [], resolved.target_point),
+        ):
+            result = prepared.apply(scene, align_limb_targets=True)
+        a, b = result.alignment_results
+        self.assertEqual(a.diagnostics["meeting_point"], b.diagnostics["meeting_point"])
+        meeting = a.diagnostics["meeting_point"]
+        partner_z = result.pose_patch.figure_positions["Partner"][2]
+        self.assertAlmostEqual(meeting[0], -100.0)
+        self.assertAlmostEqual(meeting[2], partner_z / 2)
+        self.assertLess(seen[0][2], meeting[2])
+        self.assertGreater(seen[1][2], meeting[2])
+        # Reach runs from the start of the last two long segments (r_shoulder -> r_upperarm -> r_hand), not the hip.
+        reach = math.dist((-10, 145, 0), (-20, 140, 0)) + math.dist((-20, 140, 0), (-50, 100, 0))
+        self.assertAlmostEqual(math.dist(seen[0], (-110, 145, 0)), reach * FACING_REACH_FRACTION, places=6)
+
     def test_default_axis_limits_for_bone(self):
         limits = default_axis_limits_for_bone("r_forearm")
         self.assertIsInstance(limits["x"], AxisLimit)
