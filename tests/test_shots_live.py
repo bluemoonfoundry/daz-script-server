@@ -29,7 +29,7 @@ from dazpy.math3 import Quat, Vec3
 from dazpy import shot_library as sl
 from dazpy.shot_library import LineOfAction
 from dazpy.shots import (
-    CameraKeyframe, Framing, Keyframed, Lens, Orbit, Placement, Shot, apply_shot, framing_transform,
+    Framing, Lens, Orbit, Placement, Shot, apply_shot, framing_transform,
 )
 
 _SERVER_UP = False
