@@ -326,6 +326,8 @@ class ResolvedInteractionTarget:
     The standoff is applied at alignment time, toward the source limb, once
     staging has fixed where the figures stand.
     """
+    wrap: bool = False
+    """Reach over the target anchor to the partner's back (see ``AnchorTarget.wrap``)."""
 
     def to_dict(self) -> dict:
         return {
@@ -338,6 +340,7 @@ class ResolvedInteractionTarget:
             "target_bone": self.target_bone,
             "offset": list(self.offset),
             "surface_standoff": self.surface_standoff,
+            "wrap": self.wrap,
         }
 
 
@@ -602,6 +605,7 @@ class FigureRigProfile:
             target_bone=target_bone,
             offset=target.offset,
             surface_standoff=surface_standoff,
+            wrap=target.wrap,
         )
 
     def _default_surface_standoff(self, source: InteractionAnchor, target_role: AnchorRole) -> float:
@@ -700,6 +704,13 @@ class AnchorTarget:
     skin instead of inside the partner. 0 aims at the joint centre. Explicit
     ``target_point`` targets default to 0.
     """
+    wrap: bool = False
+    """Reach over the target anchor (a shoulder) to the partner's upper back.
+
+    The effector goes first over the top of the shoulder, then down behind it
+    (the solver has no collision, so a direct reach would pass through the
+    body). ``surface_standoff`` and ``offset`` do not apply.
+    """
 
     def to_dict(self) -> dict:
         return {
@@ -711,6 +722,7 @@ class AnchorTarget:
             "target_point": list(self.target_point) if self.target_point else None,
             "offset": list(self.offset),
             "surface_standoff": self.surface_standoff,
+            "wrap": self.wrap,
         }
 
 
@@ -858,6 +870,7 @@ class InteractionPlan:
                         target_point=_as_tuple3(item.get("target_point")),
                         offset=_as_tuple3(item.get("offset")) or (0.0, 0.0, 0.0),
                         surface_standoff=_as_optional_float(item.get("surface_standoff")),
+                        wrap=bool(item.get("wrap", False)),
                     )
                 )
             elif kind == "FootTarget":
@@ -870,6 +883,7 @@ class InteractionPlan:
                         target_point=_as_tuple3(item.get("target_point")),
                         offset=_as_tuple3(item.get("offset")) or (0.0, 0.0, 0.0),
                         surface_standoff=_as_optional_float(item.get("surface_standoff")),
+                        wrap=bool(item.get("wrap", False)),
                     )
                 )
             elif kind == "ContactTarget":
@@ -1313,6 +1327,17 @@ class PreparedInteractionRecipe:
             joint_point = resolved.target_point
             if joint_point is None:
                 continue
+            solve = dict(
+                max_iterations=max_iterations or self.plan.options.max_iterations,
+                step_degrees=step_degrees,
+                damping=damping,
+                tolerance=tolerance,
+            )
+            if resolved.wrap:
+                wrapped = self._align_wrap(skeleton, profile, resolved, self._staged_bases(figure_displacements), solve)
+                if wrapped is not None:
+                    alignment_results.append(wrapped)
+                    continue
             # Hand-to-hand both ways (handshake): both hands meet halfway
             # instead of chasing each other's rest positions.
             meeting = (
@@ -1341,6 +1366,68 @@ class PreparedInteractionRecipe:
                 result.diagnostics["target_joint_point"] = list(joint_point)
             alignment_results.append(result)
         return alignment_results
+
+    def _align_wrap(
+        self,
+        skeleton: Any,
+        profile: FigureRigProfile,
+        resolved: ResolvedInteractionTarget,
+        bases: dict[int, Vector3],
+        solve: dict[str, Any],
+    ) -> "LimbAlignmentResult | None":
+        """IK passes for a wrap target: through each waypoint around the partner, then to the stop on its back.
+
+        Returns the last pass, with iterations and initial error covering all
+        of them. None when the wrap geometry is unknown (the caller falls
+        back to a direct reach).
+        """
+        geometry = self._contact_geometry(resolved, bases)
+        if geometry is None or not geometry.waypoints:
+            return None
+        passes = [
+            align_single_limb_target(skeleton, profile, replace(resolved, target_point=point), **solve)
+            for point in (*geometry.waypoints, geometry.stop)
+        ]
+        final = passes[-1]
+        diagnostics = dict(final.diagnostics)
+        diagnostics.update(
+            wrap_waypoints=[list(point) for point in geometry.waypoints],
+            waypoint_errors=[p.final_error for p in passes[:-1]],
+        )
+        if geometry.finger_point is not None:
+            diagnostics.update(self._aim_wrap_hand(skeleton, profile, resolved.bone_name, geometry.finger_point, solve))
+        return replace(
+            final,
+            iterations=sum(p.iterations for p in passes),
+            initial_error=passes[0].initial_error,
+            diagnostics=diagnostics,
+        )
+
+    @staticmethod
+    def _aim_wrap_hand(
+        skeleton: Any, profile: FigureRigProfile, hand_bone: str, finger_point: Vector3, solve: dict[str, Any]
+    ) -> dict[str, object]:
+        """Turn the wrapped hand (its bone alone) so its fingertips lie across the partner's back.
+
+        The wrist stays put. Each axis is held within ``WRAP_HAND_LIMIT`` of
+        rest. Returns diagnostics; empty when the hand has no finger bones or
+        the skeleton has no batch Jacobian.
+        """
+        tip = _farthest_descendant(profile, hand_bone)
+        if tip is None or not hasattr(skeleton, "evaluate_pose_jacobian"):
+            return {}
+        aim = ResolvedInteractionTarget(figure_label=profile.figure_label, anchor_name=hand_bone, bone_name=tip, target_point=finger_point)
+        result = _align_single_limb_batch(
+            skeleton, profile, [hand_bone], aim,
+            max_iterations=40, step_degrees=solve["step_degrees"], damping=solve["damping"], tolerance=1.0,
+        )
+        rotation = result.applied_rotations.get(hand_bone)
+        if rotation is None:
+            return {"hand_aim": "no_rotation"}
+        clamped = tuple(max(-WRAP_HAND_LIMIT, min(WRAP_HAND_LIMIT, value)) for value in rotation)
+        if clamped != tuple(rotation):
+            skeleton.set_bone_rotations({hand_bone: clamped})
+        return {"hand_aim_bone": tip, "hand_aim_rotation": list(clamped), "hand_aim_clamped": clamped != tuple(rotation)}
 
     def _stage_faced_partner(
         self,
@@ -1379,10 +1466,11 @@ class PreparedInteractionRecipe:
         for target in between:
             separation = self._faced_separation(target, _bases_at)
             if separation is not None:
-                separations.append(separation)
+                # A wrap sets its own (embrace) distance; reaches keep two torsos apart.
+                separations.append(separation if target.wrap else max(FACING_MIN_SEPARATION, separation))
         if not separations:
             return None
-        return _partner_base(max(FACING_MIN_SEPARATION, min(separations))), between
+        return _partner_base(min(separations)), between
 
     def _mutual_target(self, target: ResolvedInteractionTarget) -> ResolvedInteractionTarget | None:
         """The reverse of a hand/foot-to-hand/foot target (B's hand -> A's hand for A's hand -> B's hand), if any."""
@@ -1430,6 +1518,12 @@ class PreparedInteractionRecipe:
             return None
         chain_root, root, length = limb
         partner_base = bases.get(id(partner), partner.figure_position)
+        if target.wrap:
+            path = _wrap_path(partner, partner_base, target.target_anchor)
+            if path is None:
+                return None
+            waypoints, back, fingers = path
+            return _ContactGeometry(root=root, joint=back, stop=back, limb_length=length, waypoints=tuple(waypoints), finger_point=fingers)
         joint: Vector3 | None = None
         mutual = self._mutual_target(target)
         if mutual is not None:
@@ -1454,6 +1548,10 @@ class PreparedInteractionRecipe:
         its reach; ``bases_at(d)`` places the figures for separation ``d``.
         Never closer than ``FACING_MIN_SEPARATION``.
         """
+        if target.wrap:
+            # Reach doesn't bound a wrap: its arm must get its elbow beside the
+            # partner's ribs, which only an embrace distance allows.
+            return WRAP_SEPARATION
         profile = _lookup_rig_profile(self.rig_profiles, target.figure_label)
         chain = profile.suggest_primary_chain(target.bone_name) if profile is not None else None
         fraction = FACING_FOOT_REACH_FRACTION if chain is not None and chain.role in ("foot", "leg") else FACING_REACH_FRACTION
@@ -1604,11 +1702,78 @@ class _ContactGeometry:
     joint: Vector3
     stop: Vector3
     limb_length: float
+    waypoints: tuple[Vector3, ...] = ()  # a wrap's points around the partner, reached in turn before ``stop``
+    finger_point: Vector3 | None = None  # where a wrapped hand's fingertips aim
+
+
+def _farthest_descendant(profile: FigureRigProfile, bone_name: str) -> str | None:
+    """The descendant of ``bone_name`` farthest from it (a hand's fingertip), or None."""
+    origin = profile.bone(bone_name).world_position if bone_name in profile.bone_names() else None
+    if origin is None:
+        return None
+    best: tuple[float, str] | None = None
+    for bone in profile.bones:
+        if bone.name == bone_name or bone.world_position is None or bone.is_helper:
+            continue
+        parent = bone.parent_name
+        seen: set[str] = set()
+        while parent is not None and parent != bone_name and parent not in seen and parent in profile.bone_names():
+            seen.add(parent)
+            parent = profile.bone(parent).parent_name
+        if parent != bone_name:
+            continue
+        distance = _vec3_length(_vec3_sub(bone.world_position, origin))
+        if best is None or distance > best[0]:
+            best = (distance, bone.name)
+    return best[1] if best is not None else None
 
 
 def _anchor_bone_offset(profile: FigureRigProfile, anchor_name: str) -> Vector3 | None:
     anchor = profile.anchor(anchor_name)
     return None if anchor is None else profile.bone_offset(anchor.bone_name)
+
+
+# Wrap geometry (cm) in the partner's frame: lateral (out from the spine
+# toward the target shoulder's side), back (behind the line between the
+# shoulder anchors), at WRAP_DROP below the shoulder anchor. The effector
+# passes these points around the partner's side, under its arm, then stops
+# on the upper back.
+WRAP_DROP = 16.0
+# Origin-to-origin distance (cm) a wrapped partner is staged at.
+WRAP_SEPARATION = 26.0
+WRAP_SIDE_POINTS: tuple[tuple[float, float], ...] = ((25.0, -6.0), (24.0, 4.0))
+WRAP_BACK_POINT: tuple[float, float] = (14.0, 10.0)
+# Where the wrapped hand's fingertips aim (across the back toward the spine),
+# and how far (degrees, per axis from rest) the hand may bend to get there.
+WRAP_FINGER_POINT: tuple[float, float] = (2.0, 10.0)
+WRAP_HAND_LIMIT = 70.0
+
+
+def _wrap_path(partner: FigureRigProfile, partner_base: Vector3 | None, target_anchor: str) -> tuple[list[Vector3], Vector3, Vector3] | None:
+    """A wrap around ``partner`` (origin at ``partner_base``) on ``target_anchor``'s side.
+
+    The waypoints, the effector's stop on the partner's back, and where the
+    fingertips aim.
+
+    None when the partner's facing, shoulder anchors or side are unknown.
+    """
+    if partner_base is None:
+        return None
+    forward = figure_forward(partner)
+    joint = _anchor_bone_offset(partner, target_anchor)
+    left = _anchor_bone_offset(partner, "l_shoulder")
+    right = _anchor_bone_offset(partner, "r_shoulder")
+    side = _side_from_name(target_anchor)
+    if forward is None or joint is None or left is None or right is None or side not in ("left", "right"):
+        return None
+    outward = (forward[2], 0.0, -forward[0]) if side == "left" else (-forward[2], 0.0, forward[0])
+    spine = (partner_base[0] + (left[0] + right[0]) / 2.0, partner_base[1] + joint[1] - WRAP_DROP, partner_base[2] + (left[2] + right[2]) / 2.0)
+
+    def _at(point: tuple[float, float]) -> Vector3:
+        lateral, back = point
+        return (spine[0] + outward[0] * lateral - forward[0] * back, spine[1], spine[2] + outward[2] * lateral - forward[2] * back)
+
+    return [_at(point) for point in WRAP_SIDE_POINTS], _at(WRAP_BACK_POINT), _at(WRAP_FINGER_POINT)
 
 
 def figure_forward(profile: FigureRigProfile) -> Vector3 | None:
@@ -2560,7 +2725,11 @@ def build_hug_recipe(
     a_anchor: str = "r_hand",
     b_anchor: str = "r_hand",
 ) -> InteractionRecipe:
-    """Build a mutual arms-around-each-other embrace preset for two figures."""
+    """Build a mutual arms-around-each-other embrace preset for two figures.
+
+    Each arm wraps the partner's side (toward its far shoulder) and the hand
+    rests on its upper back (``HandTarget.wrap``).
+    """
 
     a_far_shoulder = "l_shoulder" if _side_from_name(a_anchor) == "right" else "r_shoulder"
     b_far_shoulder = "l_shoulder" if _side_from_name(b_anchor) == "right" else "r_shoulder"
@@ -2570,8 +2739,8 @@ def build_hug_recipe(
         constraints=[
             LookAtTarget(actor_a, "head", (0.0, 0.0, 0.0)),
             LookAtTarget(actor_b, "head", (0.0, 0.0, 0.0)),
-            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=a_far_shoulder),
-            HandTarget(actor_b, b_anchor, target_figure=actor_a, target_anchor=b_far_shoulder),
+            HandTarget(actor_a, a_anchor, target_figure=actor_b, target_anchor=a_far_shoulder, wrap=True),
+            HandTarget(actor_b, b_anchor, target_figure=actor_a, target_anchor=b_far_shoulder, wrap=True),
         ],
         metadata={"interaction": "hug"},
     )

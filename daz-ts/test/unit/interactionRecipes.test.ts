@@ -15,6 +15,11 @@ import {
   FACING_MIN_SEPARATION,
   FACING_REACH_FRACTION,
   figureForward,
+  WRAP_BACK_POINT,
+  WRAP_FINGER_POINT,
+  WRAP_HAND_LIMIT,
+  WRAP_SEPARATION,
+  WRAP_SIDE_POINTS,
   InteractionRecipe,
   planFacing,
   prepareInteractionRecipe,
@@ -36,6 +41,7 @@ const anchor = (kind: "HandTarget" | "FootTarget", figureLabel: string, anchorNa
   targetPoint: null,
   offset: [0, 0, 0],
   surfaceStandoff: null,
+  wrap: false,
   ...extra,
 });
 const constraintsOf = (recipe: InteractionRecipe) => recipe.constraints.map((c) => c.toDict());
@@ -120,15 +126,16 @@ describe("buildHandshakeRecipe", () => {
 });
 
 describe("buildHugRecipe", () => {
-  it("each hand reaches the partner's far shoulder", () => {
+  it("each arm wraps toward the partner's far shoulder", () => {
     const recipe = buildHugRecipe("A", "B", { bAnchor: "l_hand" });
     expect(recipe.kind).toBe("hug");
     expect(constraintsOf(recipe)).toEqual([
       lookAt("A"),
       lookAt("B"),
-      anchor("HandTarget", "A", "r_hand", { targetFigure: "B", targetAnchor: "l_shoulder" }),
-      anchor("HandTarget", "B", "l_hand", { targetFigure: "A", targetAnchor: "r_shoulder" }),
+      anchor("HandTarget", "A", "r_hand", { targetFigure: "B", targetAnchor: "l_shoulder", wrap: true }),
+      anchor("HandTarget", "B", "l_hand", { targetFigure: "A", targetAnchor: "r_shoulder", wrap: true }),
     ]);
+    expect(InteractionRecipe.fromDict(recipe.toDict()).toDict()).toEqual(recipe.toDict());
     expect(recipe.metadata).toEqual({ interaction: "hug" });
   });
 });
@@ -305,7 +312,7 @@ describe("facing staging", () => {
     expect(planFacing(buildFaceEachOtherRecipe("Genesis 9", "Partner").toPlan(), together)).toEqual({ Partner: { anchor: "Genesis 9", yawDegrees: 180 } });
   });
 
-  it("hug: the turned partner stands in front, where both hands reach the far shoulder's surface", () => {
+  it("hug: the turned partner stands in front at embrace distance (3shz)", () => {
     const prepared = prepareInteractionRecipe(buildHugRecipe("Genesis 9", "Partner"), profiles());
     expect(figureForward(prepared.rigProfiles.Partner)![2]).toBeCloseTo(-1, 12);
     const patch = prepared.buildPosePatch();
@@ -313,11 +320,87 @@ describe("facing staging", () => {
     expect(Object.keys(patch.figurePositions)).toEqual(["Partner"]);
     const [x, y, z] = patch.figurePositions.Partner;
     expect([x, y]).toEqual([-100, 0]);
-    expect(z).toBeGreaterThanOrEqual(FACING_MIN_SEPARATION);
+    // Wrapped arms stage the partner inside the reach minimum.
+    expect(z).toBe(WRAP_SEPARATION);
+    expect(z).toBeLessThan(FACING_MIN_SEPARATION);
     // B's right hand -> A's left shoulder is now on B's near side, not behind it.
     const bTarget = prepared.resolvedTargets[1];
     expect(bTarget.figureLabel).toBe("Partner");
     expect(bTarget.targetPoint![0]).toBeGreaterThan(-100);
+  });
+
+  it("hug: each arm passes the waypoints around the partner's side, then stops on its back", async () => {
+    const prepared = prepareInteractionRecipe(buildHugRecipe("Genesis 9", "Partner"), profiles());
+    const chains: string[][] = [];
+    const scene = {
+      findSkeletonByLabel: async () => ({
+        setPosition: async () => {},
+        localEuler: async () => [0, 0, 0] as [number, number, number],
+        setRotation: async () => {},
+        boneRotations: async () => ({}),
+        setBoneRotations: async () => {},
+        evaluatePoseJacobian: async (chain: string[]) => (chains.push(chain), { basePosition: [0, -500, 0], columns: chain.flatMap(() => [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) }),
+      }),
+    };
+    const result = await prepared.apply(scene as any, { alignLimbTargets: true, maxIterations: 1 });
+    const partnerZ = result.posePatch.figurePositions.Partner[2];
+    const [a, b] = result.alignmentResults;
+    // A's right hand -> Partner's left shoulder. Partner faces -Z: its left is -X, its back +Z.
+    const waypoints = a.diagnostics.wrapWaypoints as number[][];
+    expect(waypoints).toHaveLength(WRAP_SIDE_POINTS.length);
+    waypoints.forEach((point, i) => {
+      expect(point[0]).toBeCloseTo(-100 - WRAP_SIDE_POINTS[i][0], 9);
+      expect(point[2]).toBeCloseTo(partnerZ + WRAP_SIDE_POINTS[i][1], 9);
+    });
+    expect(a.targetPoint![0]).toBeCloseTo(-100 - WRAP_BACK_POINT[0], 9);
+    expect(a.targetPoint![2]).toBeCloseTo(partnerZ + WRAP_BACK_POINT[1], 9);
+    expect(a.targetPoint![1]).toBeLessThan(145);
+    // One iteration per pass, summed; the first pass's starting error.
+    expect(a.iterations).toBe(WRAP_SIDE_POINTS.length + 1);
+    expect(a.initialError).toBeCloseTo(distance([0, -500, 0], waypoints[0]), 9);
+    // B's right hand -> Genesis 9's left shoulder: Genesis 9 faces +Z, its left is +X, its back -Z.
+    expect(b.targetPoint![0]).toBeCloseTo(-100 + WRAP_BACK_POINT[0], 9);
+    expect(b.targetPoint![2]).toBeCloseTo(-WRAP_BACK_POINT[1], 9);
+    // No finger bones in this rig: no hand-aim pass.
+    expect(chains.every((chain) => chain.length > 1)).toBe(true);
+  });
+
+  it("hug: the wrapped hand alone turns its fingertips across the back, within the hand limit", async () => {
+    const withFingers = (label: string, x: number) => {
+      const entry = snapshotEntry(label, x);
+      const tip = (name: string, parent: string, world: [number, number, number]) => ({ name, label: name, parent_name: parent, local_position: [0, 0, 0], world_position: world });
+      entry.bones.push(tip("r_mid1", "r_hand", [x - 58, 94, 0]) as any, tip("r_mid3", "r_mid1", [x - 64, 88, 0]) as any);
+      return entry;
+    };
+    const rigs = buildRigProfilesFromSnapshot([withFingers("Genesis 9", -100), withFingers("Partner", 100)]);
+    const prepared = prepareInteractionRecipe(buildHugRecipe("Genesis 9", "Partner"), rigs);
+    const aims: Array<{ chain: string[]; effector: string }> = [];
+    const set: Array<Record<string, number[]>> = [];
+    const scene = {
+      findSkeletonByLabel: async () => ({
+        setPosition: async () => {},
+        localEuler: async () => [0, 0, 0] as [number, number, number],
+        setRotation: async () => {},
+        boneRotations: async () => ({}),
+        setBoneRotations: async (rotations: Record<string, number[]>) => {
+          set.push(rotations);
+        },
+        evaluatePoseJacobian: async (chain: string[], effector: string) => {
+          if (chain.length === 1) aims.push({ chain, effector });
+          // Huge columns: one step lands far past the limit, so the result must be clamped.
+          return { basePosition: [0, -500, 0], columns: chain.flatMap(() => [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) };
+        },
+      }),
+    };
+    const result = await prepared.apply(scene as any, { alignLimbTargets: true, maxIterations: 1, stepDegrees: 200 });
+    expect(aims[0]).toEqual({ chain: ["r_hand"], effector: "r_mid3" });
+    const [a] = result.alignmentResults;
+    expect(a.diagnostics.handAimBone).toBe("r_mid3");
+    expect(a.diagnostics.handAimClamped).toBe(true);
+    const handSets = set.filter((r) => Object.keys(r).length === 1 && "r_hand" in r);
+    const last = handSets[handSets.length - 1].r_hand;
+    expect(last.every((v) => Math.abs(v) <= WRAP_HAND_LIMIT)).toBe(true);
+    expect(WRAP_FINGER_POINT[0]).toBeLessThan(WRAP_BACK_POINT[0]); // fingertips aim nearer the spine than the wrist
   });
 
   it("handshake: both hands aim at one meeting point between the figures, within reach", async () => {

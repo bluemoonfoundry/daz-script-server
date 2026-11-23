@@ -415,6 +415,7 @@ export interface ResolvedInteractionTargetDict {
   targetBone: string | null;
   offset: Vector3;
   surfaceStandoff: number;
+  wrap: boolean;
 }
 
 export class ResolvedInteractionTarget {
@@ -433,6 +434,8 @@ export class ResolvedInteractionTarget {
    * fixed where the figures stand.
    */
   readonly surfaceStandoff: number;
+  /** Reach over the target anchor to the partner's back (see `AnchorTargetInit.wrap`). */
+  readonly wrap: boolean;
 
   constructor(init: {
     figureLabel: string;
@@ -444,6 +447,7 @@ export class ResolvedInteractionTarget {
     targetBone?: string | null;
     offset?: Vector3;
     surfaceStandoff?: number;
+    wrap?: boolean;
   }) {
     this.figureLabel = init.figureLabel;
     this.anchorName = init.anchorName;
@@ -454,6 +458,7 @@ export class ResolvedInteractionTarget {
     this.targetBone = init.targetBone ?? null;
     this.offset = init.offset ?? [0, 0, 0];
     this.surfaceStandoff = init.surfaceStandoff ?? 0;
+    this.wrap = init.wrap ?? false;
   }
 
   toDict(): ResolvedInteractionTargetDict {
@@ -467,6 +472,7 @@ export class ResolvedInteractionTarget {
       targetBone: this.targetBone,
       offset: this.offset,
       surfaceStandoff: this.surfaceStandoff,
+      wrap: this.wrap,
     };
   }
 }
@@ -480,6 +486,7 @@ export interface AnchorTargetLike {
   targetPoint?: Vector3 | null;
   offset?: Vector3;
   surfaceStandoff?: number | null;
+  wrap?: boolean;
 }
 
 function anchorWorldPointHint(profile: FigureRigProfile, anchorName: string): Vector3 | null {
@@ -785,6 +792,7 @@ export class FigureRigProfile {
       targetBone,
       offset: target.offset ?? [0, 0, 0],
       surfaceStandoff,
+      wrap: target.wrap ?? false,
     });
   }
 

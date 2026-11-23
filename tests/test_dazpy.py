@@ -1650,7 +1650,7 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual({k: v.to_dict() for k, v in facing.items()}, {"Partner": {"anchor": "Genesis 9", "yaw_degrees": 180.0}})
 
     def test_hug_stages_turned_partner_in_front(self):
-        from dazpy._interaction import FACING_MIN_SEPARATION, figure_forward
+        from dazpy._interaction import WRAP_SEPARATION, figure_forward
 
         prepared = prepare_interaction_recipe(build_hug_recipe("Genesis 9", "Partner"), self._facing_profiles())
         self.assertAlmostEqual(figure_forward(prepared.rig_profiles["Partner"])[2], -1.0)
@@ -1659,7 +1659,8 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(list(patch.figure_positions), ["Partner"])
         x, y, z = patch.figure_positions["Partner"]
         self.assertEqual((x, y), (-100.0, 0.0))
-        self.assertGreaterEqual(z, FACING_MIN_SEPARATION)
+        # Wrapped arms stage the partner at embrace distance, inside the reach minimum (3shz).
+        self.assertEqual(z, WRAP_SEPARATION)
         # B's right hand -> A's left shoulder is on B's near side now, not behind it.
         self.assertEqual(prepared.resolved_targets[1].figure_label, "Partner")
         self.assertGreater(prepared.resolved_targets[1].target_point[0], -100.0)
@@ -1674,6 +1675,52 @@ class TestInteractionAdapter(unittest.TestCase):
         patch.apply(scene)
         self.assertEqual(turns, [("Partner", (0.0, 190.0, 0.0))])
         self.assertEqual(moves, ["Partner"])
+
+    def test_hug_wraps_around_the_partners_side_to_its_back(self):
+        from dazpy._interaction import WRAP_BACK_POINT, WRAP_SIDE_POINTS
+
+        recipe = build_hug_recipe("Genesis 9", "Partner")
+        self.assertTrue(all(c.wrap for c in recipe.constraints if isinstance(c, HandTarget)))
+        self.assertEqual(InteractionRecipe.from_dict(recipe.to_dict()).to_dict(), recipe.to_dict())
+        prepared = prepare_interaction_recipe(recipe, self._facing_profiles())
+        partner_z = prepared.build_pose_patch().figure_positions["Partner"][2]
+        bases = {id(prepared.rig_profiles["Genesis 9"]): (-100.0, 0.0, 0.0), id(prepared.rig_profiles["Partner"]): (-100.0, 0.0, partner_z)}
+        # A's right hand -> Partner's left shoulder. Partner faces -Z, so its left is -X and its back is +Z.
+        a_hand = prepared._contact_geometry(prepared.resolved_targets[0], bases)
+        self.assertEqual(len(a_hand.waypoints), len(WRAP_SIDE_POINTS))
+        for point, (lateral, back) in zip(a_hand.waypoints, WRAP_SIDE_POINTS):
+            self.assertAlmostEqual(point[0], -100.0 - lateral)
+            self.assertAlmostEqual(point[2], partner_z + back)
+        self.assertAlmostEqual(a_hand.stop[0], -100.0 - WRAP_BACK_POINT[0])
+        self.assertAlmostEqual(a_hand.stop[2], partner_z + WRAP_BACK_POINT[1])
+        self.assertLess(a_hand.stop[1], 145.0)  # below the shoulder anchors
+        # B's right hand -> Genesis 9's left shoulder: Genesis 9 faces +Z, left is +X, back is -Z.
+        b_hand = prepared._contact_geometry(prepared.resolved_targets[1], bases)
+        self.assertAlmostEqual(b_hand.stop[0], -100.0 + WRAP_BACK_POINT[0])
+        self.assertAlmostEqual(b_hand.stop[2], -WRAP_BACK_POINT[1])
+
+    def test_hug_alignment_passes_each_waypoint_then_the_back(self):
+        prepared = prepare_interaction_recipe(build_hug_recipe("Genesis 9", "Partner"), self._facing_profiles())
+        scene = MagicMock()
+        scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(local_euler=(0.0, 0.0, 0.0))
+        seen: list = []
+
+        def _fake(skel, prof, resolved, **kw):
+            seen.append((resolved.figure_label, resolved.target_point))
+            return LimbAlignmentResult(resolved.figure_label, resolved.anchor_name, resolved.bone_name, [], resolved.target_point, iterations=5, converged=True, initial_error=float(len(seen)), final_error=0.1)
+
+        with patch("dazpy._interaction.align_single_limb_target", side_effect=_fake):
+            result = prepared.apply(scene, align_limb_targets=True)
+        a, b = result.alignment_results
+        staged, original = result.pose_patch.figure_positions["Partner"], prepared.rig_profiles["Partner"].figure_position
+        bases = prepared._staged_bases({"Partner": tuple(s - o for s, o in zip(staged, original))})
+        geometry = prepared._contact_geometry(prepared.resolved_targets[0], bases)
+        self.assertEqual([p for label, p in seen[:3]], [*geometry.waypoints, geometry.stop])
+        self.assertEqual(a.target_point, geometry.stop)
+        self.assertEqual(a.iterations, 15)
+        self.assertEqual(a.initial_error, 1.0)  # the first pass's
+        self.assertEqual(len(a.diagnostics["waypoint_errors"]), 2)
+        self.assertEqual(b.figure_label, "Partner")
 
     def test_handshake_hands_aim_at_one_meeting_point(self):
         from dazpy._interaction import FACING_REACH_FRACTION

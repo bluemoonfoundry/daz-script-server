@@ -198,6 +198,8 @@ export interface AlignOptions {
   stepDegrees?: number;
   damping?: number;
   tolerance?: number;
+  /** Bones to rotate, root first, instead of the chain the profile suggests for the effector (e.g. just a hand, to aim its fingers). */
+  chain?: string[];
 }
 
 /**
@@ -227,8 +229,8 @@ export async function alignSingleLimbTarget(
     return new LimbAlignmentResult({ ...base, chain: [], targetPoint: null, diagnostics: { reason: "missing_target_point" } });
   }
 
-  const chain = profile.suggestPrimaryChain(target.boneName);
-  const chainNames = chain !== null ? alignmentChainNames(profile, chain) : [];
+  const chain = opts.chain ? null : profile.suggestPrimaryChain(target.boneName);
+  const chainNames = opts.chain ? [...opts.chain] : chain !== null ? alignmentChainNames(profile, chain) : [];
   if (chainNames.length === 0) {
     return new LimbAlignmentResult({ ...base, chain: [], targetPoint, diagnostics: { reason: "missing_chain" } });
   }

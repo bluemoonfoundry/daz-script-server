@@ -23,6 +23,18 @@ All notable changes to DazScript Server are documented here.
 
 ### Changed
 
+- **dazpy / daz-ts:** the hug recipe's arms now wrap around the partner
+  instead of reaching for the front of its shoulder. Hand targets gain
+  `wrap` (`HandTarget(..., wrap=True)` / `{ wrap: true }`): the arm passes
+  two waypoints beside the partner's ribs, under its arm, then stops on the
+  upper back. A hand-only pass turns the fingertips across the back toward
+  the spine, bending at most `WRAP_HAND_LIMIT` (70 degrees) per axis. A
+  wrapped partner is staged at `WRAP_SEPARATION` (26 cm, origin to origin),
+  inside the 30 cm reach minimum. Live DS6, 2 x Genesis 9: both arms
+  converge (39.4 -> 0.13 cm). Each wrist ends 10.8 cm behind the partner's
+  spine, each elbow 18 cm out to the side (outside the ribs), and the
+  fingertips 1.2 cm from the spine. `alignSingleLimbTarget` takes an
+  explicit `chain` option.
 - **dazpy / daz-ts:** the face_each_other recipe now turns the second actor
   in place to face the first figure's origin (or, when both stand at the same
   spot, to face back along the first figure's heading). It moves nobody and

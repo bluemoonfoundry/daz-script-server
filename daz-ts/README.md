@@ -401,7 +401,11 @@ for (const r of result.alignmentResults) console.log(r.effectorBone, r.converged
   `build_*_recipe` for the same inputs (options are camelCase:
   `{ seatPoint, supportPoints, aAnchor, strikeAnchor, ... }`). dazpy's
   `build_kiss_recipe` `b_anchor` argument is always overwritten, so
-  `buildKissRecipe` doesn't take one.
+  `buildKissRecipe` doesn't take one. The hug's hand targets set
+  `wrap: true`: each arm passes waypoints around the partner's side (under
+  its arm) to the upper back, the hand turns to lie across it, and the
+  partner stands at embrace distance (`WRAP_SEPARATION`). Set `wrap` on
+  your own `HandTarget` (aimed at a shoulder anchor) for the same reach.
 - **Applying** — `DazScene.applyInteractionRecipe(recipe, opts)` /
   `applyInteractionRecipeToScene(scene, recipe, opts)`: one `sceneSnapshot()`
   call builds every figure's rig profile (pass `opts.rigProfiles` to skip

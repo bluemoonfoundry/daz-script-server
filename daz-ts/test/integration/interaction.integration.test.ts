@@ -154,6 +154,31 @@ describe.skipIf(!SERVER_URL)("daz-ts Phase 5C recipes against a live DAZ Studio 
     }, IK_TIMEOUT);
   }
 
+  it("hug: each arm wraps the partner's side and the hand lies on its back (3shz)", async () => {
+    if (!ready) return;
+    const result = await scene.applyInteractionRecipe(buildHugRecipe(A, B), IK);
+    await expectAligned(result, 2);
+    for (const [self, partner] of [[A, B], [B, A]] as const) {
+      // The partner's frame: its spine at chest height and its forward (from the hips, which arm IK leaves alone).
+      const [l, r] = [await boneWorld(partner, "l_thigh"), await boneWorld(partner, "r_thigh")];
+      const forward = [-(l[2] - r[2]), l[0] - r[0]];
+      const n = Math.hypot(...forward);
+      const [fx, fz] = [forward[0] / n, forward[1] / n];
+      const spine = await boneWorld(partner, "spine4");
+      const local = (p: Vector3) => {
+        const [dx, dz] = [p[0] - spine[0], p[2] - spine[2]];
+        return { lateral: Math.abs(dx * fz - dz * fx), depth: dx * fx + dz * fz }; // depth > 0: in front of the partner
+      };
+      const wrist = local(await boneWorld(self, "r_hand"));
+      const elbow = local(await boneWorld(self, "r_forearm"));
+      const tip = local(await boneWorld(self, "r_mid3"));
+      expect(wrist.depth, `${self} wrist behind ${partner}'s spine`).toBeLessThan(-5);
+      expect(elbow.lateral, `${self} elbow beside ${partner}'s ribs, not through them`).toBeGreaterThan(13);
+      expect(tip.lateral, `${self} fingertips across ${partner}'s back`).toBeLessThan(wrist.lateral);
+      console.log(`hug ${self}: wrist lat ${wrist.lateral.toFixed(1)} depth ${wrist.depth.toFixed(1)}, elbow lat ${elbow.lateral.toFixed(1)}, tip lat ${tip.lateral.toFixed(1)}`);
+    }
+  }, IK_TIMEOUT);
+
   it("fight (punch): A's hand IK targets B's head", async () => {
     if (!ready) return;
     const [r] = await expectAligned(await scene.applyInteractionRecipe(buildFightRecipe(A, B), IK), 1);

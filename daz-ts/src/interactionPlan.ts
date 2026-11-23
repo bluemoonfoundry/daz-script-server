@@ -27,8 +27,7 @@ import {
   subVec3,
   ResolvedInteractionTarget,
 } from "./rigProfile.js";
-import type { LimbAlignmentResult } from "./interactionSolve.js";
-import { alignmentChainNames, alignSingleLimbTarget } from "./interactionSolve.js";
+import { alignmentChainNames, alignSingleLimbTarget, LimbAlignmentResult, type AlignOptions } from "./interactionSolve.js";
 
 // `LimbAlignmentResult` lives in interactionSolve.ts (which must not import
 // this file); re-exported here so Phase 5A import paths keep working.
@@ -79,6 +78,14 @@ export interface AnchorTargetInit {
    * `targetPoint` targets default to 0.
    */
   surfaceStandoff?: number | null;
+  /**
+   * Reach around the target anchor's side (a shoulder) to the partner's
+   * upper back: the effector passes waypoints beside the partner's ribs,
+   * under its arm, then stops on its back, and the hand turns to lie across
+   * it. (The solver has no collision, so a direct reach would pass through
+   * the body.) `surfaceStandoff` and `offset` do not apply.
+   */
+  wrap?: boolean;
 }
 
 export interface AnchorTargetDict {
@@ -90,6 +97,7 @@ export interface AnchorTargetDict {
   targetPoint: Vector3 | null;
   offset: Vector3;
   surfaceStandoff: number | null;
+  wrap: boolean;
 }
 
 abstract class AnchorTargetBase implements AnchorTargetLike {
@@ -101,6 +109,7 @@ abstract class AnchorTargetBase implements AnchorTargetLike {
   readonly targetPoint: Vector3 | null;
   readonly offset: Vector3;
   readonly surfaceStandoff: number | null;
+  readonly wrap: boolean;
 
   constructor(init: AnchorTargetInit) {
     this.figureLabel = init.figureLabel;
@@ -110,6 +119,7 @@ abstract class AnchorTargetBase implements AnchorTargetLike {
     this.targetPoint = init.targetPoint ?? null;
     this.offset = init.offset ?? [0, 0, 0];
     this.surfaceStandoff = init.surfaceStandoff ?? null;
+    this.wrap = init.wrap ?? false;
   }
 
   toDict(): AnchorTargetDict {
@@ -122,6 +132,7 @@ abstract class AnchorTargetBase implements AnchorTargetLike {
       targetPoint: this.targetPoint,
       offset: this.offset,
       surfaceStandoff: this.surfaceStandoff,
+      wrap: this.wrap,
     };
   }
 }
@@ -382,6 +393,7 @@ export class InteractionPlan {
           targetPoint: asVector3(item.targetPoint),
           offset: asVector3(item.offset) ?? ([0, 0, 0] as Vector3),
           surfaceStandoff: typeof item.surfaceStandoff === "number" ? item.surfaceStandoff : null,
+          wrap: item.wrap === true,
         };
         constraints.push(kind === "HandTarget" ? new HandTarget(init) : new FootTarget(init));
       } else if (kind === "ContactTarget") {
@@ -778,10 +790,11 @@ export class PreparedInteractionRecipe {
       const separations: number[] = [];
       for (const target of between) {
         const separation = this.facedSeparation(target, (d) => new Map([[anchorProfile, anchorBase], [partnerProfile, partnerBase(d)]]));
-        if (separation !== null) separations.push(separation);
+        // A wrap sets its own (embrace) distance; reaches keep two torsos apart.
+        if (separation !== null) separations.push(target.wrap ? separation : Math.max(FACING_MIN_SEPARATION, separation));
       }
       if (separations.length === 0) continue;
-      const separation = Math.max(FACING_MIN_SEPARATION, Math.min(...separations));
+      const separation = Math.min(...separations);
       appendPosition(partnerLabel, partnerBase(separation));
       between.forEach((t) => facedTargets.add(t));
     }
@@ -895,6 +908,19 @@ export class PreparedInteractionRecipe {
       const profile = lookupRigProfile(this.rigProfiles, resolved.figureLabel);
       if (profile === null) continue;
       const jointPoint = resolved.targetPoint!;
+      const solve = {
+        maxIterations: opts.maxIterations || this.plan.options.maxIterations,
+        stepDegrees: opts.stepDegrees,
+        damping: opts.damping,
+        tolerance: opts.tolerance,
+      };
+      if (resolved.wrap) {
+        const wrapped = await this.alignWrap(skeleton, profile, resolved, this.stagedBases(opts.figureDisplacements), solve);
+        if (wrapped !== null) {
+          results.push(wrapped);
+          continue;
+        }
+      }
       // Hand-to-hand both ways (handshake): both hands meet halfway instead
       // of chasing each other's rest positions.
       const meeting = this.mutualTarget(resolved) !== null ? this.contactGeometry(resolved, this.stagedBases(opts.figureDisplacements)) : null;
@@ -904,12 +930,7 @@ export class PreparedInteractionRecipe {
         const sourceShift = this.profileDisplacement(profile, opts.figureDisplacements);
         resolved = new ResolvedInteractionTarget({ ...resolved, targetPoint: surfaceContactPoint(profile, resolved, sourceShift) });
       }
-      const result = await alignSingleLimbTarget(skeleton, profile, resolved, {
-        maxIterations: opts.maxIterations || this.plan.options.maxIterations,
-        stepDegrees: opts.stepDegrees,
-        damping: opts.damping,
-        tolerance: opts.tolerance,
-      });
+      const result = await alignSingleLimbTarget(skeleton, profile, resolved, solve);
       if (meeting !== null) result.diagnostics.meetingPoint = meeting.joint;
       if (resolved.surfaceStandoff > 0) {
         result.diagnostics.surfaceStandoff = resolved.surfaceStandoff;
@@ -918,6 +939,48 @@ export class PreparedInteractionRecipe {
       results.push(result);
     }
     return results;
+  }
+
+  /**
+   * IK passes for a wrap target: through each waypoint around the partner,
+   * then to the stop on its back; then the hand turns to lie across the back.
+   * Returns the last arm pass, with iterations and initial error covering
+   * all of them. Null when the wrap geometry is unknown (the caller falls
+   * back to a direct reach).
+   */
+  private async alignWrap(
+    skeleton: Awaited<ReturnType<RigSceneSource["findSkeletonByLabel"]>>,
+    profile: FigureRigProfile,
+    resolved: ResolvedInteractionTarget,
+    bases: Map<FigureRigProfile, Vector3>,
+    solve: AlignOptions,
+  ): Promise<LimbAlignmentResult | null> {
+    const geometry = this.contactGeometry(resolved, bases);
+    if (geometry === null || geometry.waypoints.length === 0) return null;
+    const passes: LimbAlignmentResult[] = [];
+    for (const point of [...geometry.waypoints, geometry.stop]) {
+      passes.push(await alignSingleLimbTarget(skeleton, profile, new ResolvedInteractionTarget({ ...resolved, targetPoint: point }), solve));
+    }
+    const final = passes[passes.length - 1];
+    const diagnostics: Record<string, unknown> = {
+      ...final.diagnostics,
+      wrapWaypoints: geometry.waypoints,
+      waypointErrors: passes.slice(0, -1).map((p) => p.finalError),
+    };
+    if (geometry.fingerPoint !== null) Object.assign(diagnostics, await aimWrapHand(skeleton, profile, resolved.boneName, geometry.fingerPoint, solve));
+    return new LimbAlignmentResult({
+      figureLabel: final.figureLabel,
+      anchorName: final.anchorName,
+      effectorBone: final.effectorBone,
+      chain: final.chain,
+      targetPoint: final.targetPoint,
+      iterations: passes.reduce((total, p) => total + p.iterations, 0),
+      converged: final.converged,
+      initialError: passes[0].initialError,
+      finalError: final.finalError,
+      appliedRotations: final.appliedRotations,
+      diagnostics,
+    });
   }
 
   /** The reverse target of a hand/foot-to-hand/foot target (B's hand -> A's hand for A's hand -> B's hand), if the plan has one. */
@@ -956,13 +1019,18 @@ export class PreparedInteractionRecipe {
    * the reach root (shoulder/hip joint) and the limb's reach. Null when the
    * geometry is unknown.
    */
-  private contactGeometry(target: ResolvedInteractionTarget, bases: Map<FigureRigProfile, Vector3>): { root: Vector3; joint: Vector3; stop: Vector3; limbLength: number } | null {
+  private contactGeometry(target: ResolvedInteractionTarget, bases: Map<FigureRigProfile, Vector3>): ContactGeometry | null {
     const source = lookupRigProfile(this.rigProfiles, target.figureLabel);
     const partner = lookupRigProfile(this.rigProfiles, target.targetFigure);
     if (source === null || partner === null || target.targetAnchor === null) return null;
     const limb = limbGeometry(source, target.boneName, bases.get(source) ?? source.figurePosition);
     if (limb === null) return null;
     const partnerBase = bases.get(partner) ?? partner.figurePosition;
+    if (target.wrap) {
+      const path = wrapPath(partner, partnerBase, target.targetAnchor);
+      if (path === null) return null;
+      return { root: limb.reachRoot, joint: path.back, stop: path.back, limbLength: limb.reach, waypoints: path.waypoints, fingerPoint: path.fingers };
+    }
     let joint: Vector3 | null = null;
     const mutual = this.mutualTarget(target);
     if (mutual !== null) {
@@ -973,7 +1041,7 @@ export class PreparedInteractionRecipe {
       if (offset !== null && partnerBase !== null) joint = addVec3(addVec3(partnerBase, offset), target.offset);
     }
     if (joint === null) return null;
-    return { root: limb.reachRoot, joint, stop: pullTowardRoot(joint, limb.chainRoot, target.surfaceStandoff), limbLength: limb.reach };
+    return { root: limb.reachRoot, joint, stop: pullTowardRoot(joint, limb.chainRoot, target.surfaceStandoff), limbLength: limb.reach, waypoints: [], fingerPoint: null };
   }
 
   /**
@@ -984,6 +1052,9 @@ export class PreparedInteractionRecipe {
    * for separation `d`. Never closer than `FACING_MIN_SEPARATION`.
    */
   private facedSeparation(target: ResolvedInteractionTarget, basesAt: (d: number) => Map<FigureRigProfile, Vector3>): number | null {
+    // Reach doesn't bound a wrap: its arm must get its elbow beside the
+    // partner's ribs, which only an embrace distance allows.
+    if (target.wrap) return WRAP_SEPARATION;
     const role = lookupRigProfile(this.rigProfiles, target.figureLabel)?.suggestPrimaryChain(target.boneName)?.role;
     const fraction = role === "foot" || role === "leg" ? FACING_FOOT_REACH_FRACTION : FACING_REACH_FRACTION;
     const gapAt = (d: number): { gap: number; reach: number } | null => {
@@ -1294,6 +1365,106 @@ function meetingPoint(rootA: Vector3, lengthA: number, rootB: Vector3, lengthB: 
   return [middle[0], middle[1] - MEETING_DROP_FRACTION * ((lengthA + lengthB) / 2), middle[2]];
 }
 
+/** Where an effector stops (and, for a wrap, the points it passes and where its fingertips aim). */
+interface ContactGeometry {
+  root: Vector3;
+  joint: Vector3;
+  stop: Vector3;
+  limbLength: number;
+  /** A wrap's points around the partner, reached in turn before `stop`. */
+  waypoints: Vector3[];
+  /** Where a wrapped hand's fingertips aim. */
+  fingerPoint: Vector3 | null;
+}
+
+// Wrap geometry (cm) in the partner's frame: [lateral (out from the spine
+// toward the target shoulder's side), back (behind the line between the
+// shoulder anchors)], at WRAP_DROP below the shoulder anchor. The effector
+// passes WRAP_SIDE_POINTS around the partner's side, under its arm, then
+// stops at WRAP_BACK_POINT on the upper back; the fingertips aim at
+// WRAP_FINGER_POINT, across the back toward the spine.
+export const WRAP_DROP = 16;
+/** Origin-to-origin distance (cm) a wrapped partner is staged at. */
+export const WRAP_SEPARATION = 26;
+export const WRAP_SIDE_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [25, -6],
+  [24, 4],
+];
+export const WRAP_BACK_POINT: readonly [number, number] = [14, 10];
+export const WRAP_FINGER_POINT: readonly [number, number] = [2, 10];
+/** How far (degrees, per axis from rest) a wrapped hand may bend to lay its fingers on the back. */
+export const WRAP_HAND_LIMIT = 70;
+
+/**
+ * A wrap around `partner` (origin at `partnerBase`) on `targetAnchor`'s
+ * side: the waypoints, the effector's stop on its back, and where the
+ * fingertips aim. Null when the partner's facing, shoulder anchors or side
+ * are unknown.
+ */
+function wrapPath(partner: FigureRigProfile, partnerBase: Vector3 | null, targetAnchor: string): { waypoints: Vector3[]; back: Vector3; fingers: Vector3 } | null {
+  if (partnerBase === null) return null;
+  const forward = figureForward(partner);
+  const joint = anchorBoneOffset(partner, targetAnchor);
+  const left = anchorBoneOffset(partner, "l_shoulder");
+  const right = anchorBoneOffset(partner, "r_shoulder");
+  const side = sideFromName(targetAnchor);
+  if (forward === null || joint === null || left === null || right === null || (side !== "left" && side !== "right")) return null;
+  const outward: Vector3 = side === "left" ? [forward[2], 0, -forward[0]] : [-forward[2], 0, forward[0]];
+  const spine: Vector3 = [partnerBase[0] + (left[0] + right[0]) / 2, partnerBase[1] + joint[1] - WRAP_DROP, partnerBase[2] + (left[2] + right[2]) / 2];
+  const at = ([lateral, back]: readonly [number, number]): Vector3 => [
+    spine[0] + outward[0] * lateral - forward[0] * back,
+    spine[1],
+    spine[2] + outward[2] * lateral - forward[2] * back,
+  ];
+  return { waypoints: WRAP_SIDE_POINTS.map(at), back: at(WRAP_BACK_POINT), fingers: at(WRAP_FINGER_POINT) };
+}
+
+/** The descendant of `boneName` farthest from it (a hand's fingertip), or null. */
+function farthestDescendant(profile: FigureRigProfile, boneName: string): string | null {
+  const names = new Set(profile.boneNames());
+  const origin = names.has(boneName) ? profile.bone(boneName).worldPosition : null;
+  if (origin === null) return null;
+  let best: { distance: number; name: string } | null = null;
+  for (const bone of profile.bones) {
+    if (bone.name === boneName || bone.worldPosition === null || bone.isHelper) continue;
+    let parent = bone.parentName;
+    const seen = new Set<string>();
+    while (parent !== null && parent !== boneName && !seen.has(parent) && names.has(parent)) {
+      seen.add(parent);
+      parent = profile.bone(parent).parentName;
+    }
+    if (parent !== boneName) continue;
+    const distance = lengthVec3(subVec3(bone.worldPosition, origin));
+    if (best === null || distance > best.distance) best = { distance, name: bone.name };
+  }
+  return best?.name ?? null;
+}
+
+/**
+ * Turn a wrapped hand (its bone alone) so its fingertips lie across the
+ * partner's back. The wrist stays put; each axis is held within
+ * `WRAP_HAND_LIMIT` of rest. Returns diagnostics; empty when the hand has no
+ * finger bones.
+ */
+async function aimWrapHand(
+  skeleton: Awaited<ReturnType<RigSceneSource["findSkeletonByLabel"]>>,
+  profile: FigureRigProfile,
+  handBone: string,
+  fingerPoint: Vector3,
+  solve: AlignOptions,
+): Promise<Record<string, unknown>> {
+  const tip = farthestDescendant(profile, handBone);
+  if (tip === null) return {};
+  const aim = new ResolvedInteractionTarget({ figureLabel: profile.figureLabel, anchorName: handBone, boneName: tip, targetPoint: fingerPoint });
+  const result = await alignSingleLimbTarget(skeleton, profile, aim, { chain: [handBone], maxIterations: 40, stepDegrees: solve.stepDegrees, damping: solve.damping, tolerance: 1 });
+  const rotation = result.appliedRotations[handBone];
+  if (!rotation) return { handAim: result.diagnostics.reason ?? "no_rotation" };
+  const clamped = rotation.map((value) => Math.max(-WRAP_HAND_LIMIT, Math.min(WRAP_HAND_LIMIT, value))) as Rotation3;
+  const wasClamped = clamped.some((value, i) => value !== rotation[i]);
+  if (wasClamped) await skeleton.setBoneRotations({ [handBone]: clamped });
+  return { handAimBone: tip, handAimRotation: clamped, handAimClamped: wasClamped };
+}
+
 /**
  * Compile a recipe against rig profiles: plan facing (turned partners' profiles
  * replace the originals in `rigProfiles`), validate, and resolve targets.
@@ -1440,7 +1611,7 @@ export function buildHandshakeRecipe(actorA: string, actorB: string, opts: { aAn
   });
 }
 
-/** Build a mutual arms-around-each-other embrace: each hand reaches the partner's far shoulder. */
+/** Build a mutual arms-around-each-other embrace: each arm wraps the partner's side (toward its far shoulder) and the hand rests on its upper back. */
 export function buildHugRecipe(actorA: string, actorB: string, opts: { aAnchor?: string; bAnchor?: string } = {}): InteractionRecipe {
   const aAnchor = opts.aAnchor ?? "r_hand";
   const bAnchor = opts.bAnchor ?? "r_hand";
@@ -1449,8 +1620,8 @@ export function buildHugRecipe(actorA: string, actorB: string, opts: { aAnchor?:
     actors: [actorA, actorB],
     constraints: [
       ...mutualLookAt(actorA, actorB),
-      new HandTarget({ figureLabel: actorA, anchorName: aAnchor, targetFigure: actorB, targetAnchor: farShoulder(aAnchor) }),
-      new HandTarget({ figureLabel: actorB, anchorName: bAnchor, targetFigure: actorA, targetAnchor: farShoulder(bAnchor) }),
+      new HandTarget({ figureLabel: actorA, anchorName: aAnchor, targetFigure: actorB, targetAnchor: farShoulder(aAnchor), wrap: true }),
+      new HandTarget({ figureLabel: actorB, anchorName: bAnchor, targetFigure: actorA, targetAnchor: farShoulder(bAnchor), wrap: true }),
     ],
     metadata: { interaction: "hug" },
   });
