@@ -872,6 +872,48 @@ class TestDazScene(unittest.TestCase):
         script = client.execute.call_args[0][0]
         self.assertIn('cam.setName("MyCam")', script)
 
+    def test_create_group_returns_daz_node_for_created_name(self):
+        from dazpy._node import DazNode
+        client = _make_client("Rig 2")
+        group = DazScene(client).create_group("Rig")
+        self.assertIs(type(group), DazNode)
+        self.assertEqual(group._identifier, NodeIdentifier("Rig 2"))  # what Studio reports
+
+    def test_create_group_names_before_add_and_labels_after(self):
+        # DS4: a label set before Scene.addNode does not stick on a scripted node.
+        client = _make_client("Rig")
+        DazScene(client).create_group("Rig", label="My Rig")
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzGroupNode()", script)
+        self.assertLess(script.index('setName("Rig")'), script.index("Scene.addNode(g)"))
+        self.assertLess(script.index("Scene.addNode(g)"), script.index('setLabel("My Rig")'))
+        self.assertNotIn("setWSPos", script)
+
+    def test_create_group_label_defaults_to_name(self):
+        client = _make_client("Rig")
+        DazScene(client).create_group("Rig")
+        self.assertIn('g.setLabel("Rig")', client.execute.call_args[0][0])
+
+    def test_create_group_position_sets_world_position(self):
+        client = _make_client("Rig")
+        DazScene(client).create_group("Rig", position=(1, 150.5, -2))
+        script = client.execute.call_args[0][0]
+        self.assertIn("g.setWSPos(new DzVec3(1.0, 150.5, -2.0))", script)
+        self.assertLess(script.index("Scene.addNode(g)"), script.index("setWSPos"))
+
+    def test_create_group_escapes_name_and_label(self):
+        client = _make_client('a"b')
+        DazScene(client).create_group('a"b', label="x\\y")
+        script = client.execute.call_args[0][0]
+        self.assertIn('setName("a\\"b")', script)
+        self.assertIn('setLabel("x\\\\y")', script)
+
+    def test_create_group_rejects_empty_name(self):
+        client = _make_client("unused")
+        with self.assertRaises(ValueError):
+            DazScene(client).create_group("")
+        client.execute.assert_not_called()
+
     def test_create_light_returns_daz_light(self):
         from dazpy._light import DazLight
         client = _make_client("Spotlight1")

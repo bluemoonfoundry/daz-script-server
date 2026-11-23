@@ -233,6 +233,49 @@ class DazScene:
         created_name = self._client.execute(script).value
         return DazLight(self._client, NodeIdentifier(created_name))
 
+    def create_group(
+        self,
+        name: str,
+        label: str | None = None,
+        position: tuple[float, float, float] | None = None,
+    ) -> DazNode:
+        """Create an empty group node (``DzGroupNode``) and add it to the scene.
+
+        Use it as a parent for nodes that move together, such as a camera rig.
+
+        Args:
+            name: Internal name for the new group.
+            label: The label shown in the Scene panel (default: *name*).  It is
+                set after the node is added: on DS4 a label set before
+                ``Scene.addNode`` does not stick on a scripted node.
+            position: Optional world-space position ``(x, y, z)`` in cm.
+
+        Returns:
+            A :class:`~dazpy.DazNode` proxy for the new group, by the name
+            Studio gave it.
+
+        Raises:
+            ValueError: If *name* is empty.
+        """
+        if not name:
+            raise ValueError("create_group needs a non-empty name")
+        name_js = ScriptBuilder.escape_string(name)
+        label_js = ScriptBuilder.escape_string(name if label is None else label)
+        place = ""
+        if position is not None:
+            x, y, z = (float(v) for v in position)
+            place = f"g.setWSPos(new DzVec3({x}, {y}, {z}));"
+        script = ScriptBuilder.iife(f"""
+            var g = new DzGroupNode();
+            g.setName({name_js});
+            Scene.addNode(g);
+            g.setLabel({label_js});
+            {place}
+            return g.getName();
+        """)
+        created_name = self._client.execute(script).value
+        return DazNode(self._client, NodeIdentifier(created_name))
+
     def find_light_by_label(self, label: str) -> "DazLight":
         """Find a light by its user-visible label.
 

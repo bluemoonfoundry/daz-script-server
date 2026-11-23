@@ -6,6 +6,10 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **dazpy:** `DazScene.create_group(name, label=None, position=None)` creates
+  an empty group node (`DzGroupNode`), e.g. a camera-rig parent, and returns
+  it as a `DazNode`. The label (default: the name) is set after the node is
+  added, since DS4 drops a label set before `Scene.addNode`.
 - **daz-ts:** ports of `dazpy.shots` and `dazpy.shot_library` as the
   `shots` and `shotLibrary` modules: typed shot/coverage models with
   `applyShot`, the shot builders, line-of-action and thirty-degree
