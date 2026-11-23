@@ -163,6 +163,25 @@ describe("buildFightRecipe", () => {
     expect(recipe.metadata.strikeTarget).toBe("l_hip");
   });
 
+  it("every strike target resolves on Genesis 9 and Genesis 8 rigs (lb1i)", () => {
+    const chain = (label: string, family: string, names: string[]) =>
+      new FigureRigProfile({ figureLabel: label, family, bones: names.map((name, i) => new BoneProfile({ name, parentName: i === 0 ? null : names[0] })) });
+    const g9 = chain("G9", "genesis_9", ["hip", "pelvis", "spine1", "spine2", "spine3", "spine4", "neck1", "head", "l_shoulder", "l_upperarm", "l_thigh", "l_shin", "l_foot", "r_thigh", "r_shin", "r_foot"]);
+    const g8 = chain("G8", "genesis_3_8", ["hip", "pelvis", "abdomenLower", "abdomenUpper", "chestLower", "chestUpper", "neckLower", "head", "lCollar", "lShldrBend", "lThighBend", "lThighTwist", "lShin", "lFoot", "rThighBend", "rThighTwist", "rShin", "rFoot"]);
+    const expected: Array<[FigureRigProfile, Record<string, string>]> = [
+      [g9, { chest: "spine3", l_hip: "l_thigh", r_hip: "r_thigh", l_knee: "l_shin" }],
+      [g8, { chest: "chestLower", l_hip: "lThighBend", r_hip: "rThighBend", l_knee: "lShin" }],
+    ];
+    for (const [profile, anchors] of expected) {
+      for (const [name, bone] of Object.entries(anchors)) expect(profile.anchor(name)?.boneName, `${profile.figureLabel} ${name}`).toBe(bone);
+      expect(profile.anchor("l_hip")?.role).toBe("hip");
+      for (const strikeAnchor of ["r_hand", "r_foot", "head"]) {
+        const target = buildFightRecipe("A", "B", { strikeAnchor }).metadata.strikeTarget as string;
+        expect(profile.anchor(target), `${profile.figureLabel} ${strikeAnchor} -> ${target}`).not.toBeNull();
+      }
+    }
+  });
+
   it("other strike anchors fall back to a hand constraint with a chest strike target", () => {
     const recipe = buildFightRecipe("A", "B", { strikeAnchor: "head" });
     expect(recipe.constraints[0].kind).toBe("HandTarget");

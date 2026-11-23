@@ -27,6 +27,7 @@ export type AnchorRole =
   | "neck"
   | "head"
   | "shoulder"
+  | "hip"
   | "elbow"
   | "hand"
   | "knee"
@@ -543,6 +544,11 @@ const PREFERRED_ANCHOR_TOKENS: Readonly<Record<string, readonly string[]>> = {
   r_knee: KNEE_JOINT_TOKENS,
 };
 
+/** Tried last: Genesis 9 has no chest-named bone; its spine3 sits where Genesis 8's chestLower does. */
+const FALLBACK_ANCHOR_TOKENS: Readonly<Record<string, readonly string[]>> = {
+  chest: ["spine3"],
+};
+
 /** Approximate body radius (cm, adult figure) from an anchor's joint centre to its skin. */
 export const ANCHOR_SURFACE_RADIUS: Readonly<Record<AnchorRole, number>> = {
   pelvis: 12,
@@ -551,6 +557,7 @@ export const ANCHOR_SURFACE_RADIUS: Readonly<Record<AnchorRole, number>> = {
   neck: 6,
   head: 10,
   shoulder: 6,
+  hip: 9,
   elbow: 4,
   hand: 3,
   knee: 5,
@@ -575,6 +582,9 @@ const ANCHOR_PATTERNS: ReadonlyArray<[string, AnchorRole, ChainSide, readonly st
   ["r_hand", "hand", "right", ["hand", "wrist"]],
   ["l_knee", "knee", "left", ["knee", "thigh"]],
   ["r_knee", "knee", "right", ["knee", "thigh"]],
+  // The hip joint is the thigh's origin (G9 l_thigh, G8 lThighBend).
+  ["l_hip", "hip", "left", ["thigh"]],
+  ["r_hip", "hip", "right", ["thigh"]],
   ["l_foot", "foot", "left", ["foot", "toe", "ankle"]],
   ["r_foot", "foot", "right", ["foot", "toe", "ankle"]],
 ];
@@ -724,7 +734,11 @@ export class FigureRigProfile {
     const anchors = new Map<string, InteractionAnchor>();
     for (const [key, role, side, tokens] of ANCHOR_PATTERNS) {
       const preferred = PREFERRED_ANCHOR_TOKENS[key];
-      const bone = this.findTerminalBone(preferred ? [[role, side, preferred], [role, side, tokens]] : [[role, side, tokens]]);
+      const fallback = FALLBACK_ANCHOR_TOKENS[key];
+      const candidates: Array<[AnchorRole, ChainSide, readonly string[]]> = [[role, side, tokens]];
+      if (preferred) candidates.unshift([role, side, preferred]);
+      if (fallback) candidates.push([role, side, fallback]);
+      const bone = this.findTerminalBone(candidates);
       if (bone === null) continue;
       anchors.set(key, new InteractionAnchor({ name: key, boneName: bone.name, role, side }));
     }

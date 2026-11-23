@@ -21,6 +21,7 @@ AnchorRole = Literal[
     "neck",
     "head",
     "shoulder",
+    "hip",
     "elbow",
     "hand",
     "knee",
@@ -174,6 +175,7 @@ ANCHOR_SURFACE_RADIUS: dict[str, float] = {
     "neck": 6.0,
     "head": 10.0,
     "shoulder": 6.0,
+    "hip": 9.0,
     "elbow": 4.0,
     "hand": 3.0,
     "knee": 5.0,
@@ -514,6 +516,9 @@ class FigureRigProfile:
             "l_knee": _KNEE_JOINT_TOKENS,
             "r_knee": _KNEE_JOINT_TOKENS,
         }
+        # Fallbacks are tried last: Genesis 9 has no chest-named bone; its
+        # spine3 sits where Genesis 8's chestLower does.
+        fallback: dict[str, tuple[str, ...]] = {"chest": ("spine3",)}
         patterns: list[tuple[str, AnchorRole, ChainSide, tuple[str, ...]]] = [
             ("pelvis", "pelvis", "center", ("pelvis", "hip")),
             ("spine", "spine", "center", ("spine", "abdomen", "torso")),
@@ -528,6 +533,9 @@ class FigureRigProfile:
             ("r_hand", "hand", "right", ("hand", "wrist")),
             ("l_knee", "knee", "left", ("knee", "thigh")),
             ("r_knee", "knee", "right", ("knee", "thigh")),
+            # The hip joint is the thigh's origin (G9 l_thigh, G8 lThighBend).
+            ("l_hip", "hip", "left", ("thigh",)),
+            ("r_hip", "hip", "right", ("thigh",)),
             ("l_foot", "foot", "left", ("foot", "toe", "ankle")),
             ("r_foot", "foot", "right", ("foot", "toe", "ankle")),
         ]
@@ -535,6 +543,8 @@ class FigureRigProfile:
             candidates = [(role, side, tokens)]
             if key in preferred:
                 candidates.insert(0, (role, side, preferred[key]))
+            if key in fallback:
+                candidates.append((role, side, fallback[key]))
             bone = self._find_terminal_bone(candidates)
             if bone is None:
                 continue

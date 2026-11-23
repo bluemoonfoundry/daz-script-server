@@ -994,6 +994,36 @@ class TestInteractionAdapter(unittest.TestCase):
         self.assertEqual(profile.anchor("r_hand").bone_name, "rHand")
         self.assertEqual(profile.anchor("l_foot").bone_name, "lFoot")
 
+    @staticmethod
+    def _chain_profile(label, family, names):
+        bones = [BoneProfile(name=names[0])]
+        bones += [BoneProfile(name=name, parent_name=names[0]) for name in names[1:]]
+        return FigureRigProfile(figure_label=label, family=family, bones=bones)
+
+    def test_chest_and_hip_anchors_resolve_on_genesis_9_and_8(self):
+        # lb1i: G9 has no chest-named bone (spine3/spine4) and nothing mapped to the hip joints.
+        g9 = self._chain_profile("G9", "genesis_9", [
+            "hip", "pelvis", "spine1", "spine2", "spine3", "spine4", "neck1", "head", "l_shoulder", "l_upperarm",
+            "l_thigh", "l_shin", "l_foot", "r_thigh", "r_shin", "r_foot",
+        ])
+        g8 = self._chain_profile("G8", "genesis_3_8", [
+            "hip", "pelvis", "abdomenLower", "abdomenUpper", "chestLower", "chestUpper", "neckLower", "head", "lCollar", "lShldrBend",
+            "lThighBend", "lThighTwist", "lShin", "lFoot", "rThighBend", "rThighTwist", "rShin", "rFoot",
+        ])
+        expected = [
+            (g9, {"chest": "spine3", "l_hip": "l_thigh", "r_hip": "r_thigh", "l_knee": "l_shin"}),
+            (g8, {"chest": "chestLower", "l_hip": "lThighBend", "r_hip": "rThighBend", "l_knee": "lShin"}),
+        ]
+        for profile, anchors in expected:
+            for anchor, bone in anchors.items():
+                with self.subTest(figure=profile.figure_label, anchor=anchor):
+                    self.assertEqual(profile.anchor(anchor).bone_name, bone)
+            self.assertEqual(profile.anchor("l_hip").role, "hip")
+            for strike in ("r_hand", "r_foot", "head"):
+                target = build_fight_recipe("A", "B", strike_anchor=strike).metadata["strike_target"]
+                with self.subTest(figure=profile.figure_label, strike=strike):
+                    self.assertIsNotNone(profile.anchor(target))
+
     def test_looks_like_helper_ignores_bend_bones(self):
         """'end' is a whole token, not a substring: G3/G8 *Bend bones are real joints (i9b6)."""
         from dazpy._interaction import _looks_like_helper
