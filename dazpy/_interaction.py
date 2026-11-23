@@ -1282,7 +1282,10 @@ class PreparedInteractionRecipe:
             profile = _lookup_rig_profile(self.rig_profiles, resolved.figure_label)
             if profile is None:
                 continue
+            # Checked at the loop top, but replace() above drops mypy's narrowing.
             joint_point = resolved.target_point
+            if joint_point is None:
+                continue
             if resolved.surface_standoff > 0.0:
                 source_shift = _displacement_for_profile(self.rig_profiles, profile, figure_displacements)
                 resolved = replace(resolved, target_point=_surface_contact_point(profile, resolved, source_shift))
