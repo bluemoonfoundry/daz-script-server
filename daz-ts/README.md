@@ -5,10 +5,11 @@ that embeds an HTTP API inside DAZ Studio for remotely executing DazScript
 code. `daz-ts` is the Node.js/TypeScript counterpart to
 [`dazpy`](../dazpy), the mature Python SDK — same wire protocol, same
 server, a single `DazClient` class (no sync/async split; `async`/`await`
-covers both). Phase 1 shipped the client core (`execute`, async job
-submission/polling, batching, render submission, SSE plumbing) plus a
-dependency-free `math3` module. Phase 2 (below) adds the scene-graph proxy
-layer (nodes, materials, skeletons, etc.).
+covers both). It covers the client core (`execute`, async jobs, batching,
+render submission, SSE streams), scene-graph proxies, rendering,
+capture/restore and domain helpers, shots and the shot library, and
+multi-figure interaction posing with IK. The phase sections below describe
+each layer.
 
 ## Install
 
@@ -20,7 +21,7 @@ For offline installs, each `daz-ts-v*` [GitHub release](https://github.com/bluem
 also carries the `bluemoonfoundry-daz-ts-*.tgz` tarball:
 
 ```bash
-npm install ./bluemoonfoundry-daz-ts-0.1.0.tgz
+npm install ./bluemoonfoundry-daz-ts-0.2.0.tgz
 ```
 
 Requires Node.js >= 18 (for built-in `fetch`/`AbortController`).
@@ -200,6 +201,9 @@ Rejections throw `ArtifactError` with `statusCode` and `errorCode`
 
 - `math3.ts` — dependency-free `Vec3`, `Quat`, `BoundingBox`, `AxisRemap`
   math utilities (no HTTP coupling).
+  `Quat.fromDz()` / `toDz()` and `fromDzEuler()` / `toDzEuler()` convert
+  Studio's `DzQuat` (the conjugate of the math3 quaternion for the same
+  rotation) and its rotation-order strings (the reverse of math3's `order`).
 - `ScriptBuilder` — the injection-safety helpers (`escapeString`, `iife`,
   `serializeArg`) used internally to build generated DazScript source; every
   injected string goes through `JSON.stringify`.
