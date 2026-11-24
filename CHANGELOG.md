@@ -4,6 +4,15 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-11-23
+
+Plugin, dazpy and daz-ts release: plugin and dazpy 2.16.0, daz-ts 0.2.0.
+Upgrade the plugin. It fixes a crash in render progress streams and a bug
+that could leave every request getting 429, and it adds a trust boundary for
+artifact downloads (see the upgrade note under **Security**). dazpy 2.16.0
+still works with plugin 2.12 or newer, and daz-ts 0.2.0 with plugin 2.11 or
+newer.
+
 ### Added
 
 - **dazpy pre-render checks:** `DazScene.check(camera=None, *, engine,
@@ -45,6 +54,24 @@ All notable changes to DazScript Server are documented here.
   `package-lock.json` in step. The release tarball is now
   `bluemoonfoundry-daz-ts-*.tgz`.
 
+- **daz-ts:** Phase 5 multi-figure interaction posing, ported from dazpy:
+  rig profiles (`buildRigProfile()`, `FigureRigProfile`: rig family, bone
+  chains, anchors), `InteractionPlan` and its constraint classes
+  (`HandTarget`, `FootTarget`, `LookAtTarget`, `BalanceTarget`,
+  `ContactTarget`, `PoseTarget`), the IK solver (`alignHandTarget()`,
+  `alignFootTarget()`, `alignSingleLimbTarget()`), the recipe builders
+  (`buildHugRecipe()`, `buildKissRecipe()`, `buildHandshakeRecipe()`,
+  `buildFightRecipe()`, `buildSitRecipe()`, `buildTouchRecipe()`,
+  `buildFaceEachOtherRecipe()`) and `DazScene.applyInteractionRecipe()`.
+  A builder returns the same constraints as dazpy's `build_*_recipe` for
+  the same inputs.
+- **dazpy / daz-ts math3:** `Quat.from_dz` / `to_dz` and `from_dz_euler` /
+  `to_dz_euler` (`fromDz` / `toDz`, `fromDzEuler` / `toDzEuler` in daz-ts)
+  convert to and from Studio's `DzQuat`, which stores the conjugate of the
+  math3 quaternion for the same rotation, and Studio's rotation-order
+  strings, which are the reverse of math3's `order`. Verified live on
+  Genesis 9 bones and a camera.
+
 ### Changed
 
 - **dazpy / daz-ts:** the hug recipe's arms now wrap around the partner
@@ -76,6 +103,11 @@ All notable changes to DazScript Server are documented here.
   skeleton with `localEuler`/`setRotation` (`local_euler`/`set_rotation`),
   which `DazSkeleton` has. Touch and sit staging is unchanged (y1td).
 
+- **Licensing:** the repository now has a `LICENSE` file: AGPL v3 for the
+  plugin, with an additional permission to link with the DAZ Studio SDK and
+  DAZ Studio. `dazpy` and `daz-ts` are MIT and ship only their own MIT
+  license. dazpy's PyPI description is now `dazpy/README.md`.
+
 ### Security
 
 - **Artifact trust boundary:** `GET /artifacts/{id}/{artifact_id}` (and its
@@ -90,6 +122,13 @@ All notable changes to DazScript Server are documented here.
   dazpy raises `ServerResponseError` and daz-ts `ArtifactError` for it (not
   `AuthenticationError`). **Upgrade note:** jobs that write outputs elsewhere
   (e.g. `D:/renders`) need that folder added.
+
+- **Server:** the API token is compared in constant time. On macOS the
+  token file is created with mode 0600 before anything is written to it, so
+  it is never briefly readable by other users. The zip entry-count limit
+  can no longer be skipped by a zip64 archive whose count overflows a
+  32-bit integer. The auth, IP whitelist and rate-limit on/off flags are
+  now thread-safe.
 
 ### Fixed
 
@@ -124,6 +163,40 @@ All notable changes to DazScript Server are documented here.
   `retryable` in dazpy, `statusCode`/`errorCode`/`detail`/`retryable` in
   daz-ts (e.g. `AUTH_INVALID_TOKEN`, `IP_NOT_WHITELISTED`). The message uses
   the server's `error` text when the body is JSON.
+- **Server:** sync `POST /execute` and `POST /scripts/{id}/execute` no longer
+  use up the concurrent-request limit behind a long or stuck script. Each
+  queued request used to wait for the main thread with no timeout, even
+  after its client disconnected, until every new request got 429
+  `CONCURRENT_LIMIT_EXCEEDED`. A request still queued when its client
+  disconnects or the server timeout passes is now dropped and answered with
+  503 `STUDIO_BUSY`.
+- **Render progress (SSE):** an SSE client disconnecting just as a render
+  finished could make the server write to freed memory. Event fields are
+  now fully JSON-escaped, so a newline in a render error or output path no
+  longer breaks the stream. The `complete` event of an animation render
+  reports the total size of its frames instead of 0. The three 404s from
+  `GET /render/{id}/progress` now return the standard `ErrorResponse`.
+- **dazpy shots:** shot and recipe framing now match Studio, which applies a
+  camera's Frame Width to the frame *height* at any aspect. Framing used it
+  as the width, so every shot stood 1/aspect too far back (33% too loose at
+  4:3), and thirds compositions, `compose_aim` and the two-shot fit used the
+  wrong frame width. `over_the_shoulder` takes `aspect`, and the coverage
+  and dialogue builders pass it on.
+- **dazpy / daz-ts interaction recipes:** figures are staged from their real
+  anchor offsets and kept on the floor; before, every figure was staged at
+  the origin and two-figure recipes left the figures overlapping. Contact
+  targets stop at the partner's skin, not inside it at the joint. Genesis 9
+  gains a `chest` anchor and every rig gains `l_hip` / `r_hip`, so the
+  fight recipe's strikes resolve. `BalanceTarget`'s pelvis takes an anchor
+  or a bone name in both validation and staging. A target with no point and
+  no resolvable figure is reported as unresolved instead of being aimed at
+  the world origin. Genesis 3/8 `*Bend` bones are no longer treated as
+  helper bones and left out of the IK chains.
+- **Server:** zip package installs remove their staging folder when the final
+  step fails. Token-loading messages, including a crypto-API failure, now
+  appear in the server log; they were dropped before the log view existed.
+- **Build:** `./build.sh --debug` now produces a Debug build on macOS
+  (single-config generators); CMake no longer forces Release.
 
 ## [2.15.0] - 2026-11-19
 
