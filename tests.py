@@ -29,6 +29,7 @@ LIVE_TEST_FILES = frozenset({
     "test_api.py",                          # raw HTTP API, requires server
     "test_dazpy_integration.py",            # dazpy SDK, requires DAZ Studio
     "test_recipe_live.py",                  # scene recipes against DAZ Studio
+    "test_shots_live.py",                   # shots / shot_library against DAZ Studio
     "test_comfyui_enhance_integration.py",  # DAZ Studio + ComfyUI when reachable
     "test_sprite_matrix_integration.py",    # DAZ Studio when reachable
     "test_performance.py",                  # load test; parse_args() at import

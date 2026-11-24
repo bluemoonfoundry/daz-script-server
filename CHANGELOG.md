@@ -19,6 +19,17 @@ All notable changes to DazScript Server are documented here.
   rolls back when the applied scene has check errors (`ApplyResult.check`), and
   `recipe.render(..., require_clean=True)` raises the new `SceneCheckError`
   before rendering.
+- **dazpy:** `DazScene.create_group(name, label=None, position=None)` creates
+  an empty group node (`DzGroupNode`), e.g. a camera-rig parent, and returns
+  it as a `DazNode`. The label (default: the name) is set after the node is
+  added, since DS4 drops a label set before `Scene.addNode`.
+- **daz-ts:** ports of `dazpy.shots` and `dazpy.shot_library` as the
+  `shots` and `shotLibrary` modules: typed shot/coverage models with
+  `applyShot`, the shot builders, line-of-action and thirty-degree
+  continuity checks, camera moves, rack focus, dialogue coverage and
+  `applyCoverage`. Plans serialise to dazpy's JSON format, so either SDK
+  reads the other's. `DazCamera` gains `setFocalDistanceAtFrame()` and
+  `clearFocalDistanceKeys()`.
 - **daz-ts:** `MIN_SERVER_VERSION` (2.11, the oldest plugin daz-ts needs)
   and `DazClient.checkServerVersion()`, which reads `GET /status` and returns
   a `VersionCheck` (`compatible`, upgrade `message`). Unlike dazpy, daz-ts
@@ -33,6 +44,37 @@ All notable changes to DazScript Server are documented here.
   `scripts/check_daz_ts_version.py` keeps the tag, `package.json` and
   `package-lock.json` in step. The release tarball is now
   `bluemoonfoundry-daz-ts-*.tgz`.
+
+### Changed
+
+- **dazpy / daz-ts:** the hug recipe's arms now wrap around the partner
+  instead of reaching for the front of its shoulder. Hand targets gain
+  `wrap` (`HandTarget(..., wrap=True)` / `{ wrap: true }`): the arm passes
+  two waypoints beside the partner's ribs, under its arm, then stops on the
+  upper back. A hand-only pass turns the fingertips across the back toward
+  the spine, bending at most `WRAP_HAND_LIMIT` (70 degrees) per axis. A
+  wrapped partner is staged at `WRAP_SEPARATION` (26 cm, origin to origin),
+  inside the 30 cm reach minimum. Live DS6, 2 x Genesis 9: both arms
+  converge (39.4 -> 0.13 cm). Each wrist ends 10.8 cm behind the partner's
+  spine, each elbow 18 cm out to the side (outside the ribs), and the
+  fingertips 1.2 cm from the spine. `alignSingleLimbTarget` takes an
+  explicit `chain` option.
+- **dazpy / daz-ts:** the face_each_other recipe now turns the second actor
+  in place to face the first figure's origin (or, when both stand at the same
+  spot, to face back along the first figure's heading). It moves nobody and
+  runs no IK. Before, it validated but left both figures as they were. The
+  pose patch's `figureYawDegrees` / `figure_yaw_degrees` carries the turn.
+- **dazpy / daz-ts:** the hug, kiss, handshake and fight interaction recipes
+  now turn the second actor to face the first before staging and place it
+  straight in front, at a distance the limbs can reach (0.85 of an arm's
+  reach from the shoulder joint, 0.95 of a leg's from the hip). Before, staging only moved figures sideways, so in a hug or kiss
+  the second actor's hand had to reach behind its own body. Handshake hands
+  now aim at one meeting point between the two figures. In the kiss recipe,
+  B's hand now goes to A's opposite shoulder (`r_shoulder` for B's
+  `l_hand`), not the cross-body one. The pose patch has
+  a new `figureYawDegrees` / `figure_yaw_degrees` field. Applying it needs a
+  skeleton with `localEuler`/`setRotation` (`local_euler`/`set_rotation`),
+  which `DazSkeleton` has. Touch and sit staging is unchanged (y1td).
 
 ### Security
 
@@ -55,11 +97,19 @@ All notable changes to DazScript Server are documented here.
   on Studio 4, which keeps it as a scene node rather than a render element.
   `apply_hdri_environment` no longer raises `RenderError`, and recipe
   environment reads and `set_environment` work there.
-- **Scene recipes:** `recipe.apply()` no longer times out loading a figure on
-  a freshly started Studio (a cold Genesis 9 load takes over 30 s). Asset
-  loads now allow 300 s. `DazClient.execute()` and `AsyncDazClient.execute()`
-  take a per-request `timeout=` for this, and timeout errors report the
-  timeout that applied.
+- **dazpy:** the first scene-recipe `apply` after Daz Studio starts could fail
+  and roll back: the first Genesis 9 load on a cold DS4 takes 19–32s (warm:
+  ~15s), past the client's 30s HTTP timeout. Recipe asset loads and pose-preset
+  opens now wait up to 300s. `DazClient.execute()` takes a per-call `timeout`,
+  and timeout errors report the timeout that actually expired.
+- **dazpy / daz-ts:** `DazCamera.depth_of_field` / `depthOfField()` returned
+  the bool property's raw `1`/`0` instead of `True`/`False` (typed `bool`).
+  Found by the new shot live tests (`tests/test_shots_live.py` and
+  `daz-ts/test/integration/shots.integration.test.ts`, same scenarios).
+- **dazpy / daz-ts:** `DazViewport.capture` failed on Studio 6 ("Property
+  'updateGL' ... is not a function"): Qt6's `Dz3DViewport` has no
+  `updateGL()`. The capture scripts now call `update()` when `updateGL()` is
+  missing.
 - **Scene recipes:** changing only an actor's pose no longer moves the figure
   when the pose preset also sets the figure's root transform (common in
   prop-interaction poses). The figure node's transform is kept across the

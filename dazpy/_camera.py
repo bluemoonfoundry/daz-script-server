@@ -38,8 +38,13 @@ class DazCamera(DazNode):
 
     @property
     def depth_of_field(self) -> bool | None:
-        """Whether depth-of-field simulation is enabled (read/write)."""
-        return self.get_property("Depth of Field")
+        """Whether depth-of-field simulation is enabled (read/write).
+
+        The bool property's ``getValue()`` reports ``1``/``0``; it is
+        returned as a real ``bool``.
+        """
+        value = self.get_property("Depth of Field")
+        return None if value is None else bool(value)
 
     @depth_of_field.setter
     def depth_of_field(self, value: bool) -> None:

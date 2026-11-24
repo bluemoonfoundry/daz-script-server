@@ -411,9 +411,9 @@ class DazClient:
                 instead of raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
-            timeout: HTTP timeout in seconds for this request, overriding the
-                client's *timeout* (e.g. for a slow scene load). The script
-                keeps running in DAZ Studio after a client-side timeout.
+            timeout: HTTP timeout in seconds for this call only (default: the
+                client's *timeout*).  Give slow scripts, such as the first
+                content load after Studio starts, more time.
 
         Returns:
             The execution result containing the script return value and any

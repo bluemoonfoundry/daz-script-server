@@ -106,7 +106,8 @@ class _Run:
                  verify: Callable[[], CheckReport] | None = None) -> None:
         self.plan, self.desired, self.live, self.ops = plan, desired, live, ops
         self.recipe_id, self.recipe_version = recipe_id, recipe_version
-        self.verify, self.check = verify, None
+        self.verify = verify
+        self.check: CheckReport | None = None
         self.journal: list[tuple[str, Callable[[], None]]] = []
         self.created: dict[str, list[str]] = {}
         self.deleted_steps: list[Step] = []

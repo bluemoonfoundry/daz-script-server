@@ -20,9 +20,13 @@ export class DazCamera extends DazNode {
     return (await this.client.execute(this.nodeScript("return _node.getFieldOfView();"))).value as number | null;
   }
 
-  /** Whether depth-of-field simulation is enabled (read/write). */
+  /**
+   * Whether depth-of-field simulation is enabled (read/write). The bool
+   * property's `getValue()` reports `1`/`0`; it is returned as a real boolean.
+   */
   async depthOfField(): Promise<boolean | null> {
-    return (await this.getProperty("Depth of Field")) as boolean | null;
+    const value = await this.getProperty("Depth of Field");
+    return value === null || value === undefined ? null : Boolean(value);
   }
 
   async setDepthOfField(value: boolean): Promise<void> {
@@ -86,6 +90,25 @@ export class DazCamera extends DazNode {
 
   async setFocalDistance(value: number): Promise<void> {
     await this.client.execute(this.nodeScript(`_node.focalDistance = ${ScriptBuilder.serializeArg(value)};`));
+  }
+
+  /**
+   * Write a real keyframe for the focal distance at timeline `frame` (a focus
+   * pull), via `getFocalDistanceControl().setDoubleValue(tm, value)` -- the
+   * same keyed-write surface as `setPositionAtFrame`.
+   */
+  async setFocalDistanceAtFrame(frame: number, value: number): Promise<void> {
+    await this.client.execute(
+      this.nodeScript(
+        `var _tm = ${ScriptBuilder.serializeArg(Math.trunc(frame))} * Scene.getTimeStep(); ` +
+          `_node.getFocalDistanceControl().setDoubleValue(_tm, ${ScriptBuilder.serializeArg(value)});`,
+      ),
+    );
+  }
+
+  /** Remove all keyframes from the focal distance control. */
+  async clearFocalDistanceKeys(): Promise<void> {
+    await this.client.execute(this.nodeScript("_node.getFocalDistanceControl().deleteAllKeys();"));
   }
 
   /** Render aspect ratio width component (read/write). */
