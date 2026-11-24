@@ -68,7 +68,8 @@ jobs:
             echo "@bluemoonfoundry/daz-ts@${VERSION} is already on npm; skipping publish."
             exit 0
           fi
-          npm publish "$TARBALL" --access public
+          # "./" keeps npm from reading dist-pack/<file>.tgz as a GitHub user/repo shorthand.
+          npm publish "./$TARBALL" --access public
 
   github-release:
     # Keep the tarball on GitHub releases too, for offline installs.
