@@ -96,6 +96,36 @@ class TestDazClientAsyncFileSubmit(unittest.TestCase):
         )
 
 
+class TestDazClientExecuteTimeout(unittest.TestCase):
+    """Per-request timeout on execute() (ekkc)."""
+
+    def _client(self):
+        client = DazClient(token="")
+        client._session.close()
+        client._session = MagicMock()
+        response = MagicMock(status_code=200, headers={})
+        response.json.return_value = {"success": True, "result": 1, "output": []}
+        client._session.post.return_value = response
+        return client
+
+    def test_execute_uses_client_timeout_by_default(self):
+        client = self._client()
+        client.execute("1;")
+        self.assertEqual(client._session.post.call_args.kwargs["timeout"], 30.0)
+
+    def test_execute_timeout_overrides_client_timeout(self):
+        client = self._client()
+        client.execute("1;", timeout=300.0)
+        self.assertEqual(client._session.post.call_args.kwargs["timeout"], 300.0)
+
+    def test_timeout_error_reports_the_timeout_that_applied(self):
+        import requests
+        client = self._client()
+        client._session.post.side_effect = requests.exceptions.Timeout("slow")
+        with self.assertRaisesRegex(exceptions.TimeoutError, "after 300.0s"):
+            client.execute("1;", timeout=300.0)
+
+
 class TestDazClientRequestIdentity(unittest.TestCase):
     """Idempotency-Key / X-Correlation-Id headers and the error envelope (5d6f.8)."""
 
@@ -214,6 +244,24 @@ class TestDazClientArtifacts(unittest.TestCase):
         self.assertEqual(cm.exception.error_code, "ARTIFACT_NOT_FOUND")
         self.assertEqual(cm.exception.status_code, 404)
         resp.close.assert_called_once()
+
+    def test_artifact_outside_roots_is_not_an_auth_error(self):
+        client, _ = self._client(status_code=403, json_data={
+            "success": False, "error_code": "ARTIFACT_OUTSIDE_ROOTS",
+            "error": "Artifact file is outside the server's allowed artifact folders",
+            "retryable": False})
+        with self.assertRaises(exceptions.ServerResponseError) as cm:
+            client.download_artifact("rnd-1", "0")
+        self.assertNotIsInstance(cm.exception, exceptions.AuthenticationError)
+        self.assertEqual(cm.exception.error_code, "ARTIFACT_OUTSIDE_ROOTS")
+        self.assertEqual(cm.exception.status_code, 403)
+
+    def test_other_403_is_still_an_auth_error(self):
+        client, _ = self._client(status_code=403, json_data={
+            "success": False, "error_code": "IP_NOT_WHITELISTED", "error": "IP not allowed",
+            "retryable": False})
+        with self.assertRaises(exceptions.AuthenticationError):
+            client.download_artifact("rnd-1", "0")
 
     def test_thumbnail_sends_params(self):
         client, _ = self._client(content=b"\x89PNG")
@@ -2936,6 +2984,14 @@ class TestDazRenderSettingsEnvironment(unittest.TestCase):
         self.assertIn('"Environment Options"', script)
         self.assertIn("_objs[3]", script)
         self.assertNotIn("getRenderElementObjects()[3]", script)
+
+    def test_environment_holder_searches_scene_nodes_before_render_elements(self):
+        # Studio 4 keeps the environment on a scene node, not a render element.
+        rs, client = self._make_render(1.0)
+        rs._get_environment_property("Environment Intensity")
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getNumNodes()", script)
+        self.assertLess(script.index("Scene.getNode("), script.index("getRenderElementObjects()"))
 
     def test_get_environment_property_reads_named_property(self):
         rs, client = self._make_render(1.0)

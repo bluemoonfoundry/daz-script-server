@@ -16,7 +16,7 @@ def execute_long(
 ) -> ExecutionResult:
     """Execute a potentially long-running script via the async endpoint with polling.
 
-    Submits *script* asynchronously, then polls ``/requests/:id/result`` with
+    Submits *script* asynchronously, then polls ``/requests/{id}/result`` with
     long-polling until the script completes or *timeout* is exceeded.
 
     Args:

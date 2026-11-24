@@ -2,6 +2,7 @@
 #include <QtCore/qdatetime.h>
 #include <QtCore/qmutex.h>
 #include <QtCore/qstring.h>
+#include <string>
 
 // Thread-safe metrics counter. recordRequest/recordAuthFailure may be called
 // from the main thread or from HTTP threads (via BlockingQueuedConnection).
@@ -22,6 +23,10 @@ public:
 
     qint64 getAvgMainThreadWaitMs() const;
     qint64 getMaxMainThreadWaitMs() const;
+
+    // GET /metrics body. std::string only: called from httplib worker threads
+    // (no QString temporaries freed across the Studio 4 CRT boundary).
+    std::string toJson(int activeRequests) const;
 
     void saveToSettings();
     void loadFromSettings();

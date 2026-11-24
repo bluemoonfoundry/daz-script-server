@@ -123,7 +123,9 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import RenderError, MaterialError, RecipeValidationError, RecipeNotAppliedError
+from .exceptions import (RenderError, MaterialError, RecipeValidationError, RecipeNotAppliedError,
+                         SceneCheckError)
+from ._scene_check import CheckFinding, CheckReport
 from ._version import MIN_SERVER_VERSION, VersionCheck
 from ._recipe_model import SceneRecipe
 from ._recipe_validate import RecipeIssue, ValidationReport
@@ -257,6 +259,9 @@ __all__ = [
     "ObserveReport",
     "ShotRender",
     "RecipeNotAppliedError",
+    "SceneCheckError",
+    "CheckFinding",
+    "CheckReport",
     "render",
     "render_variants",
     "SceneEvent",

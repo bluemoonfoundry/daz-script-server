@@ -23,6 +23,9 @@ import unittest
 import uuid
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from waiting import poll_until  # noqa: E402
+
 BASE_URL = "http://127.0.0.1:18811"
 TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
 # Must match "Max Body Size (MB)" in the DAZ Studio pane (default 5).
@@ -58,6 +61,26 @@ def is_auth_enabled():
 
 
 AUTH_ENABLED = is_auth_enabled()
+
+
+def studio_qt_major():
+    """Major Qt version of the running Studio (4 = Studio 4, 6 = Studio 6),
+    from /capabilities; None when unknown (server down or older plugin)."""
+    try:
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=5).json()
+        version = str(caps.get("studio", {}).get("qt_version") or caps.get("qt_version") or "")
+        return int(version.split(".")[0]) if version else None
+    except (requests.exceptions.RequestException, ValueError):
+        return None
+
+
+IS_STUDIO_4 = studio_qt_major() == 4
+# ARCHITECTURE.md threading rules 2 and 6: Studio 4 submits async jobs on the
+# main thread (its JSON parser needs QScriptEngine) and parses job reports
+# only when the job completes, so it can't enqueue or report live progress
+# while a script is running.
+DS6_ASYNC_ONLY = unittest.skipIf(
+    IS_STUDIO_4, "Studio 4 submits async jobs and reads job reports on the main thread")
 
 
 def execute(script=None, script_file=None, args=None, headers=None):
@@ -304,20 +327,18 @@ TERMINAL_STATUSES = (
 
 
 def poll_status(request_id, timeout=15):
-    """Poll /requests/:id/status until terminal or timeout. Returns final body dict."""
-    deadline = __import__("time").time() + timeout
-    while __import__("time").time() < deadline:
-        r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
-                         headers=auth_headers(), timeout=5)
-        body = r.json()
-        if body.get("status") in TERMINAL_STATUSES:
-            return body
-        __import__("time").sleep(0.2)
+    """Poll /requests/{id}/status until terminal or timeout. Returns the last body
+    dict (non-terminal on timeout; callers assert on its status)."""
+    body, _ = poll_until(
+        lambda: requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                             headers=auth_headers(), timeout=5).json(),
+        lambda b: b.get("status") in TERMINAL_STATUSES,
+        timeout=timeout, interval=0.2)
     return body
 
 
 def get_result(request_id, wait=False, timeout=15):
-    """GET /requests/:id/result, optionally with long-poll."""
+    """GET /requests/{id}/result, optionally with long-poll."""
     params = {}
     if wait:
         params["wait"] = "true"
@@ -369,6 +390,7 @@ class TestAsyncExecution(unittest.TestCase):
         body = result_r.json()
         self.assertEqual(body.get("result"), 99)
 
+    @DS6_ASYNC_ONLY
     def test_queued_request_can_be_cancelled_while_main_thread_runs(self):
         blocker = async_execute(script=iife(
             "var start = Date.now(); "
@@ -457,7 +479,9 @@ class TestAsyncExecution(unittest.TestCase):
                 inline_request.json()["request_id"], wait=True, timeout=20
             ).json()
             self.assertTrue(inline_result.get("success"), inline_result.get("error"))
-            self.assertEqual(inline_result.get("result"), "")
+            # No file identity leaks from the previous job. Studio 4 reports
+            # an inline script's file name as null, Studio 6 as "".
+            self.assertIn(inline_result.get("result"), ("", None))
         finally:
             if script_path and os.path.exists(script_path):
                 os.unlink(script_path)
@@ -570,15 +594,11 @@ class TestAsyncExecution(unittest.TestCase):
         request_id = r.json()["request_id"]
 
         # Wait for it to actually start running before cancelling.
-        deadline = time.time() + 5
-        status = None
-        while time.time() < deadline:
-            status_r = requests.get(f"{BASE_URL}/requests/{request_id}/status",
-                                    headers=auth_headers(), timeout=5)
-            status = status_r.json().get("status")
-            if status == "running":
-                break
-            time.sleep(0.05)
+        status, _ = poll_until(
+            lambda: requests.get(f"{BASE_URL}/requests/{request_id}/status",
+                                 headers=auth_headers(), timeout=5).json().get("status"),
+            lambda s: s == "running",
+            timeout=5)
         self.assertEqual(status, "running", "request never reached running state")
 
         cancel_r = requests.delete(f"{BASE_URL}/requests/{request_id}",
@@ -653,6 +673,7 @@ class TestAsyncExecution(unittest.TestCase):
         body = result_r.json()
         self.assertIsInstance(body.get("output"), list)
 
+    @DS6_ASYNC_ONLY
     def test_async_job_report_tracks_live_progress_logs_and_outputs(self):
         report_path = ""
         output_path = os.path.join(tempfile.gettempdir(), "dss-observed-output.png")
@@ -693,20 +714,16 @@ class TestAsyncExecution(unittest.TestCase):
             self.assertEqual(r.status_code, 200)
             request_id = r.json()["request_id"]
 
-            saw_live_progress = False
             # A prior cancellation test leaves a non-render script finishing
             # on Daz's main thread, so this job may remain queued for ~8 seconds.
-            deadline = time.time() + 20
-            while time.time() < deadline:
-                status = requests.get(
+            _, saw_live_progress = poll_until(
+                lambda: requests.get(
                     f"{BASE_URL}/requests/{request_id}/status",
                     headers=auth_headers(), timeout=5,
-                ).json()
-                detail = status.get("observation", {}).get("progress") or {}
-                if status.get("status") == "running" and detail.get("value") == 0.25:
-                    saw_live_progress = True
-                    break
-                time.sleep(0.05)
+                ).json(),
+                lambda s: s.get("status") == "running"
+                and (s.get("observation", {}).get("progress") or {}).get("value") == 0.25,
+                timeout=20)
             self.assertTrue(saw_live_progress, "structured progress was not visible while running")
 
             body = get_result(request_id, wait=True, timeout=20).json()
@@ -958,6 +975,99 @@ class TestArtifacts(unittest.TestCase):
         self.assertEqual(dl.status_code, 200)
         with open(out, "rb") as f:
             self.assertEqual(dl.content, f.read())
+
+
+class TestArtifactRoots(unittest.TestCase):
+    """Artifact trust boundary (x7ul.33): GET /artifacts serves a declared
+    output only when its real path (symlinks resolved) is inside an allowed
+    artifact folder, and never anything under ~/.daz3d. Defaults: temp,
+    Documents, Pictures, Desktop, Downloads -- so a folder directly under the
+    home folder is outside them."""
+
+    @classmethod
+    def setUpClass(cls):
+        caps = requests.get(f"{BASE_URL}/capabilities", headers=auth_headers(), timeout=10).json()
+        security = caps.get("security", {})
+        if not security.get("artifact_roots_enabled"):
+            raise unittest.SkipTest("artifact folder restriction is disabled on this server")
+        cls.roots = security.get("artifact_roots", [])
+
+        cls.inside_dir = tempfile.mkdtemp(prefix="dss-roots-in-")
+        cls.outside_dir = tempfile.mkdtemp(prefix=".dss-roots-out-", dir=os.path.expanduser("~"))
+        cls.inside = os.path.join(cls.inside_dir, "inside.png")
+        cls.outside = os.path.join(cls.outside_dir, "outside.png")
+        for p in (cls.inside, cls.outside):
+            with open(p, "wb") as f:
+                f.write(b"artifact bytes")
+        cls.token_file = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
+
+        # A symlink inside an allowed folder pointing outside of it. Creating
+        # one needs Developer Mode or admin on Windows; skip that case if not.
+        cls.link = os.path.join(cls.inside_dir, "link.png")
+        try:
+            os.symlink(cls.outside, cls.link)
+        except (OSError, NotImplementedError):
+            cls.link = None
+
+        outputs = [{"path": cls.inside}, {"path": cls.outside}, {"path": cls.token_file}]
+        if cls.link:
+            outputs.append({"path": cls.link})
+        report = os.path.join(cls.inside_dir, "report.jsonl")
+        script = iife(
+            "var cfg = getArguments()[0]; "
+            "var f = new DzFile(cfg.__dssReportFile); "
+            "if (!f.open(DzFile.WriteOnly)) throw 'report open failed'; "
+            "f.write(JSON.stringify({type:'manifest', outputs:cfg.outputs}) + '\\n'); "
+            "f.close(); return 'declared';"
+        )
+        r = async_execute(script=script, args={"outputs": outputs}, report_file=report)
+        assert r.status_code == 200, r.text
+        cls.rid = r.json()["request_id"]
+        body = get_result(cls.rid, wait=True, timeout=30).json()
+        assert body.get("status") == "completed", body
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.inside_dir, ignore_errors=True)
+        shutil.rmtree(cls.outside_dir, ignore_errors=True)
+
+    def _get(self, artifact_id):
+        return requests.get(f"{BASE_URL}/artifacts/{self.rid}/{artifact_id}",
+                            headers=auth_headers(), timeout=10)
+
+    def assertOutsideRoots(self, r):
+        self.assertEqual(r.status_code, 403, r.text)
+        body = r.json()
+        self.assertEqual(body["error_code"], "ARTIFACT_OUTSIDE_ROOTS")
+        self.assertFalse(body["retryable"])
+
+    def test_capabilities_list_the_roots(self):
+        self.assertTrue(self.roots, "no effective artifact roots reported")
+
+    def test_file_inside_a_root_is_served(self):
+        r = self._get(0)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.content, b"artifact bytes")
+
+    def test_file_outside_the_roots_is_refused(self):
+        self.assertOutsideRoots(self._get(1))
+
+    def test_token_folder_is_always_refused(self):
+        self.assertOutsideRoots(self._get(2))
+
+    def test_symlink_out_of_a_root_is_refused(self):
+        if not self.link:
+            self.skipTest("cannot create symlinks here (needs Developer Mode/admin on Windows)")
+        self.assertOutsideRoots(self._get(3))
+
+    def test_listing_marks_refused_files_unavailable(self):
+        r = requests.get(f"{BASE_URL}/artifacts/{self.rid}", headers=auth_headers(), timeout=10)
+        self.assertEqual(r.status_code, 200, r.text)
+        available = [a["available"] for a in r.json()["artifacts"]]
+        self.assertEqual(available[:3], [True, False, False])
+        if self.link:
+            self.assertFalse(available[3])
 
 
 class TestArtifactThumbnails(unittest.TestCase):
@@ -1579,7 +1689,9 @@ class TestConcurrency(unittest.TestCase):
         blocker = threading.Thread(target=lambda: blocker_result.update(r=execute(script=iife(
             "var t = Date.now(); while (Date.now() - t < %d) {} return 'done';" % busy_ms))))
         blocker.start()
-        time.sleep(1.0)  # let the blocker reach the main thread
+        # Let the blocker be accepted (and so reach the main thread first).
+        _, started = poll_until(active, lambda n: n >= 1, timeout=5.0)
+        self.assertTrue(started, "blocker request was never accepted")
 
         marker_dir = tempfile.mkdtemp(prefix="dss_3w3y_")
         self.addCleanup(lambda: __import__("shutil").rmtree(marker_dir, ignore_errors=True))
@@ -1602,9 +1714,7 @@ class TestConcurrency(unittest.TestCase):
             t.join(timeout=10)
 
         # Only the blocker should still hold a slot, well before it finishes.
-        deadline = time.time() + 3.0
-        while active() > 1 and time.time() < deadline:
-            time.sleep(0.1)
+        poll_until(active, lambda n: n <= 1, timeout=3.0, interval=0.1)
         self.assertLessEqual(active(), 1,
                              "abandoned queued requests still hold concurrency slots")
         self.assertTrue(blocker.is_alive(), "blocker finished too early to prove anything")

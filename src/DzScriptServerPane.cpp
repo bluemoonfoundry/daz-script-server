@@ -1,4 +1,5 @@
-// Include httplib ONLY here — it pulls in winsock2.h and Windows macros.
+// Include httplib first — it pulls in winsock2.h and Windows macros, which must
+// precede windows.h. Other route files include it via RouteUtil.h, also first.
 // CPPHTTPLIB_NO_COMPRESS is set via target_compile_definitions in CMakeLists.txt.
 #include "httplib.h"
 #include <ctime>
@@ -11,6 +12,9 @@
 #include "IdempotencyCache.h"
 #include "ArtifactFile.h"
 #include "ArtifactThumbnail.h"
+#include "ArtifactRoutes.h"
+#include "Capabilities.h"
+#include "RouteUtil.h"
 #include "MainThreadCall.h"
 #include "SecureRandom.h"
 #include "RequestValidator.h"
@@ -370,6 +374,32 @@ DzScriptServerPane::DzScriptServerPane()
 	whitelistHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
 	whitelistLayout->addWidget(whitelistHint);
 
+	// ─── Artifact folders ─────────────────────────────────────────────────
+	QGroupBox* artifactGroup = new QGroupBox(tr("Artifact Folders"), this);
+	QVBoxLayout* artifactLayout = new QVBoxLayout(artifactGroup);
+
+	m_pArtifactRootsCheck = new QCheckBox(tr("Only serve artifacts from these folders"), this);
+	m_pArtifactRootsCheck->setChecked(m_artifactRoots.isEnabled());
+	artifactLayout->addWidget(m_pArtifactRootsCheck);
+
+	QHBoxLayout* artifactInputLayout = new QHBoxLayout();
+	artifactInputLayout->addWidget(new QLabel(tr("Folders (;-separated):"), this));
+	m_pArtifactRootsEdit = new QLineEdit(this);
+	m_pArtifactRootsEdit->setText(m_artifactRoots.rawList());
+	m_pArtifactRootsEdit->setPlaceholderText(
+		tr("Default: temp, Documents, Pictures, Desktop, Downloads"));
+	m_pArtifactRootsEdit->setToolTip(ArtifactRoots::defaultRoots().join("\n"));
+	artifactInputLayout->addWidget(m_pArtifactRootsEdit);
+	artifactLayout->addLayout(artifactInputLayout);
+
+	QLabel* artifactHint = new QLabel(
+		tr("GET /artifacts refuses declared outputs outside these folders (symlinks resolved). "
+		   "~/.daz3d is always refused."),
+		this);
+	artifactHint->setWordWrap(true);
+	artifactHint->setStyleSheet("QLabel { color: gray; font-size: 9pt; }");
+	artifactLayout->addWidget(artifactHint);
+
 	// ─── Rate Limiting ────────────────────────────────────────────────────
 	QGroupBox* rateLimitGroup = new QGroupBox(tr("Rate Limiting"), this);
 	QVBoxLayout* rateLimitLayout = new QVBoxLayout(rateLimitGroup);
@@ -483,6 +513,7 @@ DzScriptServerPane::DzScriptServerPane()
 	mainLayout->addLayout(formLayout);
 	mainLayout->addWidget(authGroup);
 	mainLayout->addWidget(whitelistGroup);
+	mainLayout->addWidget(artifactGroup);
 	mainLayout->addWidget(rateLimitGroup);
 	mainLayout->addWidget(limitsGroup);
 	mainLayout->addWidget(m_pStatusLabel);
@@ -511,6 +542,7 @@ DzScriptServerPane::DzScriptServerPane()
 	connect(m_pAuthEnabledCheck, SIGNAL(stateChanged(int)), this, SLOT(onAuthEnabledChanged(int)));
 	connect(m_pClearLogBtn, SIGNAL(clicked()), this, SLOT(onClearLogClicked()));
 	connect(m_pIpWhitelistCheck, SIGNAL(stateChanged(int)), this, SLOT(onIpWhitelistEnabledChanged(int)));
+	connect(m_pArtifactRootsCheck, SIGNAL(stateChanged(int)), this, SLOT(onArtifactRootsEnabledChanged(int)));
 	connect(m_pRateLimitCheck, SIGNAL(stateChanged(int)), this, SLOT(onRateLimitEnabledChanged(int)));
 	connect(m_pAutoStartCheck, SIGNAL(stateChanged(int)), this, SLOT(onAutoStartChanged(int)));
 	connect(m_pStaleTimeoutSpin, SIGNAL(valueChanged(int)), this, SLOT(onStaleTimeoutChanged(int)));
@@ -573,6 +605,10 @@ void DzScriptServerPane::onStartClicked()
 	m_ipWhitelist.setEnabled(m_pIpWhitelistCheck->isChecked());
 	m_ipWhitelist.setWhitelist(m_pIpWhitelistEdit->text());
 
+	// Capture artifact folder settings (resolved in startServer())
+	m_artifactRoots.setEnabled(m_pArtifactRootsCheck->isChecked());
+	m_artifactRoots.configure(m_pArtifactRootsEdit->text());
+
 	// Capture rate limit settings
 	m_rateLimiter.setEnabled(m_pRateLimitCheck->isChecked());
 	m_rateLimiter.configure(m_pRateLimitMaxSpin->value(), m_pRateLimitWindowSpin->value());
@@ -632,6 +668,20 @@ void DzScriptServerPane::startServer()
 			probe.close();
 			probe.remove();
 		}
+	}
+
+	// 4. Artifact trust boundary: resolve the allowed folders now, so a folder
+	//    created since the settings were loaded counts, and log what applies.
+	{
+		QStringList warnings;
+		m_artifactRoots.configure(m_artifactRoots.rawList(), &warnings);
+		m_artifactRoots.setDeniedDir(QFileInfo(AuthenticationService::getTokenFilePath()).absolutePath());
+		for (const QString& w : warnings)
+			appendLog(QString("[WARN] %1").arg(w));
+		if (m_artifactRoots.isEnabled())
+			appendLog(QString("[INFO] Artifact folders: %1").arg(m_artifactRoots.effectiveRoots().join("; ")));
+		else
+			appendLog("[WARN] Artifact folder restriction disabled - any declared output can be served (~/.daz3d still refused)");
 	}
 
 	m_pServer = new httplib::Server();
@@ -873,6 +923,7 @@ void DzScriptServerPane::updateUI()
 		m_pRegenTokenBtn->setEnabled(false);
 		m_pIpWhitelistCheck->setEnabled(false);
 		m_pIpWhitelistEdit->setEnabled(false);
+		m_pArtifactRootsEdit->setEnabled(false);
 		m_pRateLimitCheck->setEnabled(false);
 		m_pRateLimitMaxSpin->setEnabled(false);
 		m_pRateLimitWindowSpin->setEnabled(false);
@@ -890,6 +941,7 @@ void DzScriptServerPane::updateUI()
 		m_pRegenTokenBtn->setEnabled(true);
 		m_pIpWhitelistCheck->setEnabled(true);
 		m_pIpWhitelistEdit->setEnabled(true);
+		m_pArtifactRootsEdit->setEnabled(true);
 		m_pRateLimitCheck->setEnabled(true);
 		m_pRateLimitMaxSpin->setEnabled(true);
 		m_pRateLimitWindowSpin->setEnabled(true);
@@ -1123,145 +1175,6 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 	applyContext(ctx, res);
 }
 
-// ─── Artifacts (GET /artifacts/...) ──────────────────────────────────────────
-//
-// Run on httplib worker threads: they read a mutex-protected copy of the job's
-// output manifest and use C stdio for file access (ArtifactFile), never DAZ or
-// GUI objects. URL segments are IDs, never paths: the only file that can be
-// opened is one the job itself declared.
-
-static void respondError(httplib::Response& res, ErrorCode code, const std::string& detail = "")
-{
-	res.status = ErrorResponse::httpStatus(code);
-	res.set_content(ErrorResponse::build(code, detail), "application/json");
-}
-
-static bool artifactIdsValid(const httplib::Request& req, httplib::Response& res)
-{
-	static const char* const kNames[] = { "", "job_id", "artifact_id" };
-	for (size_t i = 1; i < req.matches.size() && i < 3; ++i) {
-		const std::string v = req.matches[i].str();
-		if (!ArtifactFile::isValidId(v.c_str(), v.size())) {
-			respondError(res, ErrorCode::INVALID_FIELD,
-				std::string(kNames[i]) + " must be 1-64 characters of A-Z, a-z, 0-9, '-' or '_'");
-			return false;
-		}
-	}
-	return true;
-}
-
-// GET /artifacts/:job_id — the job's declared outputs plus file metadata.
-static void listArtifacts(AsyncRequestManager& mgr, const QStringList& thumbnailExts,
-                          const httplib::Request& req, httplib::Response& res)
-{
-	if (!artifactIdsValid(req, res)) return;
-	const std::string jobId = req.matches[1].str();
-
-	QVariantList entries;
-	QString      status;
-	if (!mgr.artifactManifest(jobId, entries, status)) {
-		respondError(res, ErrorCode::REQUEST_NOT_FOUND, jobId);
-		return;
-	}
-
-	QVariantList artifacts;
-	for (int i = 0; i < entries.size(); ++i) {
-		QVariantMap entry = entries[i].toMap();
-		const QString path = entry.value("path").toString();
-		const qint64  size = ArtifactFile::sizeOf(path);
-		entry.insert("available", size >= 0);
-		entry.insert("size", size >= 0 ? QVariant(size) : QVariant());
-		entry.insert("content_type", QString::fromLatin1(ArtifactFile::contentTypeFor(path)));
-		entry.insert("filename", ArtifactFile::baseName(path));
-		entry.insert("thumbnail_supported",
-			size >= 0 && size <= ArtifactThumbnail::kMaxSourceBytes
-			&& ArtifactThumbnail::extensionIn(path, thumbnailExts));
-		artifacts.append(entry);
-	}
-
-	QVariantMap body;
-	body.insert("success", true);
-	body.insert("request_id", QString::fromStdString(jobId));
-	body.insert("status", status);
-	body.insert("count", artifacts.size());
-	body.insert("artifacts", artifacts);
-	res.status = 200;
-	res.set_content(JsonStd::variantToJson(QVariant(body)), "application/json");
-}
-
-// Resolve :job_id/:artifact_id to the declared file and open it. On failure
-// the error response is already written and false is returned; on success the
-// caller owns *file and must fclose() it.
-static bool openDeclaredArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
-                                 httplib::Response& res, QString* path, FILE** file,
-                                 qint64* size, qint64* mtime = 0)
-{
-	if (!artifactIdsValid(req, res)) return false;
-	const std::string jobId      = req.matches[1].str();
-	const std::string artifactId = req.matches[2].str();
-
-	switch (mgr.findArtifact(jobId, artifactId, *path)) {
-	case AsyncRequestManager::ARTIFACT_JOB_NOT_FOUND:
-		respondError(res, ErrorCode::REQUEST_NOT_FOUND, jobId);
-		return false;
-	case AsyncRequestManager::ARTIFACT_NOT_DECLARED:
-		respondError(res, ErrorCode::ARTIFACT_NOT_FOUND, jobId + "/" + artifactId);
-		return false;
-	case AsyncRequestManager::ARTIFACT_FOUND:
-		break;
-	}
-
-	switch (ArtifactFile::openForRead(*path, file, size, mtime)) {
-	case ArtifactFile::OPEN_OK:
-		return true;
-	case ArtifactFile::OPEN_PATH_REJECTED:
-		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not an absolute file path");
-		return false;
-	case ArtifactFile::OPEN_NOT_REGULAR:
-		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared path is not a regular file");
-		return false;
-	case ArtifactFile::OPEN_MISSING:
-	default:
-		respondError(res, ErrorCode::ARTIFACT_UNAVAILABLE, "declared file does not exist or cannot be read");
-		return false;
-	}
-}
-
-// GET /artifacts/:job_id/:artifact_id — stream one declared output. httplib
-// answers Range requests (206 / 416) and HEAD from the sized content provider.
-static void serveArtifact(AsyncRequestManager& mgr, const httplib::Request& req,
-                          httplib::Response& res)
-{
-	QString path;
-	FILE*   file = 0;
-	qint64  size = 0;
-	if (!openDeclaredArtifact(mgr, req, res, &path, &file, &size)) return;
-
-	// Leave res.status unset: httplib then picks 200, or 206 for a Range
-	// request (and 416 for an unsatisfiable one). An explicit 200 would make
-	// it ignore the Range header and send the whole file.
-	const QByteArray disposition = ArtifactFile::contentDisposition(path);
-	res.set_header("Accept-Ranges", "bytes");
-	res.set_header("Content-Disposition", disposition.constData());
-	res.set_header("Cache-Control", "private, no-store");
-	res.set_header("X-Content-Type-Options", "nosniff");
-	res.set_content_provider(
-		static_cast<size_t>(size), ArtifactFile::contentTypeFor(path),
-		[file](size_t offset, size_t length, httplib::DataSink& sink) {
-			if (!ArtifactFile::seek(file, static_cast<qint64>(offset))) return false;
-			char buf[64 * 1024];
-			while (length > 0) {
-				const size_t want = length < sizeof(buf) ? length : sizeof(buf);
-				const size_t got  = std::fread(buf, 1, want, file);
-				if (got == 0) return false;   // file shrank or read error
-				if (!sink.write(buf, got)) return false;
-				length -= got;
-			}
-			return true;
-		},
-		[file](bool) { std::fclose(file); });
-}
-
 // GET /artifacts/:job_id/:artifact_id?thumbnail=<px>[&format=png|jpeg]
 //
 // HTTP worker: validation, the file read (C stdio) and the cache never touch
@@ -1272,7 +1185,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 {
 	using namespace ArtifactThumbnail;
 
-	if (!artifactIdsValid(req, res)) return;
+	if (!ArtifactRoutes::idsValid(req, res)) return;
 	int         px = 0;
 	Format      format = FORMAT_PNG;
 	std::string paramError;
@@ -1286,7 +1199,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 	FILE*   file  = 0;
 	qint64  size  = 0;
 	qint64  mtime = 0;
-	if (!openDeclaredArtifact(*m_pAsyncMgr, req, res, &path, &file, &size, &mtime)) return;
+	if (!ArtifactRoutes::openDeclared(*m_pAsyncMgr, m_artifactRoots, req, res, &path, &file, &size, &mtime)) return;
 
 	if (!extensionIn(path, m_thumbnailExtensions)) {
 		std::fclose(file);
@@ -1559,13 +1472,14 @@ void DzScriptServerPane::setupRoutes()
 	//
 	// Read chain (IP whitelist -> auth), like the other polling GETs: a client
 	// fetching a large file in Range chunks must not trip the rate limiter.
-	// Downloads only serve files in the job's output manifest; see
-	// listArtifacts()/serveArtifact() above. ?thumbnail=<px> goes to
+	// Downloads only serve files in the job's output manifest whose real
+	// path is inside the allowed artifact folders (ArtifactRoots); see
+	// ArtifactRoutes. ?thumbnail=<px> goes to
 	// serveArtifactThumbnail(), which decodes on the main thread.
 	m_pServer->Get("/artifacts/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
 		auto ctx = toContext(req);
 		if (!m_pReadChain->run(ctx)) { applyContext(ctx, res); return; }
-		listArtifacts(*m_pAsyncMgr, m_thumbnailExtensions, req, res);
+		ArtifactRoutes::list(*m_pAsyncMgr, m_artifactRoots, m_thumbnailExtensions, req, res);
 	});
 
 	m_pServer->Get("/artifacts/([^/]+)/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1574,7 +1488,7 @@ void DzScriptServerPane::setupRoutes()
 		if (req.has_param("thumbnail"))
 			serveArtifactThumbnail(req, res);
 		else
-			serveArtifact(*m_pAsyncMgr, req, res);
+			ArtifactRoutes::serve(*m_pAsyncMgr, m_artifactRoots, req, res);
 	});
 
 	// ── Render endpoints ──────────────────────────────────────────────────────
@@ -1796,31 +1710,6 @@ void DzScriptServerPane::setupRoutes()
 
 // ─── Plugin Route Registration ────────────────────────────────────────────────
 
-namespace {
-bool isValidCompanionName(const QString& name)
-{
-	if (name.isEmpty() || name.size() > 64) return false;
-	for (int i = 0; i < name.size(); ++i) {
-		const QChar c = name.at(i);
-		const bool ok = (c >= QLatin1Char('a') && c <= QLatin1Char('z'))
-			|| (c >= QLatin1Char('A') && c <= QLatin1Char('Z'))
-			|| (c >= QLatin1Char('0') && c <= QLatin1Char('9'))
-			|| c == QLatin1Char('.') || c == QLatin1Char('_') || c == QLatin1Char('-');
-		if (!ok) return false;
-	}
-	return true;
-}
-
-bool isValidCompanionVersion(const QString& version)
-{
-	if (version.isEmpty() || version.size() > 64) return false;
-	for (int i = 0; i < version.size(); ++i) {
-		const ushort u = version.at(i).unicode();
-		if (u < 0x21 || u > 0x7e) return false;  // printable ASCII, no spaces
-	}
-	return true;
-}
-} // namespace
 
 // Keep the busy-time /capabilities snapshot current after the registry
 // changes. buildCapabilitiesJson() reads GUI-owned settings, so only refresh
@@ -1835,27 +1724,10 @@ void DzScriptServerPane::refreshCapabilitiesIfRunning()
 bool DzScriptServerPane::registerCompanionPlugin(const QString& name, const QString& version,
                                                  const QString& description)
 {
-	if (!isValidCompanionName(name) || !isValidCompanionVersion(version)) {
+	if (!m_pluginRegistry.registerCompanion(name, version, description)) {
 		appendLog(QString("[WARNING] Companion plugin registration rejected: invalid name or "
 		                  "version (%1 %2)").arg(name.left(80), version.left(80)));
 		return false;
-	}
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		CompanionPlugin p;
-		p.name        = name;
-		p.version     = version;
-		p.description = description.left(500);
-		bool found = false;
-		for (int i = 0; i < m_companionPlugins.size(); ++i) {
-			if (m_companionPlugins[i].name == name) {
-				m_companionPlugins[i] = p;
-				found = true;
-				break;
-			}
-		}
-		if (!found)
-			m_companionPlugins.append(p);
 	}
 	appendLog(QString("[INFO] Companion plugin registered: %1 %2").arg(name, version));
 	refreshCapabilitiesIfRunning();
@@ -1864,15 +1736,7 @@ bool DzScriptServerPane::registerCompanionPlugin(const QString& name, const QStr
 
 void DzScriptServerPane::unregisterCompanionPlugin(const QString& name)
 {
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		for (int i = m_companionPlugins.size() - 1; i >= 0; --i)
-			if (m_companionPlugins[i].name == name)
-				m_companionPlugins.removeAt(i);
-		for (int i = m_pluginRoutes.size() - 1; i >= 0; --i)
-			if (m_pluginRoutes[i].plugin == name)
-				m_pluginRoutes.removeAt(i);
-	}
+	m_pluginRegistry.unregisterCompanion(name);
 	refreshCapabilitiesIfRunning();
 }
 
@@ -1886,7 +1750,7 @@ bool DzScriptServerPane::registerPluginRoute(const QString& method, const QStrin
                                               QObject* receiver, const QString& slotName,
                                               const QString& pluginName)
 {
-	if (!isValidCompanionName(pluginName))
+	if (!PluginRouteRegistry::isValidName(pluginName))
 		return false;
 	return registerPluginRouteImpl(method, path, receiver, slotName, pluginName);
 }
@@ -1895,43 +1759,9 @@ bool DzScriptServerPane::registerPluginRouteImpl(const QString& method, const QS
                                                   QObject* receiver, const QString& slotName,
                                                   const QString& pluginName)
 {
-	if (!receiver || path.isEmpty() || slotName.isEmpty())
+	QString m;
+	if (!m_pluginRegistry.registerRoute(method, path, receiver, slotName, pluginName, &m))
 		return false;
-
-	const QString m = method.toUpper();
-	if (m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "PATCH")
-		return false;
-
-	PluginRoute r;
-	r.method    = m;
-	r.path      = path;
-	r.receiver  = receiver;
-	r.slotName  = slotName;
-	r.plugin    = pluginName;
-
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		if (!pluginName.isEmpty()) {
-			bool known = false;
-			for (int i = 0; i < m_companionPlugins.size(); ++i)
-				if (m_companionPlugins[i].name == pluginName) { known = true; break; }
-			if (!known) {
-				CompanionPlugin p;
-				p.name = pluginName;
-				m_companionPlugins.append(p);
-			}
-		}
-		bool found = false;
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
-				m_pluginRoutes[i] = r;
-				found = true;
-				break;
-			}
-		}
-		if (!found)
-			m_pluginRoutes.append(r);
-	}
 	appendLog(pluginName.isEmpty()
 		? QString("[INFO] Plugin route registered: %1 %2").arg(m).arg(path)
 		: QString("[INFO] Plugin route registered: %1 %2 (%3)").arg(m, path, pluginName));
@@ -1941,42 +1771,14 @@ bool DzScriptServerPane::registerPluginRouteImpl(const QString& method, const QS
 
 void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QString& path)
 {
-	const QString m = method.toUpper();
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			if (m_pluginRoutes[i].method == m && m_pluginRoutes[i].path == path) {
-				m_pluginRoutes.removeAt(i);
-				break;
-			}
-		}
-	}
+	m_pluginRegistry.unregisterRoute(method, path);
 	refreshCapabilitiesIfRunning();
-}
-
-// Match a path-pattern (e.g. "/export/usd/:id") against a concrete path.
-// Fills `params` with captured segment values keyed by the param name (no colon).
-// Returns true on match.  Both arguments must start with '/'.
-static bool matchPluginPath(const QString& pattern, const QString& path,
-                             QMap<QString, QString>& params)
-{
-	const QStringList patParts  = pattern.split('/');
-	const QStringList pathParts = path.split('/');
-	if (patParts.size() != pathParts.size()) return false;
-	params.clear();
-	for (int i = 0; i < patParts.size(); ++i) {
-		if (patParts[i].startsWith(':'))
-			params[patParts[i].mid(1)] = pathParts[i];
-		else if (patParts[i] != pathParts[i])
-			return false;
-	}
-	return true;
 }
 
 void DzScriptServerPane::applyPluginRoutes()
 {
 	// Register a single catch-all handler per HTTP method.  Each handler scans
-	// m_pluginRoutes at request time (mutex-protected) so that routes registered
+	// m_pluginRegistry at request time (mutex-protected) so that routes registered
 	// after server start — and routes that change dynamically — are always
 	// visible without ever touching httplib's handler vectors post-startup.
 	// This avoids the data race that would occur if we called m_pServer->Get/Post
@@ -1989,19 +1791,7 @@ void DzScriptServerPane::applyPluginRoutes()
 
 			QPointer<QObject> receiver;
 			QByteArray        slotBytes;
-			bool              found = false;
-			{
-				QMutexLocker lock(&m_pluginRoutesMutex);
-				for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-					const PluginRoute& r = m_pluginRoutes[i];
-					if (r.method != method) continue;
-					if (!matchPluginPath(r.path, qpath, params)) continue;
-					receiver  = r.receiver;
-					slotBytes = r.slotName.toLatin1();
-					found     = true;
-					break;
-				}
-			}
+			const bool found = m_pluginRegistry.match(method, qpath, &receiver, &slotBytes, &params);
 
 			if (!found) {
 				res.status = 404;
@@ -2089,44 +1879,13 @@ void DzScriptServerPane::applyPluginRoutes()
 
 std::string DzScriptServerPane::listScriptsJson() const
 {
-	struct Entry { std::string id, description; long long registeredAtMs; };
-	std::vector<Entry> entries;
-	{
-		QMutexLocker lock(&m_scriptRegistry.mutex);
-		entries.reserve(m_scriptRegistry.scripts.size());
-		for (QMap<QByteArray, RegisteredScript>::const_iterator it = m_scriptRegistry.scripts.begin();
-		     it != m_scriptRegistry.scripts.end(); ++it) {
-			entries.push_back({
-			    std::string(it.key().constData(), it.key().size()),
-			    JsonStd::qstrToStd(it.value().description),
-			    (long long)it.value().registeredAt.toMSecsSinceEpoch()
-			});
-		}
-	}
-
-	std::string items;
-	for (size_t i = 0; i < entries.size(); ++i) {
-		if (i > 0) items += ",";
-		items += "{\"name\":\"" + JsonStd::escape(entries[i].id) + "\"";
-		items += ",\"description\":\"" + JsonStd::escape(entries[i].description) + "\"";
-		items += ",\"registered_at\":\"" + JsonStd::msecToIso(entries[i].registeredAtMs) + "\"}";
-	}
-	std::string s = "{\"scripts\":[" + items + "]";
-	s += ",\"count\":" + std::to_string(entries.size()) + "}";
-	return s;
+	return m_scriptRegistry.listJson();
 }
 
 std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
     const std::string& id, const std::string& clientIP)
 {
-	bool removed = false;
-	{
-		QByteArray key(id.c_str(), (int)id.size());
-		QMutexLocker lock(&m_scriptRegistry.mutex);
-		removed = m_scriptRegistry.scripts.remove(key) > 0;
-	}
-
-	if (!removed) {
+	if (!m_scriptRegistry.remove(id)) {
 		return {404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id)};
 	}
 
@@ -2140,12 +1899,7 @@ std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
 
 bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string& outScript) const
 {
-	QByteArray key(id.c_str(), (int)id.size());
-	QMutexLocker lock(&m_scriptRegistry.mutex);
-	if (!m_scriptRegistry.scripts.contains(key))
-		return false;
-	outScript = JsonStd::qstrToStd(m_scriptRegistry.scripts.value(key).script);
-	return true;
+	return m_scriptRegistry.lookup(id, outScript);
 }
 
 // ─── Async Request public API (called from HTTP threads) ──────────────────────
@@ -2360,18 +2114,8 @@ HttpResult DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, 
 		return HttpResult(scriptResult.httpStatus(),
 			stdToQBA(scriptResult.toErrorJson()));
 
-	RegisteredScript entry;
-	entry.description  = description;
-	entry.script       = script;
-	entry.registeredAt = QDateTime::currentDateTime();
-
-	bool isUpdate;
-	{
-		QByteArray key = name.toUtf8();
-		QMutexLocker lock(&m_scriptRegistry.mutex);
-		isUpdate = m_scriptRegistry.scripts.contains(key);
-		m_scriptRegistry.scripts.insert(key, entry);
-	}
+	QDateTime registeredAt;
+	const bool isUpdate = m_scriptRegistry.registerScript(name, description, script, &registeredAt);
 
 	appendLog(QString("[%1] [%2] [REGISTRY] %3 script: %4")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
@@ -2383,7 +2127,7 @@ HttpResult DzScriptServerPane::handleRegisterScript(const QByteArray& jsonBody, 
 	json.startObject();
 	json.addMember("success",       true);
 	json.addMember("id",            name);
-	json.addMember("registered_at", entry.registeredAt.toString(Qt::ISODate));
+	json.addMember("registered_at", registeredAt.toString(Qt::ISODate));
 	json.addMember("updated",       isUpdate);
 	json.finishObject();
 	return HttpResult(200, json.toString().toUtf8());
@@ -3604,6 +3348,10 @@ void DzScriptServerPane::applySettings(const ServerSettings& s)
 	m_ipWhitelist.setEnabled(s.ipWhitelistEnabled);
 	m_ipWhitelist.setWhitelist(s.ipWhitelist);
 
+	// Resolved (and any missing folders logged) in startServer().
+	m_artifactRoots.setEnabled(s.artifactRootsEnabled);
+	m_artifactRoots.configure(s.artifactRoots);
+
 	m_rateLimiter.setEnabled(s.rateLimitEnabled);
 	m_rateLimiter.configure(s.rateLimitMax, s.rateLimitWindow);
 }
@@ -3622,6 +3370,8 @@ void DzScriptServerPane::saveSettings()
 	s.authEnabled           = m_auth.isEnabled();
 	s.ipWhitelistEnabled    = m_ipWhitelist.isEnabled();
 	s.ipWhitelist           = m_ipWhitelist.getWhitelist();
+	s.artifactRootsEnabled  = m_artifactRoots.isEnabled();
+	s.artifactRoots         = m_artifactRoots.rawList();
 	s.rateLimitEnabled      = m_rateLimiter.isEnabled();
 	// Prefer live UI values for rate limit so the user sees what was saved.
 	s.rateLimitMax    = m_pRateLimitMaxSpin    ? m_pRateLimitMaxSpin->value()
@@ -3687,6 +3437,18 @@ void DzScriptServerPane::onIpWhitelistEnabledChanged(int state)
 
 	if (m_ipWhitelist.isEnabled() && m_bRunning) {
 		appendLog("[INFO] IP whitelist enabled - only configured IPs allowed");
+	}
+}
+
+void DzScriptServerPane::onArtifactRootsEnabledChanged(int state)
+{
+	// Live: the flag is atomic, and the folder list was resolved at start.
+	m_artifactRoots.setEnabled(state == Qt::Checked);
+	saveSettings();
+	if (m_bRunning) {
+		appendLog(m_artifactRoots.isEnabled()
+			? QString("[INFO] Artifact folders enforced: %1").arg(m_artifactRoots.effectiveRoots().join("; "))
+			: QString("[WARN] Artifact folder restriction disabled - any declared output can be served (~/.daz3d still refused)"));
 	}
 }
 
@@ -3758,336 +3520,35 @@ std::string DzScriptServerPane::getHealthJson() const
 
 std::string DzScriptServerPane::getMetricsJson() const
 {
-	// Build with std::string only — called from httplib worker threads where Qt string ops are unsafe.
-	int total      = m_metrics.getTotalRequests();
-	int successful = m_metrics.getSuccessfulRequests();
-	int failed     = m_metrics.getFailedRequests();
-	int authFail   = m_metrics.getAuthFailures();
-	int active     = (int)m_nActiveRequests;
-	long long uptime = (long long)m_metrics.getUptimeSeconds();
-	double rate    = total > 0 ? (double)successful / total * 100.0 : 0.0;
-
-	char rateBuf[32];
-	std::snprintf(rateBuf, sizeof(rateBuf), "%.15g", rate);
-
-	std::string s = "{\"total_requests\":";
-	s += std::to_string(total);
-	s += ",\"successful_requests\":";
-	s += std::to_string(successful);
-	s += ",\"failed_requests\":";
-	s += std::to_string(failed);
-	s += ",\"auth_failures\":";
-	s += std::to_string(authFail);
-	s += ",\"active_requests\":";
-	s += std::to_string(active);
-	s += ",\"uptime_seconds\":";
-	s += std::to_string(uptime);
-	s += ",\"success_rate_percent\":";
-	s += rateBuf;
-	s += ",\"avg_main_thread_wait_ms\":";
-	s += std::to_string((long long)m_metrics.getAvgMainThreadWaitMs());
-	s += ",\"max_main_thread_wait_ms\":";
-	s += std::to_string((long long)m_metrics.getMaxMainThreadWaitMs());
-	s += "}";
-	return s;
+	return m_metrics.toJson((int)m_nActiveRequests);
 }
 
 // ─── Capabilities (GET /capabilities) ─────────────────────────────────────────
 
-namespace {
-
-// Core route table reported by GET /capabilities. Paths use OpenAPI-style
-// {id} placeholders for the ([^/]+) captures in setupRoutes().
-// tests/test_route_security.py fails if this table and setupRoutes() drift apart.
-struct CapabilityRoute {
-	const char* method;
-	const char* path;
-	bool        auth;     // false only for the deliberately public routes
-	const char* kind;     // "json" | "sse" | "binary"
-};
-
-const CapabilityRoute kCapabilityRoutes[] = {
-	{ "GET",    "/status",                 false, "json"   },
-	{ "GET",    "/health",                 false, "json"   },
-	{ "GET",    "/metrics",                false, "json"   },
-	{ "GET",    "/capabilities",           true,  "json"   },
-	{ "POST",   "/execute",                true,  "json"   },
-	{ "POST",   "/scripts/register",       true,  "json"   },
-	{ "GET",    "/scripts",                true,  "json"   },
-	{ "DELETE", "/scripts/{id}",           true,  "json"   },
-	{ "POST",   "/scripts/{id}/execute",   true,  "json"   },
-	{ "POST",   "/execute/async",          true,  "json"   },
-	{ "POST",   "/scripts/{id}/async",     true,  "json"   },
-	{ "GET",    "/requests/{id}/status",   true,  "json"   },
-	{ "GET",    "/requests/{id}/result",   true,  "json"   },
-	{ "DELETE", "/requests/{id}",          true,  "json"   },
-	{ "GET",    "/requests",               true,  "json"   },
-	{ "GET",    "/artifacts/{id}",         true,  "json"   },
-	{ "GET",    "/artifacts/{id}/{artifact_id}", true, "binary" },
-	{ "POST",   "/render",                 true,  "json"   },
-	{ "POST",   "/render/batch",           true,  "json"   },
-	{ "POST",   "/render/animation",       true,  "json"   },
-	{ "POST",   "/render/{id}/cancel",     true,  "json"   },
-	{ "POST",   "/scene/save-copy",        true,  "json"   },
-	{ "POST",   "/geometry/frames",        true,  "binary" },
-	{ "GET",    "/scene/events",           true,  "sse"    },
-	{ "GET",    "/render/{id}/progress",   true,  "sse"    },
-};
-
-// Engines POST /render accepts in its "engine" field, and the renderer class
-// each one needs (null = no renderer lookup; viewport uses a ScreenShot render).
-struct SelectableEngine {
-	const char* engine;
-	const char* rendererClass;
-};
-
-const SelectableEngine kSelectableEngines[] = {
-	{ "viewport", nullptr },
-	{ "iray",     "DzIrayRenderer" },
-	{ "filament", "DzFilamentRenderer" },
-};
-
-} // namespace
-
 QByteArray DzScriptServerPane::buildCapabilitiesJson(const QString& engineSource) const
 {
-	// Main thread only: reads GUI-owned settings and DzRenderMgr.
-	//
-	// Written straight to JSON on purpose. A QVariantList built here allocates
-	// its QVariant* nodes with this DLL's CRT (ucrtbase); stored inside a
-	// QVariant/QVariantMap, the last reference is released by QtCore's
-	// ~QVariant, which frees them with Qt's CRT (msvcr100 on DAZ Studio 4)
-	// -> heap corruption on startup. QVariantMap and QStringList are safe
-	// (their storage is allocated and freed inside QtCore), so arrays here
-	// are emitted item by item and never wrapped in a QVariant.
-	JsonBuilder json;
-	json.startObject();
-	json.addMember("schema_version", ServerConfig::CAPABILITIES_SCHEMA_VERSION);
-
-	QVariantMap server;
-	server["name"]    = QString("DazScriptServer");
-	server["version"] = QString(DZSRV_VERSION_STR);
-	server["instance_id"] = QString::fromLatin1(m_serverInstanceId);
-	json.addMember("server", QVariant(server));
-
-	QVariantMap studio;
-	studio["version"]          = dzApp ? dzApp->getVersionString() : QString();
-	studio["sdk_version"]      = QString("%1.%2.%3.%4")
-		.arg(DZ_SDK_VERSION_MAJOR).arg(DZ_SDK_VERSION_MINOR)
-		.arg(DZ_SDK_VERSION_REV).arg(DZ_SDK_VERSION_BUILD);
-	studio["sdk_major"]        = DZ_SDK_VERSION_MAJOR;
-	studio["qt_version"]       = QString(qVersion());
-	studio["qt_build_version"] = QString(QT_VERSION_STR);
-	json.addMember("studio", QVariant(studio));
-
-	// ── Routes ───────────────────────────────────────────────────────────────
-	QStringList hashLines;
-	json.addKey("routes");
-	json.startArray();
-	for (size_t i = 0; i < sizeof(kCapabilityRoutes) / sizeof(kCapabilityRoutes[0]); ++i) {
-		const CapabilityRoute& r = kCapabilityRoutes[i];
-		QVariantMap m;
-		m["method"] = QString(r.method);
-		m["path"]   = QString(r.path);
-		m["auth"]   = r.auth;
-		m["kind"]   = QString(r.kind);
-		json.addItem(QVariant(m));
-		hashLines << QString("route %1 %2").arg(QString(r.method), QString(r.path));
-	}
-	json.finishArray();
-
-	bool hasPluginRoutes = false;
-	{
-		QMutexLocker lock(&m_pluginRoutesMutex);
-
-		// Flat list, kept for existing clients; companion_plugins below groups it.
-		json.addKey("plugin_routes");
-		json.startArray();
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			const PluginRoute& r = m_pluginRoutes.at(i);
-			QVariantMap m;
-			m["method"] = r.method;
-			m["path"]   = r.path;
-			m["auth"]   = true;
-			m["owner"]  = r.receiver ? QString(r.receiver->metaObject()->className()) : QString();
-			if (!r.plugin.isEmpty()) m["plugin"] = r.plugin;
-			json.addItem(QVariant(m));
-			hasPluginRoutes = true;
-			hashLines << QString("plugin %1 %2").arg(r.method, r.path);
-		}
-		json.finishArray();
-
-		// Discovery registry: one entry per companion plugin with its routes.
-		// Routes registered without a plugin name are grouped by the class of
-		// their receiver, with "registered": false and no version. Built with
-		// JsonBuilder item by item (no QVariantList; see the CRT note above).
-		QStringList groups;      // plugin names, then unattributed owner classes
-		QList<bool> registered;
-		for (int i = 0; i < m_companionPlugins.size(); ++i) {
-			groups << m_companionPlugins.at(i).name;
-			registered << true;
-			hashLines << QString("companion %1").arg(m_companionPlugins.at(i).name);
-		}
-		for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-			const PluginRoute& r = m_pluginRoutes.at(i);
-			if (!r.plugin.isEmpty()) continue;
-			const QString owner = r.receiver ? QString(r.receiver->metaObject()->className())
-			                                 : QString("unknown");
-			bool seen = false;
-			for (int g = 0; g < groups.size(); ++g)
-				if (!registered.at(g) && groups.at(g) == owner) { seen = true; break; }
-			if (!seen) { groups << owner; registered << false; }
-		}
-
-		json.addKey("companion_plugins");
-		json.startArray();
-		for (int g = 0; g < groups.size(); ++g) {
-			const bool isRegistered = registered.at(g);
-			json.startObjectItem();
-			json.addMember("name", groups.at(g));
-			json.addMember("registered", isRegistered);
-			const CompanionPlugin* info = nullptr;
-			if (isRegistered)
-				for (int i = 0; i < m_companionPlugins.size(); ++i)
-					if (m_companionPlugins.at(i).name == groups.at(g)) { info = &m_companionPlugins.at(i); break; }
-			if (info && !info->version.isEmpty()) json.addMember("version", info->version);
-			else                                  json.addMemberNull("version");
-			if (info && !info->description.isEmpty()) json.addMember("description", info->description);
-			json.addKey("routes");
-			json.startArray();
-			for (int i = 0; i < m_pluginRoutes.size(); ++i) {
-				const PluginRoute& r = m_pluginRoutes.at(i);
-				bool belongs;
-				if (isRegistered) {
-					belongs = (r.plugin == groups.at(g));
-				} else {
-					const QString owner = r.receiver ? QString(r.receiver->metaObject()->className())
-					                                 : QString("unknown");
-					belongs = r.plugin.isEmpty() && owner == groups.at(g);
-				}
-				if (!belongs) continue;
-				json.startObjectItem();
-				json.addMember("method", r.method);
-				json.addMember("path", r.path);
-				json.addMember("auth", true);
-				json.finishObject();
-			}
-			json.finishArray();
-			json.finishObject();
-		}
-		json.finishArray();
-	}
-
-	// ── Feature flags ────────────────────────────────────────────────────────
-	QVariantMap features;
-	features["async"]               = true;   // /execute/async, /requests/*
-	features["async_cancel"]        = true;   // DELETE /requests/{id}
-	features["async_long_poll"]     = true;   // /requests/{id}/result?wait=true
-	features["report_file"]         = true;   // async "reportFile" JSONL job reports
-	features["script_registry"]     = true;   // /scripts/*
-	features["sse_scene_events"]    = true;   // /scene/events
-	features["sse_render_progress"] = true;   // /render/{id}/progress
-	features["render"]              = true;
-	features["render_batch"]        = true;
-	features["render_animation"]    = true;
-	features["render_cancel"]       = true;
-	features["scene_save_copy"]     = true;
-	features["geometry_frames"]     = true;
-	features["companion_plugins"]   = hasPluginRoutes;
-	features["idempotency_key"]     = true;   // Idempotency-Key on job submission routes
-	features["correlation_id"]      = true;   // X-Correlation-Id echoed on job routes + records
-	features["server_instance_id"]  = true;   // per-run identity (X-Server-Instance-Id)
-	features["scene_revision"]      = true;   // change counter on /status and job responses
-	features["error_envelope"]      = true;   // error_code/error/retryable on every failure
-	features["artifacts"]           = true;   // GET /artifacts/{id}[/{artifact_id}] downloads
-	features["job_activity"]        = true;   // progress_supported/_source, last_activity_at, idle_ms
-	features["animation_frame_progress"] = true; // frame N of M in /render/animation job status
-	features["artifact_thumbnails"] = true;   // GET /artifacts/{id}/{artifact_id}?thumbnail=<px>
-	json.addMember("features", QVariant(features));
-	for (QVariantMap::const_iterator it = features.begin(); it != features.end(); ++it)
-		hashLines << QString("feature %1 %2").arg(it.key(), QString(it.value().toBool() ? "1" : "0"));
-
-	// ── Limits (current settings, not just defaults) ─────────────────────────
-	QVariantMap limits;
-	limits["max_body_size_mb"]        = m_nMaxBodySizeMB;
-	limits["max_script_length_kb"]    = m_nMaxScriptLengthKB;
-	limits["max_concurrent_requests"] = m_nMaxConcurrentRequests;
-	limits["max_batch_variants"]      = ServerConfig::MAX_BATCH_VARIANTS;
-	limits["max_animation_frames"]    = ServerConfig::MAX_ANIMATION_FRAMES;
-	limits["async_max_queue_depth"]   = m_pAsyncMgr ? m_pAsyncMgr->maxQueueDepth()
-	                                                : AsyncRequestManager::DEFAULT_MAX_QUEUE_DEPTH;
-	limits["async_result_ttl_seconds"] = ServerConfig::ASYNC_RESULT_TTL_SEC;
-	limits["idempotency_ttl_seconds"]  = m_idempotency.ttlSeconds();
-	limits["stale_job_timeout_minutes"] = m_nStaleJobTimeoutMin;
-	limits["thumbnail_min_px"]          = ArtifactThumbnail::kMinPx;
-	limits["thumbnail_max_px"]          = ArtifactThumbnail::kMaxPx;
-	limits["thumbnail_max_source_mb"]   = int(ArtifactThumbnail::kMaxSourceBytes / (1024 * 1024));
-	json.addMember("limits", QVariant(limits));
-	// Image types ?thumbnail can decode (Qt image plugins loaded in this
-	// Studio). QStringList, not QVariantList: see the DS4 CRT rule.
-	json.addMember("thumbnail_source_formats", QVariant(m_thumbnailExtensions));
-
-	QVariantMap rateLimit;
-	rateLimit["enabled"]        = m_rateLimiter.isEnabled();
-	rateLimit["max_requests"]   = m_pRateLimitMaxSpin ? m_pRateLimitMaxSpin->value()
-	                                                  : ServerConfig::DEFAULT_RATE_LIMIT_MAX;
-	rateLimit["window_seconds"] = m_pRateLimitWindowSpin ? m_pRateLimitWindowSpin->value()
-	                                                     : ServerConfig::DEFAULT_RATE_LIMIT_WINDOW;
-	rateLimit["applies_to"]     = QString("write");  // POST/DELETE routes only
-	json.addMember("rate_limit", QVariant(rateLimit));
-
-	QVariantMap security;
-	security["auth_enabled"]         = m_auth.isEnabled();
-	security["auth_headers"]         = QStringList() << "X-API-Token" << "Authorization: Bearer";
-	security["ip_whitelist_enabled"] = m_ipWhitelist.isEnabled();
-	json.addMember("security", QVariant(security));
-
-	// ── Render engines, read live from DzRenderMgr ───────────────────────────
-	json.addKey("render_engines");
-	json.startObject();
-	QStringList selectable;
-	QString activeClass;
-	json.addKey("registered");
-	json.startArray();
-	DzRenderMgr* renderMgr = dzApp ? dzApp->getRenderMgr() : nullptr;
-	if (renderMgr) {
-		DzRenderer* active = renderMgr->getActiveRenderer();
-		if (active) activeClass = QString(active->metaObject()->className());
-		for (int i = 0; i < renderMgr->getNumRenderers(); ++i) {
-			DzRenderer* r = renderMgr->getRenderer(i);
-			if (!r) continue;
-			QVariantMap m;
-			const QString cls = QString(r->metaObject()->className());
-			m["class_name"] = cls;
-			m["name"]       = r->getName();
-			m["active"]     = (r == active);
-			json.addItem(QVariant(m));
-		}
-		for (size_t i = 0; i < sizeof(kSelectableEngines) / sizeof(kSelectableEngines[0]); ++i) {
-			const SelectableEngine& e = kSelectableEngines[i];
-			if (!e.rendererClass || renderMgr->findRenderer(QString(e.rendererClass)))
-				selectable << QString(e.engine);
-		}
-	}
-	json.finishArray();
-	json.addMember("selectable", QVariant(selectable));   // values POST /render accepts for "engine"
-	if (activeClass.isEmpty()) json.addMemberNull("active_class");
-	else                       json.addMember("active_class", activeClass);
-	json.addMember("source", engineSource);              // "live" or "snapshot"
-	json.addMember("read_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
-	json.finishObject();
-
-	// Stable fingerprint of the API surface: schema, routes (incl. companion
-	// routes) and feature flags. Changes in limits, settings or render engines
-	// don't change it, so clients can cache their route/feature decisions by it.
-	hashLines.prepend(QString("schema %1").arg(ServerConfig::CAPABILITIES_SCHEMA_VERSION));
-	hashLines.sort();
-	QByteArray digest = QCryptographicHash::hash(hashLines.join("\n").toUtf8(),
-	                                             QCryptographicHash::Sha1).toHex();
-	json.addMember("compatibility_hash", QString::fromLatin1(digest.left(16)));
-
-	json.finishObject();
-	return json.toString().toUtf8();
+	// Main thread only: reads GUI-owned settings (see Capabilities.h).
+	Capabilities::Inputs in;
+	in.serverInstanceId      = m_serverInstanceId;
+	m_pluginRegistry.snapshot(&in.pluginRoutes, &in.companions);
+	in.maxBodySizeMB         = m_nMaxBodySizeMB;
+	in.maxScriptLengthKB     = m_nMaxScriptLengthKB;
+	in.maxConcurrentRequests = m_nMaxConcurrentRequests;
+	in.asyncMaxQueueDepth    = m_pAsyncMgr ? m_pAsyncMgr->maxQueueDepth()
+	                                       : AsyncRequestManager::DEFAULT_MAX_QUEUE_DEPTH;
+	in.idempotencyTtlSeconds = m_idempotency.ttlSeconds();
+	in.staleJobTimeoutMin    = m_nStaleJobTimeoutMin;
+	in.thumbnailExtensions   = m_thumbnailExtensions;
+	in.rateLimitEnabled      = m_rateLimiter.isEnabled();
+	in.rateLimitMax          = m_pRateLimitMaxSpin ? m_pRateLimitMaxSpin->value()
+	                                               : ServerConfig::DEFAULT_RATE_LIMIT_MAX;
+	in.rateLimitWindowSeconds = m_pRateLimitWindowSpin ? m_pRateLimitWindowSpin->value()
+	                                                   : ServerConfig::DEFAULT_RATE_LIMIT_WINDOW;
+	in.authEnabled           = m_auth.isEnabled();
+	in.ipWhitelistEnabled    = m_ipWhitelist.isEnabled();
+	in.artifactRootsEnabled  = m_artifactRoots.isEnabled();
+	in.artifactRoots         = m_artifactRoots.effectiveRoots();
+	return Capabilities::build(in, engineSource);
 }
 
 void DzScriptServerPane::refreshCapabilitiesSnapshot()

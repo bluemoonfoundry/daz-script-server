@@ -177,6 +177,20 @@ class TestAsyncDazClientExecute:
         with pytest.raises(exceptions.TimeoutError):
             await client.execute("1;")
 
+    @pytest.mark.asyncio
+    async def test_execute_timeout_overrides_client_timeout(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.return_value = _mock_resp(json_data={"success": True, "result": 1, "output": []})
+        await client.execute("1;", timeout=300.0)
+        assert mock_http.post.call_args.kwargs["timeout"] == 300.0
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_reports_the_timeout_that_applied(self):
+        client, mock_http = _client_with_mock_http()
+        mock_http.post.side_effect = httpx.TimeoutException("boom", request=MagicMock())
+        with pytest.raises(exceptions.TimeoutError, match="after 300.0s"):
+            await client.execute("1;", timeout=300.0)
+
 
 class TestAsyncDazClientExecuteBatchAsync:
     @pytest.mark.asyncio

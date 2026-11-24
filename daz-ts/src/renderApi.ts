@@ -207,8 +207,8 @@ export interface RenderCallOptions {
 /**
  * Render the DAZ Studio scene to `outputPath`.
  *
- * Uses the SSE progress stream (`GET /render/:id/progress`) when available;
- * falls back to long-poll on `/requests/:id/result` otherwise.
+ * Uses the SSE progress stream (`GET /render/{id}/progress`) when available;
+ * falls back to long-poll on `/requests/{id}/result` otherwise.
  *
  * @throws RenderError If the render fails.
  * @throws DazTimeoutError If `timeoutMs` is exceeded.

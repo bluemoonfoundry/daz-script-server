@@ -8,7 +8,7 @@ driven remotely. In practice, a user can drive DAZ Studio through its own UI
 issuing commands — DAZ Studio is single-threaded with respect to the Qt main
 thread, so the two compete for the same resource.
 
-Every request that needs the main thread (`/execute`, `/scripts/:id/execute`,
+Every request that needs the main thread (`/execute`, `/scripts/{id}/execute`,
 async-enqueue endpoints, render-enqueue endpoints) is dispatched via
 `QMetaObject::invokeMethod(..., Qt::BlockingQueuedConnection, ...)`
 (`src/RequestHandlers.cpp`). This connection type has **no timeout**: the HTTP
@@ -30,7 +30,7 @@ Compounding effects:
 - No client-visible signal exists today to distinguish "busy, retry" from
   "broken."
 
-Out of scope for this design: `GET /requests` and `GET /requests/:id/status`
+Out of scope for this design: `GET /requests` and `GET /requests/{id}/status`
 read a mutex-protected in-memory map directly on the HTTP thread with no
 main-thread hop, so they are not expected to be affected by this specific
 cause. If they are independently found to hang under the same conditions,

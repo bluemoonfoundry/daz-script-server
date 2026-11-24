@@ -1,4 +1,5 @@
 #include "ArtifactFile.h"
+#include "ArtifactRoots.h"
 #include <QtCore/qbytearray.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -73,7 +74,7 @@ static FILE* openRaw(const QString& path)
 }
 
 OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize,
-                       qint64* outMtime)
+                       qint64* outMtime, const ArtifactRoots* roots)
 {
     *outFile = 0;
     *outSize = 0;
@@ -96,17 +97,21 @@ OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize,
         std::fclose(f);
         return rc == 0 ? OPEN_NOT_REGULAR : OPEN_MISSING;
     }
+    if (roots && !roots->allows(f)) {
+        std::fclose(f);
+        return OPEN_OUTSIDE_ROOTS;
+    }
     *outFile = f;
     *outSize = (qint64)st.st_size;
     if (outMtime) *outMtime = (qint64)st.st_mtime;
     return OPEN_OK;
 }
 
-qint64 sizeOf(const QString& path)
+qint64 sizeOf(const QString& path, const ArtifactRoots* roots)
 {
     FILE*  f = 0;
     qint64 size = 0;
-    if (openForRead(path, &f, &size) != OPEN_OK) return -1;
+    if (openForRead(path, &f, &size, 0, roots) != OPEN_OK) return -1;
     std::fclose(f);
     return size;
 }

@@ -7,6 +7,7 @@ const char* ErrorResponse::codeString(ErrorCode code)
     case ErrorCode::AUTH_MISSING_TOKEN:        return "AUTH_MISSING_TOKEN";
     case ErrorCode::AUTH_INVALID_TOKEN:        return "AUTH_INVALID_TOKEN";
     case ErrorCode::IP_NOT_WHITELISTED:        return "IP_NOT_WHITELISTED";
+    case ErrorCode::ARTIFACT_OUTSIDE_ROOTS:    return "ARTIFACT_OUTSIDE_ROOTS";
     case ErrorCode::SCRIPT_NOT_FOUND:          return "SCRIPT_NOT_FOUND";
     case ErrorCode::REQUEST_NOT_FOUND:         return "REQUEST_NOT_FOUND";
     case ErrorCode::ROUTE_NOT_FOUND:           return "ROUTE_NOT_FOUND";
@@ -48,6 +49,8 @@ const char* ErrorResponse::defaultMessage(ErrorCode code)
         return "Authentication failed: invalid or missing API token";
     case ErrorCode::IP_NOT_WHITELISTED:
         return "Access denied: IP address is not in the whitelist";
+    case ErrorCode::ARTIFACT_OUTSIDE_ROOTS:
+        return "Artifact file is outside the server's allowed artifact folders";
     case ErrorCode::SCRIPT_NOT_FOUND:
         return "Script not found in registry";
     case ErrorCode::REQUEST_NOT_FOUND:
@@ -116,6 +119,7 @@ int ErrorResponse::httpStatus(ErrorCode code)
     case ErrorCode::AUTH_INVALID_TOKEN:
         return 401;
     case ErrorCode::IP_NOT_WHITELISTED:
+    case ErrorCode::ARTIFACT_OUTSIDE_ROOTS:
         return 403;
     case ErrorCode::SCRIPT_NOT_FOUND:
     case ErrorCode::REQUEST_NOT_FOUND:

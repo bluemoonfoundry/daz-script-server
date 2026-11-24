@@ -618,6 +618,16 @@ paths:
         output manifest, never paths: an undeclared file can't be requested.
         The declared path must be absolute and a regular file at download time.
 
+        **Trust boundary.** A job can declare any path, so the server only
+        serves a file whose real path (read back from the opened file, with
+        symlinks and junctions resolved) is inside one of the allowed artifact
+        folders, `security.artifact_roots` in `/capabilities`. Defaults: the
+        system temp folder and the user's Documents, Pictures, Desktop and
+        Downloads; configurable, and the restriction can be switched off in
+        the server pane. Files under `~/.daz3d` (the API token's folder) are
+        always refused. A refused file answers 403 `ARTIFACT_OUTSIDE_ROOTS`
+        and lists as `available: false`.
+
         Supports single and multiple byte ranges (`Range: bytes=0-1023`,
         `bytes=-512`, `bytes=1024-`), answered with 206 + `Content-Range`, and
         `HEAD` for size/type without the body. Uses the read middleware chain
@@ -705,7 +715,17 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: IP not whitelisted (`IP_NOT_WHITELISTED`), or the file's real path is outside the allowed artifact folders (`ARTIFACT_OUTSIDE_ROOTS`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error_code: ARTIFACT_OUTSIDE_ROOTS
+                error: "Artifact file is outside the server's allowed artifact folders"
+                detail: "the declared file's real path is outside the allowed artifact folders (server pane: Artifact Folders)"
+                retryable: false
         '404':
           description: Unknown job (`REQUEST_NOT_FOUND`) or undeclared artifact (`ARTIFACT_NOT_FOUND`)
           content:
@@ -1803,7 +1823,7 @@ components:
           properties:
             available:
               type: boolean
-              description: The declared path is an absolute, existing regular file
+              description: The declared path is an absolute, existing regular file inside the server's allowed artifact folders
             size:
               type: integer
               nullable: true
@@ -2118,6 +2138,13 @@ components:
               type: array
               items: {type: string}
             ip_whitelist_enabled: {type: boolean}
+            artifact_roots_enabled:
+              type: boolean
+              description: GET /artifacts only serves files inside `artifact_roots`
+            artifact_roots:
+              type: array
+              items: {type: string}
+              description: Allowed artifact folders that exist (as configured; symlinks resolved when checking)
         render_engines:
           type: object
           required: [registered, selectable, active_class, source, read_at]
@@ -2183,6 +2210,7 @@ components:
             - AUTH_MISSING_TOKEN
             - AUTH_INVALID_TOKEN
             - IP_NOT_WHITELISTED
+            - ARTIFACT_OUTSIDE_ROOTS
             - SCRIPT_NOT_FOUND
             - REQUEST_NOT_FOUND
             - ROUTE_NOT_FOUND

@@ -58,6 +58,7 @@ from ._recipe_json import to_jsonable
 from ._recipe_ops import SceneOps
 from ._recipe_store import EntityRecord, LiveState, Manifest
 from ._recipe_validate import RecipeIssue
+from ._scene_check import CheckReport
 
 _ENV_CHANNEL = "environment"
 _REMOVAL_OPS = ("unparent", "delete")
@@ -72,6 +73,8 @@ class ApplyResult:
     ``overwritten`` / ``kept`` are empty.
     ``failed_step`` is None when the failure happened while writing records or
     the manifest (``error`` then says which).
+    ``check``: the scene check run before the manifest is written
+    (``apply(..., require_clean=True)``); when it has errors the apply rolls back.
     """
 
     applied: bool
@@ -84,16 +87,27 @@ class ApplyResult:
     failed_step: Step | None = None
     error: str | None = None
     rollback_errors: tuple[str, ...] = ()
+    check: CheckReport | None = None
 
     def to_dict(self) -> dict:
         return to_jsonable(self)
 
 
+class _CheckFailed(Exception):
+    def __init__(self, report: CheckReport) -> None:
+        self.report = report
+        super().__init__(f"{len(report.errors)} error(s): " + "; ".join(
+            f"{f.subject}: [{f.code}] {f.message}" for f in report.errors))
+
+
 class _Run:
     def __init__(self, plan: RecipePlan, desired: dict[str, DesiredEntity], live: LiveState,
-                 ops: SceneOps, recipe_id: str, recipe_version: int) -> None:
+                 ops: SceneOps, recipe_id: str, recipe_version: int,
+                 verify: Callable[[], CheckReport] | None = None) -> None:
         self.plan, self.desired, self.live, self.ops = plan, desired, live, ops
         self.recipe_id, self.recipe_version = recipe_id, recipe_version
+        self.verify = verify
+        self.check: CheckReport | None = None
         self.journal: list[tuple[str, Callable[[], None]]] = []
         self.created: dict[str, list[str]] = {}
         self.deleted_steps: list[Step] = []
@@ -251,11 +265,17 @@ class _Run:
                 self.current = step
                 self.perform(step)
             self.current = None
+            if self.verify is not None:
+                self.context = "scene check"
+                self.check = self.verify()
+                if not self.check.ok:
+                    raise _CheckFailed(self.check)
+                self.context = ""
             self.write_manifest()
         except Exception as e:  # noqa: BLE001 - any failure triggers compensation
             return self.rollback(e)
         return ApplyResult(True, plan.steps, plan.conflicts, plan.warnings, plan.overwritten,
-                           plan.kept)
+                           plan.kept, check=self.check)
 
     def rollback(self, exc: Exception) -> ApplyResult:
         errors: list[str] = []
@@ -271,15 +291,21 @@ class _Run:
                     "deletions cannot be rolled back.") for s in self.deleted_steps)
         return ApplyResult(False, tuple(self.deleted_steps), self.plan.conflicts,
                            self.plan.warnings + partial, (), (), rolled_back=True,
-                           failed_step=self.current, error=error, rollback_errors=tuple(errors))
+                           failed_step=self.current, error=error, rollback_errors=tuple(errors),
+                           check=self.check)
 
 
 def execute(plan: RecipePlan, desired: dict[str, DesiredEntity], live: LiveState, ops: SceneOps,
-            *, recipe_id: str, recipe_version: int) -> ApplyResult:
+            *, recipe_id: str, recipe_version: int,
+            verify: Callable[[], CheckReport] | None = None) -> ApplyResult:
     """Run *plan* through *ops*; roll back by compensation on any failure.
+
+    *verify*, when given, runs after every step (deletes included) and before
+    the manifest is written; a report with errors rolls the apply back like any
+    other failure (deletes stay done, as ``deleted_not_restored`` warnings).
 
     A blocked plan executes nothing and writes nothing (no records, no manifest).
     """
     if plan.blocked:
         return ApplyResult(False, (), plan.conflicts, plan.warnings, (), ())
-    return _Run(plan, desired, live, ops, recipe_id, recipe_version).run()
+    return _Run(plan, desired, live, ops, recipe_id, recipe_version, verify).run()

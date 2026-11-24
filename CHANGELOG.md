@@ -6,6 +6,19 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **dazpy pre-render checks:** `DazScene.check(camera=None, *, engine,
+  resolution, allow_crop)` and `dazpy.recipe.check(recipe, scene, shots=)`
+  return a `CheckReport` of `CheckFinding`s with a severity. Framing: a figure
+  partly outside the camera's frame (`subject_out_of_frame`, with the edges
+  crossed, so a cut-off head shows as `top`), entirely outside it
+  (`subject_not_in_frame`), or no figure in view at all (`no_subject_in_frame`,
+  error). Lighting: `no_light` (error) when no light is on, the environment is
+  Scene Only or at intensity 0, and the headlamp is off. One Studio script per
+  check. Recipe shots gain `allow_crop` (schema v1, optional) to silence the
+  framing warnings for a deliberate crop. `recipe.apply(..., require_clean=True)`
+  rolls back when the applied scene has check errors (`ApplyResult.check`), and
+  `recipe.render(..., require_clean=True)` raises the new `SceneCheckError`
+  before rendering.
 - **dazpy:** `DazScene.create_group(name, label=None, position=None)` creates
   an empty group node (`DzGroupNode`), e.g. a camera-rig parent, and returns
   it as a `DazNode`. The label (default: the name) is set after the node is
@@ -63,8 +76,27 @@ All notable changes to DazScript Server are documented here.
   skeleton with `localEuler`/`setRotation` (`local_euler`/`set_rotation`),
   which `DazSkeleton` has. Touch and sit staging is unchanged (y1td).
 
+### Security
+
+- **Artifact trust boundary:** `GET /artifacts/{id}/{artifact_id}` (and its
+  thumbnails) now serves a declared output only when the opened file's real
+  path, with symlinks and junctions resolved, is inside an allowed artifact
+  folder. Defaults: the system temp folder plus the user's Documents,
+  Pictures, Desktop and Downloads. Configure the list, or switch the
+  restriction off, under **Artifact Folders** in the server pane. Files under
+  `~/.daz3d` are always refused. A refused file answers HTTP 403
+  `ARTIFACT_OUTSIDE_ROOTS` and lists as `available: false`; `/capabilities`
+  reports `security.artifact_roots_enabled` and `security.artifact_roots`.
+  dazpy raises `ServerResponseError` and daz-ts `ArtifactError` for it (not
+  `AuthenticationError`). **Upgrade note:** jobs that write outputs elsewhere
+  (e.g. `D:/renders`) need that folder added.
+
 ### Fixed
 
+- **dazpy on Studio 4:** the environment (Environment Options) is now found
+  on Studio 4, which keeps it as a scene node rather than a render element.
+  `apply_hdri_environment` no longer raises `RenderError`, and recipe
+  environment reads and `set_environment` work there.
 - **dazpy:** the first scene-recipe `apply` after Daz Studio starts could fail
   and roll back: the first Genesis 9 load on a cold DS4 takes 19–32s (warm:
   ~15s), past the client's 30s HTTP timeout. Recipe asset loads and pose-preset

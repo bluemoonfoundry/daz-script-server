@@ -176,9 +176,11 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
         RenderError: If a post-apply readback of "Environment Intensity"
             doesn't match *env.intensity*. All of this module's environment
             writes go through ``DazRenderSettings._environment_holder()``,
-            which finds the ``DzEnvironmentNode`` render-element group by
-            class. DAZ Studio only exposes that group while the render type
-            is Software (Iray); otherwise every write above silently no-ops
+            which finds the ``DzEnvironmentNode`` by class: a scene node on
+            Studio 4 (created by the first Iray render, gone after
+            ``Scene.clear()``), a render-element group on Studio 6 (only
+            while the render type is Software/Iray). When it is absent every
+            write above silently no-ops
             (matching the existing ``if (!holder) return;`` pattern) with no
             exception, so this readback is what actually catches it.
     """
@@ -201,11 +203,12 @@ def apply_hdri_environment(render_settings: DazRenderSettings, env: HDRIEnvironm
         raise RenderError(
             "HDRI environment apply failed verification: 'Environment Intensity' "
             f"readback ({readback!r}) does not match the requested value "
-            f"({env.intensity!r}). The Environment Options render-element "
-            "group (DzEnvironmentNode) was not available -- DAZ Studio only "
-            "exposes it when the render type is Software (Iray), e.g. "
-            "DazRenderSettings.set_active_engine('iray') -- so the HDRI was likely "
-            "never applied."
+            f"({env.intensity!r}). The Environment Options node "
+            "(DzEnvironmentNode) was not available -- Studio 6 only exposes "
+            "it when the render type is Software (Iray), e.g. "
+            "DazRenderSettings.set_active_engine('iray'); Studio 4 creates it "
+            "at the first Iray render after Scene.clear() -- so the HDRI was "
+            "likely never applied."
         )
 
 

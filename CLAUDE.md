@@ -92,6 +92,11 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 | `SecureRandom` | `src/SecureRandom.cpp` | Crypto-secure RNG (OS APIs) |
 | `JsonBuilder` | `src/JsonBuilder.cpp` | Type-safe JSON with auto-escaping |
 | `ServerConfig` | `include/DzScriptServerPane.h` | Centralized config constants |
+| `ArtifactRoutes` | `src/ArtifactRoutes.cpp` | `GET /artifacts` list/download handlers |
+| `ArtifactRoots` | `src/ArtifactRoots.cpp` | Artifact trust boundary (allowed folders) |
+| `Capabilities` | `src/Capabilities.cpp` | `GET /capabilities` document + route table |
+| `PluginRouteRegistry` | `src/PluginRouteRegistry.cpp` | Companion-plugin routes and matching |
+| `ScriptRegistry` | `src/ScriptRegistry.cpp` | Session-only registered scripts |
 
 ### HTTP API Endpoints
 
@@ -101,14 +106,14 @@ It also documents artifact manifest and Range/HEAD behavior.
 
 Default: `127.0.0.1:18811`
 
-**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden/IP blocked), 404 (Unknown script/request/route/artifact), 409 (Idempotency key in flight), 413 (Body too large), 410 (Declared artifact file gone), 422 (Idempotency key reused), 429 (Rate limit/concurrent limit), 503 (Studio busy/queue full)
+**Status codes:** 200 (OK), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden: IP blocked, or artifact outside the allowed artifact folders), 404 (Unknown script/request/route/artifact), 409 (Idempotency key in flight), 413 (Body too large), 410 (Declared artifact file gone), 422 (Idempotency key reused), 429 (Rate limit/concurrent limit), 503 (Studio busy/queue full)
 
 **Errors:** every failure body is `ErrorResponse` (`include/ErrorResponse.h`):
 `{success:false, error_code, error, retryable, detail?}`. Never hand-build an
 error body; add an `ErrorCode` instead. Script/job failures stay HTTP 200 with
 `error_code` `SCRIPT_ERROR` / `JOB_CANCELLED` / `JOB_STALE`.
 
-**Job routes** (`/execute`, `/scripts/:id/execute`, async + render submission)
+**Job routes** (`/execute`, `/scripts/{id}/execute`, async + render submission)
 go through `runJobRoute()`: write chain → `X-Correlation-Id` → `Idempotency-Key`
 (`IdempotencyCache`, async/render submission only) → handler → identity stamp.
 
@@ -121,10 +126,10 @@ go through `runJobRoute()`: write chain → `X-Correlation-Id` → `Idempotency-
 
 **Script Registry** (in-memory, session-only):
 - `POST /scripts/register`: `{"name":"id","description":"...","script":"..."}` (name is ID, overwrites existing)
-- `POST /scripts/:id/execute`: Execute registered script
+- `POST /scripts/{id}/execute`: Execute registered script
 - Script names: 1-64 chars, alphanumeric/hyphens/underscores
 
-**Async endpoints:** Return `request_id` immediately. Poll `/requests/:id/status` or use `GET /requests/:id/result?wait=true` for long-poll. Status: `queued`, `running`, `completed`, `failed`, `cancelled`. TTL: 1 hour cleanup.
+**Async endpoints:** Return `request_id` immediately. Poll `/requests/{id}/status` or use `GET /requests/{id}/result?wait=true` for long-poll. Status: `queued`, `running`, `completed`, `failed`, `cancelled`. TTL: 1 hour cleanup.
 
 ### Dependencies & Build
 

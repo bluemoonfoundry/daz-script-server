@@ -176,6 +176,8 @@ ServerSettings SettingsService::readFrom(QSettings& qs) const
     s.authEnabled           = qs.value("authEnabled",           def.authEnabled).toBool();
     s.ipWhitelistEnabled    = qs.value("ipWhitelistEnabled",    def.ipWhitelistEnabled).toBool();
     s.ipWhitelist           = qs.value("ipWhitelist",           def.ipWhitelist).toString();
+    s.artifactRootsEnabled  = qs.value("artifactRootsEnabled",  def.artifactRootsEnabled).toBool();
+    s.artifactRoots         = qs.value("artifactRoots",         def.artifactRoots).toString();
     s.rateLimitEnabled      = qs.value("rateLimitEnabled",      def.rateLimitEnabled).toBool();
     s.rateLimitMax          = qs.value("rateLimitMax",          def.rateLimitMax).toInt();
     s.rateLimitWindow       = qs.value("rateLimitWindow",       def.rateLimitWindow).toInt();
@@ -195,6 +197,8 @@ void SettingsService::writeTo(QSettings& qs, const ServerSettings& s) const
     qs.setValue("authEnabled",           s.authEnabled);
     qs.setValue("ipWhitelistEnabled",    s.ipWhitelistEnabled);
     qs.setValue("ipWhitelist",           s.ipWhitelist);
+    qs.setValue("artifactRootsEnabled",  s.artifactRootsEnabled);
+    qs.setValue("artifactRoots",         s.artifactRoots);
     qs.setValue("rateLimitEnabled",      s.rateLimitEnabled);
     qs.setValue("rateLimitMax",          s.rateLimitMax);
     qs.setValue("rateLimitWindow",       s.rateLimitWindow);

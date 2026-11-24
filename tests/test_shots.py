@@ -173,7 +173,27 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(anchors, sorted(anchors))
 
     def test_distance_fits_the_frame(self):
-        self.assertAlmostEqual(framing_distance("close_up", 85), 40 * 85 / 27)
+        # Studio applies the lens FOV to the frame height: 36 mm spans the height at any aspect.
+        self.assertAlmostEqual(framing_distance("close_up", 85), 40 * 85 / 36)
+        self.assertAlmostEqual(framing_distance("close_up", 85, aspect=1.5), 40 * 85 / 36)
+
+    def test_fitted_height_fills_the_frame_in_studios_projection(self):
+        # Cross-check against _scene_check.frame_extent (live-verified, 5d6f.22): Studio's
+        # vertical FOV is 2*atan(frame_width / (2*f)) at any aspect.
+        import math
+        from dazpy._scene_check import frame_extent
+        f = 50.0
+        pos, aim = framing_transform([(Vec3(0, 0, 0), True)],
+                                     Framing(subjects=("a",), size="full_body", elevation_deg=0), f)
+        self.assertAlmostEqual(pos.x, aim.x)  # looking straight down -Z: identity rotation
+        cam = {"pos": [pos.x, pos.y, pos.z], "rot": [0.0, 0.0, 0.0, 1.0],
+               "fov": 2 * math.atan(36.0 / (2 * f))}
+        box = [-1.0, aim.y - 105.0, -1e-3, 1.0, aim.y + 105.0, 1e-3]  # 210 cm tall at the aim
+        for w_over_h in (4 / 3, 2 / 3):
+            (_, _, y0, y1), behind = frame_extent(cam, w_over_h, box)
+            self.assertEqual(behind, 0)
+            self.assertAlmostEqual(y0, -1.0, places=4)
+            self.assertAlmostEqual(y1, 1.0, places=4)
 
     def test_angle_sets_elevation_unless_overridden(self):
         f = Framing(subjects=("a",), angle="high")
@@ -195,7 +215,8 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(pos, centre_pos)  # the camera does not move
         # Camera on +Z looking -Z: screen-right is +X; aim right so the subject is left.
         dist = framing_distance("medium", 50)
-        self.assertAlmostEqual(aim.x - centre_aim.x, dist * 36 / 50 / 6)
+        # Frame height = 36 mm at f; width = height / aspect (h/w, 3/4 default).
+        self.assertAlmostEqual(aim.x - centre_aim.x, dist * 36 / 50 / (3 / 4) / 6)
         right = framing_transform([(Vec3(0, 0, 0), True)],
                                   Framing(subjects=("a",), size="medium", composition="right_third"), 50)[1]
         self.assertAlmostEqual(right.x, -aim.x)

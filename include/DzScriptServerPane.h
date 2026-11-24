@@ -36,6 +36,9 @@
 #include "AuthenticationService.h"
 #include "RateLimiterService.h"
 #include "IPWhitelistService.h"
+#include "ArtifactRoots.h"
+#include "ScriptRegistry.h"
+#include "PluginRouteRegistry.h"
 #include "MetricsCollector.h"
 #include "RequestHandler.h"
 #include "AsyncRequestManager.h"
@@ -259,6 +262,7 @@ private slots:
 	void onAuthEnabledChanged(int state);
 	void onClearLogClicked();
 	void onIpWhitelistEnabledChanged(int state);
+	void onArtifactRootsEnabledChanged(int state);
 	void onRateLimitEnabledChanged(int state);
 	void onAutoStartChanged(int state);
 	void onStaleTimeoutChanged(int minutes);
@@ -334,23 +338,12 @@ private:
 	AuthenticationService m_auth;
 	RateLimiterService    m_rateLimiter;
 	IPWhitelistService    m_ipWhitelist;
+	ArtifactRoots         m_artifactRoots;   // GET /artifacts trust boundary
 	MetricsCollector      m_metrics;
 
 	QAtomicInt       m_nActiveRequests;  // Current concurrent requests (atomic: written from HTTP threads)
 
-	// Script Registry (session-only, in-memory)
-	struct RegisteredScript {
-		QString   description;
-		QString   script;
-		QDateTime registeredAt;
-	};
-	struct ScriptRegistry {
-		// Key is QByteArray (not QString) so worker threads can look up scripts
-		// without creating QString temporaries that ~QString would free via the
-		// wrong CRT (ucrtbase vs msvcr100).
-		QMap<QByteArray, RegisteredScript> scripts;
-		mutable QMutex mutex;
-	};
+	// Script Registry (session-only, in-memory; see ScriptRegistry.h)
 	ScriptRegistry m_scriptRegistry;
 
 	// ── Async Request Infrastructure ─────────────────────────────────────────
@@ -367,28 +360,14 @@ private:
 	// served directly from AsyncRequestManager's mutex-protected map without
 	// needing the main thread, so polling always returns promptly.
 
-	// Plugin route registry — populated by companion plugins via registerPluginRoute().
-	// Applied in setupRoutes() each time the server starts.
-	struct PluginRoute {
-		QString          method;    // "GET", "POST", "PUT", "DELETE", "PATCH"
-		QString          path;
-		QPointer<QObject> receiver;
-		QString          slotName;  // Q_INVOKABLE: HttpResult slotName(QByteArray, QByteArray)
-		QString          plugin;    // companion plugin name; empty if unattributed
-	};
-	QList<PluginRoute> m_pluginRoutes;
-	// Guarded by m_pluginRoutesMutex too.
-	struct CompanionPlugin {
-		QString name;
-		QString version;      // empty when only routes named it
-		QString description;
-	};
-	QList<CompanionPlugin> m_companionPlugins;
+	// Plugin route registry — populated by companion plugins via registerPluginRoute()
+	// and registerCompanionPlugin(); matched by the catch-alls applyPluginRoutes()
+	// installs. See PluginRouteRegistry.h.
+	PluginRouteRegistry m_pluginRegistry;
 	void refreshCapabilitiesIfRunning();
 	bool registerPluginRouteImpl(const QString& method, const QString& path,
 	                             QObject* receiver, const QString& slotName,
 	                             const QString& pluginName);
-	mutable QMutex     m_pluginRoutesMutex;
 
 	QByteArray         m_serverInstanceId;       // see serverInstanceId()
 	mutable QAtomicInt m_sceneRevision;          // see sceneRevision()
@@ -457,6 +436,10 @@ private:
 	// IP Whitelist UI
 	QCheckBox*   m_pIpWhitelistCheck;
 	QLineEdit*   m_pIpWhitelistEdit;
+
+	// Artifact roots UI
+	QCheckBox*   m_pArtifactRootsCheck;
+	QLineEdit*   m_pArtifactRootsEdit;
 
 	// Rate Limiting UI
 	QCheckBox*   m_pRateLimitCheck;

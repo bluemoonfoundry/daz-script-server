@@ -17,7 +17,7 @@ function sleep(ms: number): Promise<void> {
 /**
  * Execute a potentially long-running script via the async endpoint with polling.
  *
- * Submits `script` asynchronously, then polls `/requests/:id/result` with
+ * Submits `script` asynchronously, then polls `/requests/{id}/result` with
  * long-polling until the script completes or `timeoutMs` is exceeded.
  *
  * `completed_after_cancel_request` and `completed_after_stale` resolve with

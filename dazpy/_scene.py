@@ -9,6 +9,7 @@ from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
     from ._camera import DazCamera
+    from ._scene_check import CheckReport
     from ._interaction import FigureRigProfile, InteractionRecipe, PreparedInteractionResult
     from ._light import DazLight
     from ._skeleton import DazSkeleton
@@ -124,6 +125,40 @@ class DazScene:
         """Return the total number of nodes in the scene."""
         script = ScriptBuilder.iife("return Scene.getNumNodes();")
         return self._client.execute(script).value or 0
+
+    def check(self, camera: str | None = None, *, engine: str | None = None,
+              resolution: tuple[int, int] | None = None,
+              allow_crop: bool = False) -> "CheckReport":
+        """Pre-render checks for a render from *camera* (one Studio script).
+
+        Checks that each visible figure (top-level, not fitted to another) is
+        inside the camera's frame, and that something will light the render.
+        Findings (see :class:`~dazpy.CheckFinding`):
+
+        - ``subject_out_of_frame`` (warning): part of a figure's bounding box is
+          outside the frame; ``sides`` says which edges (a head or feet cut off
+          shows as ``top`` / ``bottom``). The box is loose, so an outstretched
+          arm can trigger it with nothing visible cut off.
+        - ``subject_not_in_frame`` (warning): a figure is entirely out of frame.
+        - ``no_subject_in_frame`` (error): the scene has figures and the camera
+          sees none of them.
+        - ``no_light`` (error): no light is on with non-zero intensity, the
+          environment does not light the scene (mode Scene Only, or intensity
+          0) and the camera headlamp is off. Not checked for the OpenGL engines.
+        - ``camera_not_found`` (error): no camera has that label.
+
+        Args:
+            camera: Camera label; ``None`` checks the active viewport camera
+                (what :func:`dazpy.render` renders from by default).
+            engine: Engine the render will use (``"iray"``, ``"filament"``,
+                ``"viewport"``); default: the active engine.
+            resolution: ``(width, height)`` of the render; default: the render
+                settings' aspect ratio.
+            allow_crop: Drop the two framing warnings (a deliberate crop).
+        """
+        from ._scene_check import check_scene
+        return check_scene(self._client, camera, engine=engine, resolution=resolution,
+                           allow_crop=allow_crop)
 
     def cameras(self) -> list["DazCamera"]:
         """Return all camera nodes in the scene."""
