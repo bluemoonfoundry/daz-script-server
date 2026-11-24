@@ -108,8 +108,165 @@ export type {
   OrbitCamera,
 } from "./cinematics.js";
 
+// Typed shot models (dazpy.shots) and the cinematic shot library
+// (dazpy.shot_library). The full modules are namespaced -- `shots.CameraKeyframe`
+// (the class; the flat `CameraKeyframe` above is cinematics' interface) and
+// `shotLibrary.single(...)` etc.; the core types are also exported flat.
+export * as shots from "./shots.js";
+export * as shotLibrary from "./shotLibrary.js";
+export {
+  AspectSettings,
+  BlockingBeat,
+  CAMERA_ANGLES,
+  CoveragePlan,
+  FocusKey,
+  FocusPull,
+  Framing,
+  GazeBeat,
+  Keyframed,
+  Lens,
+  Orbit,
+  Placement,
+  RenderOutput,
+  SHOT_SIZES,
+  Sequence,
+  Shot,
+  Storyboard,
+  applyShot,
+  framingDistance,
+  framingTransform,
+  shotFromRecipeCamera,
+} from "./shots.js";
+export type { ApplyShotOptions, CameraAngle, Composition, ShotSize, Target as ShotTarget } from "./shots.js";
+export { ContinuityIssue, DialogueBeat, LineOfAction, applyCoverage, shotName } from "./shotLibrary.js";
+export type { Positions as ShotPositions } from "./shotLibrary.js";
+
 export { watchSceneEvents, waitForSceneEvent } from "./sceneEvents.js";
 export type { SceneEvent } from "./sceneEvents.js";
 
 export { MIN_SERVER_VERSION, parseVersion, evaluateServerVersion } from "./version.js";
 export type { VersionCheck } from "./version.js";
+
+// ── Phase 5A: interaction rig profiles + plan data model ───────────────────
+
+export {
+  ANCHOR_SURFACE_RADIUS,
+  AxisLimit,
+  BoneChain,
+  BoneProfile,
+  FigureRigProfile,
+  InteractionAnchor,
+  ResolvedInteractionTarget,
+  addVec3,
+  averageVec3,
+  buildRigProfile,
+  buildRigProfilesFromSnapshot,
+  clamp,
+  defaultAxisLimitsForBone,
+  detectFigureFamily,
+  dotVec3,
+  EFFECTOR_REACH_FALLBACK,
+  lengthVec3,
+  lookupRigProfile,
+  looksLikeHelper,
+  looksLikeTwist,
+  midpointVec3,
+  scaleVec3,
+  sideFromName,
+  subVec3,
+} from "./rigProfile.js";
+export type {
+  AnchorRole,
+  AnchorTargetLike,
+  AxisLimitDict,
+  AxisName,
+  BoneChainDict,
+  BoneProfileDict,
+  ChainRole,
+  ChainSide,
+  FigureRigProfileDict,
+  InteractionAnchorDict,
+  ResolvedInteractionTargetDict,
+  RigMetadataSource,
+  RigSceneSource,
+  RigSkeletonSource,
+  Rotation3,
+  Vector3,
+} from "./rigProfile.js";
+
+export {
+  BalanceTarget,
+  ContactTarget,
+  FootTarget,
+  HandTarget,
+  InteractionPlan,
+  InteractionPosePatch,
+  InteractionRecipe,
+  LookAtTarget,
+  PoseTarget,
+  PreparedInteractionRecipe,
+  PreparedInteractionResult,
+  SolveOptions,
+  ValidationIssue,
+  applyInteractionRecipeToScene,
+  buildFaceEachOtherRecipe,
+  buildFightRecipe,
+  buildHandshakeRecipe,
+  buildHugRecipe,
+  buildKissRecipe,
+  buildSitRecipe,
+  buildTouchRecipe,
+  prepareInteractionRecipe,
+  resolveInteractionTarget,
+} from "./interactionPlan.js";
+export type {
+  AlignLimbTargetsOptions,
+  AnchorTargetDict,
+  AnchorTargetInit,
+  ApplyInteractionRecipeOptions,
+  InteractionApplyOptions,
+  BalanceTargetDict,
+  ContactTargetDict,
+  InteractionConstraint,
+  InteractionPlanDict,
+  InteractionPosePatchDict,
+  InteractionRecipeDict,
+  LookAtTargetDict,
+  PoseTargetDict,
+  RecipeKind,
+  SolveBackend,
+  SolveOptionsDict,
+  ValidationIssueDict,
+} from "./interactionPlan.js";
+
+// ── Phase 5B: IK solver ─────────────────────────────────────────────────────
+
+export {
+  LimbAlignmentResult,
+  alignFootTarget,
+  alignHandTarget,
+  alignSingleLimbTarget,
+  alignmentChainNames,
+  dampedLeastSquaresStep,
+  invert3x3,
+  mul3x3Vec,
+  rotationWithAxisLimits,
+} from "./interactionSolve.js";
+export type {
+  AlignAnchorOptions,
+  AlignOptions,
+  AlignableSkeleton,
+  JacobianSource,
+  LimbAlignmentResultDict,
+  Matrix3,
+} from "./interactionSolve.js";
+
+// Compile-time check: the live classes satisfy the structural sources the
+// interaction modules accept (they never import skeleton.ts/scene.ts).
+type AssertTrue<T extends true> = T;
+export type _DazSkeletonIsRigSkeletonSource = AssertTrue<
+  import("./skeleton.js").DazSkeleton extends import("./rigProfile.js").RigSkeletonSource ? true : false
+>;
+export type _DazSceneIsRigSceneSource = AssertTrue<
+  import("./scene.js").DazScene extends import("./rigProfile.js").RigSceneSource ? true : false
+>;

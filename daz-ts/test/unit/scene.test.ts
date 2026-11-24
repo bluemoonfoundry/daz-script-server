@@ -460,9 +460,11 @@ describe("DazScene bulk snapshots", () => {
                         }
                     });
                 }
+                var _spos = _skel.getWSPos();
                 _result.push({
                     name: _skel.getName(),
                     label: _skel.getLabel(),
+                    position: {x: _spos.x, y: _spos.y, z: _spos.z},
                     bones: _boneList
                 });
             }
@@ -516,9 +518,11 @@ describe("DazScene bulk snapshots", () => {
                         }
                     });
                 }
+                var _spos = _skel.getWSPos();
                 _result.push({
                     name: _skel.getName(),
                     label: _skel.getLabel(),
+                    position: {x: _spos.x, y: _spos.y, z: _spos.z},
                     bones: _boneList
                 });
             }

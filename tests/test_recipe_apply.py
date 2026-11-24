@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dazpy._recipe_apply import ApplyResult, execute
 from dazpy._recipe_diff import Step, diff
-from dazpy._recipe_ops import DazSceneOps
+from dazpy._recipe_ops import ASSET_LOAD_TIMEOUT_S, DazSceneOps
 from dazpy._recipe_store import (EntityRecord, LiveState, Manifest, remove_record_script,
                                  write_manifest_script, write_record_script)
 from dazpy._pose import DazPose
@@ -457,6 +457,16 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertLess(load.index("Scene.selectAllNodes(false);"), load.index("loadScene"))
         self.assertIn('C:/Lib/g9.duf", DzScene.MergeFile)', load)  # never 0 / OpenNew
 
+    def test_asset_load_waits_longer_than_the_client_default(self):
+        # y33z: the first Genesis 9 load after a cold DS4 start took 29-32s
+        # (warm: ~15s) and tripped the client's 30s default, rolling the apply back.
+        client, ops = self.ops(("recipe:resolve", {"/g9.duf": "C:/Lib/g9.duf"}),
+                               ("recipe:snapshot", ["1"]), ("recipe:claim", ["Genesis 9"]))
+        ops.create(d_actor("anna"))
+        load = next(c for c in client.execute.call_args_list if "loadScene" in c.args[0])
+        self.assertGreaterEqual(load.kwargs.get("timeout") or 0, ASSET_LOAD_TIMEOUT_S)
+        self.assertGreaterEqual(ASSET_LOAD_TIMEOUT_S, 120.0)
+
     def test_claim_names_a_root_created_without_a_name(self):
         # DS4: a new DzBasicCamera / DzSpotLight has a label but an empty name,
         # and every later step finds nodes by name.
@@ -593,8 +603,12 @@ class DazSceneOpsChannelTests(unittest.TestCase):
             self.ops.set_channels("G9", "actor", {
                 "transform": {"position": (1.0, 2.0, 3.0), "rotation": (0.0, 90.0, 0.0)},
                 "pose": {"pose_path": "C:/p.json"}})
-        self.assertEqual(seen, [0])
-        self.assertIn("setWSPos", self.joined())
+        # read-xform, then the pose, then write-xform, then the transform
+        self.assertEqual(seen, [1])
+        s = self.client.scripts
+        self.assertIn("recipe:read-xform", s[0])
+        self.assertIn("recipe:write-xform", s[1])
+        self.assertIn("setWSPos", "\n".join(s[2:]))
 
     def test_camera_with_aim_positions_then_aims(self):
         self.ops.set_channels("Cam", "camera", {"transform": {"position": (1.0, 2.0, 3.0),
@@ -664,7 +678,9 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         with patch("dazpy._recipe_ops.apply_pose") as apply_pose:
             self.ops.set_channels("Genesis 9", "actor", {"pose": {"pose_path": "/Poses/Sit.DUF"}})
         apply_pose.assert_not_called()
-        find, open_ = self.client.scripts
+        read, find, open_, write = self.client.scripts
+        self.assertIn("recipe:read-xform", read)
+        self.assertIn("recipe:write-xform", write)
         self.assertIn(json.dumps("/Poses/Sit.DUF"), find)
         self.assertIn('Scene.setPrimarySelection(_node)', open_)
         self.assertIn('openFile("C:/Lib/Poses/Sit.duf", true)', open_)
@@ -673,6 +689,15 @@ class DazSceneOpsChannelTests(unittest.TestCase):
         self.assertLess(open_.index("Scene.getPrimarySelection()"), open_.index("setPrimarySelection(_node)"))
         self.assertIn("finally", open_)
         self.assertLess(open_.index("openFile"), open_.index("Scene.setPrimarySelection(_prev)"))
+
+    def test_pose_preset_open_waits_longer_than_the_client_default(self):
+        # y33z: a preset opened right after a cold start reads its files cold too.
+        self.client = scripted_client(("recipe:resolve", {"/Poses/Sit.duf": "C:/Lib/Poses/Sit.duf"}),
+                                      ("openFile", True))
+        self.ops = DazSceneOps(DazScene(self.client))
+        self.ops.set_channels("Genesis 9", "actor", {"pose": {"pose_path": "/Poses/Sit.duf"}})
+        open_ = next(c for c in self.client.execute.call_args_list if "openFile" in c.args[0])
+        self.assertGreaterEqual(open_.kwargs.get("timeout") or 0, ASSET_LOAD_TIMEOUT_S)
 
     def test_pose_preset_open_failure_raises_dazerror_distinct_from_missing_node(self):
         self.client = scripted_client(("recipe:resolve", {"/Poses/Sit.duf": "C:/Lib/Poses/Sit.duf"}),

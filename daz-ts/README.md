@@ -259,10 +259,11 @@ accessor, since accessors can't be `async`.
   `with scene.undo(label): ...` context manager (TS has no `with`
   statement).
 
-`capture_sprite()` (dazpy's `rembg`-based background removal) and
-IK-dependent methods (`DazSkeleton.handToTarget`/`.footToTarget`,
-`DazScene.applyInteractionRecipe`) are out of scope for this phase — they
-require the Phase 5 IK solver.
+`capture_sprite()` (dazpy's `rembg`-based background removal) is out of
+scope. dazpy's `DazSkeleton.hand_to_target`/`foot_to_target` are standalone
+functions in daz-ts — `alignHandTarget(skeleton, point)` /
+`alignFootTarget(skeleton, point)` from the Phase 5 IK solver
+(`interactionSolve.ts`); see Phase 5 below for `DazScene.applyInteractionRecipe`.
 
 See `test/integration/proxies.integration.test.ts` for a live-server
 integration suite covering these classes (gated on `DAZ_SERVER_URL`, same
@@ -362,6 +363,29 @@ domain-helper modules, which apply typed configuration objects to the Phase
   effect), `applyFrameSubject` (shot-distance presets), and
   `applyAnimatedShot` (real DAZ Studio keyframes via
   `setPositionAtFrame`/`setRotationAtFrame`, letting DAZ Studio interpolate).
+- `shots.ts` (from `shots.py`) — typed, immutable shot models (`Shot`,
+  `Framing`, `Placement`, `Lens`, `Orbit`, `Keyframed`, `FocusPull`,
+  `Sequence`, `CoveragePlan`, ...) and `applyShot`. `toDict()`/`fromDict()`
+  use **dazpy's wire format** (snake_case keys, `[x, y, z]` vectors), so a
+  plan saved by either SDK loads in the other. Static shots convert to and
+  from scene-recipe cameras (`Shot.toRecipe`, `CoveragePlan.mergeIntoRecipe`).
+  Namespaced as `shots` (`shots.CameraKeyframe` is the model class; the flat
+  `CameraKeyframe` stays cinematics' interface); core types are also flat.
+- `shotLibrary.ts` (from `shot_library.py`), namespaced as `shotLibrary` —
+  pure shot builders (`establishing`, `master`, `twoShot`, `single`,
+  `overTheShoulder`, `shotReverseShot`, `pov`, `insert`), the 180-degree
+  `LineOfAction` with `checkAxis`/`checkThirtyDegree`/`checkPlan`, camera
+  moves (`pushIn`/`pullOut`, `arc`, `cameraMove`), `rackFocus`/
+  `withRackFocus`, coverage (`subjectCoverage`, `dialogueCoverage`,
+  `conversation`), `shotName`, and `applyCoverage`. Keyword arguments become
+  an options object (`single(line, "bob", { size: "close_up" })`). Two
+  differences: the pure helpers take key/`Vec3` targets only (a live node's
+  position is an HTTP round trip here), and `cameraMove("handheld")` uses
+  its own seeded PRNG, so its jitter is repeatable per seed but differs from
+  dazpy's. Live check: `test/integration/shots.integration.test.ts` (twin of
+  dazpy's `tests/test_shots_live.py`, same scenarios) applies each kind of
+  shot and reads the camera back at its keyed frames; it leaves the open
+  scene as it found it.
 - `sceneEvents.ts` (from `_scene_events.py`) — `watchSceneEvents`/
   `waitForSceneEvent`, typed SSE parsing over `GET /scene/events`, reusing
   `client.ts`'s `parseSseStream`/`streamSceneEvents` already added in
@@ -374,5 +398,55 @@ blocking-dialog-avoidance pattern — a bad path reaching DAZ Studio's
 underlying `setMap()`/environment-map call can hang or crash the app via a
 modal file-not-found dialog rather than raising a script error.
 
-Not ported in Phase 4: `_interaction.py` (multi-figure IK posing) — that's
-Phase 5 (`daz-script-server-sf7y`).
+`_interaction.py` (multi-figure IK posing) is Phase 5, below.
+
+## Phase 5: Interaction / IK (multi-figure posing)
+
+Phase 5 ports dazpy's `_interaction.py`: stage two figures relative to each
+other and pull their hands/feet onto contact points with a
+damped-least-squares IK pass.
+
+```ts
+import { DazScene, buildHugRecipe } from "daz-ts";
+
+const scene = new DazScene();
+const result = await scene.applyInteractionRecipe(buildHugRecipe("Genesis 9", "Genesis 9 (2)"), {
+  alignLimbTargets: true, // run the IK pass after staging
+});
+if (!result.prepared.isValid) console.warn(result.prepared.validationIssues.map((i) => i.message));
+for (const r of result.alignmentResults) console.log(r.effectorBone, r.converged, r.finalError);
+```
+
+- **Recipe builders** (`interactionPlan.ts`) — `buildSitRecipe`,
+  `buildTouchRecipe`, `buildKissRecipe`, `buildHandshakeRecipe`,
+  `buildHugRecipe`, `buildFaceEachOtherRecipe`, `buildFightRecipe`. Each
+  returns an `InteractionRecipe` whose constraints match dazpy's
+  `build_*_recipe` for the same inputs (options are camelCase:
+  `{ seatPoint, supportPoints, aAnchor, strikeAnchor, ... }`). dazpy's
+  `build_kiss_recipe` `b_anchor` argument is always overwritten, so
+  `buildKissRecipe` doesn't take one. The hug's hand targets set
+  `wrap: true`: each arm passes waypoints around the partner's side (under
+  its arm) to the upper back, the hand turns to lie across it, and the
+  partner stands at embrace distance (`WRAP_SEPARATION`). Set `wrap` on
+  your own `HandTarget` (aimed at a shoulder anchor) for the same reach.
+- **Applying** — `DazScene.applyInteractionRecipe(recipe, opts)` /
+  `applyInteractionRecipeToScene(scene, recipe, opts)`: one `sceneSnapshot()`
+  call builds every figure's rig profile (pass `opts.rigProfiles` to skip
+  it), the recipe is validated and resolved, figures are staged toward their
+  contact points, and `opts.alignLimbTargets` runs the IK pass
+  (`maxIterations`, `stepDegrees`, `damping`, `tolerance`). Unknown
+  figures/anchors come back as `result.prepared.validationIssues`, not
+  exceptions.
+- **Lower-level pieces** — `prepareInteractionRecipe()` /
+  `PreparedInteractionRecipe` (validate, resolve, `buildPosePatch()`,
+  `apply()`), `InteractionPlan` and the constraint classes (`HandTarget`,
+  `FootTarget`, `LookAtTarget`, `BalanceTarget`, `ContactTarget`,
+  `PoseTarget`) for custom recipes; `buildRigProfile()` /
+  `FigureRigProfile` (`rigProfile.ts`) for rig-family detection, bone
+  chains and anchors; `alignHandTarget()` / `alignFootTarget()` /
+  `alignSingleLimbTarget()` (`interactionSolve.ts`) for one-off IK.
+
+Unlike dazpy, the IK solver is batch-only (every `DazSkeleton` has
+`evaluatePoseJacobian()`), so dazpy's per-bone-perturbation fallback path
+isn't ported. See
+`docs/superpowers/specs/2026-09-07-daz-ts-phase5-interaction-design.md`.
