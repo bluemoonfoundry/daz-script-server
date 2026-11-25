@@ -933,16 +933,22 @@ class DazScene:
 
     # ── Scene I/O ──────────────────────────────────────────────────────────────
 
-    def load(self, path: str) -> None:
-        """Load a scene file (merge mode — does not clear the existing scene).
+    def load(self, path: str, *, replace: bool = False) -> None:
+        """Load a scene file, merging it into the current scene by default.
 
         Args:
             path: Absolute path to the ``.daz`` or ``.duf`` file on the server
                 host.
+            replace: Clear the current scene first, so the file replaces it.
+                Done as ``Scene.clear()`` then a merge rather than
+                ``DzScene.OpenNew``, which can raise a modal "save changes?"
+                prompt that blocks the script server. Unsaved changes are
+                discarded.
         """
+        clear = "Scene.clear(); " if replace else ""
         script = ScriptBuilder.iife(
             # DzScene.MergeFile (= 2 on DS4); 0 and OpenNew (1) replace the scene.
-            f"Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);"
+            f"{clear}Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);"
         )
         self._client.execute(script)
 

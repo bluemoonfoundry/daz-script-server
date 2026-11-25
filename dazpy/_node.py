@@ -387,6 +387,48 @@ class DazNode(DazElement):
         script = ScriptBuilder.node_body_from_locator(self._locator, "return Scene.removeNode(_node);")
         return bool(self._client.execute(script).value)
 
+    def hierarchy(self, max_depth: int | None = None) -> dict:
+        """Return the descendant tree under this node, in one call.
+
+        Args:
+            max_depth: Levels to include below this node (this node is level
+                0). ``None`` or ``0`` means unlimited.
+
+        Returns:
+            ``{"node": label, "hierarchy": {...}, "total_descendants": int}``,
+            each entry ``{"label", "name", "type", "element_id", "children"}``
+            (``children`` omitted on leaves). ``total_descendants`` counts
+            the children visited, including those at the depth limit.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+        depth = int(max_depth) if max_depth else 0
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _maxDepth = {depth};
+            var _total = 0;
+            function _build(n, depth) {{
+                if (_maxDepth > 0 && depth >= _maxDepth) return null;
+                var info = {{label: n.getLabel(), name: n.getName(), type: n.className(),
+                             element_id: n.elementID}};
+                var children = [];
+                for (var i = 0; i < n.getNumNodeChildren(); i++) {{
+                    _total++;
+                    var c = _build(n.getNodeChild(i), depth + 1);
+                    if (c) children.push(c);
+                }}
+                if (children.length > 0) info.children = children;
+                return info;
+            }}
+            var _h = _build(_node, 0);
+            return {{node: _node.getLabel(), hierarchy: _h, total_descendants: _total}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return result
+
     def unparent(self, *, preserve_world_transform: bool = True) -> None:
         """Detach this node from its parent so it sits at the scene root.
 

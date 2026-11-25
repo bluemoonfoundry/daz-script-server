@@ -3607,6 +3607,38 @@ class TestNodeResolution(unittest.TestCase):
         self.assertIsNone(found[0].parent)
 
 
+class TestSceneLoadAndHierarchy(unittest.TestCase):
+    def test_load_merges_by_default(self):
+        client = _make_client(None)
+        DazScene(client).load("C:/a.duf")
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzScene.MergeFile", script)
+        self.assertNotIn("Scene.clear()", script)
+
+    def test_load_replace_clears_first_without_dialogs(self):
+        client = _make_client(None)
+        DazScene(client).load("C:/a.duf", replace=True)
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index("Scene.clear()"), script.index("loadScene"))
+        self.assertNotIn("OpenNew", script)
+
+    def test_node_hierarchy_from_proxy(self):
+        payload = {"node": "Genesis 9", "total_descendants": 1,
+                   "hierarchy": {"label": "Genesis 9", "name": "Genesis9", "type": "DzFigure",
+                                 "element_id": 5, "children": []}}
+        client = _make_client(payload)
+        r = DazNode(client, NodeIdentifier("5", kind="element_id")).hierarchy(max_depth=3)
+        self.assertEqual(r["hierarchy"]["element_id"], 5)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.findNodeByElementID(5)", script)
+        self.assertIn("var _maxDepth = 3", script)
+        self.assertIn("element_id: n.elementID", script)
+
+    def test_node_hierarchy_missing(self):
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            DazNode(_make_client(None), NodeIdentifier("5", kind="element_id")).hierarchy()
+
+
 class TestDazNodeUnparent(unittest.TestCase):
     def test_unparent_moves_to_scene_root(self):
         client = _make_client(None)
@@ -5823,6 +5855,22 @@ class TestDazPose(unittest.TestCase):
         self.assertIn("setRawValue(_v)", props_section)
         self.assertIn("setValue(_v)", props_section)
         self.assertNotIn("if (v !== undefined)", props_section)
+
+    def test_apply_full_skips_non_numeric_node_properties(self):
+        # Regression (found live, DS 4.24): a figure carrying DzFileProperty
+        # entries ("Preview Clothing Template", "Developer Tools") made
+        # apply_full() call setValue(0) on them, and Studio rejected the whole
+        # script ("Passing incompatible arguments to C++ functions"). capture()
+        # only records number-valued properties, so apply_full() must only
+        # zero those too -- which also leaves "Point At" / "Fit to" alone.
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        props_section = script[script.index("getNumProperties"):]
+        guard = props_section.index('typeof _cur !== "number"')
+        self.assertLess(guard, props_section.index("setValue(_v)"))
 
     # ── repr ──────────────────────────────────────────────────────────────────
 

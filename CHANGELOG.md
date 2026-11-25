@@ -56,6 +56,9 @@ All notable changes to DazScript Server are documented here.
     value and group path.
   - New exceptions: `AmbiguousNodeError`, `PropertyNotFoundError`.
   - `DazNode.unparent()` moves a node to the scene root.
+  - `DazNode.hierarchy(max_depth)` returns the descendant tree with
+    elementIDs. `DazScene.load(path, replace=True)` clears the scene and then
+    merges, which avoids `OpenNew`'s blocking "save changes?" prompt.
   Live-verified on Studio 4.24.
 
 ### Fixed
@@ -69,6 +72,13 @@ All notable changes to DazScript Server are documented here.
   already did. `reparent()` and `fit_to()` likewise resolve their target
   node through its proxy. Plain nodes generate the same lookup as before.
   Live-verified on Studio 4.24.
+- **dazpy: `DazPose.apply_full()` (and so `DazSceneState.apply()`) failed
+  on figures with file properties.** It wrote 0 to every figure property
+  missing from the pose, including `DzFileProperty` entries that some
+  content adds (for example "Preview Clothing Template"), and Studio
+  rejected the script. It now zeroes only number-valued properties, the
+  same set `capture()` records, so it also no longer clears a figure's
+  "Point At" target. Live-verified on Studio 4.24.
 
 ## [2.16.0] - 2026-11-23
 

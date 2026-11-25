@@ -379,6 +379,10 @@ class DazPose:
             for (var i = 0; i < _skel.getNumProperties(); i++) {{
                 var p = _skel.getProperty(i);
                 if (p && p.setValue) {{
+                    // Only number-valued properties, as capture() records:
+                    // file/node/skeleton properties reject setValue(0).
+                    var _cur = (typeof p.getRawValue === "function") ? p.getRawValue() : p.getValue();
+                    if (typeof _cur !== "number") continue;
                     var v = _props[p.getName()];
                     var _v = (v !== undefined) ? v : 0;
                     if (typeof p.setRawValue === "function") {{ p.setRawValue(_v); }}
