@@ -102,6 +102,8 @@ All notable changes to DazScript Server are documented here.
   - `DazLight.aim_at(x, y, z)`, like `DazCamera.aim_at`.
   - `DazRenderSettings.environment_mode` / `set_environment_mode()` read
     and write Iray's Environment Mode on Studio 4 and 6.
+- `DazNode.subdivision()` / `set_subdivision(view, render=None)` read and set
+  the mesh's SubD levels (the shape's `SubDIALevel` / `SubDRenderLevel`).
 - `DazNode.fitted_item_info()` lists the items fitted to a figure as
   `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
 

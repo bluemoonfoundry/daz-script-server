@@ -1653,6 +1653,53 @@ class DazNode(DazElement):
         )
         return self._client.execute(script).value or {"previous_figure": None, "actions": []}
 
+    _SUBD_JS = """
+        var _obj = _node.getObject ? _node.getObject() : null;
+        var _shape = _obj ? _obj.getCurrentShape() : null;
+        var _view = _shape ? _shape.findProperty("SubDIALevel") : null;
+        var _rend = _shape ? _shape.findProperty("SubDRenderLevel") : null;
+        function _levels() {
+            return {view: _view ? _view.getValue() : null, render: _rend ? _rend.getValue() : null};
+        }
+    """
+
+    def subdivision(self) -> dict | None:
+        """SubD levels of this node's mesh: ``{"view": int, "render": int}``.
+
+        These are the shape's "View SubD Level" (``SubDIALevel``) and "Render
+        SubD Level (Minimum)" (``SubDRenderLevel``) dials; ``None`` values
+        mean the mesh has no SubD cage.
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, self._SUBD_JS + "return _levels();")
+        return self._client.execute(script).value
+
+    def set_subdivision(self, view: int, render: int | None = None) -> dict:
+        """Set the mesh's view SubD level (and optionally its render minimum).
+
+        Returns:
+            ``{"previous": {...}, "current": {...}}`` levels as in :meth:`subdivision`.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            PropertyNotFoundError: If the mesh has no SubD levels.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        render_js = "null" if render is None else str(int(render))
+        script = ScriptBuilder.node_body_from_locator(self._locator, self._SUBD_JS + f"""
+            if (!_view) return {{status: "no_subd"}};
+            var _render = {render_js};
+            var _prev = _levels();
+            _view.setValue({int(view)});
+            if (_render !== null && _rend) _rend.setValue(_render);
+            return {{status: "ok", previous: _prev, current: _levels()}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "no_subd":
+            raise PropertyNotFoundError(f"No SubD levels on {self._identifier.value!r}")
+        return {"previous": raw["previous"], "current": raw["current"]}
+
     def fitted_item_info(self) -> list["FittedItem"]:
         """Items fitted to this figure, with their kind, in one call.
 

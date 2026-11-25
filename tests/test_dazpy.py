@@ -3713,6 +3713,28 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestSubdivision(unittest.TestCase):
+    def test_subdivision_reads_shape_levels(self):
+        client = _make_client({"view": 1, "render": 3})
+        self.assertEqual(DazNode(client, NodeIdentifier("9", kind="element_id")).subdivision(),
+                         {"view": 1, "render": 3})
+        script = client.execute.call_args[0][0]
+        self.assertIn("getCurrentShape()", script)
+        self.assertIn('"SubDIALevel"', script)
+
+    def test_set_subdivision_returns_previous(self):
+        client = _make_client({"status": "ok", "previous": {"view": 1, "render": 3},
+                               "current": {"view": 2, "render": 3}})
+        r = DazNode(client, NodeIdentifier("9", kind="element_id")).set_subdivision(2)
+        self.assertEqual(r["previous"], {"view": 1, "render": 3})
+        self.assertIn("var _render = null", client.execute.call_args[0][0])
+
+    def test_set_subdivision_unsupported(self):
+        client = _make_client({"status": "no_subd"})
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).set_subdivision(1)
+
+
 class TestExportErrors(unittest.TestCase):
     def test_missing_exporter_raises(self):
         client = _make_client({"status": "no_exporter"})
