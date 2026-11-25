@@ -3783,6 +3783,13 @@ class TestDForceHelpers(unittest.TestCase):
         self.assertEqual(node.freeze_dforce(), 2)
         self.assertIn('findPropertyByLabel("Freeze Simulation")', client.execute.call_args[0][0])
 
+    def test_scene_freeze_dforce(self):
+        client = _make_client(3)
+        self.assertEqual(DazScene(client).freeze_dforce(), 3)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getNumNodes()", script)
+        self.assertIn('findPropertyByLabel("Freeze Simulation")', script)
+
     def test_transfer_utility(self):
         from dazpy._node import DazNode as N
         client = _make_client({"ok": True})

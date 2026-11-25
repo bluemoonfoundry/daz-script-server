@@ -273,6 +273,32 @@ class DazScene:
         return [BatchPropertyResult(bool(r.get("ok")), r.get("node"), r.get("property"),
                                     r.get("value"), r.get("error")) for r in raw]
 
+    def freeze_dforce(self, on: bool = True) -> int:
+        """Freeze (bake) or release every dForce modifier in the scene, in one
+        call. Returns how many modifiers were changed."""
+        from ._dforce import DFORCE_FIND_JS
+        script = ScriptBuilder.iife(f"""
+            var total = 0;
+            for (var s = 0; s < Scene.getNumNodes(); s++) {{
+                var _node = Scene.getNode(s);
+                if (!_node || _node.inherits("DzBone")) continue;
+                {DFORCE_FIND_JS}
+                var hs = _hosts();
+                for (var h = 0; h < hs.length; h++) {{
+                    var host = hs[h][1];
+                    if (!host || typeof host.getNumModifiers !== "function") continue;
+                    for (var i = 0; i < host.getNumModifiers(); i++) {{
+                        var m = host.getModifier(i);
+                        if (!_isDForce(m)) continue;
+                        var p = m.findPropertyByLabel("Freeze Simulation");
+                        if (p) {{ p.setValue({"true" if on else "false"}); total++; }}
+                    }}
+                }}
+            }}
+            return total;
+        """)
+        return int(self._client.execute(script).value or 0)
+
     def transfer_utility(
         self,
         source: DazNode,

@@ -113,7 +113,8 @@ All notable changes to DazScript Server are documented here.
     `set_dforce_surface_property(name, value, material)` read and write a
     surface's simulation settings.
   - `freeze_dforce(on=True)` freezes the simulated shape; this is dForce's
-    "bake".
+    "bake". `DazScene.freeze_dforce()` does the same for the whole scene in
+    one call.
   - `DazScene.transfer_utility(source, target, ...)` runs the Transfer
     Utility silently.
   Errors list the modifiers or settings that are available. Verified live
