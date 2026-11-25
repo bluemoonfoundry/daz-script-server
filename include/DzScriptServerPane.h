@@ -74,6 +74,7 @@ namespace ServerConfig {
     const int RATE_LIMIT_CLEANUP_INTERVAL = 100;
 
     // Server lifecycle timing
+    const int PROGRESS_POLL_INTERVAL_MS = 200;     // Main-thread sampling of DzProgress for busy checks
     const int SERVER_BIND_WAIT_MS = 100;           // Wait after listen() before checking is_running()
     const int SERVER_THREAD_STOP_TIMEOUT_MS = 5000; // Max wait for the listen thread to join on stop/failed bind (then leaked, never terminated)
     const int HTTP_KEEP_ALIVE_MAX_COUNT = 5;        // Max requests per persistent connection
@@ -259,6 +260,8 @@ public:
 	std::string                 listAsyncRequestsJson(const std::string& statusFilter);
 
 private slots:
+	// MAIN THREAD: samples DzProgress/DzBackgroundProgress into m_progressBusy.
+	void pollProgressBusy();
 	void onStartClicked();
 	void onStopClicked();
 	void onMessagePosted(const QString& msg);
@@ -408,6 +411,11 @@ private:
 
 	AsyncRequestManager*  m_pAsyncMgr;
 	QTimer*               m_pCleanupTimer;    // Fires every 5 min to purge TTL-expired requests
+	// DzProgress state for HTTP workers (yau7.2.3): DzProgress APIs are
+	// main-thread only, so a timer samples them; workers read only this.
+	enum ProgressBusy { ProgressIdle = 0, ProgressForeground = 1, ProgressBackground = 2 };
+	QTimer*               m_pProgressPollTimer;
+	std::atomic<int>      m_progressBusy;
 	SceneEventBroker*     m_pEventBroker;     // SSE scene-change notification broker
 	RenderProgressBroker* m_pRenderProgress;  // SSE render progress notification broker
 

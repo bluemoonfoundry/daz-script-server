@@ -257,6 +257,8 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_rateLimiter(ServerConfig::DEFAULT_RATE_LIMIT_MAX, ServerConfig::DEFAULT_RATE_LIMIT_WINDOW)
 	, m_pAsyncMgr(nullptr)
 	, m_pCleanupTimer(nullptr)
+	, m_pProgressPollTimer(nullptr)
+	, m_progressBusy(ProgressIdle)
 	, m_pEventBroker(nullptr)
 	, m_pRenderProgress(nullptr)
 	, m_pEventClientsLabel(nullptr)
@@ -290,6 +292,8 @@ DzScriptServerPane::DzScriptServerPane()
 	// Started in startServer(), stopped in stopServer().
 	m_pCleanupTimer = new QTimer(this);
 	connect(m_pCleanupTimer, SIGNAL(timeout()), this, SLOT(cleanupExpiredRequests()));
+	m_pProgressPollTimer = new QTimer(this);
+	connect(m_pProgressPollTimer, SIGNAL(timeout()), this, SLOT(pollProgressBusy()));
 
 	// ── Build UI ─────────────────────────────────────────────────────────────
 	QLabel* titleLabel = new QLabel(
@@ -836,6 +840,8 @@ void DzScriptServerPane::startServer()
 		.arg(m_nTimeoutSec));
 
 	m_pCleanupTimer->start(ServerConfig::ASYNC_CLEANUP_INTERVAL_MIN * 60 * 1000);
+	pollProgressBusy();
+	m_pProgressPollTimer->start(ServerConfig::PROGRESS_POLL_INTERVAL_MS);
 }
 
 void DzScriptServerPane::teardownServer()
@@ -901,6 +907,8 @@ void DzScriptServerPane::stopServer()
 
 	// Stop async cleanup timer
 	m_pCleanupTimer->stop();
+	m_pProgressPollTimer->stop();
+	m_progressBusy.store(ProgressIdle);
 
 	teardownServer();
 
@@ -3578,7 +3586,16 @@ bool DzScriptServerPane::isMainThreadBusy() const
 	// DzScene signal marking that tail. DzProgress/DzBackgroundProgress back the
 	// progress indicator DAZ Studio itself shows for exactly that kind of work,
 	// so poll it as a second, independent busy signal.
-	return DzProgress::isActive() || DzBackgroundProgress::isActive();
+	// Sampled on the main thread by pollProgressBusy(): DzProgress is not
+	// safe to call from an HTTP worker.
+	return m_progressBusy.load() != ProgressIdle;
+}
+
+void DzScriptServerPane::pollProgressBusy()
+{
+	m_progressBusy.store(DzBackgroundProgress::isActive() ? ProgressBackground
+	                     : DzProgress::isActive()         ? ProgressForeground
+	                                                      : ProgressIdle);
 }
 
 std::string DzScriptServerPane::mainThreadBusyMessage() const
@@ -3593,10 +3610,11 @@ std::string DzScriptServerPane::mainThreadBusyMessage() const
 	// load, not a real hang. Neither DzProgress nor DzBackgroundProgress
 	// exposes a readable status/info string (setInfo() has no getter), so
 	// this is the most specific message obtainable from the SDK.
-	if (DzBackgroundProgress::isActive()) {
+	const int progress = m_progressBusy.load();
+	if (progress == ProgressBackground) {
 		return "DAZ Studio is busy loading background content (e.g. lazy-loaded/referenced scene assets)";
 	}
-	if (DzProgress::isActive()) {
+	if (progress == ProgressForeground) {
 		return "DAZ Studio is showing a progress dialog for a foreground operation";
 	}
 	return "DAZ Studio is busy";
