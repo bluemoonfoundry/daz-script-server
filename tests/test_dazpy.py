@@ -3694,6 +3694,52 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestFrameKeys(unittest.TestCase):
+    """find_numeric_property + frame-based keys (daz-mcp-server-scz). Keys are
+    stored in DzTime ticks; frames convert with Scene.getTimeStep()."""
+
+    def _prop(self, value=None):
+        from dazpy._property import DazProperty
+        client = _make_client(value)
+        return DazProperty._from_locator(client, "PROP"), client
+
+    def test_find_numeric_property(self):
+        from dazpy._property import DazProperty
+        client = _make_client(True)
+        prop = DazNode(client, NodeIdentifier("9", kind="element_id")).find_numeric_property("x translate")
+        self.assertIsInstance(prop, DazProperty)
+        self.assertIn("_findNumeric(", prop._locator)
+        self.assertIn('"x translate"', prop._locator)
+
+    def test_find_numeric_property_missing(self):
+        client = _make_client(False)
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).find_numeric_property("Nope")
+
+    def test_set_key_at_frame_converts_to_ticks(self):
+        prop, client = self._prop(5.0)
+        self.assertEqual(prop.set_key_at_frame(30, 5), 5.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("30 * Scene.getTimeStep()", script)
+        self.assertIn("setDoubleValue(_tm, 5.0)", script)
+
+    def test_keys_by_frame(self):
+        prop, client = self._prop([[0, 0.0], [30, 5.0]])
+        self.assertEqual(prop.keys_by_frame(), [(0, 0.0), (30, 5.0)])
+        self.assertIn("/ _step", client.execute.call_args[0][0])
+
+    def test_remove_key_at_frame(self):
+        prop, client = self._prop(True)
+        self.assertTrue(prop.remove_key_at_frame(12))
+        script = client.execute.call_args[0][0]
+        self.assertIn("12 * Scene.getTimeStep()", script)
+        self.assertIn("deleteKeys(new DzTimeRange(_tm, _tm))", script)
+
+    def test_clear_keys_returns_count(self):
+        prop, _ = self._prop(4)
+        self.assertEqual(prop.clear_keys(), 4)
+
+
 class TestSurfacePreset(unittest.TestCase):
     def test_apply_surface_preset_selects_surfaces_and_preflights(self):
         client = _make_client({"status": "ok", "materials": [

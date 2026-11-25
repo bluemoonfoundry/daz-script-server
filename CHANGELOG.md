@@ -72,6 +72,13 @@ All notable changes to DazScript Server are documented here.
   exist before opening the preset, since Studio's Missing Files dialog
   blocks the server. `DazScene.content_path(relative)` resolves
   content-library paths. Live-verified on Studio 4.24.
+- **dazpy frame-based keyframes** (daz-mcp-server-scz):
+  `DazNode.find_numeric_property(name)` returns a `DazProperty` found by
+  label or name across node properties and the modifier stack.
+  `DazProperty.set_key_at_frame()`, `keys_by_frame()` and
+  `remove_key_at_frame()` take timeline frames and convert them with
+  `Scene.getTimeStep()`, where `set_key()`/`get_keys()` use DzTime ticks.
+  `clear_keys()` now returns how many keys it removed.
 
 ### Fixed
 

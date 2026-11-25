@@ -140,6 +140,49 @@ _NUMERIC_CHANNELS_JS = """
     }
 """
 
+# JS: find a property on `node` whose label or name equals `want` (lowercased),
+# or contains it when `substring`. Searches node properties, then each
+# modifier (a morph matched by its own name/label resolves to its value
+# channel) and the modifier's properties. Returns {prop, owner} or null;
+# owner is the modifier when matched through one.
+_FIND_NUMERIC_JS = """
+    function _findNumeric(node, want, substring) {
+        function names(p, alias) {
+            var out = [p.getLabel().toLowerCase(), p.getName().toLowerCase()];
+            if (alias) { out.push(alias.getLabel().toLowerCase()); out.push(alias.getName().toLowerCase()); }
+            return out;
+        }
+        function scan(test) {
+            var i, j, k, n, p, obj, m, ch;
+            for (i = 0; i < node.getNumProperties(); i++) {
+                p = node.getProperty(i); n = names(p, null);
+                for (j = 0; j < n.length; j++) if (test(n[j])) return {prop: p, owner: null};
+            }
+            obj = (typeof node.getObject === "function") ? node.getObject() : null;
+            if (!obj || typeof obj.getNumModifiers !== "function") return null;
+            for (i = 0; i < obj.getNumModifiers(); i++) {
+                m = obj.getModifier(i);
+                if (!m) continue;
+                ch = (typeof m.getValueChannel === "function") ? m.getValueChannel() : null;
+                if (ch) {
+                    n = names(ch, m);
+                    for (j = 0; j < n.length; j++) if (test(n[j])) return {prop: ch, owner: m};
+                }
+                if (typeof m.getNumProperties === "function") {
+                    for (k = 0; k < m.getNumProperties(); k++) {
+                        p = m.getProperty(k); n = names(p, null);
+                        for (j = 0; j < n.length; j++) if (test(n[j])) return {prop: p, owner: null};
+                    }
+                }
+            }
+            return null;
+        }
+        var hit = scan(function (s) { return s === want; });
+        if (!hit && substring) hit = scan(function (s) { return s.indexOf(want) !== -1; });
+        return hit;
+    }
+"""
+
 _NODE_INFO_JS = """
     function _nodeInfo(n) {
         var p = n.getNodeParent ? n.getNodeParent() : null;
@@ -903,44 +946,12 @@ class DazNode(DazElement):
             TypeError: If the match is not numeric.
         """
         from .exceptions import NodeNotFoundError, PropertyNotFoundError
-        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+        script = ScriptBuilder.node_body_from_locator(self._locator, _FIND_NUMERIC_JS + f"""
             var _want = {json.dumps(name.lower())};
             var _substring = {"true" if substring_fallback else "false"};
             var _unlock = {"true" if unlock else "false"};
-            function _names(p, alias) {{
-                var out = [p.getLabel().toLowerCase(), p.getName().toLowerCase()];
-                if (alias) {{ out.push(alias.getLabel().toLowerCase()); out.push(alias.getName().toLowerCase()); }}
-                return out;
-            }}
-            var _hit = null, _owner = null;
-            function _scan(test) {{
-                var i, j, n, p, obj, m;
-                for (i = 0; i < _node.getNumProperties(); i++) {{
-                    p = _node.getProperty(i);
-                    n = _names(p, null);
-                    for (j = 0; j < n.length; j++) if (test(n[j])) return p;
-                }}
-                obj = (typeof _node.getObject === "function") ? _node.getObject() : null;
-                if (!obj || typeof obj.getNumModifiers !== "function") return null;
-                for (i = 0; i < obj.getNumModifiers(); i++) {{
-                    m = obj.getModifier(i);
-                    if (!m) continue;
-                    if (typeof m.getValueChannel === "function" && m.getValueChannel()) {{
-                        n = _names(m.getValueChannel(), m);
-                        for (j = 0; j < n.length; j++) if (test(n[j])) {{ _owner = m; return m.getValueChannel(); }}
-                    }}
-                    if (typeof m.getNumProperties === "function") {{
-                        for (var k = 0; k < m.getNumProperties(); k++) {{
-                            p = m.getProperty(k);
-                            n = _names(p, null);
-                            for (j = 0; j < n.length; j++) if (test(n[j])) return p;
-                        }}
-                    }}
-                }}
-                return null;
-            }}
-            _hit = _scan(function (s) {{ return s === _want; }});
-            if (!_hit && _substring) _hit = _scan(function (s) {{ return s.indexOf(_want) !== -1; }});
+            var _found = _findNumeric(_node, _want, _substring);
+            var _hit = _found ? _found.prop : null, _owner = _found ? _found.owner : null;
             if (!_hit) return {{status: "missing"}};
             if (!_hit.inherits("DzNumericProperty")) return {{status: "not_numeric", label: _hit.getLabel()}};
             if (_unlock && typeof _hit.lock === "function" && _hit.isLocked && _hit.isLocked()) _hit.lock(false);
@@ -956,6 +967,29 @@ class DazNode(DazElement):
         if raw.get("status") == "not_numeric":
             raise TypeError(f"Property is not numeric: {raw.get('label', name)!r}")
         return NumericPropertyWrite(label=raw["label"], name=raw["name"], value=raw["value"])
+
+    def find_numeric_property(self, name: str) -> "DazProperty":
+        """Return the numeric property whose label or name is *name* (case-insensitive).
+
+        Searches like :meth:`set_numeric_property` (node properties, then
+        the modifier stack), exact matches only. The proxy re-finds the
+        property by the same rule on every call.
+
+        Raises:
+            PropertyNotFoundError: If nothing matches, or the match is not numeric.
+        """
+        from ._property import DazProperty
+        from .exceptions import PropertyNotFoundError
+        locator = (
+            "(function(){" + _FIND_NUMERIC_JS
+            + f"var _node = {self._locator}; if (!_node) return null;"
+            + f" var _h = _findNumeric(_node, {json.dumps(name.lower())}, false);"
+            + ' return (_h && _h.prop.inherits("DzNumericProperty")) ? _h.prop : null;})()'
+        )
+        if not self._client.execute(ScriptBuilder.iife(f"return !!({locator});")).value:
+            raise PropertyNotFoundError(
+                f"Numeric property not found: {name!r} on {self._identifier.value!r}")
+        return DazProperty._from_locator(self._client, locator)
 
     def morph_info(
         self, pattern: str | None = None, include_zero: bool = False

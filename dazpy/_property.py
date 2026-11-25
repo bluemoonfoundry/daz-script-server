@@ -195,10 +195,63 @@ class DazProperty(DazElement):
         """)
         self._client.execute(script)
 
-    def clear_keys(self) -> None:
-        """Remove all keyframes from this property's animation curve."""
+    def clear_keys(self) -> int:
+        """Remove all keyframes from this property's animation curve.
+
+        Returns:
+            How many keys were removed.
+        """
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.deleteAllKeys) p.deleteAllKeys();
+            if (!p || !p.deleteAllKeys) return 0;
+            var n = p.getNumKeys ? p.getNumKeys() : 0;
+            p.deleteAllKeys();
+            return n;
         """)
-        self._client.execute(script)
+        return int(self._client.execute(script).value or 0)
+
+    # ── frame-based keys (frames convert with Scene.getTimeStep()) ──────────
+
+    def set_key_at_frame(self, frame: int, value: float) -> float | None:
+        """Key *value* at timeline *frame* and return the value read back there.
+
+        Unlike :meth:`set_key`, which takes DzTime ticks, *frame* is converted
+        with the scene's ticks-per-frame (``Scene.getTimeStep()``).
+        """
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p || !p.setDoubleValue) return null;
+            var _tm = {int(frame)} * Scene.getTimeStep();
+            p.setDoubleValue(_tm, {float(value)!r});
+            return p.getDoubleValue(_tm);
+        """)
+        return self._client.execute(script).value
+
+    def keys_by_frame(self) -> list[tuple[float, float]]:
+        """Every key as ``(frame, value)``, frames converted from ticks.
+
+        A key between whole frames comes back with a fractional frame.
+        """
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p || !p.getNumKeys) return [];
+            var _step = Scene.getTimeStep().valueOf(), out = [];
+            for (var i = 0; i < p.getNumKeys(); i++) {{
+                var t = p.getKeyTime(i);
+                out.push([t.valueOf() / _step, p.getDoubleValue(t)]);
+            }}
+            return out;
+        """)
+        return [(k[0], k[1]) for k in self._client.execute(script).value or []]
+
+    def remove_key_at_frame(self, frame: int) -> bool:
+        """Remove the key at *frame*; ``False`` if there was none."""
+        script = ScriptBuilder.iife(f"""
+            var p = {self._locator};
+            if (!p || !p.getNumKeys) return false;
+            var _tm = {int(frame)} * Scene.getTimeStep();
+            var before = p.getNumKeys();
+            p.deleteKeys(new DzTimeRange(_tm, _tm));
+            return p.getNumKeys() < before;
+        """)
+        return bool(self._client.execute(script).value)
