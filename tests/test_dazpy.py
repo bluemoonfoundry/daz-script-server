@@ -3694,6 +3694,60 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestPropertyDetailsAndBatchSet(unittest.TestCase):
+    """property_details / property_detail / set_numeric_properties (daz-mcp-server-ksl)."""
+
+    def test_property_details_filter(self):
+        row = {"label": "X Translate", "name": "XTranslate", "type": "DzFloatProperty",
+               "value": 0.0, "min": -1e4, "max": 1e4, "default": 0.0, "path": "Transforms",
+               "is_animatable": True}
+        client = _make_client([row])
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        details = node.property_details("transform")
+        self.assertEqual(details[0].path, "Transforms")
+        self.assertIn('var _kind = "transform"', client.execute.call_args[0][0])
+        # DzProperty has canAnimate(); isAnimatable() does not exist (always false)
+        self.assertIn("p.canAnimate()", client.execute.call_args[0][0])
+
+    def test_property_details_rejects_unknown_kind(self):
+        node = DazNode(_make_client([]), NodeIdentifier("9", kind="element_id"))
+        with self.assertRaises(ValueError):
+            node.property_details("colour")
+
+    def test_property_detail_missing(self):
+        node = DazNode(_make_client({"status": "missing"}), NodeIdentifier("9", kind="element_id"))
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            node.property_detail("Nope")
+
+    def test_property_detail(self):
+        client = _make_client({"status": "ok", "detail": {
+            "label": "Flux", "name": "Flux", "type": "DzFloatProperty", "value": 1500.0,
+            "min": 0.0, "max": 1e5, "default": 1500.0, "path": "Light", "is_animatable": True}})
+        d = DazNode(client, NodeIdentifier("9", kind="element_id")).property_detail("flux")
+        self.assertEqual((d.label, d.default), ("Flux", 1500.0))
+
+    def test_set_numeric_properties_one_call_per_op_errors(self):
+        client = _make_client([
+            {"ok": True, "node": "Genesis 9", "property": "X Translate", "value": 10},
+            {"ok": False, "node": None, "error": "Ambiguous node 'Chair' (2 matches)"},
+        ])
+        results = DazScene(client).set_numeric_properties(
+            [("Genesis 9", "x translate", 10), ("Chair", "Y Rotate", 5)])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertTrue(results[0].ok)
+        self.assertEqual(results[0].property, "X Translate")
+        self.assertFalse(results[1].ok)
+        self.assertIn("Ambiguous", results[1].error)
+        script = client.execute.call_args[0][0]
+        self.assertIn("_findNumeric(", script)
+        self.assertIn("_resolve(", script)
+
+    def test_set_numeric_properties_empty(self):
+        client = _make_client([])
+        self.assertEqual(DazScene(client).set_numeric_properties([]), [])
+        client.execute.assert_not_called()
+
+
 class TestFrameKeys(unittest.TestCase):
     """find_numeric_property + frame-based keys (daz-mcp-server-scz). Keys are
     stored in DzTime ticks; frames convert with Scene.getTimeStep()."""

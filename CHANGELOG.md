@@ -79,6 +79,12 @@ All notable changes to DazScript Server are documented here.
   `remove_key_at_frame()` take timeline frames and convert them with
   `Scene.getTimeStep()`, where `set_key()`/`get_keys()` use DzTime ticks.
   `clear_keys()` now returns how many keys it removed.
+- **dazpy property metadata and batch writes** (daz-mcp-server-ksl):
+  `DazNode.property_details(kind)` and `property_detail(name)` return
+  `PropertyDetails` (type, value, range, default, group path, and
+  animatability via `canAnimate()`). `DazScene.set_numeric_properties(ops)`
+  sets many properties across nodes in one call and reports each
+  operation's error separately (`BatchPropertyResult`).
 
 ### Fixed
 

@@ -16,7 +16,7 @@ Typical usage::
 __version__ = "2.16.0"
 
 from ._client import DazClient
-from ._scene import DazScene, ViewportCamera
+from ._scene import BatchPropertyResult, DazScene, ViewportCamera
 from ._node import (
     DazNode,
     MorphInfo,
@@ -24,6 +24,7 @@ from ._node import (
     NodeInfo,
     NumericCandidateMatch,
     NumericPropertyWrite,
+    PropertyDetails,
 )
 from ._skeleton import DazSkeleton
 from ._bone import DazBone
@@ -164,6 +165,8 @@ __all__ = [
     "MaterialProperty",
     "MaterialPropertyWrite",
     "ViewportCamera",
+    "BatchPropertyResult",
+    "PropertyDetails",
     "DazSkeleton",
     "DazBone",
     "DazCamera",

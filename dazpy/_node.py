@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
@@ -93,6 +93,55 @@ class NodeInfo:
             parent=raw.get("parent"),
             num_children=raw.get("num_children"),
         )
+
+
+@dataclass(frozen=True)
+class PropertyDetails:
+    """One node property with its metadata, from :meth:`DazNode.property_details`.
+
+    ``value``/``min``/``max``/``default`` are ``None`` where they don't apply
+    (non-numeric properties; ``value`` is kept for string properties).
+    """
+
+    label: str
+    name: str
+    type: str
+    value: Any
+    min: float | None
+    max: float | None
+    default: Any
+    path: str
+    is_animatable: bool
+
+    @classmethod
+    def _from_raw(cls, r: dict) -> "PropertyDetails":
+        return cls(r["label"], r["name"], r["type"], r.get("value"), r.get("min"),
+                   r.get("max"), r.get("default"), r.get("path", ""),
+                   bool(r.get("is_animatable")))
+
+
+_PROPERTY_KINDS = ("all", "numeric", "transform", "morph", "bool", "string")
+
+_PROPERTY_DETAIL_JS = """
+    var _TRANSFORMS = {XTranslate: 1, YTranslate: 1, ZTranslate: 1, XRotate: 1, YRotate: 1,
+                       ZRotate: 1, Scale: 1, XScale: 1, YScale: 1, ZScale: 1};
+    function _detail(p) {
+        var cls = p.className(), num = p.inherits("DzNumericProperty");
+        var str = cls === "DzStringProperty";
+        return {label: p.getLabel(), name: p.getName(), type: cls,
+                value: (num || str) ? p.getValue() : null,
+                min: (num && p.getMin) ? p.getMin() : null,
+                max: (num && p.getMax) ? p.getMax() : null,
+                default: (num && p.getDefaultValue) ? p.getDefaultValue() : null,
+                path: p.getPath ? p.getPath() : "",
+                is_animatable: p.canAnimate ? p.canAnimate() : false};
+    }
+    function _kindOf(p) {
+        var cls = p.className(), num = p.inherits("DzNumericProperty");
+        return {numeric: num, transform: _TRANSFORMS[p.getName()] === 1,
+                bool: cls === "DzBoolProperty", string: cls === "DzStringProperty"};
+    }
+"""
 
 
 @dataclass(frozen=True)
@@ -967,6 +1016,55 @@ class DazNode(DazElement):
         if raw.get("status") == "not_numeric":
             raise TypeError(f"Property is not numeric: {raw.get('label', name)!r}")
         return NumericPropertyWrite(label=raw["label"], name=raw["name"], value=raw["value"])
+
+    def property_details(self, kind: str = "all") -> list[PropertyDetails]:
+        """Node-level properties with type, value, range, default, group path
+        and animatability, in one call.
+
+        Args:
+            kind: ``"all"``, ``"numeric"``, ``"transform"`` (translate, rotate
+                and scale channels), ``"morph"`` (numeric, not a transform),
+                ``"bool"`` or ``"string"``.
+
+        Raises:
+            ValueError: For any other *kind*.
+        """
+        if kind not in _PROPERTY_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(_PROPERTY_KINDS)}; got {kind!r}")
+        script = ScriptBuilder.node_body_from_locator(self._locator, _PROPERTY_DETAIL_JS + f"""
+            var _kind = {json.dumps(kind)}, _out = [];
+            for (var i = 0; i < _node.getNumProperties(); i++) {{
+                var p = _node.getProperty(i), k = _kindOf(p);
+                var keep = _kind === "all" || (_kind === "morph" ? (k.numeric && !k.transform) : k[_kind]);
+                if (keep) _out.push(_detail(p));
+            }}
+            return _out;
+        """)
+        return [PropertyDetails._from_raw(r) for r in self._client.execute(script).value or []]
+
+    def property_detail(self, name: str) -> PropertyDetails:
+        """Metadata for one node-level property, by label or name (case-insensitive).
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            PropertyNotFoundError: If no node-level property matches.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, _PROPERTY_DETAIL_JS + f"""
+            var _want = {json.dumps(name.lower())};
+            for (var i = 0; i < _node.getNumProperties(); i++) {{
+                var p = _node.getProperty(i);
+                if (p.getLabel().toLowerCase() === _want || p.getName().toLowerCase() === _want)
+                    return {{status: "ok", detail: _detail(p)}};
+            }}
+            return {{status: "missing"}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] != "ok":
+            raise PropertyNotFoundError(f"Property not found: {name!r}")
+        return PropertyDetails._from_raw(raw["detail"])
 
     def find_numeric_property(self, name: str) -> "DazProperty":
         """Return the numeric property whose label or name is *name* (case-insensitive).

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from ._client import DazClient
-from ._node import _NODE_INFO_JS, DazNode, NodeIdentifier, NodeInfo
+from ._node import _FIND_NUMERIC_JS, _NODE_INFO_JS, DazNode, NodeIdentifier, NodeInfo
 from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
@@ -35,6 +35,51 @@ class ViewportCamera:
     in_scene: bool
     position: tuple[float, float, float]
     camera: "DazCamera | None" = None
+
+
+# JS: resolve a node reference (elementID, Parent/Label path, or a unique
+# label/name). Returns {node} | {missing: ref} | {ambiguous, count, matches}.
+# Needs _NODE_INFO_JS.
+_RESOLVE_JS = """
+            function _resolve(s) {
+                if (/^[0-9]+$/.test(s)) {
+                    var byId = Scene.findNodeByElementID(parseInt(s, 10));
+                    return byId ? {node: byId} : {missing: s};
+                }
+                var slash = s.lastIndexOf("/");
+                if (slash > 0) {
+                    var parent = _resolve(s.substring(0, slash));
+                    if (!parent.node) return parent;
+                    var part = s.substring(slash + 1), child = null;
+                    if (typeof parent.node.findNodeChildByLabel === "function")
+                        child = parent.node.findNodeChildByLabel(part, true);
+                    if (!child && typeof parent.node.findNodeChild === "function")
+                        child = parent.node.findNodeChild(part, true);
+                    return child ? {node: child} : {missing: s};
+                }
+                var matches = [];
+                for (var i = 0; i < Scene.getNumNodes(); i++) {
+                    var n = Scene.getNode(i);
+                    if (n && (n.getLabel() === s || n.getName() === s)) matches.push(n);
+                }
+                if (matches.length === 1) return {node: matches[0]};
+                if (matches.length === 0) return {missing: s};
+                var info = [];
+                for (var k = 0; k < matches.length && k < 12; k++) info.push(_nodeInfo(matches[k]));
+                return {ambiguous: s, count: matches.length, matches: info};
+            }
+"""
+
+
+@dataclass(frozen=True)
+class BatchPropertyResult:
+    """One operation's outcome from :meth:`DazScene.set_numeric_properties`."""
+
+    ok: bool
+    node: str | None
+    property: str | None = None
+    value: float | None = None
+    error: str | None = None
 
 
 class DazScene:
@@ -132,34 +177,7 @@ class DazScene:
         text = str(ref).strip() if ref is not None else ""
         if not text:
             raise ValueError("resolve_node: a node reference is required")
-        script = ScriptBuilder.iife(_NODE_INFO_JS + f"""
-            function _resolve(s) {{
-                if (/^[0-9]+$/.test(s)) {{
-                    var byId = Scene.findNodeByElementID(parseInt(s, 10));
-                    return byId ? {{node: byId}} : {{missing: s}};
-                }}
-                var slash = s.lastIndexOf("/");
-                if (slash > 0) {{
-                    var parent = _resolve(s.substring(0, slash));
-                    if (!parent.node) return parent;
-                    var part = s.substring(slash + 1), child = null;
-                    if (typeof parent.node.findNodeChildByLabel === "function")
-                        child = parent.node.findNodeChildByLabel(part, true);
-                    if (!child && typeof parent.node.findNodeChild === "function")
-                        child = parent.node.findNodeChild(part, true);
-                    return child ? {{node: child}} : {{missing: s}};
-                }}
-                var matches = [];
-                for (var i = 0; i < Scene.getNumNodes(); i++) {{
-                    var n = Scene.getNode(i);
-                    if (n && (n.getLabel() === s || n.getName() === s)) matches.push(n);
-                }}
-                if (matches.length === 1) return {{node: matches[0]}};
-                if (matches.length === 0) return {{missing: s}};
-                var info = [];
-                for (var k = 0; k < matches.length && k < 12; k++) info.push(_nodeInfo(matches[k]));
-                return {{ambiguous: s, count: matches.length, matches: info}};
-            }}
+        script = ScriptBuilder.iife(_NODE_INFO_JS + _RESOLVE_JS + f"""
             var r = _resolve({json.dumps(text)});
             if (r.node) {{
                 var t = "DzNode", kinds = {json.dumps(list(self._NODE_CLASSES))};
@@ -181,6 +199,46 @@ class DazScene:
         missing = raw.get("ref", text)
         detail = f" (no node at {missing!r})" if missing != text else ""
         raise NodeNotFoundError(f"Node not found: {text!r}{detail}")
+
+    def set_numeric_properties(
+        self, operations: Sequence[tuple[str | int, str, float]]
+    ) -> list[BatchPropertyResult]:
+        """Set many numeric properties across nodes in one call.
+
+        Each operation is ``(node_ref, property_name, value)``: *node_ref*
+        as for :meth:`resolve_node`, *property_name* matched like
+        :meth:`DazNode.set_numeric_property` (exact, case-insensitive; locked
+        properties are unlocked). A failing operation doesn't stop the
+        others; its result carries the error.
+        """
+        ops = [{"node": str(n), "prop": str(p), "value": float(v)} for n, p, v in operations]
+        if not ops:
+            return []
+        script = ScriptBuilder.iife(_NODE_INFO_JS + _RESOLVE_JS + _FIND_NUMERIC_JS + f"""
+            var _ops = {json.dumps(ops)}, _out = [];
+            for (var i = 0; i < _ops.length; i++) {{
+                var op = _ops[i];
+                try {{
+                    var r = _resolve(op.node);
+                    if (r.ambiguous) throw new Error("Ambiguous node '" + op.node + "' (" + r.count +
+                        " matches). Use elementID or Parent/Label.");
+                    if (!r.node) throw new Error("Node not found: " + op.node);
+                    var h = _findNumeric(r.node, op.prop.toLowerCase(), false);
+                    if (!h) throw new Error("Property not found: " + op.prop);
+                    var p = h.prop;
+                    if (!p.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + op.prop);
+                    if (typeof p.lock === "function" && p.isLocked && p.isLocked()) p.lock(false);
+                    p.setValue(op.value);
+                    _out.push({{ok: true, node: r.node.getLabel(), property: p.getLabel(), value: p.getValue()}});
+                }} catch (e) {{
+                    _out.push({{ok: false, node: null, error: e.message || String(e)}});
+                }}
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value or []
+        return [BatchPropertyResult(bool(r.get("ok")), r.get("node"), r.get("property"),
+                                    r.get("value"), r.get("error")) for r in raw]
 
     def find_nodes(self, query: str) -> list[NodeInfo]:
         """Every node whose label or internal name equals *query* exactly.
