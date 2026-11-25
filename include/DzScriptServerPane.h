@@ -293,6 +293,19 @@ private:
 	void   serveArtifactThumbnail(const httplib::Request& req, httplib::Response& res);
 	void   updateUI();
 	DzScript* ensurePersistentScript();
+
+	// One script run on the persistent DzScript with print() output captured
+	// (yau7.5.1). Loads scriptFile when set, else runs scriptText. MAIN THREAD.
+	struct CapturedScriptRun {
+		bool        loaded;    // false: scriptFile could not be loaded (not run)
+		bool        success;
+		QVariant    result;
+		QStringList output;
+		QString     error;     // "Line N: message" when the line is known
+		CapturedScriptRun() : loaded(true), success(false) {}
+	};
+	CapturedScriptRun runCapturedScript(const QString& scriptFile, const QString& scriptText,
+	                                    const QVariantMap& args);
 	QString buildResponseJson(bool success,
 	                          const QVariant& result,
 	                          const QStringList& output,

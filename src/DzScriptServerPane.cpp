@@ -1960,6 +1960,57 @@ std::string DzScriptServerPane::listAsyncRequestsJson(const std::string& statusF
 
 // ─── Main-thread request handler ──────────────────────────────────────────────
 
+DzScriptServerPane::CapturedScriptRun DzScriptServerPane::runCapturedScript(
+	const QString& scriptFile, const QString& scriptText, const QVariantMap& args)
+{
+	// Turns print() capture on for exactly this run; the destructor undoes it
+	// even if something throws, so capture can't stay on or the signal
+	// stay connected.
+	struct CaptureScope {
+		DzScriptServerPane* pane;
+		explicit CaptureScope(DzScriptServerPane* p) : pane(p) {
+			pane->m_aCapturedLogLines.clear();
+			pane->m_bCapturingLog = true;
+			connect(dzApp, DSS_DEBUG_SIGNAL, pane, SLOT(onMessagePosted(const QString&)),
+			        Qt::DirectConnection);
+		}
+		~CaptureScope() {
+			disconnect(dzApp, DSS_DEBUG_SIGNAL, pane, SLOT(onMessagePosted(const QString&)));
+			pane->m_bCapturingLog = false;
+		}
+	} scope(this);
+
+	CapturedScriptRun run;
+	// Reuse the persistent DzScript instance instead of constructing/
+	// destroying one per request — see m_pPersistentScript's declaration.
+	ensurePersistentScript()->clear();
+	if (!scriptFile.isEmpty()) {
+		// loadFromFile sets the filename so getScriptFileName() and relative
+		// include() calls work inside the script.
+		if (!m_pPersistentScript->loadFromFile(scriptFile)) {
+			run.loaded = false;
+			run.error  = QString("Failed to load script file: %1").arg(scriptFile);
+			return run;
+		}
+	} else {
+		m_pPersistentScript->setCode(scriptText);
+	}
+
+	// Args are reachable in scripts via getArguments()[0].
+	const ScriptRunResult r = runDazScript(m_pPersistentScript, args, scriptFile);
+	run.success = r.success;
+	run.result  = r.result;
+	if (!r.success)
+		run.error = r.errorLine > 0 ? QString("Line %1: %2").arg(r.errorLine).arg(r.errorMessage)
+		                            : r.errorMessage;
+#if DAZ_SDK_MAJOR_VERSION >= 6
+	run.output = r.output;               // SDK6: evaluate() bypasses the debugMsg signal
+#else
+	run.output = m_aCapturedLogLines;
+#endif
+	return run;
+}
+
 HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP, qint64 acceptedAtMs)
 {
 	QTime startTime = QTime::currentTime();
@@ -2003,55 +2054,15 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 			stdToQBA(vr.toErrorJson()));
 	}
 
-	// Capture dzApp debug output (print() in DazScript)
-	m_aCapturedLogLines.clear();
-	m_bCapturingLog = true;
-	connect(dzApp, DSS_DEBUG_SIGNAL,
-	        this,  SLOT(onMessagePosted(const QString&)),
-	        Qt::DirectConnection);
-
-	// Reuse the persistent DzScript instance instead of constructing/
-	// destroying one per request — see m_pPersistentScript's declaration.
-	ensurePersistentScript()->clear();
-
-	if (!scriptFile.isEmpty()) {
-		// loadFromFile sets the filename so getScriptFileName() and relative
-		// include() calls work correctly inside the script.
-		if (!m_pPersistentScript->loadFromFile(scriptFile)) {
-			disconnect(dzApp, DSS_DEBUG_SIGNAL,
-			           this,  SLOT(onMessagePosted(const QString&)));
-			m_bCapturingLog = false;
-			m_metrics.recordRequest(false);
-			return HttpResult(400,
-				stdToQBA(ErrorResponse::build(
-					ErrorCode::SCRIPT_FILE_LOAD_FAILED, JsonStd::qstrToStd(scriptFile))));
-		}
-	} else {
-		m_pPersistentScript->setCode(scriptText);
+	const CapturedScriptRun run = runCapturedScript(scriptFile, scriptText, argsMap);
+	if (!run.loaded) {
+		m_metrics.recordRequest(false);
+		return HttpResult(400,
+			stdToQBA(ErrorResponse::build(
+				ErrorCode::SCRIPT_FILE_LOAD_FAILED, JsonStd::qstrToStd(scriptFile))));
 	}
-
-	// Args are accessible in scripts via getArguments()[0], since
-	// DzScriptContext methods are available as globals in every DzScript.
-	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap, scriptFile);
 	m_sceneRevision.fetchAndAddOrdered(1);  // the script may have changed anything
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
-#endif
-
-	QVariant scriptResult = runResult.result;
-	QVariant errorVar;
-	bool     success = runResult.success;
-
-	if (!success) {
-		QString errMsg = runResult.errorMessage;
-		if (runResult.errorLine > 0)
-			errMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errMsg);
-		errorVar = QVariant(errMsg);
-	}
-
-	disconnect(dzApp, DSS_DEBUG_SIGNAL,
-	           this,  SLOT(onMessagePosted(const QString&)));
-	m_bCapturingLog = false;
+	const bool success = run.success;
 
 	// Calculate execution duration
 	int durationMs = startTime.msecsTo(QTime::currentTime());
@@ -2073,9 +2084,9 @@ HttpResult DzScriptServerPane::handleExecuteRequest(const QByteArray& jsonBody, 
 		.arg(logLabel));
 
 	QString body = buildResponseJson(success,
-	                                 success ? scriptResult : QVariant(),
-	                                 m_aCapturedLogLines,
-	                                 errorVar,
+	                                 success ? run.result : QVariant(),
+	                                 run.output,
+	                                 success ? QVariant() : QVariant(run.error),
 	                                 requestId);
 	return HttpResult(200, body.toUtf8());
 }
@@ -2146,36 +2157,10 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 			argsMap = parsedBody.value("args").toMap();
 	}
 
-	// Execute
-	m_aCapturedLogLines.clear();
-	m_bCapturingLog = true;
-	connect(dzApp, DSS_DEBUG_SIGNAL,
-	        this,  SLOT(onMessagePosted(const QString&)),
-	        Qt::DirectConnection);
-
-	ensurePersistentScript()->clear();
-	m_pPersistentScript->setCode(QString::fromUtf8(scriptText.constData(), scriptText.size()));
-
-	ScriptRunResult runResult = runDazScript(m_pPersistentScript, argsMap, QString());
+	const CapturedScriptRun run = runCapturedScript(
+		QString(), QString::fromUtf8(scriptText.constData(), scriptText.size()), argsMap);
 	m_sceneRevision.fetchAndAddOrdered(1);  // the script may have changed anything
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
-#endif
-
-	QVariant scriptResult = runResult.result;
-	QVariant errorVar;
-	bool     success = runResult.success;
-
-	if (!success) {
-		QString errMsg = runResult.errorMessage;
-		if (runResult.errorLine > 0)
-			errMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errMsg);
-		errorVar = QVariant(errMsg);
-	}
-
-	disconnect(dzApp, DSS_DEBUG_SIGNAL,
-	           this,  SLOT(onMessagePosted(const QString&)));
-	m_bCapturingLog = false;
+	const bool success = run.success;
 
 	int durationMs = startTime.msecsTo(QTime::currentTime());
 	m_metrics.recordRequest(success);
@@ -2190,9 +2175,9 @@ HttpResult DzScriptServerPane::handleRegistryExecuteRequest(
 
 	return HttpResult(200,
 		buildResponseJson(success,
-		                  success ? scriptResult : QVariant(),
-		                  m_aCapturedLogLines,
-		                  errorVar,
+		                  success ? run.result : QVariant(),
+		                  run.output,
+		                  success ? QVariant() : QVariant(run.error),
 		                  requestId).toUtf8());
 }
 
@@ -3627,40 +3612,13 @@ void DzScriptServerPane::processNextAsyncRequest()
 		m_pRenderProgress->notifyStarted(id);
 
 	// Execute the script on the main thread (same path as sync handler)
-	m_aCapturedLogLines.clear();
-	m_bCapturingLog = true;
 	m_sCurrentRenderId = isRender ? id : QString();
-	connect(dzApp, DSS_DEBUG_SIGNAL,
-	        this,  SLOT(onMessagePosted(const QString&)),
-	        Qt::DirectConnection);
-
-	ensurePersistentScript()->clear();
-	ScriptRunResult runResult;
-	if (!scriptFile.isEmpty() && !m_pPersistentScript->loadFromFile(scriptFile)) {
-		runResult.errorMessage = QString("Failed to load script file: %1").arg(scriptFile);
-	} else {
-		if (scriptFile.isEmpty())
-			m_pPersistentScript->setCode(scriptText);
-		runResult = runDazScript(m_pPersistentScript, args, scriptFile);
-	}
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	m_aCapturedLogLines = runResult.output;  // SDK6: evaluate() bypasses the debugMsg signal
-#endif
-
-	bool     executed    = runResult.success;
-	QVariant scriptResult = runResult.result;
-	QString  errorMsg;
-	if (!executed) {
-		errorMsg = runResult.errorMessage;
-		if (runResult.errorLine > 0)
-			errorMsg = QString("Line %1: %2").arg(runResult.errorLine).arg(errorMsg);
-	}
-	QStringList capturedOutput = m_aCapturedLogLines;
-
-	disconnect(dzApp, DSS_DEBUG_SIGNAL,
-	           this,  SLOT(onMessagePosted(const QString&)));
-	m_bCapturingLog = false;
+	const CapturedScriptRun run = runCapturedScript(scriptFile, scriptText, args);
 	m_sCurrentRenderId.clear();
+	const bool        executed       = run.success;
+	const QVariant    scriptResult   = run.result;
+	const QString     errorMsg       = run.error;
+	const QStringList capturedOutput = run.output;
 
 	int durationMs = wallClock.msecsTo(QTime::currentTime());
 
