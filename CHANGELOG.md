@@ -37,6 +37,18 @@ All notable changes to DazScript Server are documented here.
     view cameras ("Perspective View"), which aren't scene nodes.
   Live-verified on Studio 4.24 with Genesis 9 and Genesis 8 Female.
 
+### Fixed
+
+- **dazpy: `DazBone` methods inherited from `DazNode` read the wrong figure.**
+  `position`, `label`, visibility, transforms and the other `DazNode` methods
+  looked the bone up with `Scene.findNode(<bone name>)`. Every Genesis
+  figure has a bone named `head`, so with two figures loaded,
+  `g8.find_bone("head").position` returned Genesis 9's head. They now
+  resolve through the bone's own skeleton, as `DazBone`'s own methods
+  already did. `reparent()` and `fit_to()` likewise resolve their target
+  node through its proxy. Plain nodes generate the same lookup as before.
+  Live-verified on Studio 4.24.
+
 ## [2.16.0] - 2026-11-23
 
 Plugin, dazpy and daz-ts release: plugin and dazpy 2.16.0, daz-ts 0.2.0.

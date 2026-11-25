@@ -113,13 +113,13 @@ class DazNode(DazElement):
     @property
     def label(self) -> str | None:
         """User-visible display label shown in the Scene panel (read/write)."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.getLabel();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.getLabel();")
         return self._client.execute(script).value
 
     @label.setter
     def label(self, value: str) -> None:
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.setLabel({json.dumps(value)});"
         )
         self._client.execute(script)
@@ -127,7 +127,7 @@ class DazNode(DazElement):
     @property
     def name(self) -> str | None:
         """Internal node name used to look up the node (read-only)."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.getName();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.getName();")
         return self._client.execute(script).value
 
     @property
@@ -136,8 +136,8 @@ class DazNode(DazElement):
 
         Use :meth:`set_position` to change.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var p = _node.getWSPos(); return {x: p.x, y: p.y, z: p.z};"
         )
         return self._client.execute(script).value
@@ -150,8 +150,8 @@ class DazNode(DazElement):
             y: Y coordinate.
             z: Z coordinate.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.setWSPos(new DzVec3({x}, {y}, {z}));"
         )
         self._client.execute(script)
@@ -162,8 +162,8 @@ class DazNode(DazElement):
 
         Use :meth:`set_rotation` to change (accepts Euler angles in degrees).
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var r = _node.getWSRot(); return {x: r.x, y: r.y, z: r.z, w: r.w};"
         )
         return self._client.execute(script).value
@@ -171,8 +171,8 @@ class DazNode(DazElement):
     @property
     def general_scale(self) -> float | None:
         """Uniform scale factor (read-only)."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "return _node.getScaleControl().getValue();"
         )
         return self._client.execute(script).value
@@ -183,8 +183,8 @@ class DazNode(DazElement):
 
         Use :meth:`set_scale` to change the per-axis values.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "return {x: _node.getXScaleControl().getValue(), y: _node.getYScaleControl().getValue(), z: _node.getZScaleControl().getValue(), general: _node.getScaleControl().getValue()};"
         )
         return self._client.execute(script).value
@@ -200,8 +200,8 @@ class DazNode(DazElement):
             y: Y-axis scale factor.
             z: Z-axis scale factor.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.getXScaleControl().setValue({x}); _node.getYScaleControl().setValue({y}); _node.getZScaleControl().setValue({z});"
         )
         self._client.execute(script)
@@ -243,7 +243,7 @@ class DazNode(DazElement):
             )
         if not lines:
             return
-        script = ScriptBuilder.node_body(self._identifier, "\n".join(lines))
+        script = ScriptBuilder.node_body_from_locator(self._locator, "\n".join(lines))
         self._client.execute(script)
 
     @property
@@ -253,20 +253,20 @@ class DazNode(DazElement):
         Affects both viewport and render visibility unless overridden by the
         per-channel visibility setters.
         """
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isVisible();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isVisible();")
         return self._client.execute(script).value
 
     @visible.setter
     def visible(self, value: bool) -> None:
         flag = "true" if value else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.setVisible({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.setVisible({flag});")
         self._client.execute(script)
 
     @property
     def parent(self) -> DazNode | None:
         """Parent node in the scene hierarchy, or ``None`` for root nodes."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var p = _node.getNodeParent(); return p ? p.getName() : null;"
         )
         name = self._client.execute(script).value
@@ -277,8 +277,8 @@ class DazNode(DazElement):
     @property
     def children(self) -> list[DazNode]:
         """Direct child nodes."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var names = [];
             for (var i = 0; i < _node.getNumNodeChildren(); i++) {
@@ -296,7 +296,7 @@ class DazNode(DazElement):
         Returns:
             ``True`` if the node was found and removed, ``False`` otherwise.
         """
-        script = ScriptBuilder.node_body(self._identifier, "return Scene.removeNode(_node);")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return Scene.removeNode(_node);")
         return bool(self._client.execute(script).value)
 
     def reparent(self, new_parent: "DazNode", *, preserve_world_transform: bool = True) -> None:
@@ -320,10 +320,10 @@ class DazNode(DazElement):
                 create a cycle).
         """
         from .exceptions import ScriptRuntimeError
-        parent_expr = ScriptBuilder.find_node_expr(new_parent._identifier)
+        parent_expr = new_parent._locator
         in_place = "true" if preserve_world_transform else "false"
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var _newParent = {parent_expr};
             if (!_newParent) return "new parent not found";
@@ -365,8 +365,8 @@ class DazNode(DazElement):
             A list of :class:`~dazpy.DazMorph` and :class:`~dazpy.DazModifier`
             instances.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var obj = _node.getObject();
             if (!obj) return [];
@@ -396,8 +396,8 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
             ``None`` if not found.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
@@ -426,8 +426,8 @@ class DazNode(DazElement):
     def materials(self) -> list["DazMaterial"]:
         """Return all surface materials on this node's current shape."""
         from ._material import DazMaterial
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var obj = _node.getObject();
             if (!obj) return [];
@@ -453,8 +453,8 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMaterial` proxy, or ``None`` if not found.
         """
         from ._material import DazMaterial
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
@@ -483,8 +483,8 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
             ``None`` if no modifier with that label exists.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
@@ -671,8 +671,8 @@ class DazNode(DazElement):
             y: Rotation around the Y axis in degrees.
             z: Rotation around the Z axis in degrees.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.getXRotControl().setValue({x}); _node.getYRotControl().setValue({y}); _node.getZRotControl().setValue({z});"
         )
         self._client.execute(script)
@@ -695,8 +695,8 @@ class DazNode(DazElement):
             y: Y coordinate.
             z: Z coordinate.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
             f"_node.setWSPos(_tm, new DzVec3({x}, {y}, {z}));"
         )
@@ -716,8 +716,8 @@ class DazNode(DazElement):
             y: Rotation around the Y axis in degrees.
             z: Rotation around the Z axis in degrees.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
             f"_node.getXRotControl().setDoubleValue(_tm, {x}); "
             f"_node.getYRotControl().setDoubleValue(_tm, {y}); "
@@ -734,8 +734,8 @@ class DazNode(DazElement):
         the leftover default key distorts interpolation/extrapolation
         around the new keys.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "_node.getXPosControl().deleteAllKeys(); "
             "_node.getYPosControl().deleteAllKeys(); "
             "_node.getZPosControl().deleteAllKeys();"
@@ -747,8 +747,8 @@ class DazNode(DazElement):
 
         See :meth:`clear_position_keys` — same rationale, for orientation.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "_node.getXRotControl().deleteAllKeys(); "
             "_node.getYRotControl().deleteAllKeys(); "
             "_node.getZRotControl().deleteAllKeys();"
@@ -811,8 +811,8 @@ class DazNode(DazElement):
             raise ValueError(f"unknown key interpolation {bad[0]!r} (allowed: {', '.join(TRANSFORM_KEY_KINDS)})")
         axes = ("Pos", "Rot") if rotation else ("Pos",)
         controls = ", ".join(f"_node.get{a}{c}Control()" for c in axes for a in "XYZ")
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             _KEY_INTERP_JS
             + f"var _F = {json.dumps(frames)}, _K = {json.dumps(kinds)}, _C = [{controls}];\n"
             f"for (var _c = 0; _c < _C.length; _c++) "
@@ -824,8 +824,8 @@ class DazNode(DazElement):
     @property
     def local_position(self) -> dict | None:
         """Local-space position as ``{"x", "y", "z"}`` (read-only)."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var p = _node.getLocalPos(); return {x: p.x, y: p.y, z: p.z};"
         )
         return self._client.execute(script).value
@@ -838,8 +838,8 @@ class DazNode(DazElement):
             y: Y coordinate.
             z: Z coordinate.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.setLocalPos(new DzVec3({x}, {y}, {z}));"
         )
         self._client.execute(script)
@@ -854,8 +854,8 @@ class DazNode(DazElement):
         Returns:
             ``(x, y, z)`` in degrees, or ``None`` if the node cannot be found.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "return [_node.getXRotControl().getValue(), "
             "_node.getYRotControl().getValue(), "
             "_node.getZRotControl().getValue()];"
@@ -868,8 +868,8 @@ class DazNode(DazElement):
     @property
     def local_rotation(self) -> dict | None:
         """Local-space rotation as ``{"x", "y", "z", "w"}`` quaternion (read-only)."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var r = _node.getLocalRot(); return {x: r.x, y: r.y, z: r.z, w: r.w};"
         )
         return self._client.execute(script).value
@@ -882,15 +882,15 @@ class DazNode(DazElement):
             y: Rotation around the local Y axis in degrees.
             z: Rotation around the local Z axis in degrees.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.getXRotControl().setValue({x}); _node.getYRotControl().setValue({y}); _node.getZRotControl().setValue({z});"
         )
         self._client.execute(script)
 
     def is_selected(self) -> bool:
         """Return ``True`` if this node is currently selected."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isSelected();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isSelected();")
         return bool(self._client.execute(script).value)
 
     def select(self, on: bool = True) -> None:
@@ -900,22 +900,22 @@ class DazNode(DazElement):
             on: ``True`` to select, ``False`` to deselect.
         """
         flag = "true" if on else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.select({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.select({flag});")
         self._client.execute(script)
 
     def is_in_scene(self) -> bool:
         """Return ``True`` if this node is still part of the active scene."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isInScene();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isInScene();")
         return bool(self._client.execute(script).value)
 
     def is_root(self) -> bool:
         """Return ``True`` if this node has no parent (top-level node)."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isRootNode();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isRootNode();")
         return bool(self._client.execute(script).value)
 
     def is_visible_in_render(self) -> bool:
         """Return ``True`` if this node is visible in render output."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isVisibleInRender();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isVisibleInRender();")
         return bool(self._client.execute(script).value)
 
     def set_visible_in_render(self, on: bool) -> None:
@@ -925,12 +925,12 @@ class DazNode(DazElement):
             on: ``True`` to show in render, ``False`` to hide.
         """
         flag = "true" if on else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.setVisibleInRender({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.setVisibleInRender({flag});")
         self._client.execute(script)
 
     def is_visible_in_viewport(self) -> bool:
         """Return ``True`` if this node is visible in the 3D viewport."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isVisibleInViewport();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isVisibleInViewport();")
         return bool(self._client.execute(script).value)
 
     def set_visible_in_viewport(self, on: bool) -> None:
@@ -940,7 +940,7 @@ class DazNode(DazElement):
             on: ``True`` to show, ``False`` to hide.
         """
         flag = "true" if on else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.setVisibleInViewport({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.setVisibleInViewport({flag});")
         self._client.execute(script)
 
     def bounding_box(self) -> dict | None:
@@ -950,8 +950,8 @@ class DazNode(DazElement):
             A dict ``{"min": {"x", "y", "z"}, "max": {"x", "y", "z"}}`` or
             ``None`` if the node has no geometry.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var bb = _node.getWSBoundingBox(); return {min: {x: bb.min.x, y: bb.min.y, z: bb.min.z}, max: {x: bb.max.x, y: bb.max.y, z: bb.max.z}};"
         )
         return self._client.execute(script).value
@@ -977,9 +977,9 @@ class DazNode(DazElement):
             NodeNotFoundError: If this node or *figure* cannot be found.
         """
         from .exceptions import NodeNotFoundError
-        figure_expr = ScriptBuilder.find_node_expr(figure._identifier)
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        figure_expr = figure._locator
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var _figure = {figure_expr};
             if (!_figure) return null;
@@ -1020,8 +1020,8 @@ class DazNode(DazElement):
               ``["cleared follow target", "detached from parent"]``), or
               ``[]`` if nothing was fitted.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var _prevFigure = null;
             var _actions = [];
@@ -1056,8 +1056,8 @@ class DazNode(DazElement):
         Returns:
             A list of :class:`~dazpy.DazNode` proxies for each fitted item.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var _fitted = [];
             var _numNodes = Scene.getNumNodes();
@@ -1084,8 +1084,8 @@ class DazNode(DazElement):
     @property
     def geometry_vertex_count(self) -> int | None:
         """Total vertex count of this node's current geometry, or ``None``."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var obj = _node.getObject();
             if (!obj) return null;

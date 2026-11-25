@@ -3445,6 +3445,43 @@ class TestDazSkeletonBoneAxes(unittest.TestCase):
         client.execute.assert_not_called()
 
 
+class TestDazBoneInheritedNodeMethods(unittest.TestCase):
+    """Inherited DazNode methods on a bone must resolve the bone through its own
+    skeleton, not Scene.findNode(name): every Genesis figure has a bone named
+    'head', so a name lookup reads whichever figure Studio finds first."""
+
+    def _bone(self, value=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(["head"])
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 8 Female", kind="label"))
+        bone = skel.bones()[0]
+        client.execute.return_value = ExecutionResult(value=value, output=[], request_id="t")
+        return bone, client
+
+    def _assert_skeleton_relative(self, script):
+        self.assertIn("getSkeletonList", script)
+        self.assertIn('"Genesis 8 Female"', script)
+        self.assertIn('findBone("head")', script)
+        self.assertNotIn('Scene.findNode("head")', script)
+
+    def test_position(self):
+        bone, client = self._bone({"x": 100, "y": 150, "z": 0})
+        bone.position
+        self._assert_skeleton_relative(client.execute.call_args[0][0])
+
+    def test_label_and_visibility(self):
+        bone, client = self._bone("Head")
+        bone.label
+        self._assert_skeleton_relative(client.execute.call_args[0][0])
+        bone.set_visible_in_viewport(True)
+        self._assert_skeleton_relative(client.execute.call_args[0][0])
+
+    def test_plain_node_lookup_unchanged(self):
+        client = _make_client({"x": 0, "y": 0, "z": 0})
+        DazNode(client, NodeIdentifier("Chair")).position
+        self.assertIn('Scene.findNode("Chair")', client.execute.call_args[0][0])
+
+
 class TestDazNodeNumericCandidates(unittest.TestCase):
     """DazNode.set_numeric_candidates() (5d6f.29: emotion/expression dials)."""
 
@@ -6083,9 +6120,7 @@ class TestCallCounts(unittest.TestCase):
         client = MagicMock(spec=DazClient)
         client.execute.side_effect = _execute
 
-        skel = DazSkeleton.__new__(DazSkeleton)
-        object.__setattr__(skel, "_client", client)
-        object.__setattr__(skel, "_identifier", NodeIdentifier("Genesis 9", kind="label"))
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
         return skel, client
 
     def test_align_hand_target_call_count_bounded(self):
@@ -7103,9 +7138,7 @@ class TestBatchPoseEvaluation(unittest.TestCase):
         client = MagicMock(spec=DazClient)
         client.execute.side_effect = _execute
 
-        skel = DazSkeleton.__new__(DazSkeleton)
-        object.__setattr__(skel, "_client", client)
-        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+        skel = DazSkeleton(client, NodeIdentifier("Test", kind="label"))
 
         result = align_single_limb_target(skel, profile, target)
 
@@ -7141,9 +7174,7 @@ class TestBatchPoseEvaluation(unittest.TestCase):
         client = MagicMock(spec=DazClient)
         client.execute.side_effect = _execute
 
-        skel = DazSkeleton.__new__(DazSkeleton)
-        object.__setattr__(skel, "_client", client)
-        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+        skel = DazSkeleton(client, NodeIdentifier("Test", kind="label"))
 
         result = align_single_limb_target(skel, profile, target, tolerance=0.5)
 
