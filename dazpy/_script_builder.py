@@ -28,7 +28,28 @@ class ScriptBuilder:
     def find_node_expr(identifier: "NodeIdentifier") -> str:
         if identifier.kind == "label":
             return f"Scene.findNodeByLabel({json.dumps(identifier.value)})"
+        if identifier.kind == "element_id":
+            return f"Scene.findNodeByElementID({ScriptBuilder.element_id(identifier)})"
         return f"Scene.findNode({json.dumps(identifier.value)})"
+
+    @staticmethod
+    def element_id(identifier: "NodeIdentifier") -> int:
+        """The integer elementID of an ``element_id`` identifier (validated)."""
+        try:
+            return int(str(identifier.value))
+        except ValueError:
+            raise ValueError(
+                f"element_id identifier must be an integer, got {identifier.value!r}"
+            ) from None
+
+    @staticmethod
+    def skeleton_match(identifier: "NodeIdentifier", item: str = "_skels[_i]") -> str:
+        """JS condition that is true when skeleton *item* is the one *identifier* names."""
+        if identifier.kind == "label":
+            return f"{item}.getLabel() === {json.dumps(identifier.value)}"
+        if identifier.kind == "element_id":
+            return f"{item}.elementID === {ScriptBuilder.element_id(identifier)}"
+        return f"{item}.getName() === {json.dumps(identifier.value)}"
 
     @staticmethod
     def node_body(identifier: "NodeIdentifier", body: str) -> str:
@@ -55,12 +76,7 @@ class ScriptBuilder:
         The snippet does not wrap itself in an IIFE — embed it at the top of
         a larger script body and follow it with ``if (!_skel) return null;``.
         """
-        value = json.dumps(identifier.value)
-        match = (
-            f"_skels[_i].getLabel() === {value}"
-            if identifier.kind == "label"
-            else f"_skels[_i].getName() === {value}"
-        )
+        match = ScriptBuilder.skeleton_match(identifier)
         return (
             f"var _skel=null,_skels=Scene.getSkeletonList();"
             f"for(var _i=0;_i<_skels.length;_i++){{"

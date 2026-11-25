@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
@@ -9,6 +10,23 @@ from ._script_builder import ScriptBuilder
 if TYPE_CHECKING:
     from ._interaction import LimbAlignmentResult
     from ._bone import DazBone
+
+
+@dataclass(frozen=True)
+class BoneAim:
+    """One bone's rotation after :meth:`DazSkeleton.look_at` (degrees, read back)."""
+
+    bone: str
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class LookAtResult:
+    """Outcome of :meth:`DazSkeleton.look_at`."""
+
+    applied: list[BoneAim]
+    missing: list[str]
 
 
 class DazSkeleton(DazNode):
@@ -21,12 +39,7 @@ class DazSkeleton(DazNode):
         # Scene.findNode() returns DzNode which lacks DzSkeleton methods like
         # findBone(). Retrieve a properly typed DzSkeleton by iterating
         # getSkeletonList(), which is the only proven-typed accessor in the API.
-        kind = self._identifier.kind
-        value = json.dumps(self._identifier.value)
-        if kind == "label":
-            match = f"_skels[_i].getLabel() === {value}"
-        else:
-            match = f"_skels[_i].getName() === {value}"
+        match = ScriptBuilder.skeleton_match(self._identifier)
         lookup = (
             f"var _node = null;"
             f" var _skels = Scene.getSkeletonList();"
@@ -41,13 +54,7 @@ class DazSkeleton(DazNode):
         Uses the skeleton list rather than Scene.findNode() so that two figures
         with the same internal name (e.g. two Genesis 9 figures) are kept distinct.
         """
-        kind = self._identifier.kind
-        value = json.dumps(self._identifier.value)
-        match = (
-            f"_skels[_i].getLabel() === {value}"
-            if kind == "label"
-            else f"_skels[_i].getName() === {value}"
-        )
+        match = ScriptBuilder.skeleton_match(self._identifier)
         return (
             f"(function(){{"
             f"var _skel=null,_skels=Scene.getSkeletonList();"
@@ -56,9 +63,16 @@ class DazSkeleton(DazNode):
             f"}})()"
         )
 
-    def bones(self) -> list["DazBone"]:
-        """Return all bones in this skeleton."""
-        from ._bone import DazBone
+    def bone_names(self) -> list[str]:
+        """Return the internal name of every bone in this skeleton, in one call.
+
+        Cheaper than :meth:`bones` when only the names are needed, e.g. to
+        pick the bone a figure generation uses for a role (``chestUpper`` on
+        Genesis 3/8, ``spine4`` on Genesis 9).
+
+        Returns:
+            Bone names, or ``[]`` if the skeleton is not in the scene.
+        """
         script = self._skeleton_body(
             """
             var bones = _node.getAllBones();
@@ -69,7 +83,12 @@ class DazSkeleton(DazNode):
             return names;
             """
         )
-        names = self._client.execute(script).value or []
+        return list(self._client.execute(script).value or [])
+
+    def bones(self) -> list["DazBone"]:
+        """Return all bones in this skeleton."""
+        from ._bone import DazBone
+        names = self.bone_names()
         return [DazBone._from_locator(self._client, self._bone_locator(n), n) for n in names]
 
     def bone_metadata(self) -> list[dict]:
@@ -259,6 +278,172 @@ class DazSkeleton(DazNode):
             }}
         """)
         self._client.execute(script)
+
+    def set_bone_axes(self, data: Mapping[str, Mapping[str, float]]) -> list[str]:
+        """Set individual rotation axes on any subset of bones in one HTTP call.
+
+        Unlike :meth:`set_bone_rotations`, which writes all three axes, this
+        writes only the axes named for each bone, so an adjustment like "tilt
+        the chest forward 5 degrees" leaves the chest's twist and side-bend
+        alone.
+
+        Args:
+            data: ``{bone_name: {"x": deg, "y": deg, "z": deg}}``; each inner
+                mapping may name any subset of ``"x"``, ``"y"``, ``"z"``.
+
+        Returns:
+            Names from *data* that matched no bone (all of them if the
+            skeleton is not in the scene). Bones that matched were written.
+
+        Raises:
+            ValueError: If an inner mapping names an axis other than x/y/z.
+        """
+        payload: dict[str, dict[str, float]] = {}
+        for bone, axes in data.items():
+            bad = set(axes) - {"x", "y", "z"}
+            if bad:
+                raise ValueError(
+                    f"set_bone_axes: bone {bone!r} has unknown axes {sorted(bad)}; "
+                    "use 'x', 'y' or 'z'"
+                )
+            payload[bone] = {axis: float(v) for axis, v in axes.items()}
+        if not payload:
+            return []
+        script = self._skeleton_body(f"""
+            var _data = {json.dumps(payload)};
+            var _ctl = {{x: "getXRotControl", y: "getYRotControl", z: "getZRotControl"}};
+            var _found = {{}};
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {{
+                var _b = _bones[i];
+                var _n = _b.getName();
+                if (!_data.hasOwnProperty(_n)) continue;
+                _found[_n] = true;
+                var _axes = _data[_n];
+                for (var _a in _axes) {{
+                    if (_axes.hasOwnProperty(_a)) _b[_ctl[_a]]().setValue(_axes[_a]);
+                }}
+            }}
+            var _missing = [];
+            for (var _k in _data) {{
+                if (_data.hasOwnProperty(_k) && !_found[_k]) _missing.push(_k);
+            }}
+            return _missing;
+        """)
+        missing = self._client.execute(script).value
+        if missing is None:  # skeleton not in the scene
+            return list(payload)
+        return list(missing)
+
+    def key_bone_axes(
+        self, data: Mapping[str, Mapping[str, Sequence[tuple[int, float]]]]
+    ) -> list[str]:
+        """Keyframe individual rotation axes of bones at timeline frames, in one call.
+
+        Args:
+            data: ``{bone: {"x"|"y"|"z": [(frame, degrees), ...]}}``.
+
+        Returns:
+            Bone names from *data* not on this figure.
+
+        Raises:
+            ValueError: For an axis other than x/y/z.
+        """
+        payload: dict[str, dict[str, list]] = {}
+        for bone, axes in data.items():
+            bad = set(axes) - {"x", "y", "z"}
+            if bad:
+                raise ValueError(f"key_bone_axes: bone {bone!r} has unknown axes {sorted(bad)}")
+            payload[bone] = {a: [[int(f), float(v)] for f, v in keys] for a, keys in axes.items()}
+        if not payload:
+            return []
+        script = self._skeleton_body(f"""
+            var _data = {json.dumps(payload)}, _step = Scene.getTimeStep(), _found = {{}};
+            var _ctl = {{x: "getXRotControl", y: "getYRotControl", z: "getZRotControl"}};
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {{
+                var b = _bones[i], n = b.getName();
+                if (!_data.hasOwnProperty(n)) continue;
+                _found[n] = true;
+                for (var a in _data[n]) {{
+                    if (!_data[n].hasOwnProperty(a)) continue;
+                    var keys = _data[n][a], ctl = b[_ctl[a]]();
+                    for (var k = 0; k < keys.length; k++) ctl.setValue(keys[k][0] * _step, keys[k][1]);
+                }}
+            }}
+            var _missing = [];
+            for (var key in _data) if (_data.hasOwnProperty(key) && !_found[key]) _missing.push(key);
+            return _missing;
+        """)
+        missing = self._client.execute(script).value
+        return list(payload) if missing is None else list(missing)
+
+    def look_at(
+        self,
+        point: Sequence[float],
+        chain: Sequence[tuple[str, float]],
+    ) -> LookAtResult:
+        """Turn a chain of bones toward a world-space point, in one call.
+
+        *chain* lists ``(bone_name, weight)`` from the root of the chain to
+        the tip (e.g. chest, neck, head, eyes). Each bone, in order, turns
+        *weight* of the way toward the point from where its parents left
+        it, so a final weight of 1.0 aims the last bone exactly (as far as
+        its joint limits allow). The direction is worked out in the bone's
+        own rotation frame (parent world rotation times the bone's
+        orientation), so a turned or leaning figure still looks the right
+        way. Only the X (pitch) and Y (yaw) rotations are written; Z (roll)
+        is left alone. Bones whose rest pose faces +Z, as Genesis heads and
+        eyes do, are assumed.
+
+        Args:
+            point: World ``(x, y, z)`` to look at.
+            chain: ``(bone_name, weight)`` pairs, weight in ``[0, 1]``.
+
+        Returns:
+            :class:`LookAtResult`: each bone's rotation as Studio kept it,
+            and the chain bones not on this figure.
+
+        Raises:
+            ValueError: If a weight is outside ``[0, 1]``.
+            NodeNotFoundError: If the skeleton is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+        pairs = []
+        for bone, weight in chain:
+            if not 0.0 <= float(weight) <= 1.0:
+                raise ValueError(f"look_at: weight for {bone!r} must be in [0, 1], got {weight}")
+            pairs.append([str(bone), float(weight)])
+        tx, ty, tz = (float(v) for v in point)
+        script = self._skeleton_body(f"""
+            var _chain = {json.dumps(pairs)};
+            var _target = new DzVec3({tx!r}, {ty!r}, {tz!r});
+            var _byName = {{}}, _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) _byName[_bones[i].getName()] = _bones[i];
+            var _deg = 180 / Math.PI, _applied = [], _missing = [];
+            for (var c = 0; c < _chain.length; c++) {{
+                var b = _byName[_chain[c][0]], w = _chain[c][1];
+                if (!b) {{ _missing.push(_chain[c][0]); continue; }}
+                var parent = b.getNodeParent();
+                var frame = b.getOrientation();
+                if (parent) frame = parent.getWSRot().multiply(frame);
+                var v = frame.inverse().multVec(_target.subtract(b.getWSPos()));
+                var yaw = Math.atan2(v.x, v.z) * _deg;
+                var pitch = -Math.atan2(v.y, Math.sqrt(v.x * v.x + v.z * v.z)) * _deg;
+                var xc = b.getXRotControl(), yc = b.getYRotControl();
+                xc.setValue(pitch * w);
+                yc.setValue(yaw * w);
+                _applied.push({{bone: b.getName(), x: xc.getValue(), y: yc.getValue()}});
+            }}
+            return {{applied: _applied, missing: _missing}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Skeleton not found: {self._identifier.value!r}")
+        return LookAtResult(
+            [BoneAim(a["bone"], a["x"], a["y"]) for a in raw.get("applied", [])],
+            list(raw.get("missing", [])),
+        )
 
     def _zero_bones_and_morphs(self) -> None:
         """Drive every bone rotation to 0 and every non-zero DzMorph to 0, in

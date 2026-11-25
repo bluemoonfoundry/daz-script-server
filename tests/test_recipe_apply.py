@@ -417,7 +417,7 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         return client, DazSceneOps(DazScene(client))
 
     def test_create_camera_labels_the_new_root(self):
-        client, ops = self.ops(("recipe:snapshot", ["11", "12"]), ("new DzBasicCamera", "Camera 3"),
+        client, ops = self.ops(("recipe:snapshot", ["11", "12"]), ("new DzBasicCamera", 13),
                                ("recipe:claim", ["Camera 3"]))
         names = ops.create(d_camera("new"))
         self.assertEqual(names, ["Camera 3"])
@@ -431,7 +431,7 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertIn("setName", client.scripts[claim])  # unique-name fix happens in the claim
 
     def test_create_light_uses_light_type(self):
-        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", "Spotlight 1"),
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", 14),
                                ("recipe:claim", ["Spotlight 1"]))
         self.assertEqual(ops.create(d_light("key")), ["Spotlight 1"])
 
@@ -470,7 +470,7 @@ class DazSceneOpsCreateTests(unittest.TestCase):
     def test_claim_names_a_root_created_without_a_name(self):
         # DS4: a new DzBasicCamera / DzSpotLight has a label but an empty name,
         # and every later step finds nodes by name.
-        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", ""),
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", 14),
                                ("recipe:claim", ["live_main_key"]))
         ops.create(d_light("key"))
         claim = next(s for s in client.scripts if "recipe:claim" in s)
@@ -478,7 +478,7 @@ class DazSceneOpsCreateTests(unittest.TestCase):
         self.assertLess(claim.index('if (!nm) {'), claim.index("_count(nm) > 1"))
 
     def test_create_raises_when_claim_reports_an_empty_name(self):
-        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", ""),
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzSpotLight", 14),
                                ("recipe:claim", [""]), ("recipe:cleanup", 1))
         with self.assertRaisesRegex(DazError, "no name"):
             ops.create(d_light("key"))
@@ -580,7 +580,7 @@ class DazSceneOpsCreateTests(unittest.TestCase):
             ops.create(d_prop("ball"))
 
     def test_snapshot_lists_every_node_not_only_roots(self):
-        client, ops = self.ops(("recipe:snapshot", []), ("new DzBasicCamera", "Camera"),
+        client, ops = self.ops(("recipe:snapshot", []), ("new DzBasicCamera", 13),
                                ("recipe:claim", ["Camera"]))
         ops.create(d_camera("new"))
         snap = next(s for s in client.scripts if "recipe:snapshot" in s)

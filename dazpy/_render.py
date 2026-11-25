@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import warnings
-from typing import Any
+from typing import Any, Sequence
 from dataclasses import dataclass
 
 from ._client import DazClient
@@ -284,6 +284,93 @@ class DazRenderSettings:
             }}
             return {render_element};
         }})()"""
+
+    @property
+    def draw_ground_plane(self) -> bool | None:
+        """Whether renders draw Studio's ground plane (``DzRenderOptions.drawGroundPlane``)."""
+        script = ScriptBuilder.iife(f"""
+            var mgr = {self._render_mgr()};
+            return mgr ? !!mgr.getRenderOptions().drawGroundPlane : null;
+        """)
+        return self._client.execute(script).value
+
+    @draw_ground_plane.setter
+    def draw_ground_plane(self, on: bool) -> None:
+        script = ScriptBuilder.iife(f"""
+            var mgr = {self._render_mgr()};
+            if (!mgr) return;
+            var opts = mgr.getRenderOptions();
+            opts.drawGroundPlane = {"true" if on else "false"};
+            opts.applyChanges();
+        """)
+        self._client.execute(script)
+
+    _ENVIRONMENT_MODES = {"dome_and_scene": 0, "dome_only": 1, "sun_sky": 2, "scene_only": 3}
+
+    @property
+    def environment_mode(self) -> str | None:
+        """Iray "Environment Mode": ``"dome_and_scene"``, ``"dome_only"``,
+        ``"sun_sky"`` or ``"scene_only"``; ``None`` when there is no
+        environment node yet (Studio 4 after ``Scene.clear()``, until the
+        next Iray render creates it)."""
+        value = self._get_environment_property("Environment Mode")
+        by_value = {v: k for k, v in self._ENVIRONMENT_MODES.items()}
+        return by_value.get(int(value)) if value is not None else None
+
+    def set_environment_mode(self, mode: str) -> bool:
+        """Set the Iray "Environment Mode" (see :attr:`environment_mode`).
+
+        Returns:
+            ``False`` if there is no environment node to set (Studio 4
+            after ``Scene.clear()``, until the next Iray render).
+
+        Raises:
+            ValueError: For an unknown *mode*.
+        """
+        if mode not in self._ENVIRONMENT_MODES:
+            raise ValueError(
+                f"environment mode must be one of {', '.join(self._ENVIRONMENT_MODES)}; got {mode!r}")
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return false;
+            var p = holder.findProperty("Environment Mode");
+            if (!p) return false;
+            p.setValue({self._ENVIRONMENT_MODES[mode]});
+            return true;
+        """)
+        return bool(self._execute(script).value)
+
+    def set_environment_properties(
+        self, settings: Sequence[tuple[Sequence[str], object]]
+    ) -> list[str | None] | None:
+        """Set Iray environment ("Environment Options") properties in one call.
+
+        Each setting is ``(candidate_names, value)``; the first candidate
+        that exists (by name, then label) is set. Booleans and numbers are
+        written with ``setValue``.
+
+        Returns:
+            The matched name per setting (``None`` where no candidate
+            exists), or ``None`` overall when there is no environment node
+            yet (Studio 4 after ``Scene.clear()``, until the next Iray render).
+        """
+        rows = [[list(map(str, names)), value] for names, value in settings]
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return {{holder: false}};
+            var rows = {json.dumps(rows)}, matched = [];
+            for (var i = 0; i < rows.length; i++) {{
+                var hit = null, names = rows[i][0];
+                for (var j = 0; j < names.length && !hit; j++) {{
+                    var p = holder.findProperty(names[j]) || holder.findPropertyByLabel(names[j]);
+                    if (p) {{ p.setValue(rows[i][1]); hit = names[j]; }}
+                }}
+                matched.push(hit);
+            }}
+            return {{holder: true, matched: matched}};
+        """)
+        raw = self._execute(script).value or {"holder": False}
+        return list(raw["matched"]) if raw.get("holder") else None
 
     def _get_environment_property(self, name: str):
         script = ScriptBuilder.iife(f"""

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
@@ -40,7 +40,8 @@ _KEY_INTERP_JS = (
 )
 
 if TYPE_CHECKING:
-    from ._material import DazMaterial
+    from ._material import DazMaterial, MaterialInfo
+    from ._morph_loader import MorphLoadResult
     from ._modifier import DazModifier
     from ._morph import DazMorph
     from ._dforce import DazDForce
@@ -60,6 +61,222 @@ class NodeIdentifier:
 
     value: str
     kind: str = "name"  # "name" or "label"
+
+
+@dataclass(frozen=True)
+class NodeInfo:
+    """Identity of a scene node, as returned by :meth:`DazScene.find_nodes`,
+    :meth:`DazNode.describe` and :class:`~dazpy.exceptions.AmbiguousNodeError`.
+
+    Attributes:
+        label: Display label.
+        name: Internal name.
+        type: DazScript class name (``"DzFigure"``, ``"DzNode"``, ...).
+        element_id: Studio's per-session unique id; stable while the scene is open.
+        parent: Parent node's label, or ``None`` at the scene root.
+        num_children: Direct child count (``None`` where not collected).
+    """
+
+    label: str
+    name: str
+    type: str
+    element_id: int
+    parent: str | None
+    num_children: int | None = None
+
+    @classmethod
+    def _from_raw(cls, raw: dict) -> "NodeInfo":
+        return cls(
+            label=raw.get("label", ""),
+            name=raw.get("name", ""),
+            type=raw.get("type", ""),
+            element_id=int(raw.get("element_id", 0)),
+            parent=raw.get("parent"),
+            num_children=raw.get("num_children"),
+        )
+
+
+@dataclass(frozen=True)
+class PropertyDetails:
+    """One node property with its metadata, from :meth:`DazNode.property_details`.
+
+    ``value``/``min``/``max``/``default`` are ``None`` where they don't apply
+    (non-numeric properties; ``value`` is kept for string properties).
+    """
+
+    label: str
+    name: str
+    type: str
+    value: Any
+    min: float | None
+    max: float | None
+    default: Any
+    path: str
+    is_animatable: bool
+
+    @classmethod
+    def _from_raw(cls, r: dict) -> "PropertyDetails":
+        return cls(r["label"], r["name"], r["type"], r.get("value"), r.get("min"),
+                   r.get("max"), r.get("default"), r.get("path", ""),
+                   bool(r.get("is_animatable")))
+
+
+_PROPERTY_KINDS = ("all", "numeric", "transform", "morph", "bool", "string")
+
+_PROPERTY_DETAIL_JS = """
+    var _TRANSFORMS = {XTranslate: 1, YTranslate: 1, ZTranslate: 1, XRotate: 1, YRotate: 1,
+                       ZRotate: 1, Scale: 1, XScale: 1, YScale: 1, ZScale: 1};
+    function _detail(p) {
+        var cls = p.className(), num = p.inherits("DzNumericProperty");
+        var str = cls === "DzStringProperty";
+        return {label: p.getLabel(), name: p.getName(), type: cls,
+                value: (num || str) ? p.getValue() : null,
+                min: (num && p.getMin) ? p.getMin() : null,
+                max: (num && p.getMax) ? p.getMax() : null,
+                default: (num && p.getDefaultValue) ? p.getDefaultValue() : null,
+                path: p.getPath ? p.getPath() : "",
+                is_animatable: p.canAnimate ? p.canAnimate() : false};
+    }
+    function _kindOf(p) {
+        var cls = p.className(), num = p.inherits("DzNumericProperty");
+        return {numeric: num, transform: _TRANSFORMS[p.getName()] === 1,
+                bool: cls === "DzBoolProperty", string: cls === "DzStringProperty"};
+    }
+"""
+
+
+@dataclass(frozen=True)
+class FittedItem:
+    """An item fitted to a figure, from :meth:`DazNode.fitted_item_info`."""
+
+    label: str
+    name: str
+    type: str  # "clothing" | "hair" | "prop"
+    element_id: int
+
+
+@dataclass(frozen=True)
+class MorphInfo:
+    """One ``DzMorph`` on a node, from :meth:`DazNode.morph_info`."""
+
+    name: str
+    label: str
+    value: float
+    path: str
+
+
+@dataclass(frozen=True)
+class NumericPropertyWrite:
+    """Result of :meth:`DazNode.set_numeric_property`: the property that was
+    written and the value read back after the write."""
+
+    label: str
+    name: str
+    value: float
+
+
+# JS: collect every numeric channel on _node in search order -- node
+# properties, then each modifier's value channel and its own properties.
+_NUMERIC_CHANNELS_JS = """
+    function _numericChannels(node) {
+        var out = [];
+        function add(p, alias) {
+            if (p && p.inherits("DzNumericProperty")) out.push({prop: p, alias: alias || null});
+        }
+        var i, j, m;
+        for (i = 0; i < node.getNumProperties(); i++) add(node.getProperty(i));
+        var obj = (typeof node.getObject === "function") ? node.getObject() : null;
+        if (obj && typeof obj.getNumModifiers === "function") {
+            for (i = 0; i < obj.getNumModifiers(); i++) {
+                m = obj.getModifier(i);
+                if (!m) continue;
+                if (typeof m.getValueChannel === "function") add(m.getValueChannel(), m);
+                if (typeof m.getNumProperties === "function") {
+                    for (j = 0; j < m.getNumProperties(); j++) add(m.getProperty(j));
+                }
+            }
+        }
+        return out;
+    }
+"""
+
+# JS: find a property on `node` whose label or name equals `want` (lowercased),
+# or contains it when `substring`. Searches node properties, then each
+# modifier (a morph matched by its own name/label resolves to its value
+# channel) and the modifier's properties. Returns {prop, owner} or null;
+# owner is the modifier when matched through one.
+_FIND_NUMERIC_JS = """
+    function _findNumeric(node, want, substring) {
+        function names(p, alias) {
+            var out = [p.getLabel().toLowerCase(), p.getName().toLowerCase()];
+            if (alias) { out.push(alias.getLabel().toLowerCase()); out.push(alias.getName().toLowerCase()); }
+            return out;
+        }
+        function scan(test) {
+            var i, j, k, n, p, obj, m, ch;
+            for (i = 0; i < node.getNumProperties(); i++) {
+                p = node.getProperty(i); n = names(p, null);
+                for (j = 0; j < n.length; j++) if (test(n[j])) return {prop: p, owner: null};
+            }
+            obj = (typeof node.getObject === "function") ? node.getObject() : null;
+            if (!obj || typeof obj.getNumModifiers !== "function") return null;
+            for (i = 0; i < obj.getNumModifiers(); i++) {
+                m = obj.getModifier(i);
+                if (!m) continue;
+                ch = (typeof m.getValueChannel === "function") ? m.getValueChannel() : null;
+                if (ch) {
+                    n = names(ch, m);
+                    for (j = 0; j < n.length; j++) if (test(n[j])) return {prop: ch, owner: m};
+                }
+                if (typeof m.getNumProperties === "function") {
+                    for (k = 0; k < m.getNumProperties(); k++) {
+                        p = m.getProperty(k); n = names(p, null);
+                        for (j = 0; j < n.length; j++) if (test(n[j])) return {prop: p, owner: null};
+                    }
+                }
+            }
+            return null;
+        }
+        var hit = scan(function (s) { return s === want; });
+        if (!hit && substring) hit = scan(function (s) { return s.indexOf(want) !== -1; });
+        return hit;
+    }
+"""
+
+_NODE_INFO_JS = """
+    function _nodeInfo(n) {
+        var p = n.getNodeParent ? n.getNodeParent() : null;
+        return {label: n.getLabel(), name: n.getName(), type: n.className(),
+                element_id: n.elementID, parent: p ? p.getLabel() : null,
+                num_children: n.getNumNodeChildren()};
+    }
+"""
+
+
+@dataclass(frozen=True)
+class NumericCandidateMatch:
+    """One slot's outcome from :meth:`DazNode.set_numeric_candidates`.
+
+    Attributes:
+        candidates: The names tried, in order.
+        requested: The value the slot asked for.
+        matched: The candidate name that resolved, or ``None`` if none did.
+        source: ``"property"`` (a node-level property, e.g. an expression
+            controller dial) or ``"modifier"`` (a morph's value channel);
+            ``None`` when nothing matched.
+        value: The value read back after the write (``None`` when nothing
+            matched). Can differ from *requested* if the dial clamps.
+    """
+
+    candidates: tuple[str, ...]
+    requested: float
+    matched: str | None
+    source: str | None
+    value: float | None
+
+    @property
+    def found(self) -> bool:
+        return self.matched is not None
 
 
 class DazNode(DazElement):
@@ -87,13 +304,13 @@ class DazNode(DazElement):
     @property
     def label(self) -> str | None:
         """User-visible display label shown in the Scene panel (read/write)."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.getLabel();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.getLabel();")
         return self._client.execute(script).value
 
     @label.setter
     def label(self, value: str) -> None:
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.setLabel({json.dumps(value)});"
         )
         self._client.execute(script)
@@ -101,7 +318,7 @@ class DazNode(DazElement):
     @property
     def name(self) -> str | None:
         """Internal node name used to look up the node (read-only)."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.getName();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.getName();")
         return self._client.execute(script).value
 
     @property
@@ -110,8 +327,8 @@ class DazNode(DazElement):
 
         Use :meth:`set_position` to change.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var p = _node.getWSPos(); return {x: p.x, y: p.y, z: p.z};"
         )
         return self._client.execute(script).value
@@ -124,8 +341,8 @@ class DazNode(DazElement):
             y: Y coordinate.
             z: Z coordinate.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.setWSPos(new DzVec3({x}, {y}, {z}));"
         )
         self._client.execute(script)
@@ -136,8 +353,8 @@ class DazNode(DazElement):
 
         Use :meth:`set_rotation` to change (accepts Euler angles in degrees).
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var r = _node.getWSRot(); return {x: r.x, y: r.y, z: r.z, w: r.w};"
         )
         return self._client.execute(script).value
@@ -145,8 +362,8 @@ class DazNode(DazElement):
     @property
     def general_scale(self) -> float | None:
         """Uniform scale factor (read-only)."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "return _node.getScaleControl().getValue();"
         )
         return self._client.execute(script).value
@@ -157,8 +374,8 @@ class DazNode(DazElement):
 
         Use :meth:`set_scale` to change the per-axis values.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "return {x: _node.getXScaleControl().getValue(), y: _node.getYScaleControl().getValue(), z: _node.getZScaleControl().getValue(), general: _node.getScaleControl().getValue()};"
         )
         return self._client.execute(script).value
@@ -174,8 +391,8 @@ class DazNode(DazElement):
             y: Y-axis scale factor.
             z: Z-axis scale factor.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.getXScaleControl().setValue({x}); _node.getYScaleControl().setValue({y}); _node.getZScaleControl().setValue({z});"
         )
         self._client.execute(script)
@@ -217,7 +434,7 @@ class DazNode(DazElement):
             )
         if not lines:
             return
-        script = ScriptBuilder.node_body(self._identifier, "\n".join(lines))
+        script = ScriptBuilder.node_body_from_locator(self._locator, "\n".join(lines))
         self._client.execute(script)
 
     @property
@@ -227,20 +444,20 @@ class DazNode(DazElement):
         Affects both viewport and render visibility unless overridden by the
         per-channel visibility setters.
         """
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isVisible();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isVisible();")
         return self._client.execute(script).value
 
     @visible.setter
     def visible(self, value: bool) -> None:
         flag = "true" if value else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.setVisible({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.setVisible({flag});")
         self._client.execute(script)
 
     @property
     def parent(self) -> DazNode | None:
         """Parent node in the scene hierarchy, or ``None`` for root nodes."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var p = _node.getNodeParent(); return p ? p.getName() : null;"
         )
         name = self._client.execute(script).value
@@ -251,8 +468,8 @@ class DazNode(DazElement):
     @property
     def children(self) -> list[DazNode]:
         """Direct child nodes."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var names = [];
             for (var i = 0; i < _node.getNumNodeChildren(); i++) {
@@ -270,8 +487,77 @@ class DazNode(DazElement):
         Returns:
             ``True`` if the node was found and removed, ``False`` otherwise.
         """
-        script = ScriptBuilder.node_body(self._identifier, "return Scene.removeNode(_node);")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return Scene.removeNode(_node);")
         return bool(self._client.execute(script).value)
+
+    def hierarchy(self, max_depth: int | None = None) -> dict:
+        """Return the descendant tree under this node, in one call.
+
+        Args:
+            max_depth: Levels to include below this node (this node is level
+                0). ``None`` or ``0`` means unlimited.
+
+        Returns:
+            ``{"node": label, "hierarchy": {...}, "total_descendants": int}``,
+            each entry ``{"label", "name", "type", "element_id", "children"}``
+            (``children`` omitted on leaves). ``total_descendants`` counts
+            the children visited, including those at the depth limit.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+        depth = int(max_depth) if max_depth else 0
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _maxDepth = {depth};
+            var _total = 0;
+            function _build(n, depth) {{
+                if (_maxDepth > 0 && depth >= _maxDepth) return null;
+                var info = {{label: n.getLabel(), name: n.getName(), type: n.className(),
+                             element_id: n.elementID}};
+                var children = [];
+                for (var i = 0; i < n.getNumNodeChildren(); i++) {{
+                    _total++;
+                    var c = _build(n.getNodeChild(i), depth + 1);
+                    if (c) children.push(c);
+                }}
+                if (children.length > 0) info.children = children;
+                return info;
+            }}
+            var _h = _build(_node, 0);
+            return {{node: _node.getLabel(), hierarchy: _h, total_descendants: _total}};
+        """)
+        result = self._client.execute(script).value
+        if result is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return result
+
+    def unparent(self, *, preserve_world_transform: bool = True) -> None:
+        """Detach this node from its parent so it sits at the scene root.
+
+        A no-op for a node that is already at the root.
+
+        Args:
+            preserve_world_transform: Keep the node's world-space transform
+                (default), adjusting its local values; ``False`` keeps the
+                local values, which may move it in world space.
+
+        Raises:
+            :class:`~dazpy.exceptions.ScriptRuntimeError`: If Studio refuses
+                the detach.
+        """
+        from .exceptions import ScriptRuntimeError
+        in_place = "true" if preserve_world_transform else "false"
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _parent = _node.getNodeParent();
+            if (!_parent) return null;
+            var _err = _parent.removeNodeChild(_node, {in_place});
+            var _errNum = _err ? _err.valueOf() : 0;
+            return _errNum !== 0 ? ("DzError code " + _errNum) : null;
+        """)
+        result = self._client.execute(script).value
+        if result:
+            raise ScriptRuntimeError(f"unparent failed: {result}")
 
     def reparent(self, new_parent: "DazNode", *, preserve_world_transform: bool = True) -> None:
         """Move this node to a new position in the scene hierarchy.
@@ -294,10 +580,10 @@ class DazNode(DazElement):
                 create a cycle).
         """
         from .exceptions import ScriptRuntimeError
-        parent_expr = ScriptBuilder.find_node_expr(new_parent._identifier)
+        parent_expr = new_parent._locator
         in_place = "true" if preserve_world_transform else "false"
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var _newParent = {parent_expr};
             if (!_newParent) return "new parent not found";
@@ -339,8 +625,8 @@ class DazNode(DazElement):
             A list of :class:`~dazpy.DazMorph` and :class:`~dazpy.DazModifier`
             instances.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var obj = _node.getObject();
             if (!obj) return [];
@@ -370,8 +656,8 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
             ``None`` if not found.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
@@ -400,8 +686,8 @@ class DazNode(DazElement):
     def materials(self) -> list["DazMaterial"]:
         """Return all surface materials on this node's current shape."""
         from ._material import DazMaterial
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var obj = _node.getObject();
             if (!obj) return [];
@@ -417,6 +703,135 @@ class DazNode(DazElement):
         names = self._client.execute(script).value or []
         return [DazMaterial(self._client, self._material_locator(n)) for n in names]
 
+    def material_info(self) -> list["MaterialInfo"]:
+        """Index, name, label and shader class of every surface zone, in one call."""
+        from ._material import MaterialInfo
+        script = ScriptBuilder.node_body_from_locator(self._locator, """
+            var obj = _node.getObject ? _node.getObject() : null;
+            var shape = obj ? obj.getCurrentShape() : null;
+            if (!shape) return [];
+            var out = [];
+            for (var i = 0; i < shape.getNumMaterials(); i++) {
+                var m = shape.getMaterial(i);
+                out.push({index: i, name: m.getName(),
+                          label: (typeof m.getLabel === "function") ? m.getLabel() : m.getName(),
+                          shader: m.className()});
+            }
+            return out;
+        """)
+        raw = self._client.execute(script).value or []
+        return [MaterialInfo(int(r["index"]), r["name"], r["label"], r["shader"]) for r in raw]
+
+    def resolve_material(self, ref: str) -> "DazMaterial":
+        """Find a surface zone by label, then by internal name.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            MaterialError: If the node has no surfaces or no zone matches;
+                the message lists the available zone labels.
+        """
+        from ._material import DazMaterial
+        from .exceptions import MaterialError, NodeNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _want = {json.dumps(ref)};
+            var obj = _node.getObject ? _node.getObject() : null;
+            var shape = obj ? obj.getCurrentShape() : null;
+            if (!shape) return {{status: "no_shape"}};
+            var byName = null, labels = [];
+            for (var i = 0; i < shape.getNumMaterials(); i++) {{
+                var m = shape.getMaterial(i);
+                var lbl = (typeof m.getLabel === "function") ? m.getLabel() : m.getName();
+                if (lbl === _want) return {{status: "ok", name: m.getName()}};
+                if (!byName && m.getName() === _want) byName = m.getName();
+                labels.push(lbl);
+            }}
+            if (byName) return {{status: "ok", name: byName}};
+            return {{status: "missing", available: labels}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "no_shape":
+            raise MaterialError("Node has no surfaces")
+        if raw["status"] == "missing":
+            raise MaterialError(
+                f"Material {ref!r} not found. Available: {', '.join(raw.get('available', []))}"
+            )
+        return DazMaterial(self._client, self._material_locator(raw["name"]))
+
+    def apply_surface_preset(
+        self,
+        path: str,
+        *,
+        map_paths: Sequence[str] | None = None,
+        allow_missing: bool = False,
+    ) -> list["MaterialInfo"]:
+        """Apply a material or shader preset ``.duf`` to every surface of this node.
+
+        Selects this node alone and every one of its surfaces (preset
+        application acts on the selected surfaces; with only the node
+        selected ``openFile`` reports success and changes nothing), then
+        opens the preset through the content manager.
+
+        Args:
+            path: Absolute path to the preset file.
+            map_paths: Texture paths the preset references (absolute or
+                content-relative). Checked first: if any is missing the
+                preset is not opened, because Studio's Missing Files dialog
+                would block the script server.
+            allow_missing: Open the preset even when maps are missing.
+
+        Returns:
+            :class:`MaterialInfo` for every surface after the preset applied.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            MaterialError: If maps are missing, or Studio fails to open the preset.
+        """
+        from ._material import MaterialInfo
+        from .exceptions import MaterialError, NodeNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _maps = {json.dumps(list(map_paths or []))};
+            var _allowMissing = {"true" if allow_missing else "false"};
+            var _missing = [];
+            for (var i = 0; i < _maps.length; i++) {{
+                var rel = _maps[i];
+                if (!rel) continue;
+                var fi = new DzFileInfo(rel);
+                if (fi.exists()) continue;
+                var abs = App.getContentMgr().getAbsolutePath(rel, true, "");
+                if (abs && new DzFileInfo(abs).exists()) continue;
+                _missing.push(rel);
+            }}
+            if (_missing.length && !_allowMissing) return {{status: "missing_maps", missing: _missing}};
+            Scene.selectAllNodes(false);
+            _node.select(true);
+            var _obj = _node.getObject ? _node.getObject() : null;
+            var _shape = _obj ? _obj.getCurrentShape() : null;
+            if (_shape) for (var s = 0; s < _shape.getNumMaterials(); s++) _shape.getMaterial(s).select(true);
+            var _ok = App.getContentMgr().openFile({json.dumps(path)}, new DzFileIOSettings(), false);
+            if (!_ok) return {{status: "open_failed"}};
+            var out = [];
+            _shape = _obj ? _obj.getCurrentShape() : null;
+            if (_shape) for (var j = 0; j < _shape.getNumMaterials(); j++) {{
+                var m = _shape.getMaterial(j);
+                out.push({{index: j, name: m.getName(), label: m.getLabel(), shader: m.className()}});
+            }}
+            return {{status: "ok", materials: out}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "missing_maps":
+            raise MaterialError(
+                "Missing texture files (preset not opened, to avoid Studio's Missing "
+                f"Files dialog): {', '.join(raw.get('missing', []))}"
+            )
+        if raw["status"] == "open_failed":
+            raise MaterialError(f"Studio failed to apply the preset: {path}")
+        return [MaterialInfo(int(m["index"]), m["name"], m["label"], m["shader"])
+                for m in raw.get("materials", [])]
+
     def find_material(self, name: str) -> "DazMaterial | None":
         """Find a surface material by name.
 
@@ -427,8 +842,8 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMaterial` proxy, or ``None`` if not found.
         """
         from ._material import DazMaterial
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
@@ -457,8 +872,8 @@ class DazNode(DazElement):
             A :class:`~dazpy.DazMorph` or :class:`~dazpy.DazModifier`, or
             ``None`` if no modifier with that label exists.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
@@ -503,6 +918,516 @@ class DazNode(DazElement):
             return None
         return DazProperty._from_locator(self._client, locator)
 
+    @property
+    def element_id(self) -> int | None:
+        """Studio's unique ``elementID`` for this node (``None`` if not in the scene).
+
+        ``NodeIdentifier(str(node.element_id), kind="element_id")`` addresses
+        the node unambiguously even when labels repeat.
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.elementID;")
+        value = self._client.execute(script).value
+        return None if value is None else int(value)
+
+    def describe(self) -> NodeInfo:
+        """Return this node's label, name, type, elementID, parent and child count.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator, _NODE_INFO_JS + "return _nodeInfo(_node);"
+        )
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return NodeInfo._from_raw(raw)
+
+    def numeric_properties(self, include_modifiers: bool = False) -> dict[str, object]:
+        """Every numeric property on the node, in one call: ``{label: value}``.
+
+        Args:
+            include_modifiers: Also collect the object's modifier stack (morph
+                value channels and modifier properties), where most of a
+                figure's dials live. A property reached twice is reported
+                once; when two properties share a label, the first in search
+                order (node, then modifiers) wins. (Morph value channels are
+                all named ``Value``, so labels are the only usable key.)
+                Default ``False`` keeps
+                :meth:`DazElement.numeric_properties`' node-only behaviour.
+
+        Returns:
+            ``{label: value}``, or ``{}`` if the node is not in the scene.
+        """
+        if not include_modifiers:
+            return super().numeric_properties()
+        script = ScriptBuilder.node_body_from_locator(self._locator, _NUMERIC_CHANNELS_JS + """
+            var _all = _numericChannels(_node), _out = {};
+            for (var _i = 0; _i < _all.length; _i++) {
+                var _p = _all[_i].prop;
+                if (!_out.hasOwnProperty(_p.getLabel())) _out[_p.getLabel()] = _p.getValue();
+            }
+            return _out;
+        """)
+        return dict(self._client.execute(script).value or {})
+
+    def set_numeric_property(
+        self,
+        name: str,
+        value: float,
+        *,
+        substring_fallback: bool = False,
+        unlock: bool = True,
+    ) -> NumericPropertyWrite:
+        """Set a numeric property found by label or name, searching modifiers too.
+
+        Searches node-level properties, then each modifier (a morph matched
+        by its own name or label resolves to its value channel) and the
+        modifier's properties, matching label or name exactly
+        (case-insensitive). With *substring_fallback*, a second pass accepts
+        the first property whose label or name contains *name*.
+
+        Args:
+            name: Property label or internal name.
+            value: Value to write.
+            substring_fallback: Accept a substring match when nothing matches exactly.
+            unlock: Unlock a locked property before writing (Studio ignores
+                writes to locked properties).
+
+        Returns:
+            :class:`NumericPropertyWrite` with the matched label, the name
+            (the morph's name when matched through a morph, since its value
+            channel is always called ``Value``) and the value read back.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            PropertyNotFoundError: If no property matches.
+            TypeError: If the match is not numeric.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, _FIND_NUMERIC_JS + f"""
+            var _want = {json.dumps(name.lower())};
+            var _substring = {"true" if substring_fallback else "false"};
+            var _unlock = {"true" if unlock else "false"};
+            var _found = _findNumeric(_node, _want, _substring);
+            var _hit = _found ? _found.prop : null, _owner = _found ? _found.owner : null;
+            if (!_hit) return {{status: "missing"}};
+            if (!_hit.inherits("DzNumericProperty")) return {{status: "not_numeric", label: _hit.getLabel()}};
+            if (_unlock && typeof _hit.lock === "function" && _hit.isLocked && _hit.isLocked()) _hit.lock(false);
+            _hit.setValue({float(value)!r});
+            return {{status: "ok", label: _hit.getLabel(),
+                     name: _owner ? _owner.getName() : _hit.getName(), value: _hit.getValue()}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw.get("status") == "missing":
+            raise PropertyNotFoundError(f"Property not found: {name!r} on {self._identifier.value!r}")
+        if raw.get("status") == "not_numeric":
+            raise TypeError(f"Property is not numeric: {raw.get('label', name)!r}")
+        return NumericPropertyWrite(label=raw["label"], name=raw["name"], value=raw["value"])
+
+    def property_details(self, kind: str = "all") -> list[PropertyDetails]:
+        """Node-level properties with type, value, range, default, group path
+        and animatability, in one call.
+
+        Args:
+            kind: ``"all"``, ``"numeric"``, ``"transform"`` (translate, rotate
+                and scale channels), ``"morph"`` (numeric, not a transform),
+                ``"bool"`` or ``"string"``.
+
+        Raises:
+            ValueError: For any other *kind*.
+        """
+        if kind not in _PROPERTY_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(_PROPERTY_KINDS)}; got {kind!r}")
+        script = ScriptBuilder.node_body_from_locator(self._locator, _PROPERTY_DETAIL_JS + f"""
+            var _kind = {json.dumps(kind)}, _out = [];
+            for (var i = 0; i < _node.getNumProperties(); i++) {{
+                var p = _node.getProperty(i), k = _kindOf(p);
+                var keep = _kind === "all" || (_kind === "morph" ? (k.numeric && !k.transform) : k[_kind]);
+                if (keep) _out.push(_detail(p));
+            }}
+            return _out;
+        """)
+        return [PropertyDetails._from_raw(r) for r in self._client.execute(script).value or []]
+
+    def property_detail(self, name: str) -> PropertyDetails:
+        """Metadata for one node-level property, by label or name (case-insensitive).
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            PropertyNotFoundError: If no node-level property matches.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, _PROPERTY_DETAIL_JS + f"""
+            var _want = {json.dumps(name.lower())};
+            for (var i = 0; i < _node.getNumProperties(); i++) {{
+                var p = _node.getProperty(i);
+                if (p.getLabel().toLowerCase() === _want || p.getName().toLowerCase() === _want)
+                    return {{status: "ok", detail: _detail(p)}};
+            }}
+            return {{status: "missing"}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] != "ok":
+            raise PropertyNotFoundError(f"Property not found: {name!r}")
+        return PropertyDetails._from_raw(raw["detail"])
+
+    def find_numeric_property(self, name: str) -> "DazProperty":
+        """Return the numeric property whose label or name is *name* (case-insensitive).
+
+        Searches like :meth:`set_numeric_property` (node properties, then
+        the modifier stack), exact matches only. The proxy re-finds the
+        property by the same rule on every call.
+
+        Raises:
+            PropertyNotFoundError: If nothing matches, or the match is not numeric.
+        """
+        from ._property import DazProperty
+        from .exceptions import PropertyNotFoundError
+        locator = (
+            "(function(){" + _FIND_NUMERIC_JS
+            + f"var _node = {self._locator}; if (!_node) return null;"
+            + f" var _h = _findNumeric(_node, {json.dumps(name.lower())}, false);"
+            + ' return (_h && _h.prop.inherits("DzNumericProperty")) ? _h.prop : null;})()'
+        )
+        if not self._client.execute(ScriptBuilder.iife(f"return !!({locator});")).value:
+            raise PropertyNotFoundError(
+                f"Numeric property not found: {name!r} on {self._identifier.value!r}")
+        return DazProperty._from_locator(self._client, locator)
+
+    def morph_info(
+        self, pattern: str | None = None, include_zero: bool = False
+    ) -> list[MorphInfo]:
+        """List the node's ``DzMorph`` modifiers with label, value and group path.
+
+        Args:
+            pattern: Case-insensitive substring of the morph's name or label;
+                ``None`` lists every morph.
+            include_zero: Include morphs whose value is exactly 0.
+
+        Returns:
+            :class:`MorphInfo` per matching morph (``[]`` if the node has no
+            object or is not in the scene).
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _pat = {json.dumps((pattern or "").lower())};
+            var _includeZero = {"true" if include_zero else "false"};
+            var _obj = (typeof _node.getObject === "function") ? _node.getObject() : null;
+            if (!_obj) return [];
+            var _out = [];
+            for (var _i = 0; _i < _obj.getNumModifiers(); _i++) {{
+                var _m = _obj.getModifier(_i);
+                if (!_m || _m.className() !== "DzMorph") continue;
+                var _n = _m.getName(), _l = _m.getLabel();
+                if (_pat && _n.toLowerCase().indexOf(_pat) === -1 &&
+                        _l.toLowerCase().indexOf(_pat) === -1) continue;
+                var _ch = _m.getValueChannel(), _v = _ch.getValue();
+                if (!_includeZero && _v === 0) continue;
+                var _path = "";
+                try {{ var _g = _ch.getPropertyGroup(); if (_g) _path = _g.getPath(); }} catch (e) {{}}
+                _out.push({{name: _n, label: _l, value: _v, path: _path}});
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value or []
+        return [MorphInfo(r["name"], r["label"], r["value"], r.get("path", "")) for r in raw]
+
+    def set_numeric_candidates(
+        self, slots: Sequence[tuple[Sequence[str], float]]
+    ) -> list[NumericCandidateMatch]:
+        """Set numeric dials chosen from per-slot candidate names, in one call.
+
+        Each slot is ``(candidate_names, value)``. The first candidate that
+        resolves on this node is set to *value* and read back; later
+        candidates in that slot are ignored. This handles dials whose names
+        differ between figure generations or products, e.g. a smile that is
+        ``"Smile"`` on Genesis 9 but something else on another figure.
+
+        A name resolves, in order, as a node-level property name
+        (``findProperty``: expression and pose controller dials), then a
+        node-level property label, then a ``DzMorph`` modifier name or
+        label (its value channel). Only numeric properties count.
+
+        Writes use plain ``setValue()``, like
+        :meth:`~dazpy.DazElement.set_property`.
+
+        Args:
+            slots: ``[(names, value), ...]``. *names* must be a sequence of
+                strings, not a bare string.
+
+        Returns:
+            One :class:`NumericCandidateMatch` per slot, in order.
+
+        Raises:
+            TypeError: If a slot's names is a bare string.
+            NodeNotFoundError: If this node is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+
+        normalized: list[tuple[tuple[str, ...], float]] = []
+        for names, value in slots:
+            if isinstance(names, str):
+                raise TypeError(
+                    "set_numeric_candidates: each slot's names must be a list of "
+                    f"strings, got the bare string {names!r}"
+                )
+            normalized.append((tuple(str(n) for n in names), float(value)))
+        if not normalized:
+            return []
+        payload = json.dumps([{"names": list(n), "value": v} for n, v in normalized])
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _slots = {payload};
+            var _mods = null;
+            function _numeric(p) {{ return p && p.inherits("DzNumericProperty") ? p : null; }}
+            function _modChannel(n) {{
+                if (_mods === null) {{
+                    _mods = {{byName: {{}}, byLabel: {{}}}};
+                    var _obj = _node.getObject ? _node.getObject() : null;
+                    if (_obj) {{
+                        for (var _i = 0; _i < _obj.getNumModifiers(); _i++) {{
+                            var _m = _obj.getModifier(_i);
+                            if (!_m || _m.className() !== "DzMorph") continue;
+                            var _ch = _m.getValueChannel();
+                            if (!_mods.byName.hasOwnProperty(_m.getName())) _mods.byName[_m.getName()] = _ch;
+                            if (!_mods.byLabel.hasOwnProperty(_m.getLabel())) _mods.byLabel[_m.getLabel()] = _ch;
+                        }}
+                    }}
+                }}
+                if (_mods.byName.hasOwnProperty(n)) return _numeric(_mods.byName[n]);
+                if (_mods.byLabel.hasOwnProperty(n)) return _numeric(_mods.byLabel[n]);
+                return null;
+            }}
+            var _out = [];
+            for (var _s = 0; _s < _slots.length; _s++) {{
+                var _slot = _slots[_s];
+                var _hit = null;
+                for (var _c = 0; _c < _slot.names.length && !_hit; _c++) {{
+                    var _n = _slot.names[_c];
+                    var _p = _numeric(_node.findProperty(_n)) || _numeric(_node.findPropertyByLabel(_n));
+                    if (_p) {{ _hit = {{name: _n, source: "property", prop: _p}}; break; }}
+                    _p = _modChannel(_n);
+                    if (_p) {{ _hit = {{name: _n, source: "modifier", prop: _p}}; break; }}
+                }}
+                if (_hit) {{
+                    _hit.prop.setValue(_slot.value);
+                    _out.push({{matched: _hit.name, source: _hit.source, value: _hit.prop.getValue()}});
+                }} else {{
+                    _out.push({{matched: null, source: null, value: null}});
+                }}
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return [
+            NumericCandidateMatch(
+                candidates=names,
+                requested=value,
+                matched=r.get("matched"),
+                source=r.get("source"),
+                value=r.get("value"),
+            )
+            for (names, value), r in zip(normalized, raw)
+        ]
+
+    def key_numeric_candidates(
+        self, slots: Sequence[tuple[Sequence[str], Sequence[tuple[int, float]]]]
+    ) -> list[NumericCandidateMatch]:
+        """Keyframe dials chosen from per-slot candidate names, in one call.
+
+        Like :meth:`set_numeric_candidates`, but each slot carries
+        ``[(frame, value), ...]`` keys instead of one value; frames convert
+        to DzTime with ``Scene.getTimeStep()``. The returned matches have
+        ``value`` ``None``.
+        """
+        from .exceptions import NodeNotFoundError
+        norm = []
+        for names, keys in slots:
+            if isinstance(names, str):
+                raise TypeError("key_numeric_candidates: names must be a list of strings, "
+                                f"got the bare string {names!r}")
+            norm.append((tuple(str(n) for n in names),
+                         [[int(f), float(v)] for f, v in keys]))
+        if not norm:
+            return []
+        payload = json.dumps([{"names": list(n), "keys": k} for n, k in norm])
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _slots = {payload}, _step = Scene.getTimeStep(), _mods = null, _out = [];
+            function _num(p) {{ return p && p.inherits("DzNumericProperty") ? p : null; }}
+            function _mod(n) {{
+                if (_mods === null) {{
+                    _mods = {{}};
+                    var o = _node.getObject ? _node.getObject() : null;
+                    if (o) for (var i = 0; i < o.getNumModifiers(); i++) {{
+                        var m = o.getModifier(i);
+                        if (m && m.className() === "DzMorph") {{
+                            if (!_mods.hasOwnProperty(m.getName())) _mods[m.getName()] = m.getValueChannel();
+                            if (!_mods.hasOwnProperty(m.getLabel())) _mods[m.getLabel()] = m.getValueChannel();
+                        }}
+                    }}
+                }}
+                return _mods.hasOwnProperty(n) ? _num(_mods[n]) : null;
+            }}
+            for (var s = 0; s < _slots.length; s++) {{
+                var hit = null, src = null;
+                for (var c = 0; c < _slots[s].names.length && !hit; c++) {{
+                    var n = _slots[s].names[c];
+                    hit = _num(_node.findProperty(n)) || _num(_node.findPropertyByLabel(n));
+                    if (hit) {{ src = "property"; break; }}
+                    hit = _mod(n);
+                    if (hit) {{ src = "modifier"; break; }}
+                }}
+                if (!hit) {{ _out.push({{matched: null, source: null, value: null}}); continue; }}
+                var keys = _slots[s].keys;
+                for (var k = 0; k < keys.length; k++) hit.setValue(keys[k][0] * _step, keys[k][1]);
+                _out.push({{matched: _slots[s].names[c], source: src, value: null}});
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return [NumericCandidateMatch(names, float(keys[-1][1]) if keys else 0.0,
+                                      r.get("matched"), r.get("source"), None)
+                for (names, keys), r in zip(norm, raw)]
+
+    def key_color(self, name: str, keys: Sequence[tuple[int, Sequence[int]]]) -> int:
+        """Keyframe a color property (label or name) at timeline frames.
+
+        Args:
+            name: Property label or name, e.g. a light's ``"Color"``.
+            keys: ``[(frame, (r, g, b)), ...]`` with 0-255 components.
+
+        Returns:
+            How many keys were written.
+
+        Raises:
+            PropertyNotFoundError: If no color property matches.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        rows = [[int(f), *(max(0, min(255, int(round(c)))) for c in rgb)] for f, rgb in keys]
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var p = _node.findPropertyByLabel({json.dumps(name)}) || _node.findProperty({json.dumps(name)});
+            if (!p || !(p.inherits("DzColorProperty") || p.inherits("DzFloatColorProperty")))
+                return {{status: "missing"}};
+            var _step = Scene.getTimeStep(), rows = {json.dumps(rows)};
+            for (var i = 0; i < rows.length; i++) {{
+                var k = rows[i];
+                p.setColorValue(k[0] * _step, new Color(k[1], k[2], k[3]));
+            }}
+            return {{status: "ok", keys: rows.length, label: p.getLabel()}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "missing":
+            raise PropertyNotFoundError(f"No color property {name!r} on {self._identifier.value!r}")
+        return int(raw["keys"])
+
+    def load_morph(self, obj_path: str, *, control_node: "DazNode | None" = None,
+                   **options: Any) -> "MorphLoadResult":
+        """Create a morph on this node from an OBJ with Morph Loader Pro.
+
+        Args:
+            obj_path: The OBJ to load (on the Studio host).
+            control_node: Node owning ``control_property_name`` (default: this node).
+            **options: Morph Loader Pro settings in snake_case: ``morph_name``,
+                ``load_mode`` (``"EntireFigure"``, ``"SelectedNodes"``,
+                ``"PrimaryNode"``, ``"SingleSkinFigure"``,
+                ``"SingleSkinFigureFromGraft"``), ``overwrite_mode``
+                (``"MakeUnique"``, ``"DeltasAndERCLinks"``, ``"DeltasOnly"``),
+                ``mirroring``, ``scale``, ``delta_tolerance``, ``subdivision``,
+                ``subdivision_mapping``, ``reverse_deformations``,
+                ``reverse_deformations_pose_path``, ``control_property_name``,
+                ``control_property_erc_type``, ``property_group_path``, ... (see
+                ``dazpy/_morph_loader.py`` for the full list).
+
+        Raises:
+            DazError: If the plugin is missing or the loader reports a problem.
+        """
+        from ._morph_loader import load_morph
+        return load_morph(self, obj_path, control_node=control_node, **options)
+
+    def save_support_asset(
+        self,
+        output_path: str,
+        *,
+        vendor: str = "Author",
+        product: str = "Product",
+        item: str | None = None,
+        category: str | None = None,
+        compatibility_base: str | None = None,
+        compatible_with: str | None = None,
+        smart_parent: bool | None = None,
+        write_geometry: bool | None = None,
+        write_parameters: bool | None = None,
+        write_uvs: bool | None = None,
+        force_unique_ids: bool | None = None,
+        compress: bool | None = None,
+    ) -> str:
+        """Save this node as a support asset (``DzNodeSupportAssetFilter``), silently.
+
+        *output_path* must be inside a configured content directory.
+
+        Returns:
+            The content directory the asset was saved under.
+
+        Raises:
+            ValueError: If *output_path* is outside every content directory.
+            DazError: If the filter is unavailable or the save fails.
+        """
+        from .exceptions import DazError, NodeNotFoundError
+        strings = {"VendorName": vendor, "ProductName": product, "ItemName": item,
+                   "Category": category, "CompatibilityBase": compatibility_base,
+                   "CompatibleWith": compatible_with}
+        flags = {"SmartParentProp": smart_parent, "WriteGeometryDef": write_geometry,
+                 "WriteParameterDefs": write_parameters, "WriteUVDefs": write_uvs,
+                 "ForceUniqueIDs": force_unique_ids, "CompressOutput": compress}
+        sets = [f"settings.setStringValue({json.dumps(k)}, {json.dumps(v)});"
+                for k, v in strings.items() if v is not None]
+        sets += [f"settings.setStringValue({json.dumps(k)}, {json.dumps('yes' if v else 'no')});"
+                 for k, v in flags.items() if v is not None]
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            if (typeof DzNodeSupportAssetFilter !== "function") return {{status: "unavailable"}};
+            var out = {json.dumps(output_path)};
+            function norm(p) {{ return String(p).replace(/\\\\/g, "/").toLowerCase(); }}
+            var cm = App.getContentMgr(), base = null, dirs = [];
+            for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
+                var d = cm.getContentDirectoryPath(i);
+                dirs.push(d);
+                if (norm(out).indexOf(norm(d)) === 0) base = d;
+            }}
+            if (!base) return {{status: "outside", dirs: dirs}};
+            var filter = new DzNodeSupportAssetFilter();
+            filter.setNode(_node);
+            var settings = new DzFileIOSettings();
+            filter.getDefaultOptions(settings);
+            settings.setStringValue("RunSilent", "yes");
+            settings.setStringValue("BaseDataPath", base);
+            if (!{json.dumps(item is not None)}) settings.setStringValue("ItemName", _node.getLabel());
+            {' '.join(sets)}
+            var err = filter.doSave(settings, out, "");
+            var code = (err && typeof err.valueOf === "function") ? err.valueOf() : (err || 0);
+            return code ? {{status: "failed", code: code}} : {{status: "ok", base: base}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "outside":
+            raise ValueError("output_path must be inside a configured content directory: "
+                             + ", ".join(raw.get("dirs", [])))
+        if raw["status"] == "unavailable":
+            raise DazError("DzNodeSupportAssetFilter is not available in this DAZ Studio")
+        if raw["status"] == "failed":
+            raise DazError(f"DzNodeSupportAssetFilter.doSave failed (error {raw.get('code')})")
+        return raw["base"]
+
     def find_property_by_label(self, label: str) -> "DazProperty | None":
         """Find a node-level property by its user-visible label.
 
@@ -546,8 +1471,8 @@ class DazNode(DazElement):
             y: Rotation around the Y axis in degrees.
             z: Rotation around the Z axis in degrees.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.getXRotControl().setValue({x}); _node.getYRotControl().setValue({y}); _node.getZRotControl().setValue({z});"
         )
         self._client.execute(script)
@@ -570,8 +1495,8 @@ class DazNode(DazElement):
             y: Y coordinate.
             z: Z coordinate.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
             f"_node.setWSPos(_tm, new DzVec3({x}, {y}, {z}));"
         )
@@ -591,8 +1516,8 @@ class DazNode(DazElement):
             y: Rotation around the Y axis in degrees.
             z: Rotation around the Z axis in degrees.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
             f"_node.getXRotControl().setDoubleValue(_tm, {x}); "
             f"_node.getYRotControl().setDoubleValue(_tm, {y}); "
@@ -609,8 +1534,8 @@ class DazNode(DazElement):
         the leftover default key distorts interpolation/extrapolation
         around the new keys.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "_node.getXPosControl().deleteAllKeys(); "
             "_node.getYPosControl().deleteAllKeys(); "
             "_node.getZPosControl().deleteAllKeys();"
@@ -622,8 +1547,8 @@ class DazNode(DazElement):
 
         See :meth:`clear_position_keys` — same rationale, for orientation.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "_node.getXRotControl().deleteAllKeys(); "
             "_node.getYRotControl().deleteAllKeys(); "
             "_node.getZRotControl().deleteAllKeys();"
@@ -686,8 +1611,8 @@ class DazNode(DazElement):
             raise ValueError(f"unknown key interpolation {bad[0]!r} (allowed: {', '.join(TRANSFORM_KEY_KINDS)})")
         axes = ("Pos", "Rot") if rotation else ("Pos",)
         controls = ", ".join(f"_node.get{a}{c}Control()" for c in axes for a in "XYZ")
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             _KEY_INTERP_JS
             + f"var _F = {json.dumps(frames)}, _K = {json.dumps(kinds)}, _C = [{controls}];\n"
             f"for (var _c = 0; _c < _C.length; _c++) "
@@ -699,8 +1624,8 @@ class DazNode(DazElement):
     @property
     def local_position(self) -> dict | None:
         """Local-space position as ``{"x", "y", "z"}`` (read-only)."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var p = _node.getLocalPos(); return {x: p.x, y: p.y, z: p.z};"
         )
         return self._client.execute(script).value
@@ -713,8 +1638,8 @@ class DazNode(DazElement):
             y: Y coordinate.
             z: Z coordinate.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.setLocalPos(new DzVec3({x}, {y}, {z}));"
         )
         self._client.execute(script)
@@ -729,8 +1654,8 @@ class DazNode(DazElement):
         Returns:
             ``(x, y, z)`` in degrees, or ``None`` if the node cannot be found.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "return [_node.getXRotControl().getValue(), "
             "_node.getYRotControl().getValue(), "
             "_node.getZRotControl().getValue()];"
@@ -743,8 +1668,8 @@ class DazNode(DazElement):
     @property
     def local_rotation(self) -> dict | None:
         """Local-space rotation as ``{"x", "y", "z", "w"}`` quaternion (read-only)."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var r = _node.getLocalRot(); return {x: r.x, y: r.y, z: r.z, w: r.w};"
         )
         return self._client.execute(script).value
@@ -757,15 +1682,15 @@ class DazNode(DazElement):
             y: Rotation around the local Y axis in degrees.
             z: Rotation around the local Z axis in degrees.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"_node.getXRotControl().setValue({x}); _node.getYRotControl().setValue({y}); _node.getZRotControl().setValue({z});"
         )
         self._client.execute(script)
 
     def is_selected(self) -> bool:
         """Return ``True`` if this node is currently selected."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isSelected();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isSelected();")
         return bool(self._client.execute(script).value)
 
     def select(self, on: bool = True) -> None:
@@ -775,22 +1700,22 @@ class DazNode(DazElement):
             on: ``True`` to select, ``False`` to deselect.
         """
         flag = "true" if on else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.select({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.select({flag});")
         self._client.execute(script)
 
     def is_in_scene(self) -> bool:
         """Return ``True`` if this node is still part of the active scene."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isInScene();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isInScene();")
         return bool(self._client.execute(script).value)
 
     def is_root(self) -> bool:
         """Return ``True`` if this node has no parent (top-level node)."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isRootNode();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isRootNode();")
         return bool(self._client.execute(script).value)
 
     def is_visible_in_render(self) -> bool:
         """Return ``True`` if this node is visible in render output."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isVisibleInRender();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isVisibleInRender();")
         return bool(self._client.execute(script).value)
 
     def set_visible_in_render(self, on: bool) -> None:
@@ -800,12 +1725,12 @@ class DazNode(DazElement):
             on: ``True`` to show in render, ``False`` to hide.
         """
         flag = "true" if on else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.setVisibleInRender({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.setVisibleInRender({flag});")
         self._client.execute(script)
 
     def is_visible_in_viewport(self) -> bool:
         """Return ``True`` if this node is visible in the 3D viewport."""
-        script = ScriptBuilder.node_body(self._identifier, "return _node.isVisibleInViewport();")
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.isVisibleInViewport();")
         return bool(self._client.execute(script).value)
 
     def set_visible_in_viewport(self, on: bool) -> None:
@@ -815,7 +1740,7 @@ class DazNode(DazElement):
             on: ``True`` to show, ``False`` to hide.
         """
         flag = "true" if on else "false"
-        script = ScriptBuilder.node_body(self._identifier, f"_node.setVisibleInViewport({flag});")
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"_node.setVisibleInViewport({flag});")
         self._client.execute(script)
 
     def bounding_box(self) -> dict | None:
@@ -825,8 +1750,8 @@ class DazNode(DazElement):
             A dict ``{"min": {"x", "y", "z"}, "max": {"x", "y", "z"}}`` or
             ``None`` if the node has no geometry.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             "var bb = _node.getWSBoundingBox(); return {min: {x: bb.min.x, y: bb.min.y, z: bb.min.z}, max: {x: bb.max.x, y: bb.max.y, z: bb.max.z}};"
         )
         return self._client.execute(script).value
@@ -852,9 +1777,9 @@ class DazNode(DazElement):
             NodeNotFoundError: If this node or *figure* cannot be found.
         """
         from .exceptions import NodeNotFoundError
-        figure_expr = ScriptBuilder.find_node_expr(figure._identifier)
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        figure_expr = figure._locator
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             f"""
             var _figure = {figure_expr};
             if (!_figure) return null;
@@ -895,8 +1820,8 @@ class DazNode(DazElement):
               ``["cleared follow target", "detached from parent"]``), or
               ``[]`` if nothing was fitted.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var _prevFigure = null;
             var _actions = [];
@@ -921,46 +1846,285 @@ class DazNode(DazElement):
         )
         return self._client.execute(script).value or {"previous_figure": None, "actions": []}
 
-    def fitted_items(self) -> list["DazNode"]:
-        """Return all clothing, hair, and prop nodes fitted to this figure.
+    _SUBD_JS = """
+        var _obj = _node.getObject ? _node.getObject() : null;
+        var _shape = _obj ? _obj.getCurrentShape() : null;
+        var _view = _shape ? _shape.findProperty("SubDIALevel") : null;
+        var _rend = _shape ? _shape.findProperty("SubDRenderLevel") : null;
+        function _levels() {
+            return {view: _view ? _view.getValue() : null, render: _rend ? _rend.getValue() : null};
+        }
+    """
 
-        A node counts as fitted if it either follows this node (figure-based
-        conforming clothing/hair) or is directly parented to it (props and
-        accessories).
+    def subdivision(self) -> dict | None:
+        """SubD levels of this node's mesh: ``{"view": int, "render": int}``.
+
+        These are the shape's "View SubD Level" (``SubDIALevel``) and "Render
+        SubD Level (Minimum)" (``SubDRenderLevel``) dials; ``None`` values
+        mean the mesh has no SubD cage.
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, self._SUBD_JS + "return _levels();")
+        return self._client.execute(script).value
+
+    def set_subdivision(self, view: int, render: int | None = None) -> dict:
+        """Set the mesh's view SubD level (and optionally its render minimum).
 
         Returns:
-            A list of :class:`~dazpy.DazNode` proxies for each fitted item.
+            ``{"previous": {...}, "current": {...}}`` levels as in :meth:`subdivision`.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            PropertyNotFoundError: If the mesh has no SubD levels.
         """
-        script = ScriptBuilder.node_body(
-            self._identifier,
-            """
-            var _fitted = [];
-            var _numNodes = Scene.getNumNodes();
-            for (var i = 0; i < _numNodes; i++) {
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        render_js = "null" if render is None else str(int(render))
+        script = ScriptBuilder.node_body_from_locator(self._locator, self._SUBD_JS + f"""
+            if (!_view) return {{status: "no_subd"}};
+            var _render = {render_js};
+            var _prev = _levels();
+            _view.setValue({int(view)});
+            if (_render !== null && _rend) _rend.setValue(_render);
+            return {{status: "ok", previous: _prev, current: _levels()}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "no_subd":
+            raise PropertyNotFoundError(f"No SubD levels on {self._identifier.value!r}")
+        return {"previous": raw["previous"], "current": raw["current"]}
+
+    # ── dForce ───────────────────────────────────────────────────────────────
+
+    def _dforce_call(self, body: str, *, provider: bool = False) -> dict:
+        from ._dforce import DFORCE_FIND_JS, DFORCE_PROVIDER_JS
+        from .exceptions import DazError, NodeNotFoundError
+        js = DFORCE_FIND_JS + (DFORCE_PROVIDER_JS if provider else "") + body
+        raw = self._client.execute(ScriptBuilder.node_body_from_locator(self._locator, js)).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw.get("status") == "no_dforce":
+            raise DazError(
+                f"No dForce modifier on {self._identifier.value!r} (add one with "
+                f"add_dforce_dynamic_surface). Modifiers: {', '.join(raw.get('modifiers', []))}")
+        if raw.get("status") == "no_provider":
+            raise DazError(
+                f"No dForce simulation settings for surface {raw.get('material')!r} (is a dForce "
+                f"modifier attached?). Available: {', '.join(raw.get('available', []))}")
+        if raw.get("status") in ("no_shape", "no_materials", "unsupported"):
+            raise DazError(f"dForce surface settings unavailable: {raw['status']}")
+        return raw
+
+    _NO_DFORCE = 'if (!_m) return {status: "no_dforce", modifiers: _modifierNames()};'
+
+    def add_dforce_dynamic_surface(self) -> bool:
+        """Add a dForce Dynamic Surface modifier (Studio's own action, run on
+        this node alone).
+
+        Returns:
+            ``True`` if added, ``False`` if the node already had one.
+
+        Raises:
+            DazError: If the action ran but no dForce modifier appeared.
+        """
+        from .exceptions import DazError
+        raw = self._dforce_call("""
+            if (_findDForce()) return {status: "present"};
+            var act = MainWindow.getActionMgr().findAction("DzAddDForceModifierDynamicSurfaceAction");
+            if (!act) return {status: "no_action"};
+            Scene.selectAllNodes(false);
+            _node.select(true);
+            act.trigger();
+            return {status: _findDForce() ? "added" : "not_added"};
+        """)
+        if raw["status"] in ("not_added", "no_action"):
+            raise DazError(f"Adding a dForce Dynamic Surface failed ({raw['status']})")
+        return raw["status"] == "added"
+
+    def dforce_influence_weights(self) -> list[float] | None:
+        """Per-vertex dForce influence weights (0 = pinned, 1 = free), or
+        ``None`` when the modifier has no weight map yet."""
+        raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + """
+            var wm = _m.getInfluenceWeights();
+            if (!wm) return {status: "ok", weights: null};
+            var out = [];
+            for (var i = 0; i < wm.getNumWeights(); i++) out.push(wm.getFloatWeight(i));
+            return {status: "ok", weights: out};
+        """)
+        return raw["weights"]
+
+    def set_dforce_influence_weights(
+        self, default: float = 1.0, overrides: Mapping[int, float] | None = None
+    ) -> tuple[int, int]:
+        """Set every vertex's dForce influence to *default*, then *overrides*.
+
+        Returns:
+            ``(vertex_count, overrides_applied)``; out-of-range indices are skipped.
+
+        Raises:
+            DazError: If the vertex count is unknown (simulate the node once first).
+        """
+        from .exceptions import DazError
+        payload = json.dumps({str(int(k)): float(v) for k, v in (overrides or {}).items()})
+        raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + f"""
+            var n = _m.getTargetVertexCount ? _m.getTargetVertexCount() : 0;
+            if (!n) {{ var ex = _m.getInfluenceWeights(); n = ex ? ex.getNumWeights() : 0; }}
+            if (!n) return {{status: "no_vertex_count"}};
+            var over = {payload}, wm = new DzWeightMap(), applied = 0;
+            wm.setNumWeights(n);
+            for (var i = 0; i < n; i++) wm.setFloatWeight(i, {float(default)!r});
+            for (var k in over) {{
+                var idx = parseInt(k, 10);
+                if (idx >= 0 && idx < n) {{ wm.setFloatWeight(idx, over[k]); applied++; }}
+            }}
+            _m.setInfluenceWeights(wm);
+            return {{status: "ok", vertex_count: n, overridden: applied}};
+        """)
+        if raw["status"] == "no_vertex_count":
+            raise DazError("dForce vertex count unknown: simulate this node once, then retry")
+        return int(raw["vertex_count"]), int(raw["overridden"])
+
+    def set_dforce_property(self, name: str, value: float) -> dict:
+        """Set a property on this node's dForce modifier (by name or label,
+        case-insensitive). Returns modifier, property, old_value, new_value.
+
+        Raises:
+            PropertyNotFoundError: Lists the modifier's property names.
+        """
+        from .exceptions import PropertyNotFoundError
+        raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + f"""
+            var want = {json.dumps(name.lower())}, p = null, names = [];
+            for (var i = 0; i < _m.getNumProperties(); i++) {{
+                var q = _m.getProperty(i);
+                names.push(q.getName());
+                if (!p && (q.getName().toLowerCase() === want || q.getLabel().toLowerCase() === want)) p = q;
+            }}
+            if (!p) return {{status: "no_property", available: names}};
+            var old = p.getValue();
+            p.setValue({float(value)!r});
+            return {{status: "ok", modifier: _m.className(), property: p.getName(),
+                     old: old, new: p.getValue()}};
+        """)
+        if raw["status"] == "no_property":
+            raise PropertyNotFoundError(
+                f"dForce property {name!r} not found. Available: {', '.join(raw['available'])}")
+        return {"modifier": raw["modifier"], "property": raw["property"],
+                "old_value": raw["old"], "new_value": raw["new"]}
+
+    def dforce_surface_properties(self, material: str | None = None) -> tuple[str, list[dict]]:
+        """dForce simulation settings of one surface (default: the first).
+
+        Returns:
+            ``(material_name, [{name, label, type, value}])``.
+        """
+        raw = self._dforce_call(f"""
+            var r = _provider({json.dumps(material)});
+            if (r.status !== "ok") return r;
+            var out = [];
+            for (var i = 0; i < r.provider.getNumProperties(); i++) {{
+                var q = r.provider.getProperty(i), num = q.inherits("DzNumericProperty");
+                out.push({{name: q.getName(), label: q.getLabel(), type: num ? "numeric" : "unknown",
+                          value: num ? q.getValue() : null}});
+            }}
+            return {{status: "ok", material: r.material, properties: out}};
+        """, provider=True)
+        return raw["material"], raw["properties"]
+
+    def set_dforce_surface_property(self, name: str, value: float,
+                                    material: str | None = None) -> dict:
+        """Set one numeric dForce surface setting. Returns material, property,
+        old_value, new_value.
+
+        Raises:
+            PropertyNotFoundError: Lists the surface's setting names.
+        """
+        from .exceptions import PropertyNotFoundError
+        raw = self._dforce_call(f"""
+            var r = _provider({json.dumps(material)});
+            if (r.status !== "ok") return r;
+            var p = r.provider.findProperty({json.dumps(name)}), names = [];
+            if (!p || !p.inherits("DzNumericProperty")) {{
+                for (var i = 0; i < r.provider.getNumProperties(); i++) names.push(r.provider.getProperty(i).getName());
+                return {{status: "no_property", available: names}};
+            }}
+            var old = p.getValue();
+            p.setValue({float(value)!r});
+            return {{status: "ok", material: r.material, property: p.getName(), old: old, new: p.getValue()}};
+        """, provider=True)
+        if raw["status"] == "no_property":
+            raise PropertyNotFoundError(
+                f"dForce surface setting {name!r} not found. Available: {', '.join(raw['available'])}")
+        return {"material": raw["material"], "property": raw["property"],
+                "old_value": raw["old"], "new_value": raw["new"]}
+
+    def freeze_dforce(self, on: bool = True) -> int:
+        """Freeze (bake) or release every dForce modifier on this node.
+
+        Freezing holds the simulated shape on the mesh -- Studio's dForce
+        "bake". Returns how many modifiers were changed.
+        """
+        from ._dforce import DFORCE_FIND_JS
+        script = ScriptBuilder.node_body_from_locator(self._locator, DFORCE_FIND_JS + f"""
+            var n = 0, hs = _hosts();
+            for (var h = 0; h < hs.length; h++) {{
+                var host = hs[h][1];
+                if (!host || typeof host.getNumModifiers !== "function") continue;
+                for (var i = 0; i < host.getNumModifiers(); i++) {{
+                    var m = host.getModifier(i);
+                    if (!_isDForce(m)) continue;
+                    var p = m.findPropertyByLabel("Freeze Simulation");
+                    if (p) {{ p.setValue({"true" if on else "false"}); n++; }}
+                }}
+            }}
+            return n;
+        """)
+        return int(self._client.execute(script).value or 0)
+
+    def fitted_item_info(self) -> list["FittedItem"]:
+        """Items fitted to this figure, with their kind, in one call.
+
+        A node counts as fitted if it follows this node (conforming clothing
+        and hair) or is a direct non-bone child of it (props and
+        accessories). ``type`` is ``"hair"`` for ``DzHair`` nodes, otherwise
+        ``"clothing"`` for followers and ``"prop"`` for children.
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, """
+            var _out = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {
                 var _n = Scene.getNode(i);
-                if (!_n || _n === _node) continue;
-                var _isFitted = false;
+                if (!_n || _n === _node || _n.inherits("DzBone")) continue;
+                var _type = null;
                 if (typeof _n.getFollowTarget === 'function') {
                     var _ft = _n.getFollowTarget();
-                    if (_ft && _ft.elementID === _node.elementID) _isFitted = true;
+                    if (_ft && _ft.elementID === _node.elementID) _type = "clothing";
                 }
-                if (!_isFitted && typeof _n.getNodeParent === 'function') {
+                if (!_type && typeof _n.getNodeParent === 'function') {
                     var _p = _n.getNodeParent();
-                    if (_p && _p.elementID === _node.elementID) _isFitted = true;
+                    if (_p && _p.elementID === _node.elementID) _type = "prop";
                 }
-                if (_isFitted) _fitted.push(_n.getName());
+                if (!_type) continue;
+                if (_n.inherits("DzHair")) _type = "hair";
+                _out.push({label: _n.getLabel(), name: _n.getName(), type: _type,
+                           element_id: _n.elementID});
             }
-            return _fitted;
-            """
-        )
-        names = self._client.execute(script).value or []
-        return [DazNode(self._client, NodeIdentifier(n)) for n in names]
+            return _out;
+        """)
+        return [FittedItem(r["label"], r["name"], r["type"], int(r["element_id"]))
+                for r in self._client.execute(script).value or []]
+
+    def fitted_items(self) -> list["DazNode"]:
+        """Proxies for the items fitted to this figure (see :meth:`fitted_item_info`).
+
+        Bound by elementID. Bones are not fitted items (a figure's root bone
+        is its direct child).
+        """
+        return [DazNode(self._client, NodeIdentifier(str(i.element_id), kind="element_id"))
+                for i in self.fitted_item_info()]
 
     @property
     def geometry_vertex_count(self) -> int | None:
         """Total vertex count of this node's current geometry, or ``None``."""
-        script = ScriptBuilder.node_body(
-            self._identifier,
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator,
             """
             var obj = _node.getObject();
             if (!obj) return null;

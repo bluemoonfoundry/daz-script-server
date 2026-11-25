@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Sequence
 
 from ._client import DazClient
-from ._node import DazNode, NodeIdentifier
+from ._node import _FIND_NUMERIC_JS, _NODE_INFO_JS, DazNode, NodeIdentifier, NodeInfo
 from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
@@ -14,6 +15,120 @@ if TYPE_CHECKING:
     from ._light import DazLight
     from ._skeleton import DazSkeleton
     from ._undo import UndoGroup
+
+
+@dataclass(frozen=True)
+class ViewportCamera:
+    """Snapshot of the camera the active 3D viewport is looking through.
+
+    Attributes:
+        label: The camera's label (e.g. ``"Perspective View"``, ``"Camera 1"``).
+        name: The camera's internal name.
+        in_scene: ``False`` for Studio's built-in view cameras (Perspective,
+            Front, Top, ...), which are not scene nodes.
+        position: World-space ``(x, y, z)`` at the time of the call.
+        camera: A :class:`~dazpy.DazCamera` proxy when *in_scene*, else ``None``.
+    """
+
+    label: str
+    name: str
+    in_scene: bool
+    position: tuple[float, float, float]
+    camera: "DazCamera | None" = None
+
+
+# JS: resolve a node reference (elementID, Parent/Label path, or a unique
+# label/name). Returns {node} | {missing: ref} | {ambiguous, count, matches}.
+# Needs _NODE_INFO_JS.
+_RESOLVE_JS = """
+            function _resolve(s) {
+                if (/^[0-9]+$/.test(s)) {
+                    var byId = Scene.findNodeByElementID(parseInt(s, 10));
+                    return byId ? {node: byId} : {missing: s};
+                }
+                var slash = s.lastIndexOf("/");
+                if (slash > 0) {
+                    var parent = _resolve(s.substring(0, slash));
+                    if (!parent.node) return parent;
+                    var part = s.substring(slash + 1), child = null;
+                    if (typeof parent.node.findNodeChildByLabel === "function")
+                        child = parent.node.findNodeChildByLabel(part, true);
+                    if (!child && typeof parent.node.findNodeChild === "function")
+                        child = parent.node.findNodeChild(part, true);
+                    return child ? {node: child} : {missing: s};
+                }
+                var matches = [];
+                for (var i = 0; i < Scene.getNumNodes(); i++) {
+                    var n = Scene.getNode(i);
+                    if (n && (n.getLabel() === s || n.getName() === s)) matches.push(n);
+                }
+                if (matches.length === 1) return {node: matches[0]};
+                if (matches.length === 0) return {missing: s};
+                var info = [];
+                for (var k = 0; k < matches.length && k < 12; k++) info.push(_nodeInfo(matches[k]));
+                return {ambiguous: s, count: matches.length, matches: info};
+            }
+"""
+
+
+@dataclass(frozen=True)
+class CameraInfo:
+    """One scene camera, from :meth:`DazScene.camera_info`."""
+
+    index: int
+    label: str
+    name: str
+    type: str
+    element_id: int
+    position: tuple[float, float, float]
+    focal_length: float | None
+
+
+@dataclass(frozen=True)
+class LightInfo:
+    """One scene light, from :meth:`DazScene.light_info`.
+
+    ``flux`` is the light's "Flux" property (``None`` for light types
+    without one); ``on`` is whether the node is visible.
+    """
+
+    index: int
+    label: str
+    name: str
+    type: str
+    element_id: int
+    position: tuple[float, float, float]
+    flux: float | None
+    on: bool
+
+
+@dataclass(frozen=True)
+class ContentCategory:
+    """A sub-folder of the content library, from :meth:`DazScene.content_categories`."""
+
+    name: str
+    path: str
+    duf_count: int
+
+
+@dataclass(frozen=True)
+class ContentFile:
+    """A ``.duf`` in a content-library folder, from :meth:`DazScene.content_files`."""
+
+    name: str
+    filename: str
+    full_path: str
+
+
+@dataclass(frozen=True)
+class BatchPropertyResult:
+    """One operation's outcome from :meth:`DazScene.set_numeric_properties`."""
+
+    ok: bool
+    node: str | None
+    property: str | None = None
+    value: float | None = None
+    error: str | None = None
 
 
 class DazScene:
@@ -54,9 +169,10 @@ class DazScene:
             for (var i = 0; i < Scene.getNumNodes(); i++) {
                 var n = Scene.getNode(i);
                 var nodeType = "DzNode";
+                // DzLight inherits DzCamera: test lights first.
                 if (n.inherits("DzSkeleton")) { nodeType = "DzSkeleton"; }
-                else if (n.inherits("DzCamera")) { nodeType = "DzCamera"; }
                 else if (n.inherits("DzLight")) { nodeType = "DzLight"; }
+                else if (n.inherits("DzCamera")) { nodeType = "DzCamera"; }
                 result.push({name: n.getName(), className: nodeType});
             }
             return result;
@@ -74,6 +190,275 @@ class DazScene:
             _NODE_CLASS_MAP.get(item["className"], DazNode)(self._client, NodeIdentifier(item["name"]))
             for item in items
         ]
+
+    # DzLight inherits DzCamera, so lights must be tested before cameras.
+    _NODE_CLASSES = ("DzSkeleton", "DzLight", "DzCamera")
+
+    def _typed_node(self, identifier: NodeIdentifier, class_name: str) -> DazNode:
+        from ._skeleton import DazSkeleton
+        from ._camera import DazCamera
+        from ._light import DazLight
+        cls = {"DzSkeleton": DazSkeleton, "DzCamera": DazCamera, "DzLight": DazLight}.get(
+            class_name, DazNode)
+        return cls(self._client, identifier)
+
+    def resolve_node(self, ref: str | int) -> DazNode:
+        """Resolve a node reference the way users and agents write them, in one call.
+
+        *ref* may be:
+
+        - an elementID (``4217`` or ``"4217"``),
+        - a ``Parent/Label`` path (each step a label or name; the child is
+          searched recursively under the parent), or
+        - a label or internal name, which must match exactly one node.
+
+        Returns:
+            A proxy bound to the node's elementID (so later calls can't drift
+            to a same-named node), typed :class:`~dazpy.DazSkeleton`,
+            :class:`~dazpy.DazCamera`, :class:`~dazpy.DazLight` or
+            :class:`~dazpy.DazNode`.
+
+        Raises:
+            ValueError: If *ref* is empty.
+            NodeNotFoundError: If nothing matches.
+            AmbiguousNodeError: If a label/name matches several nodes; its
+                ``matches`` list the candidates with their elementIDs.
+        """
+        from .exceptions import AmbiguousNodeError, NodeNotFoundError
+        text = str(ref).strip() if ref is not None else ""
+        if not text:
+            raise ValueError("resolve_node: a node reference is required")
+        script = ScriptBuilder.iife(_NODE_INFO_JS + _RESOLVE_JS + f"""
+            var r = _resolve({json.dumps(text)});
+            if (r.node) {{
+                var t = "DzNode", kinds = {json.dumps(list(self._NODE_CLASSES))};
+                for (var c = 0; c < kinds.length; c++) if (r.node.inherits(kinds[c])) {{ t = kinds[c]; break; }}
+                return {{status: "ok", element_id: r.node.elementID, type: t}};
+            }}
+            if (r.ambiguous) return {{status: "ambiguous", ref: r.ambiguous, count: r.count, matches: r.matches}};
+            return {{status: "missing", ref: r.missing}};
+        """)
+        raw = self._client.execute(script).value or {"status": "missing", "ref": text}
+        if raw["status"] == "ok":
+            ident = NodeIdentifier(str(int(raw["element_id"])), kind="element_id")
+            return self._typed_node(ident, raw.get("type", "DzNode"))
+        if raw["status"] == "ambiguous":
+            raise AmbiguousNodeError(
+                raw.get("ref", text), int(raw.get("count", 0)),
+                [NodeInfo._from_raw(m) for m in raw.get("matches", [])],
+            )
+        missing = raw.get("ref", text)
+        detail = f" (no node at {missing!r})" if missing != text else ""
+        raise NodeNotFoundError(f"Node not found: {text!r}{detail}")
+
+    def set_numeric_properties(
+        self, operations: Sequence[tuple[str | int, str, float]]
+    ) -> list[BatchPropertyResult]:
+        """Set many numeric properties across nodes in one call.
+
+        Each operation is ``(node_ref, property_name, value)``: *node_ref*
+        as for :meth:`resolve_node`, *property_name* matched like
+        :meth:`DazNode.set_numeric_property` (exact, case-insensitive; locked
+        properties are unlocked). A failing operation doesn't stop the
+        others; its result carries the error.
+        """
+        ops = [{"node": str(n), "prop": str(p), "value": float(v)} for n, p, v in operations]
+        if not ops:
+            return []
+        script = ScriptBuilder.iife(_NODE_INFO_JS + _RESOLVE_JS + _FIND_NUMERIC_JS + f"""
+            var _ops = {json.dumps(ops)}, _out = [];
+            for (var i = 0; i < _ops.length; i++) {{
+                var op = _ops[i];
+                try {{
+                    var r = _resolve(op.node);
+                    if (r.ambiguous) throw new Error("Ambiguous node '" + op.node + "' (" + r.count +
+                        " matches). Use elementID or Parent/Label.");
+                    if (!r.node) throw new Error("Node not found: " + op.node);
+                    var h = _findNumeric(r.node, op.prop.toLowerCase(), false);
+                    if (!h) throw new Error("Property not found: " + op.prop);
+                    var p = h.prop;
+                    if (!p.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + op.prop);
+                    if (typeof p.lock === "function" && p.isLocked && p.isLocked()) p.lock(false);
+                    p.setValue(op.value);
+                    _out.push({{ok: true, node: r.node.getLabel(), property: p.getLabel(), value: p.getValue()}});
+                }} catch (e) {{
+                    _out.push({{ok: false, node: null, error: e.message || String(e)}});
+                }}
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value or []
+        return [BatchPropertyResult(bool(r.get("ok")), r.get("node"), r.get("property"),
+                                    r.get("value"), r.get("error")) for r in raw]
+
+    def freeze_dforce(self, on: bool = True) -> int:
+        """Freeze (bake) or release every dForce modifier in the scene, in one
+        call. Returns how many modifiers were changed."""
+        from ._dforce import DFORCE_FIND_JS
+        script = ScriptBuilder.iife(f"""
+            var total = 0;
+            for (var s = 0; s < Scene.getNumNodes(); s++) {{
+                var _node = Scene.getNode(s);
+                if (!_node || _node.inherits("DzBone")) continue;
+                {DFORCE_FIND_JS}
+                var hs = _hosts();
+                for (var h = 0; h < hs.length; h++) {{
+                    var host = hs[h][1];
+                    if (!host || typeof host.getNumModifiers !== "function") continue;
+                    for (var i = 0; i < host.getNumModifiers(); i++) {{
+                        var m = host.getModifier(i);
+                        if (!_isDForce(m)) continue;
+                        var p = m.findPropertyByLabel("Freeze Simulation");
+                        if (p) {{ p.setValue({"true" if on else "false"}); total++; }}
+                    }}
+                }}
+            }}
+            return total;
+        """)
+        return int(self._client.execute(script).value or 0)
+
+    def transfer_utility(
+        self,
+        source: DazNode,
+        target: DazNode,
+        *,
+        binding: bool = False,
+        morphs: bool = False,
+        uvs: bool = False,
+        material_groups: bool = False,
+        face_groups: bool = False,
+        fit_to_figure: bool = False,
+        parent_to_figure: bool = False,
+        merge_hierarchies: bool = False,
+    ) -> None:
+        """Run Studio's Transfer Utility from *source* to *target*, silently.
+
+        Raises:
+            DazError: If ``doTransfer()`` reports failure.
+        """
+        from .exceptions import DazError
+        flags = {"setTransferBinding": binding, "setTransferMorphs": morphs,
+                 "setTransferUVs": uvs, "setTransferMaterialGroups": material_groups,
+                 "setTransferFaceGroups": face_groups, "setFitToFigure": fit_to_figure,
+                 "setParentToFigure": parent_to_figure, "setMergeHierarchies": merge_hierarchies}
+        calls = "\n".join(f"tu.{k}({'true' if v else 'false'});" for k, v in flags.items())
+        script = ScriptBuilder.iife(f"""
+            var src = {source._locator}, dst = {target._locator};
+            if (!src || !dst) return {{ok: false, missing: true}};
+            var tu = new DzTransferUtility();
+            tu.setSilentImporters(true);
+            tu.setSource(src);
+            tu.setTarget(dst);
+            {calls}
+            return {{ok: !!tu.doTransfer()}};
+        """)
+        raw = self._client.execute(script).value or {"ok": False}
+        if raw.get("missing"):
+            raise DazError("Transfer Utility: source or target node not found")
+        if not raw.get("ok"):
+            raise DazError("Transfer Utility: doTransfer() returned false")
+
+    def content_categories(self, parent: str = "") -> list[ContentCategory]:
+        """Sub-folders of *parent* (content-relative) across every content
+        directory, merged by name, with their ``.duf`` counts."""
+        rel = json.dumps(parent.strip("/"))
+        script = ScriptBuilder.iife(f"""
+            var cm = App.getContentMgr(), rel = {rel}, seen = {{}}, out = [];
+            for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
+                var dir = cm.getContentDirectory(i);
+                if (!dir) continue;
+                var d = new DzDir(rel ? dir.fullPath + "/" + rel : dir.fullPath);
+                if (!d.exists()) continue;
+                var subs = d.entryList([], DzDir.Dirs | DzDir.NoDotAndDotDot);
+                for (var j = 0; j < subs.length; j++) {{
+                    if (seen[subs[j]]) continue;
+                    seen[subs[j]] = true;
+                    var sub = new DzDir(d.absoluteFilePath(subs[j]));
+                    out.push({{name: subs[j], path: rel ? rel + "/" + subs[j] : subs[j],
+                              duf_count: sub.entryList(["*.duf"], DzDir.Files).length}});
+                }}
+            }}
+            return out;
+        """)
+        raw = self._client.execute(script).value or []
+        return sorted((ContentCategory(r["name"], r["path"], int(r["duf_count"])) for r in raw),
+                      key=lambda c: c.name)
+
+    def content_files(self, category: str = "") -> list[ContentFile]:
+        """``.duf`` files in *category* (content-relative) across every
+        content directory; a name found in several directories is listed once."""
+        rel = json.dumps(category.strip("/"))
+        script = ScriptBuilder.iife(f"""
+            var cm = App.getContentMgr(), rel = {rel}, seen = {{}}, out = [];
+            for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
+                var dir = cm.getContentDirectory(i);
+                if (!dir) continue;
+                var path = rel ? dir.fullPath + "/" + rel : dir.fullPath, d = new DzDir(path);
+                if (!d.exists()) continue;
+                var files = d.entryList(["*.duf"], DzDir.Files);
+                for (var j = 0; j < files.length; j++) {{
+                    if (seen[files[j]]) continue;
+                    seen[files[j]] = true;
+                    out.push({{name: files[j].replace(/\.duf$/i, ""), filename: files[j],
+                              full_path: path + "/" + files[j]}});
+                }}
+            }}
+            return out;
+        """)
+        raw = self._client.execute(script).value or []
+        return sorted((ContentFile(r["name"], r["filename"], r["full_path"]) for r in raw),
+                      key=lambda f: f.name)
+
+    def strand_hair_nodes(self) -> list[dict]:
+        """Every Strand-Based Hair node: label, name, elementID, target figure,
+        whether it has geometry, and its surface labels."""
+        script = ScriptBuilder.iife("""
+            var out = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {
+                var n = Scene.getNode(i);
+                if (!n || !n.inherits("DzStrandHairNode")) continue;
+                var t = n.getTargetNode(), obj = n.getObject(), mats = [];
+                var shape = obj ? obj.getCurrentShape() : null;
+                if (shape) for (var m = 0; m < shape.getNumMaterials(); m++) {
+                    var mat = shape.getMaterial(m);
+                    mats.push((typeof mat.getLabel === "function" && mat.getLabel()) || mat.getName());
+                }
+                out.push({label: n.getLabel(), name: n.getName(), element_id: n.elementID,
+                          target: t ? t.getLabel() : null, has_geometry: !!obj, materials: mats});
+            }
+            return out;
+        """)
+        return list(self._client.execute(script).value or [])
+
+    def find_nodes(self, query: str) -> list[NodeInfo]:
+        """Every node whose label or internal name equals *query* exactly.
+
+        Use it to list same-labelled nodes and pick one by
+        :attr:`NodeInfo.element_id`.
+        """
+        script = ScriptBuilder.iife(_NODE_INFO_JS + f"""
+            var q = {json.dumps(query)}, out = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {{
+                var n = Scene.getNode(i);
+                if (n && (n.getLabel() === q || n.getName() === q)) out.push(_nodeInfo(n));
+            }}
+            return out;
+        """)
+        return [NodeInfo._from_raw(r) for r in self._client.execute(script).value or []]
+
+    def content_path(self, relative: str) -> str | None:
+        """Resolve a content-library-relative path to an absolute path.
+
+        Searches every configured content directory, as Studio does for
+        asset references (e.g. ``"Shader Presets/Iray/DAZ Uber/!Iray Uber Base.duf"``).
+
+        Returns:
+            The absolute path, or ``None`` if no content directory has it.
+        """
+        script = ScriptBuilder.iife(
+            f"return App.getContentMgr().getAbsolutePath({json.dumps(relative)}, false, \"\") || \"\";"
+        )
+        return self._client.execute(script).value or None
 
     def find_node(self, name: str) -> DazNode:
         """Find a scene node by its internal name.
@@ -186,6 +571,125 @@ class DazScene:
         names = self._client.execute(script).value or []
         return [DazLight(self._client, NodeIdentifier(n)) for n in names]
 
+    def viewport_camera(self) -> ViewportCamera | None:
+        """Return the camera the active 3D viewport is looking through.
+
+        This is often one of Studio's built-in view cameras (``"Perspective
+        View"``), which is not a scene node and so is not in :meth:`cameras`;
+        :attr:`ViewportCamera.in_scene` says which kind it is.
+
+        Returns:
+            A :class:`ViewportCamera` snapshot, or ``None`` when there is no
+            active 3D viewport (e.g. Studio is running without a main window).
+        """
+        from ._camera import DazCamera
+        script = ScriptBuilder.iife("""
+            var _vm = (typeof MainWindow !== "undefined" && MainWindow) ? MainWindow.getViewportMgr() : null;
+            var _vp = _vm ? _vm.getActiveViewport() : null;
+            var _v3 = _vp ? _vp.get3DViewport() : null;
+            var _cam = _v3 ? _v3.getCamera() : null;
+            if (!_cam) return null;
+            var _p = _cam.getWSPos();
+            return {label: _cam.getLabel(), name: _cam.getName(),
+                    in_scene: _cam.isInScene(), position: [_p.x, _p.y, _p.z]};
+        """)
+        raw = self._client.execute(script).value
+        if not raw:
+            return None
+        in_scene = bool(raw.get("in_scene"))
+        pos = raw.get("position") or [0.0, 0.0, 0.0]
+        return ViewportCamera(
+            label=raw.get("label", ""),
+            name=raw.get("name", ""),
+            in_scene=in_scene,
+            position=(float(pos[0]), float(pos[1]), float(pos[2])),
+            camera=DazCamera(self._client, NodeIdentifier(raw["name"])) if in_scene else None,
+        )
+
+    def set_viewport_camera(self, camera: "DazCamera | str") -> str | None:
+        """Look through *camera* in the active 3D viewport.
+
+        *camera* is a :class:`~dazpy.DazCamera`, or a label: a scene camera's,
+        or one of Studio's built-in view cameras (``"Perspective View"``,
+        ``"Front View"``, ...), which are not scene nodes.
+
+        Returns:
+            The label of the camera the viewport used before.
+
+        Raises:
+            NodeNotFoundError: If *camera* is not in the scene.
+            TypeError: If the node is not a camera.
+            RuntimeError: If there is no active 3D viewport.
+        """
+        from .exceptions import NodeNotFoundError
+        if isinstance(camera, str):
+            label = json.dumps(camera)
+            locator = f"""(function(){{
+                for (var i = 0; i < Scene.getNumCameras(); i++)
+                    if (Scene.getCamera(i).getLabel() === {label}) return Scene.getCamera(i);
+                var vm = (typeof MainWindow !== "undefined" && MainWindow) ? MainWindow.getViewportMgr() : null;
+                if (vm) for (var j = 0; j < vm.getNumViewCameras(); j++)
+                    if (vm.getViewCamera(j).getLabel() === {label}) return vm.getViewCamera(j);
+                return null;
+            }})()"""
+            ref = camera
+        else:
+            locator, ref = camera._locator, camera._identifier.value
+        script = ScriptBuilder.iife(f"""
+            var _cam = {locator};
+            if (!_cam) return {{status: "missing"}};
+            if (!_cam.inherits("DzCamera")) return {{status: "not_camera"}};
+            var _vm = (typeof MainWindow !== "undefined" && MainWindow) ? MainWindow.getViewportMgr() : null;
+            var _vp = _vm ? _vm.getActiveViewport() : null;
+            var _v3 = _vp ? _vp.get3DViewport() : null;
+            if (!_v3) return {{status: "no_viewport"}};
+            var _prev = _v3.getCamera();
+            _v3.setCamera(_cam);
+            return {{status: "ok", previous: _prev ? _prev.getLabel() : null}};
+        """)
+        raw = self._client.execute(script).value or {"status": "missing"}
+        if raw["status"] == "missing":
+            raise NodeNotFoundError(f"Camera not found: {ref!r}")
+        if raw["status"] == "not_camera":
+            raise TypeError(f"Node is not a camera: {ref!r}")
+        if raw["status"] == "no_viewport":
+            raise RuntimeError("No active 3D viewport")
+        return raw.get("previous")
+
+    def camera_info(self) -> list[CameraInfo]:
+        """Every scene camera with position and focal length, in one call."""
+        script = ScriptBuilder.iife("""
+            var out = [];
+            for (var i = 0; i < Scene.getNumCameras(); i++) {
+                var c = Scene.getCamera(i), p = c.getWSPos();
+                var fl = c.getFocalLengthControl ? c.getFocalLengthControl() : null;
+                out.push({index: i, label: c.getLabel(), name: c.getName(), type: c.className(),
+                          element_id: c.elementID, position: [p.x, p.y, p.z],
+                          focal_length: fl ? fl.getValue() : null});
+            }
+            return out;
+        """)
+        return [CameraInfo(r["index"], r["label"], r["name"], r["type"], int(r["element_id"]),
+                           tuple(float(v) for v in r["position"]), r.get("focal_length"))  # type: ignore[arg-type]
+                for r in self._client.execute(script).value or []]
+
+    def light_info(self) -> list[LightInfo]:
+        """Every scene light with position, flux and on/off state, in one call."""
+        script = ScriptBuilder.iife("""
+            var out = [];
+            for (var i = 0; i < Scene.getNumLights(); i++) {
+                var l = Scene.getLight(i), p = l.getWSPos(), f = l.findProperty("Flux");
+                out.push({index: i, label: l.getLabel(), name: l.getName(), type: l.className(),
+                          element_id: l.elementID, position: [p.x, p.y, p.z],
+                          flux: f ? f.getValue() : null, on: l.isVisible()});
+            }
+            return out;
+        """)
+        return [LightInfo(r["index"], r["label"], r["name"], r["type"], int(r["element_id"]),
+                          tuple(float(v) for v in r["position"]), r.get("flux"),  # type: ignore[arg-type]
+                          bool(r.get("on", True)))
+                for r in self._client.execute(script).value or []]
+
     def find_camera_by_label(self, label: str) -> "DazCamera":
         """Find a camera by its user-visible label.
 
@@ -232,10 +736,12 @@ class DazScene:
             var cam = new DzBasicCamera();
             if ({name_expr} !== null) cam.setName({name_expr});
             Scene.addNode(cam);
-            return cam.getName();
+            return cam.elementID;
         """)
-        created_name = self._client.execute(script).value
-        return DazCamera(self._client, NodeIdentifier(created_name))
+        # Bound by elementID: without a name Studio leaves getName() empty,
+        # and a name lookup would be ambiguous or fail.
+        element_id = self._client.execute(script).value
+        return DazCamera(self._client, NodeIdentifier(str(int(element_id)), kind="element_id"))
 
     def create_light(self, light_type: str, name: str | None = None) -> "DazLight":
         """Create a new light node and add it to the scene.
@@ -263,10 +769,11 @@ class DazScene:
             var light = new {class_name}();
             if ({name_expr} !== null) light.setName({name_expr});
             Scene.addNode(light);
-            return light.getName();
+            return light.elementID;
         """)
-        created_name = self._client.execute(script).value
-        return DazLight(self._client, NodeIdentifier(created_name))
+        # Bound by elementID: without a name Studio leaves getName() empty.
+        element_id = self._client.execute(script).value
+        return DazLight(self._client, NodeIdentifier(str(int(element_id)), kind="element_id"))
 
     def create_group(
         self,
@@ -519,15 +1026,35 @@ class DazScene:
         """)
         return self._client.execute(script).value or []
 
+    def time_step(self) -> int:
+        """DzTime ticks per timeline frame (``Scene.getTimeStep()``; 160 at 30 fps)."""
+        value = self._client.execute(
+            ScriptBuilder.iife("return Scene.getTimeStep().valueOf();")).value
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        return int(value) if ok else 160
+
     def all_node_transforms(self) -> list[dict]:
         """Return world-space transforms for every node in a single call.
 
         Returns:
             A list of dicts, each with keys ``"name"``, ``"label"``,
-            ``"position"`` (``[x, y, z]``), ``"rotation"`` (``[x, y, z]``),
-            and ``"visible"``.
+            ``"element_id"``, ``"type"`` (``"lights"``, ``"cameras"``,
+            ``"bones"``, ``"figures"``, ``"wearables"`` -- a figure parented
+            to another figure -- or ``"props"``), ``"position"``
+            (``[x, y, z]``), ``"rotation"`` (``[x, y, z]``), and ``"visible"``.
         """
         script = ScriptBuilder.iife("""
+            function nodeType(n) {
+                // DzLight inherits DzCamera: test lights first.
+                if (n.inherits("DzLight")) return "lights";
+                if (n.inherits("DzCamera")) return "cameras";
+                if (n.inherits("DzBone")) return "bones";
+                if (n.inherits("DzSkeleton")) {
+                    var p = n.getNodeParent();
+                    return (p && p.inherits("DzFigure")) ? "wearables" : "figures";
+                }
+                return "props";
+            }
             var result = [];
             for (var i = 0; i < Scene.getNumNodes(); i++) {
                 var n = Scene.getNode(i);
@@ -536,6 +1063,8 @@ class DazScene:
                 result.push({
                     name: n.getName(),
                     label: n.getLabel(),
+                    element_id: n.elementID,
+                    type: nodeType(n),
                     position: [pos.x, pos.y, pos.z],
                     rotation: [rot.x, rot.y, rot.z],
                     visible: n.isVisible()
@@ -775,16 +1304,22 @@ class DazScene:
 
     # ── Scene I/O ──────────────────────────────────────────────────────────────
 
-    def load(self, path: str) -> None:
-        """Load a scene file (merge mode — does not clear the existing scene).
+    def load(self, path: str, *, replace: bool = False) -> None:
+        """Load a scene file, merging it into the current scene by default.
 
         Args:
             path: Absolute path to the ``.daz`` or ``.duf`` file on the server
                 host.
+            replace: Clear the current scene first, so the file replaces it.
+                Done as ``Scene.clear()`` then a merge rather than
+                ``DzScene.OpenNew``, which can raise a modal "save changes?"
+                prompt that blocks the script server. Unsaved changes are
+                discarded.
         """
+        clear = "Scene.clear(); " if replace else ""
         script = ScriptBuilder.iife(
             # DzScene.MergeFile (= 2 on DS4); 0 and OpenNew (1) replace the scene.
-            f"Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);"
+            f"{clear}Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);"
         )
         self._client.execute(script)
 
@@ -848,6 +1383,10 @@ class DazScene:
         ``RunSilent`` must be forced to 1 or the native exporter shows a modal
         options dialog, which would hang the main thread the HTTP handler
         blocks on.
+
+        Raises:
+            DazError: If the exporter is not installed, or ``writeFile``
+                returns an error code.
         """
         settings_calls = []
         for key, value in overrides.items():
@@ -864,13 +1403,20 @@ class DazScene:
         script = ScriptBuilder.iife(f"""
             var mgr = App.getExportMgr();
             var exp = mgr.findExporterByClassName({json.dumps(exporter_class)});
-            if (!exp) return;
+            if (!exp) return {{status: "no_exporter"}};
             var settings = new DzFileIOSettings();
             exp.getDefaultOptions(settings);
             {' '.join(settings_calls)}
-            exp.writeFile({json.dumps(path)}, settings);
+            var err = exp.writeFile({json.dumps(path)}, settings);
+            var code = (err && typeof err.valueOf === "function") ? err.valueOf() : (err || 0);
+            return code ? {{status: "error", code: code}} : {{status: "ok"}};
         """)
-        self._client.execute(script)
+        from .exceptions import DazError
+        raw = self._client.execute(script).value or {"status": "ok"}
+        if raw.get("status") == "no_exporter":
+            raise DazError(f"Exporter {exporter_class} is not installed in this DAZ Studio")
+        if raw.get("status") == "error":
+            raise DazError(f"{exporter_class} failed writing {path!r} (DzError {raw.get('code')})")
 
     def export_fbx(
         self,

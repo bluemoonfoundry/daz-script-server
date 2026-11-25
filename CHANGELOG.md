@@ -20,6 +20,164 @@ All notable changes to DazScript Server are documented here.
   `setTransformKeyInterpolation()` sets per-key interpolation directly. Both
   fields are optional, and plans without them serialise as before. Live-verified
   on Studio 4.24 and 6.26.
+- **dazpy primitives for expression, posture and gaze tools** (5d6f.29), added
+  so daz-mcp-server's morph tools can drop their embedded DazScript:
+  - `DazNode.set_numeric_candidates([(names, value), ...])` sets one dial per
+    slot, using the first name that resolves (node property name, then
+    property label, then `DzMorph` modifier name/label), reads it back, and
+    returns a `NumericCandidateMatch` per slot. Expression controls on stock
+    Genesis 8/9 are node-level controller properties, not morph modifiers, so
+    `set_morph_values` can't reach them.
+  - `DazSkeleton.set_bone_axes({bone: {"x": deg}})` writes only the named
+    axes and returns the bones it couldn't find. `set_bone_rotations` always
+    writes all three axes.
+  - `DazSkeleton.bone_names()` returns every bone name in one call.
+  - `DazScene.viewport_camera()` returns a `ViewportCamera` snapshot of the
+    camera the active viewport looks through, including Studio's built-in
+    view cameras ("Perspective View"), which aren't scene nodes.
+  Live-verified on Studio 4.24 with Genesis 9 and Genesis 8 Female.
+- **dazpy node references and property search** (daz-mcp-server-nde), so
+  MCP tools that resolve user-written node references can drop their
+  embedded DazScript:
+  - `DazScene.resolve_node(ref)` accepts an elementID, a `Parent/Label` path
+    or a label/name. It raises `AmbiguousNodeError` (with `matches`) when a
+    label fits several nodes, and returns a proxy bound to the node's
+    elementID, typed as skeleton, camera, light or node.
+  - `NodeIdentifier(kind="element_id")` is supported by every node,
+    skeleton and bone lookup. `DazNode.element_id` reads it.
+  - `DazScene.find_nodes(query)` and `DazNode.describe()` return `NodeInfo`
+    (label, name, type, elementID, parent, child count).
+  - `DazNode.set_numeric_property(name, value, substring_fallback=,
+    unlock=)` finds a property by label or name across node properties and
+    the modifier stack, unlocks it, writes it, and reads it back.
+  - `DazNode.numeric_properties(include_modifiers=True)` also collects morph
+    channels and modifier properties. The default stays node-only.
+  - `DazNode.morph_info(pattern, include_zero)` lists morphs with label,
+    value and group path.
+  - New exceptions: `AmbiguousNodeError`, `PropertyNotFoundError`.
+  - `DazNode.unparent()` moves a node to the scene root.
+  - `DazNode.hierarchy(max_depth)` returns the descendant tree with
+    elementIDs. `DazScene.load(path, replace=True)` clears the scene and then
+    merges, which avoids `OpenNew`'s blocking "save changes?" prompt.
+  Live-verified on Studio 4.24.
+- **dazpy material helpers** (daz-mcp-server-et7), one call each:
+  `DazNode.material_info()` (index, name, label and shader for every zone),
+  `DazNode.resolve_material(ref)` (by label, then name, and the error lists
+  the available zones), `DazMaterial.describe()`, `property_values()`
+  (typed values: colors as `#rrggbb`, image maps as file paths),
+  `set_property_value(name, value)` (a number, or `#RRGGBB` for colors),
+  and `copy_from(source)`.
+  `DazNode.apply_surface_preset(path, map_paths=, allow_missing=)` selects
+  the node and all its surfaces and checks that the referenced texture maps
+  exist before opening the preset, since Studio's Missing Files dialog
+  blocks the server. `DazScene.content_path(relative)` resolves
+  content-library paths. Live-verified on Studio 4.24.
+- **dazpy frame-based keyframes** (daz-mcp-server-scz):
+  `DazNode.find_numeric_property(name)` returns a `DazProperty` found by
+  label or name across node properties and the modifier stack.
+  `DazProperty.set_key_at_frame()`, `keys_by_frame()` and
+  `remove_key_at_frame()` take timeline frames and convert them with
+  `Scene.getTimeStep()`, where `set_key()`/`get_keys()` use DzTime ticks.
+  `clear_keys()` now returns how many keys it removed.
+- **dazpy property metadata and batch writes** (daz-mcp-server-ksl):
+  `DazNode.property_details(kind)` and `property_detail(name)` return
+  `PropertyDetails` (type, value, range, default, group path, and
+  animatability via `canAnimate()`). `DazScene.set_numeric_properties(ops)`
+  sets many properties across nodes in one call and reports each
+  operation's error separately (`BatchPropertyResult`).
+- **`DazSkeleton.look_at(point, chain)`** turns a weighted bone chain
+  (for example chest, neck, head, eyes) toward a world point in one call
+  and returns each bone's kept rotation (`LookAtResult`). Directions are
+  worked out in each bone's own rotation frame, so turned figures and
+  Genesis eyes (oriented 180° about Z) aim correctly. A final weight of 1
+  aims the last bone exactly, within its joint limits. Live-verified on
+  Genesis 9 and Genesis 8 Female: under 1° error within joint limits.
+- **dazpy viewport, camera/light listing and environment mode**
+  (daz-mcp-server-qrd):
+  - `DazScene.set_viewport_camera(camera_or_label)` takes a `DazCamera` or
+    a label, including Studio's built-in view cameras ("Perspective View",
+    ...), and returns the previous camera's label.
+  - `DazScene.camera_info()` / `light_info()` list cameras (position, focal
+    length) and lights (position, flux, on) in one call.
+  - `DazLight.aim_at(x, y, z)`, like `DazCamera.aim_at`.
+  - `DazRenderSettings.draw_ground_plane` reads or sets whether renders
+    draw the ground plane.
+  - `DazRenderSettings.set_environment_properties([(names, value), ...])`
+    sets Environment Options properties in one call.
+  - `DazRenderSettings.environment_mode` / `set_environment_mode()` read
+    and write Iray's Environment Mode on Studio 4 and 6.
+- `DazNode.subdivision()` / `set_subdivision(view, render=None)` read and set
+  the mesh's SubD levels (the shape's `SubDIALevel` / `SubDRenderLevel`).
+- **dazpy dForce and Transfer Utility helpers** (daz-mcp-server-1kd):
+  - `DazNode.add_dforce_dynamic_surface()` adds the modifier.
+  - `dforce_influence_weights()` / `set_dforce_influence_weights(default,
+    overrides)` read and write the per-vertex weights.
+  - `set_dforce_property(name, value)` sets a modifier property.
+  - `dforce_surface_properties(material)` /
+    `set_dforce_surface_property(name, value, material)` read and write a
+    surface's simulation settings.
+  - `freeze_dforce(on=True)` freezes the simulated shape; this is dForce's
+    "bake". `DazScene.freeze_dforce()` does the same for the whole scene in
+    one call.
+  - `DazScene.transfer_utility(source, target, ...)` runs the Transfer
+    Utility silently.
+  Errors list the modifiers or settings that are available. Verified live
+  on Studio 4.24, except the Transfer Utility (unit-tested only).
+- `DazNode.key_numeric_candidates([(names, [(frame, value), ...]), ...])` and
+  `DazSkeleton.key_bone_axes({bone: {axis: [(frame, deg), ...]}})` keyframe
+  candidate dials and single bone axes at timeline frames, in one call each.
+- `DazNode.key_color(name, [(frame, (r, g, b)), ...])` keyframes a color
+  property, such as a light's "Color".
+- **dazpy content, asset and Morph Loader Pro helpers** (daz-mcp-server-z2h):
+  - `DazScene.content_categories(parent)` / `content_files(category)` list
+    content-library folders and `.duf` files across every content
+    directory.
+  - `DazScene.strand_hair_nodes()` lists Strand-Based Hair nodes.
+  - `DazNode.save_support_asset(path, ...)` saves the node silently with
+    `DzNodeSupportAssetFilter`.
+  - `DazNode.load_morph(obj_path, ...)` builds a morph from an OBJ with
+    Morph Loader Pro and returns `MorphLoadResult` (morph name and the
+    loader's log).
+  Verified live on Studio 4.24, except the support-asset save itself, which
+  writes into the content library; its validation was checked.
+- `DazScene.all_node_transforms()` entries add `element_id` and `type`
+  (lights, cameras, bones, figures, wearables, props). `DazScene.time_step()`
+  returns ticks per frame.
+- `DazNode.fitted_item_info()` lists the items fitted to a figure as
+  `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
+
+### Fixed
+
+- **dazpy: `fitted_items()` included the figure's bones** (the root bone is
+  a direct child of the figure) and returned name-bound proxies. It now
+  skips bones and binds by elementID.
+- **dazpy: `export_fbx()` / `export_obj()` failed silently** when the
+  exporter was missing or `writeFile` returned an error. Both now raise
+  `DazError`.
+- **dazpy: lights were typed as cameras.** `DzLight` inherits `DzCamera`,
+  and `DazScene.nodes()` checked for cameras first, so every light came
+  back as a `DazCamera`. Lights are now checked first, and `resolve_node()`
+  does the same.
+- **dazpy: `create_light()` / `create_camera()` without a name returned an
+  unusable proxy.** Studio leaves a new node's name empty, so the proxy
+  looked up `Scene.findNode("")`. Both now return a proxy bound to the new
+  node's elementID.
+- **dazpy: `DazBone` methods inherited from `DazNode` read the wrong figure.**
+  `position`, `label`, visibility, transforms and the other `DazNode` methods
+  looked the bone up with `Scene.findNode(<bone name>)`. Every Genesis
+  figure has a bone named `head`, so with two figures loaded,
+  `g8.find_bone("head").position` returned Genesis 9's head. They now
+  resolve through the bone's own skeleton, as `DazBone`'s own methods
+  already did. `reparent()` and `fit_to()` likewise resolve their target
+  node through its proxy. Plain nodes generate the same lookup as before.
+  Live-verified on Studio 4.24.
+- **dazpy: `DazPose.apply_full()` (and so `DazSceneState.apply()`) failed
+  on figures with file properties.** It wrote 0 to every figure property
+  missing from the pose, including `DzFileProperty` entries that some
+  content adds (for example "Preview Clothing Template"), and Studio
+  rejected the script. It now zeroes only number-valued properties, the
+  same set `capture()` records, so it also no longer clears a figure's
+  "Point At" target. Live-verified on Studio 4.24.
 
 ## [2.16.0] - 2026-11-23
 

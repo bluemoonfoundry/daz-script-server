@@ -899,14 +899,14 @@ class TestDazScene(unittest.TestCase):
 
     def test_create_camera_returns_daz_camera(self):
         from dazpy._camera import DazCamera
-        client = _make_client("Camera")
+        client = _make_client(42)
         scene = DazScene(client)
         camera = scene.create_camera()
         self.assertIsInstance(camera, DazCamera)
-        self.assertEqual(camera._identifier.value, "Camera")
+        self.assertEqual(camera._identifier, NodeIdentifier("42", kind="element_id"))
 
     def test_create_camera_script_uses_basic_camera_and_add_node(self):
-        client = _make_client("Camera")
+        client = _make_client(42)
         scene = DazScene(client)
         scene.create_camera()
         script = client.execute.call_args[0][0]
@@ -914,7 +914,7 @@ class TestDazScene(unittest.TestCase):
         self.assertIn("Scene.addNode(cam)", script)
 
     def test_create_camera_with_name_sets_name(self):
-        client = _make_client("MyCam")
+        client = _make_client(42)
         scene = DazScene(client)
         scene.create_camera(name="MyCam")
         script = client.execute.call_args[0][0]
@@ -964,11 +964,11 @@ class TestDazScene(unittest.TestCase):
 
     def test_create_light_returns_daz_light(self):
         from dazpy._light import DazLight
-        client = _make_client("Spotlight1")
+        client = _make_client(42)
         scene = DazScene(client)
         light = scene.create_light("spot")
         self.assertIsInstance(light, DazLight)
-        self.assertEqual(light._identifier.value, "Spotlight1")
+        self.assertEqual(light._identifier, NodeIdentifier("42", kind="element_id"))
 
     def test_create_light_script_uses_correct_class_per_type(self):
         cases = {
@@ -977,15 +977,23 @@ class TestDazScene(unittest.TestCase):
             "distant": "DzDistantLight",
         }
         for light_type, class_name in cases.items():
-            client = _make_client("Light1")
+            client = _make_client(42)
             scene = DazScene(client)
             scene.create_light(light_type)
             script = client.execute.call_args[0][0]
             self.assertIn(f"new {class_name}()", script)
             self.assertIn("Scene.addNode(light)", script)
 
+    def test_create_light_unnamed_is_bound_by_element_id(self):
+        # Studio leaves getName() empty for an unnamed light; a name-bound
+        # proxy was Scene.findNode("") and unusable.
+        client = _make_client(42)
+        light = DazScene(client).create_light("spot")
+        self.assertIn("return light.elementID", client.execute.call_args[0][0])
+        self.assertEqual(light._identifier, NodeIdentifier("42", kind="element_id"))
+
     def test_create_light_with_name_sets_name(self):
-        client = _make_client("Key Light")
+        client = _make_client(42)
         scene = DazScene(client)
         scene.create_light("point", name="Key Light")
         script = client.execute.call_args[0][0]
@@ -3397,6 +3405,961 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+class TestDazSkeletonBoneAxes(unittest.TestCase):
+    """bone_names() and set_bone_axes() (5d6f.29: morph-tool primitives)."""
+
+    def _make_skeleton(self, return_value=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(return_value)
+        return DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label")), client
+
+    def test_bone_names_single_call(self):
+        skel, client = self._make_skeleton(["hip", "spine4", "head"])
+        self.assertEqual(skel.bone_names(), ["hip", "spine4", "head"])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertIn("getAllBones", client.execute.call_args[0][0])
+
+    def test_bone_names_missing_skeleton_is_empty(self):
+        skel, _ = self._make_skeleton(None)
+        self.assertEqual(skel.bone_names(), [])
+
+    def test_set_bone_axes_writes_only_named_axes(self):
+        skel, client = self._make_skeleton([])
+        skel.set_bone_axes({"spine4": {"x": 5.0}, "l_upperarm": {"z": -5.0, "y": 1.5}})
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        payload = json.loads(script.split("var _data = ", 1)[1].split(";\n", 1)[0])
+        self.assertEqual(payload, {"spine4": {"x": 5.0}, "l_upperarm": {"z": -5.0, "y": 1.5}})
+        self.assertIn("getXRotControl", script)
+        self.assertIn("hasOwnProperty", script)
+
+    def test_set_bone_axes_returns_missing_bones(self):
+        skel, _ = self._make_skeleton(["lShldr"])
+        self.assertEqual(skel.set_bone_axes({"lShldr": {"z": 3}, "hip": {"x": 1}}), ["lShldr"])
+
+    def test_set_bone_axes_missing_skeleton_reports_all_missing(self):
+        skel, _ = self._make_skeleton(None)
+        self.assertEqual(sorted(skel.set_bone_axes({"a": {"x": 1}, "b": {"y": 2}})), ["a", "b"])
+
+    def test_set_bone_axes_rejects_unknown_axis(self):
+        skel, client = self._make_skeleton([])
+        with self.assertRaises(ValueError):
+            skel.set_bone_axes({"hip": {"w": 1.0}})
+        client.execute.assert_not_called()
+
+    def test_set_bone_axes_empty_is_noop(self):
+        skel, client = self._make_skeleton([])
+        self.assertEqual(skel.set_bone_axes({}), [])
+        client.execute.assert_not_called()
+
+
+class TestDazBoneInheritedNodeMethods(unittest.TestCase):
+    """Inherited DazNode methods on a bone must resolve the bone through its own
+    skeleton, not Scene.findNode(name): every Genesis figure has a bone named
+    'head', so a name lookup reads whichever figure Studio finds first."""
+
+    def _bone(self, value=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(["head"])
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 8 Female", kind="label"))
+        bone = skel.bones()[0]
+        client.execute.return_value = ExecutionResult(value=value, output=[], request_id="t")
+        return bone, client
+
+    def _assert_skeleton_relative(self, script):
+        self.assertIn("getSkeletonList", script)
+        self.assertIn('"Genesis 8 Female"', script)
+        self.assertIn('findBone("head")', script)
+        self.assertNotIn('Scene.findNode("head")', script)
+
+    def test_position(self):
+        bone, client = self._bone({"x": 100, "y": 150, "z": 0})
+        bone.position
+        self._assert_skeleton_relative(client.execute.call_args[0][0])
+
+    def test_label_and_visibility(self):
+        bone, client = self._bone("Head")
+        bone.label
+        self._assert_skeleton_relative(client.execute.call_args[0][0])
+        bone.set_visible_in_viewport(True)
+        self._assert_skeleton_relative(client.execute.call_args[0][0])
+
+    def test_plain_node_lookup_unchanged(self):
+        client = _make_client({"x": 0, "y": 0, "z": 0})
+        DazNode(client, NodeIdentifier("Chair")).position
+        self.assertIn('Scene.findNode("Chair")', client.execute.call_args[0][0])
+
+
+class TestDazNodeNumericCandidates(unittest.TestCase):
+    """DazNode.set_numeric_candidates() (5d6f.29: emotion/expression dials)."""
+
+    def _node(self, return_value):
+        client = _make_client(return_value)
+        return DazNode(client, NodeIdentifier("Genesis 9", kind="label")), client
+
+    def test_single_call_and_payload(self):
+        node, client = self._node([
+            {"matched": "Smile", "source": "property", "value": 0.6},
+            {"matched": None, "source": None, "value": None},
+        ])
+        results = node.set_numeric_candidates([
+            (["PHMSmile", "Smile"], 0.6),
+            (("BrowUp",), 0.4),
+        ])
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("findProperty", script)
+        self.assertIn("findPropertyByLabel", script)
+        self.assertIn("DzMorph", script)
+        self.assertIn("DzNumericProperty", script)
+        self.assertIn('"PHMSmile"', script)
+        self.assertEqual(results[0].matched, "Smile")
+        self.assertEqual(results[0].source, "property")
+        self.assertAlmostEqual(results[0].value, 0.6)
+        self.assertEqual(results[0].candidates, ("PHMSmile", "Smile"))
+        self.assertTrue(results[0].found)
+        self.assertFalse(results[1].found)
+        self.assertEqual(results[1].requested, 0.4)
+
+    def test_missing_node_raises(self):
+        node, _ = self._node(None)
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            node.set_numeric_candidates([(["Smile"], 1.0)])
+
+    def test_empty_slots_is_noop(self):
+        node, client = self._node([])
+        self.assertEqual(node.set_numeric_candidates([]), [])
+        client.execute.assert_not_called()
+
+    def test_rejects_string_candidates(self):
+        # A bare string would be iterated per character -- refuse it.
+        node, client = self._node([])
+        with self.assertRaises(TypeError):
+            node.set_numeric_candidates([("Smile", 1.0)])
+        client.execute.assert_not_called()
+
+    def test_names_are_json_escaped(self):
+        node, client = self._node([{"matched": None, "source": None, "value": None}])
+        node.set_numeric_candidates([(['a"); Scene.clear(); ("'], 1.0)])
+        script = client.execute.call_args[0][0]
+        self.assertNotIn('a"); Scene.clear()', script)
+
+
+class TestNodeResolution(unittest.TestCase):
+    """elementID identifiers, resolve_node, find_nodes (daz-mcp-server-nde)."""
+
+    def test_element_id_identifier_uses_find_by_element_id(self):
+        client = _make_client({"x": 0, "y": 0, "z": 0})
+        DazNode(client, NodeIdentifier("4217", kind="element_id")).position
+        self.assertIn("Scene.findNodeByElementID(4217)", client.execute.call_args[0][0])
+
+    def test_element_id_skeleton_and_bone_lookup(self):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(["head"])
+        skel = DazSkeleton(client, NodeIdentifier("4217", kind="element_id"))
+        skel.bone_names()
+        script = client.execute.call_args[0][0]
+        self.assertIn("_skels[_i].elementID === 4217", script)
+        bone = skel.bones()[0]
+        client.execute.return_value = ExecutionResult(value="Head", output=[], request_id="t")
+        bone.label
+        self.assertIn("_skels[_i].elementID === 4217", client.execute.call_args[0][0])
+
+    def test_element_id_must_be_numeric(self):
+        with self.assertRaises(ValueError):
+            ScriptBuilder.find_node_expr(NodeIdentifier("abc", kind="element_id"))
+
+    def test_resolve_node_returns_typed_element_id_proxy(self):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client({"status": "ok", "element_id": 77, "type": "DzSkeleton"})
+        node = DazScene(client).resolve_node("Genesis 9")
+        self.assertIsInstance(node, DazSkeleton)
+        self.assertEqual(node._identifier, NodeIdentifier("77", kind="element_id"))
+        script = client.execute.call_args[0][0]
+        self.assertIn('"Genesis 9"', script)
+        self.assertIn("findNodeChildByLabel", script)
+        self.assertIn("findNodeByElementID", script)
+
+    def test_lights_typed_before_cameras(self):
+        # DzLight inherits DzCamera; a light must come back as DazLight.
+        script_client = _make_client({"status": "ok", "element_id": 5, "type": "DzLight"})
+        DazScene(script_client).resolve_node("Key")
+        script = script_client.execute.call_args[0][0]
+        self.assertLess(script.index('"DzLight"'), script.index('"DzCamera"'))
+        client = _make_client([])
+        DazScene(client).nodes()
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index('inherits("DzLight")'), script.index('inherits("DzCamera")'))
+
+    def test_resolve_node_accepts_int(self):
+        client = _make_client({"status": "ok", "element_id": 5, "type": "DzNode"})
+        DazScene(client).resolve_node(5)
+        self.assertIn('"5"', client.execute.call_args[0][0])
+
+    def test_resolve_node_missing(self):
+        client = _make_client({"status": "missing", "ref": "Ghost"})
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            DazScene(client).resolve_node("Ghost")
+
+    def test_resolve_node_ambiguous_lists_candidates(self):
+        matches = [
+            {"label": "Chair", "name": "Chair", "type": "DzNode", "element_id": 1, "parent": None},
+            {"label": "Chair", "name": "Chair_2", "type": "DzNode", "element_id": 2, "parent": "Room"},
+        ]
+        client = _make_client({"status": "ambiguous", "ref": "Chair", "count": 2, "matches": matches})
+        with self.assertRaises(exceptions.AmbiguousNodeError) as ctx:
+            DazScene(client).resolve_node("Chair")
+        err = ctx.exception
+        self.assertEqual([m.element_id for m in err.matches], [1, 2])
+        self.assertIn("elementID", str(err))
+        self.assertIn("Room", str(err))
+
+    def test_resolve_node_empty_ref(self):
+        with self.assertRaises(ValueError):
+            DazScene(_make_client(None)).resolve_node("")
+
+    def test_find_nodes(self):
+        client = _make_client([
+            {"label": "Chair", "name": "Chair", "type": "DzNode", "element_id": 1, "parent": None}])
+        found = DazScene(client).find_nodes("Chair")
+        self.assertEqual(found[0].element_id, 1)
+        self.assertIsNone(found[0].parent)
+
+
+class TestMaterialTools(unittest.TestCase):
+    """material_info / resolve_material / property_values / set_property_value /
+    copy_from (daz-mcp-server-et7)."""
+
+    def _node(self, value):
+        client = _make_client(value)
+        return DazNode(client, NodeIdentifier("9", kind="element_id")), client
+
+    def test_material_info(self):
+        node, client = self._node([{"index": 0, "name": "Skin", "label": "Skin",
+                                    "shader": "DzUberIrayMaterial"}])
+        info = node.material_info()
+        self.assertEqual((info[0].label, info[0].shader), ("Skin", "DzUberIrayMaterial"))
+        self.assertIn("getNumMaterials", client.execute.call_args[0][0])
+
+    def test_resolve_material_by_label(self):
+        from dazpy._material import DazMaterial
+        node, client = self._node({"status": "ok", "name": "1_SkinFace"})
+        mat = node.resolve_material("Face")
+        self.assertIsInstance(mat, DazMaterial)
+        self.assertIn('findMaterial("1_SkinFace")', mat._locator)
+        self.assertIn("if (lbl === _want)", client.execute.call_args[0][0])
+
+    def test_resolve_material_missing_lists_available(self):
+        node, _ = self._node({"status": "missing", "available": ["Skin", "Lips"]})
+        with self.assertRaises(exceptions.MaterialError) as ctx:
+            node.resolve_material("Hair")
+        self.assertIn("Skin, Lips", str(ctx.exception))
+
+    def test_resolve_material_no_shape(self):
+        node, _ = self._node({"status": "no_shape"})
+        with self.assertRaises(exceptions.MaterialError):
+            node.resolve_material("Skin")
+
+    def _material(self, value):
+        from dazpy._material import DazMaterial
+        client = _make_client(value)
+        return DazMaterial(client, "MAT"), client
+
+    def test_property_values(self):
+        mat, client = self._material([{"name": "Diffuse Color", "label": "Base Color",
+                                       "type": "color", "value": "#ff8040"}])
+        props = mat.property_values()
+        self.assertEqual((props[0].label, props[0].type, props[0].value),
+                         ("Base Color", "color", "#ff8040"))
+        script = client.execute.call_args[0][0]
+        self.assertIn("getFloatColorValue", script)
+        self.assertIn("DzImageProperty", script)
+
+    def test_describe(self):
+        mat, _ = self._material({"index": 2, "name": "Skin", "label": "Skin", "shader": "X"})
+        self.assertEqual(mat.describe().index, 2)
+
+    def test_set_property_value_color_and_numeric(self):
+        mat, client = self._material({"status": "ok", "label": "Base Color", "type": "color",
+                                      "value": "#3a6ea5"})
+        w = mat.set_property_value("Diffuse Color", "#3A6EA5")
+        self.assertEqual((w.type, w.value), ("color", "#3a6ea5"))
+        script = client.execute.call_args[0][0]
+        self.assertIn("findPropertyByLabel", script)
+        self.assertIn("new QColor", script)
+        mat, client = self._material({"status": "ok", "label": "Roughness", "type": "numeric",
+                                      "value": 0.4})
+        mat.set_property_value("Glossy Roughness", 0.4)
+
+    def test_set_property_value_errors(self):
+        mat, _ = self._material({"status": "missing"})
+        with self.assertRaises(exceptions.MaterialError):
+            mat.set_property_value("Nope", 1)
+        mat, _ = self._material({"status": "unsupported", "label": "Base Color Map"})
+        with self.assertRaises(exceptions.MaterialError):
+            mat.set_property_value("Base Color Map", 1)
+        mat, client = self._material(None)
+        with self.assertRaises(ValueError):
+            mat.set_property_value("Base Color", "#12")
+        client.execute.assert_not_called()
+
+    def test_copy_from(self):
+        from dazpy._material import DazMaterial
+        mat, client = self._material({"copied": 40, "skipped": 2})
+        src = DazMaterial(client, "SRC")
+        self.assertEqual(mat.copy_from(src), (40, 2))
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _src = SRC", script)
+        self.assertIn("var _dst = MAT", script)
+
+
+class TestKeyedCandidatesAndBones(unittest.TestCase):
+    """key_numeric_candidates / key_bone_axes (timed expressions, ord)."""
+
+    def test_key_numeric_candidates(self):
+        client = _make_client([{"matched": "facs_ctrl_Happy", "source": "property", "value": None},
+                               {"matched": None, "source": None, "value": None}])
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        r = node.key_numeric_candidates([(["facs_ctrl_Happy"], [(0, 0.0), (10, 0.7)]),
+                                         (["Nope"], [(0, 1.0)])])
+        self.assertEqual(r[0].matched, "facs_ctrl_Happy")
+        self.assertFalse(r[1].found)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getTimeStep()", script)
+        self.assertIn("[[0, 0.0], [10, 0.7]]", script)
+        self.assertIn("findPropertyByLabel", script)
+
+    def test_key_numeric_candidates_rejects_bare_string(self):
+        node = DazNode(_make_client([]), NodeIdentifier("9", kind="element_id"))
+        with self.assertRaises(TypeError):
+            node.key_numeric_candidates([("Smile", [(0, 1.0)])])
+
+    def test_key_bone_axes(self):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(["lShldr"])
+        skel = DazSkeleton(client, NodeIdentifier("9", kind="element_id"))
+        missing = skel.key_bone_axes({"spine4": {"x": [(0, 0.0), (10, 2.1)]},
+                                      "lShldr": {"z": [(0, 1.0)]}})
+        self.assertEqual(missing, ["lShldr"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getTimeStep()", script)
+        self.assertIn("getXRotControl", script)
+        with self.assertRaises(ValueError):
+            skel.key_bone_axes({"hip": {"w": [(0, 1.0)]}})
+
+
+class TestTransformTypesAndTimeStep(unittest.TestCase):
+    def test_all_node_transforms_types_lights_before_cameras(self):
+        client = _make_client([])
+        DazScene(client).all_node_transforms()
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index('inherits("DzLight")'), script.index('inherits("DzCamera")'))
+        self.assertIn('"wearables"', script)
+        self.assertIn("element_id: n.elementID", script)
+
+    def test_time_step(self):
+        self.assertEqual(DazScene(_make_client(160)).time_step(), 160)
+        self.assertEqual(DazScene(_make_client(None)).time_step(), 160)
+        self.assertEqual(DazScene(_make_client(True)).time_step(), 160)
+
+
+class TestContentAssetMorphLoader(unittest.TestCase):
+    """content listing, strand hair listing, support asset save, Morph Loader Pro (z2h)."""
+
+    def test_content_categories_and_files(self):
+        client = _make_client([{"name": "Poses", "path": "People/Poses", "duf_count": 3}])
+        cats = DazScene(client).content_categories("/People/")
+        self.assertEqual((cats[0].path, cats[0].duf_count), ("People/Poses", 3))
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumContentDirectories()", script)
+        self.assertIn('"People"', script)
+        client = _make_client([{"name": "Hero", "filename": "Hero.duf", "full_path": "D:/x/Hero.duf"}])
+        files = DazScene(client).content_files("People/Poses")
+        self.assertEqual(files[0].full_path, "D:/x/Hero.duf")
+
+    def test_strand_hair_nodes(self):
+        client = _make_client([{"label": "Hair", "name": "Hair", "target": "Genesis 9",
+                                "has_geometry": True, "materials": ["Hair"], "element_id": 4}])
+        nodes = DazScene(client).strand_hair_nodes()
+        self.assertEqual(nodes[0]["target"], "Genesis 9")
+        self.assertIn('inherits("DzStrandHairNode")', client.execute.call_args[0][0])
+
+    def test_save_support_asset(self):
+        client = _make_client({"status": "ok", "base": "D:/Lib"})
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        self.assertEqual(node.save_support_asset("D:/Lib/data/x.duf", vendor="Me", smart_parent=True), "D:/Lib")
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzNodeSupportAssetFilter", script)
+        self.assertIn('"SmartParentProp", "yes"', script)
+        self.assertIn('"RunSilent", "yes"', script)
+        self.assertIn('replace(/\\\\/g, "/")', script)  # JS regex matching one backslash
+        for status, exc in (("outside", ValueError), ("failed", exceptions.DazError),
+                            ("unavailable", exceptions.DazError)):
+            client = _make_client({"status": status, "dirs": ["D:/Lib"], "code": 3})
+            with self.assertRaises(exc):
+                DazNode(client, NodeIdentifier("9", kind="element_id")).save_support_asset("C:/x.duf")
+
+    def test_load_morph(self):
+        client = _make_client({"status": "ok", "morph": "MyMorph", "log": "",
+                               "control": None})
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        r = node.load_morph("C:/m.obj", morph_name="MyMorph", load_mode="PrimaryNode")
+        self.assertEqual(r.morph_name, "MyMorph")
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzMorphLoader()", script)
+        self.assertIn('"loadMode": "PrimaryNode"', script)
+        client = _make_client({"status": "error", "message": "Unknown loadMode: Bad"})
+        with self.assertRaises(exceptions.DazError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).load_morph("C:/m.obj", load_mode="Bad")
+
+
+class TestKeyColor(unittest.TestCase):
+    def test_key_color(self):
+        client = _make_client({"status": "ok", "keys": 2, "label": "Color"})
+        n = DazNode(client, NodeIdentifier("9", kind="element_id")).key_color(
+            "Color", [(0, (255, 200, 128)), (30, (128, 178, 255))])
+        self.assertEqual(n, 2)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setColorValue(k[0] * _step, new Color(k[1], k[2], k[3]))", script)
+        self.assertIn("[0, 255, 200, 128]", script)
+
+    def test_key_color_missing(self):
+        client = _make_client({"status": "missing"})
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).key_color("Tint", [(0, (1, 2, 3))])
+
+
+class TestDForceHelpers(unittest.TestCase):
+    """dForce surface/weights/properties/freeze and the Transfer Utility (1kd)."""
+
+    def _node(self, value):
+        client = _make_client(value)
+        return DazNode(client, NodeIdentifier("9", kind="element_id")), client
+
+    def test_add_dynamic_surface(self):
+        node, client = self._node({"status": "added"})
+        self.assertTrue(node.add_dforce_dynamic_surface())
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzAddDForceModifierDynamicSurfaceAction", script)
+        self.assertLess(script.index("_findDForce("), script.index("trigger()"))
+        node, _ = self._node({"status": "present"})
+        self.assertFalse(node.add_dforce_dynamic_surface())
+
+    def test_add_dynamic_surface_failed(self):
+        node, _ = self._node({"status": "not_added"})
+        with self.assertRaises(exceptions.DazError):
+            node.add_dforce_dynamic_surface()
+
+    def test_influence_weights(self):
+        node, client = self._node({"status": "ok", "weights": [1.0, 0.0]})
+        self.assertEqual(node.dforce_influence_weights(), [1.0, 0.0])
+        node, _ = self._node({"status": "ok", "weights": None})
+        self.assertIsNone(node.dforce_influence_weights())
+        node, _ = self._node({"status": "no_dforce", "modifiers": ["obj:DzMorph"]})
+        with self.assertRaises(exceptions.DazError) as ctx:
+            node.dforce_influence_weights()
+        self.assertIn("obj:DzMorph", str(ctx.exception))
+
+    def test_set_influence_weights(self):
+        node, client = self._node({"status": "ok", "vertex_count": 3, "overridden": 1})
+        self.assertEqual(node.set_dforce_influence_weights(1.0, {2: 0.0, 9: 0.5}), (3, 1))
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzWeightMap()", script)
+        self.assertIn('{"2": 0.0, "9": 0.5}', script)
+        node, _ = self._node({"status": "no_vertex_count"})
+        with self.assertRaises(exceptions.DazError):
+            node.set_dforce_influence_weights()
+
+    def test_set_dforce_property(self):
+        node, client = self._node({"status": "ok", "modifier": "DzDForceModifier",
+                                   "property": "Dynamics Strength", "old": 1.0, "new": 0.5})
+        r = node.set_dforce_property("dynamics strength", 0.5)
+        self.assertEqual((r["old_value"], r["new_value"]), (1.0, 0.5))
+        node, _ = self._node({"status": "no_property", "available": ["A", "B"]})
+        with self.assertRaises(exceptions.PropertyNotFoundError) as ctx:
+            node.set_dforce_property("Nope", 1)
+        self.assertIn("A, B", str(ctx.exception))
+
+    def test_surface_properties(self):
+        node, client = self._node({"status": "ok", "material": "Cloth", "properties": [
+            {"name": "Friction", "label": "Friction", "type": "numeric", "value": 0.2}]})
+        mat, props = node.dforce_surface_properties()
+        self.assertEqual((mat, props[0]["name"]), ("Cloth", "Friction"))
+        self.assertIn("findSimulationSettingsProvider", client.execute.call_args[0][0])
+        node, _ = self._node({"status": "ok", "material": "Cloth", "property": "Friction",
+                              "old": 0.2, "new": 0.4})
+        r = node.set_dforce_surface_property("Friction", 0.4, material="Cloth")
+        self.assertEqual(r["new_value"], 0.4)
+        node, _ = self._node({"status": "no_provider", "material": "Cloth", "available": []})
+        with self.assertRaises(exceptions.DazError):
+            node.dforce_surface_properties("Cloth")
+
+    def test_freeze_dforce(self):
+        node, client = self._node(2)
+        self.assertEqual(node.freeze_dforce(), 2)
+        self.assertIn('findPropertyByLabel("Freeze Simulation")', client.execute.call_args[0][0])
+
+    def test_scene_freeze_dforce(self):
+        client = _make_client(3)
+        self.assertEqual(DazScene(client).freeze_dforce(), 3)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getNumNodes()", script)
+        self.assertIn('findPropertyByLabel("Freeze Simulation")', script)
+
+    def test_transfer_utility(self):
+        from dazpy._node import DazNode as N
+        client = _make_client({"ok": True})
+        src, dst = N(client, NodeIdentifier("1", kind="element_id")), N(client, NodeIdentifier("2", kind="element_id"))
+        DazScene(client).transfer_utility(src, dst, morphs=True, fit_to_figure=True)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setSilentImporters(true)", script)
+        self.assertIn("setTransferMorphs(true)", script)
+        self.assertIn("setTransferUVs(false)", script)
+        client = _make_client({"ok": False})
+        with self.assertRaises(exceptions.DazError):
+            DazScene(client).transfer_utility(src, dst)
+
+
+class TestSubdivision(unittest.TestCase):
+    def test_subdivision_reads_shape_levels(self):
+        client = _make_client({"view": 1, "render": 3})
+        self.assertEqual(DazNode(client, NodeIdentifier("9", kind="element_id")).subdivision(),
+                         {"view": 1, "render": 3})
+        script = client.execute.call_args[0][0]
+        self.assertIn("getCurrentShape()", script)
+        self.assertIn('"SubDIALevel"', script)
+
+    def test_set_subdivision_returns_previous(self):
+        client = _make_client({"status": "ok", "previous": {"view": 1, "render": 3},
+                               "current": {"view": 2, "render": 3}})
+        r = DazNode(client, NodeIdentifier("9", kind="element_id")).set_subdivision(2)
+        self.assertEqual(r["previous"], {"view": 1, "render": 3})
+        self.assertIn("var _render = null", client.execute.call_args[0][0])
+
+    def test_set_subdivision_unsupported(self):
+        client = _make_client({"status": "no_subd"})
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).set_subdivision(1)
+
+
+class TestExportErrors(unittest.TestCase):
+    def test_missing_exporter_raises(self):
+        client = _make_client({"status": "no_exporter"})
+        with self.assertRaises(exceptions.DazError):
+            DazScene(client).export_fbx("C:/out.fbx")
+
+    def test_write_error_raises(self):
+        client = _make_client({"status": "error", "code": 5})
+        with self.assertRaises(exceptions.DazError) as ctx:
+            DazScene(client).export_obj("C:/out.obj")
+        self.assertIn("5", str(ctx.exception))
+
+    def test_ok(self):
+        client = _make_client({"status": "ok"})
+        DazScene(client).export_obj("C:/out.obj")
+        self.assertIn("writeFile", client.execute.call_args[0][0])
+
+
+class TestFittedItems(unittest.TestCase):
+    def test_fitted_items_skip_bones_and_bind_by_element_id(self):
+        client = _make_client([{"label": "Shirt", "name": "Shirt", "type": "clothing",
+                                "element_id": 21}])
+        items = DazNode(client, NodeIdentifier("9", kind="element_id")).fitted_items()
+        self.assertEqual(items[0]._identifier, NodeIdentifier("21", kind="element_id"))
+        self.assertIn('inherits("DzBone")', client.execute.call_args[0][0])
+
+    def test_fitted_item_info(self):
+        client = _make_client([{"label": "Hair", "name": "Hair", "type": "hair", "element_id": 5}])
+        info = DazNode(client, NodeIdentifier("9", kind="element_id")).fitted_item_info()
+        self.assertEqual((info[0].label, info[0].type, info[0].element_id), ("Hair", "hair", 5))
+        self.assertIn('inherits("DzHair")', client.execute.call_args[0][0])
+
+
+class TestCameraLightHelpers(unittest.TestCase):
+    """viewport camera setter, camera/light listings, environment mode (qrd)."""
+
+    def test_set_viewport_camera(self):
+        from dazpy._camera import DazCamera
+        client = _make_client({"status": "ok", "previous": "Perspective View"})
+        cam = DazCamera(client, NodeIdentifier("12", kind="element_id"))
+        self.assertEqual(DazScene(client).set_viewport_camera(cam), "Perspective View")
+        script = client.execute.call_args[0][0]
+        self.assertIn("setCamera(_cam)", script)
+        self.assertIn("Scene.findNodeByElementID(12)", script)
+
+    def test_set_viewport_camera_by_view_label(self):
+        client = _make_client({"status": "ok", "previous": "Camera 1"})
+        DazScene(client).set_viewport_camera("Perspective View")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getViewCamera(j)", script)
+        self.assertIn('"Perspective View"', script)
+
+    def test_set_viewport_camera_errors(self):
+        from dazpy._camera import DazCamera
+        for status, exc in (("missing", exceptions.NodeNotFoundError),
+                            ("not_camera", TypeError), ("no_viewport", RuntimeError)):
+            client = _make_client({"status": status})
+            with self.assertRaises(exc):
+                DazScene(client).set_viewport_camera(DazCamera(client, NodeIdentifier("1")))
+
+    def test_camera_and_light_info(self):
+        client = _make_client([{"index": 0, "label": "Camera 1", "name": "Camera_1",
+                                "type": "DzBasicCamera", "element_id": 7,
+                                "position": [0, 150, 300], "focal_length": 65.0}])
+        cams = DazScene(client).camera_info()
+        self.assertEqual((cams[0].label, cams[0].position, cams[0].focal_length),
+                         ("Camera 1", (0.0, 150.0, 300.0), 65.0))
+        client = _make_client([{"index": 0, "label": "Key", "name": "Key", "type": "DzSpotLight",
+                                "element_id": 8, "position": [1, 2, 3], "flux": 2000.0,
+                                "on": True}])
+        lights = DazScene(client).light_info()
+        self.assertEqual((lights[0].flux, lights[0].on), (2000.0, True))
+
+    def test_light_aim_at(self):
+        from dazpy._light import DazLight
+        client = _make_client(None)
+        DazLight(client, NodeIdentifier("3", kind="element_id")).aim_at(0, 150, 0)
+        self.assertIn("_node.aimAt(new DzVec3(0.0, 150.0, 0.0))", client.execute.call_args[0][0])
+
+    def test_draw_ground_plane(self):
+        from dazpy import DazRenderSettings
+        client = _make_client(True)
+        rs = DazRenderSettings(client)
+        self.assertTrue(rs.draw_ground_plane)
+        rs.draw_ground_plane = False
+        script = client.execute.call_args[0][0]
+        self.assertIn("opts.drawGroundPlane = false", script)
+        self.assertIn("applyChanges()", script)
+
+    def test_set_environment_properties(self):
+        from dazpy import DazRenderSettings
+        client = _make_client({"holder": True, "matched": ["Environment Intensity", None]})
+        r = DazRenderSettings(client).set_environment_properties(
+            [(["Environment Intensity", "Dome Intensity"], 0.5), (["Sun Intensity"], 2.0)])
+        self.assertEqual(r, ["Environment Intensity", None])
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzEnvironmentNode", script)
+        self.assertIn("findPropertyByLabel", script)
+        client = _make_client({"holder": False})
+        self.assertIsNone(DazRenderSettings(client).set_environment_properties([(["X"], 1)]))
+
+    def test_environment_mode(self):
+        from dazpy import DazRenderSettings
+        client = _make_client(True)
+        self.assertTrue(DazRenderSettings(client).set_environment_mode("scene_only"))
+        script = client.execute.call_args[0][0]
+        self.assertIn('findProperty("Environment Mode")', script)
+        self.assertIn("setValue(3)", script)
+        with self.assertRaises(ValueError):
+            DazRenderSettings(client).set_environment_mode("sunny")
+        client = _make_client(2)
+        self.assertEqual(DazRenderSettings(client).environment_mode, "sun_sky")
+
+
+class TestSkeletonLookAt(unittest.TestCase):
+    def _skel(self, value):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(value)
+        return DazSkeleton(client, NodeIdentifier("4", kind="element_id")), client
+
+    def test_look_at_one_call_parent_frame(self):
+        skel, client = self._skel({"applied": [{"bone": "head", "x": -10.0, "y": 20.0}],
+                                   "missing": ["l_eye"]})
+        r = skel.look_at((0, 160, 200), [("head", 0.6), ("l_eye", 1.0)])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(r.applied[0].bone, "head")
+        self.assertEqual(r.missing, ["l_eye"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSRot()", script)
+        self.assertIn("getOrientation()", script)
+        self.assertIn(".inverse().multVec(", script)
+        self.assertIn('[["head", 0.6], ["l_eye", 1.0]]', script)
+
+    def test_look_at_rejects_bad_weight(self):
+        skel, client = self._skel(None)
+        with self.assertRaises(ValueError):
+            skel.look_at((0, 0, 0), [("head", 1.5)])
+        client.execute.assert_not_called()
+
+    def test_look_at_missing_skeleton(self):
+        skel, _ = self._skel(None)
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            skel.look_at((0, 0, 0), [("head", 1.0)])
+
+
+class TestPropertyDetailsAndBatchSet(unittest.TestCase):
+    """property_details / property_detail / set_numeric_properties (daz-mcp-server-ksl)."""
+
+    def test_property_details_filter(self):
+        row = {"label": "X Translate", "name": "XTranslate", "type": "DzFloatProperty",
+               "value": 0.0, "min": -1e4, "max": 1e4, "default": 0.0, "path": "Transforms",
+               "is_animatable": True}
+        client = _make_client([row])
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        details = node.property_details("transform")
+        self.assertEqual(details[0].path, "Transforms")
+        self.assertIn('var _kind = "transform"', client.execute.call_args[0][0])
+        # DzProperty has canAnimate(); isAnimatable() does not exist (always false)
+        self.assertIn("p.canAnimate()", client.execute.call_args[0][0])
+
+    def test_property_details_rejects_unknown_kind(self):
+        node = DazNode(_make_client([]), NodeIdentifier("9", kind="element_id"))
+        with self.assertRaises(ValueError):
+            node.property_details("colour")
+
+    def test_property_detail_missing(self):
+        node = DazNode(_make_client({"status": "missing"}), NodeIdentifier("9", kind="element_id"))
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            node.property_detail("Nope")
+
+    def test_property_detail(self):
+        client = _make_client({"status": "ok", "detail": {
+            "label": "Flux", "name": "Flux", "type": "DzFloatProperty", "value": 1500.0,
+            "min": 0.0, "max": 1e5, "default": 1500.0, "path": "Light", "is_animatable": True}})
+        d = DazNode(client, NodeIdentifier("9", kind="element_id")).property_detail("flux")
+        self.assertEqual((d.label, d.default), ("Flux", 1500.0))
+
+    def test_set_numeric_properties_one_call_per_op_errors(self):
+        client = _make_client([
+            {"ok": True, "node": "Genesis 9", "property": "X Translate", "value": 10},
+            {"ok": False, "node": None, "error": "Ambiguous node 'Chair' (2 matches)"},
+        ])
+        results = DazScene(client).set_numeric_properties(
+            [("Genesis 9", "x translate", 10), ("Chair", "Y Rotate", 5)])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertTrue(results[0].ok)
+        self.assertEqual(results[0].property, "X Translate")
+        self.assertFalse(results[1].ok)
+        self.assertIn("Ambiguous", results[1].error)
+        script = client.execute.call_args[0][0]
+        self.assertIn("_findNumeric(", script)
+        self.assertIn("_resolve(", script)
+
+    def test_set_numeric_properties_empty(self):
+        client = _make_client([])
+        self.assertEqual(DazScene(client).set_numeric_properties([]), [])
+        client.execute.assert_not_called()
+
+
+class TestFrameKeys(unittest.TestCase):
+    """find_numeric_property + frame-based keys (daz-mcp-server-scz). Keys are
+    stored in DzTime ticks; frames convert with Scene.getTimeStep()."""
+
+    def _prop(self, value=None):
+        from dazpy._property import DazProperty
+        client = _make_client(value)
+        return DazProperty._from_locator(client, "PROP"), client
+
+    def test_find_numeric_property(self):
+        from dazpy._property import DazProperty
+        client = _make_client(True)
+        prop = DazNode(client, NodeIdentifier("9", kind="element_id")).find_numeric_property("x translate")
+        self.assertIsInstance(prop, DazProperty)
+        self.assertIn("_findNumeric(", prop._locator)
+        self.assertIn('"x translate"', prop._locator)
+
+    def test_find_numeric_property_missing(self):
+        client = _make_client(False)
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).find_numeric_property("Nope")
+
+    def test_set_key_at_frame_converts_to_ticks(self):
+        prop, client = self._prop(5.0)
+        self.assertEqual(prop.set_key_at_frame(30, 5), 5.0)
+        script = client.execute.call_args[0][0]
+        self.assertIn("30 * Scene.getTimeStep()", script)
+        self.assertIn("setDoubleValue(_tm, 5.0)", script)
+
+    def test_keys_by_frame(self):
+        prop, client = self._prop([[0, 0.0], [30, 5.0]])
+        self.assertEqual(prop.keys_by_frame(), [(0, 0.0), (30, 5.0)])
+        self.assertIn("/ _step", client.execute.call_args[0][0])
+
+    def test_remove_key_at_frame(self):
+        prop, client = self._prop(True)
+        self.assertTrue(prop.remove_key_at_frame(12))
+        script = client.execute.call_args[0][0]
+        self.assertIn("12 * Scene.getTimeStep()", script)
+        self.assertIn("deleteKeys(new DzTimeRange(_tm, _tm))", script)
+
+    def test_clear_keys_returns_count(self):
+        prop, _ = self._prop(4)
+        self.assertEqual(prop.clear_keys(), 4)
+
+
+class TestSurfacePreset(unittest.TestCase):
+    def test_apply_surface_preset_selects_surfaces_and_preflights(self):
+        client = _make_client({"status": "ok", "materials": [
+            {"index": 0, "name": "Skin", "label": "Skin", "shader": "DzUberIrayMaterial"}]})
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        mats = node.apply_surface_preset("C:/p.duf", map_paths=["/Runtime/Textures/a.jpg"])
+        self.assertEqual(mats[0].shader, "DzUberIrayMaterial")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getMaterial(s).select(true)", script)
+        self.assertIn("DzFileIOSettings", script)
+        self.assertIn('"/Runtime/Textures/a.jpg"', script)
+        self.assertIn("var _allowMissing = false", script)
+        self.assertLess(script.index("_missing.length"), script.index("openFile("))
+
+    def test_apply_surface_preset_missing_maps(self):
+        client = _make_client({"status": "missing_maps", "missing": ["a.jpg"]})
+        with self.assertRaises(exceptions.MaterialError) as ctx:
+            DazNode(client, NodeIdentifier("9", kind="element_id")).apply_surface_preset("C:/p.duf")
+        self.assertIn("a.jpg", str(ctx.exception))
+
+    def test_apply_surface_preset_open_failed(self):
+        client = _make_client({"status": "open_failed"})
+        with self.assertRaises(exceptions.MaterialError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).apply_surface_preset("C:/p.duf")
+
+    def test_content_path(self):
+        client = _make_client("D:/Lib/Shader Presets/x.duf")
+        self.assertEqual(DazScene(client).content_path("Shader Presets/x.duf"),
+                         "D:/Lib/Shader Presets/x.duf")
+        self.assertIn("getAbsolutePath", client.execute.call_args[0][0])
+        self.assertIsNone(DazScene(_make_client("")).content_path("nope.duf"))
+
+
+class TestSceneLoadAndHierarchy(unittest.TestCase):
+    def test_load_merges_by_default(self):
+        client = _make_client(None)
+        DazScene(client).load("C:/a.duf")
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzScene.MergeFile", script)
+        self.assertNotIn("Scene.clear()", script)
+
+    def test_load_replace_clears_first_without_dialogs(self):
+        client = _make_client(None)
+        DazScene(client).load("C:/a.duf", replace=True)
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index("Scene.clear()"), script.index("loadScene"))
+        self.assertNotIn("OpenNew", script)
+
+    def test_node_hierarchy_from_proxy(self):
+        payload = {"node": "Genesis 9", "total_descendants": 1,
+                   "hierarchy": {"label": "Genesis 9", "name": "Genesis9", "type": "DzFigure",
+                                 "element_id": 5, "children": []}}
+        client = _make_client(payload)
+        r = DazNode(client, NodeIdentifier("5", kind="element_id")).hierarchy(max_depth=3)
+        self.assertEqual(r["hierarchy"]["element_id"], 5)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.findNodeByElementID(5)", script)
+        self.assertIn("var _maxDepth = 3", script)
+        self.assertIn("element_id: n.elementID", script)
+
+    def test_node_hierarchy_missing(self):
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            DazNode(_make_client(None), NodeIdentifier("5", kind="element_id")).hierarchy()
+
+
+class TestDazNodeUnparent(unittest.TestCase):
+    def test_unparent_moves_to_scene_root(self):
+        client = _make_client(None)
+        DazNode(client, NodeIdentifier("7", kind="element_id")).unparent()
+        script = client.execute.call_args[0][0]
+        self.assertIn("removeNodeChild(_node, true)", script)
+
+    def test_unparent_keep_local(self):
+        client = _make_client(None)
+        DazNode(client, NodeIdentifier("7", kind="element_id")).unparent(preserve_world_transform=False)
+        self.assertIn("removeNodeChild(_node, false)", client.execute.call_args[0][0])
+
+    def test_unparent_failure_raises(self):
+        client = _make_client("DzError code 3")
+        with self.assertRaises(exceptions.ScriptRuntimeError):
+            DazNode(client, NodeIdentifier("7", kind="element_id")).unparent()
+
+
+class TestNodePropertySearch(unittest.TestCase):
+    """describe / numeric_properties / set_numeric_property / morph_info (nde)."""
+
+    def _node(self, value):
+        client = _make_client(value)
+        return DazNode(client, NodeIdentifier("12", kind="element_id")), client
+
+    def test_describe(self):
+        node, client = self._node({"name": "Chair", "label": "Chair", "type": "DzNode",
+                                   "element_id": 12, "parent": "Room", "num_children": 3})
+        info = node.describe()
+        self.assertEqual((info.label, info.element_id, info.parent, info.num_children),
+                         ("Chair", 12, "Room", 3))
+
+    def test_describe_missing_raises(self):
+        node, _ = self._node(None)
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            node.describe()
+
+    def test_numeric_properties_searches_modifiers(self):
+        node, client = self._node({"X Translate": 0.0, "Smile": 0.4})
+        self.assertEqual(node.numeric_properties(include_modifiers=True),
+                         {"X Translate": 0.0, "Smile": 0.4})
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumModifiers", script)
+        self.assertIn("getValueChannel", script)
+        self.assertIn("DzNumericProperty", script)
+
+    def test_numeric_properties_default_is_node_only(self):
+        node, client = self._node({"X Translate": 0.0})
+        node.numeric_properties()
+        self.assertNotIn("getNumModifiers", client.execute.call_args[0][0])
+
+    def test_set_numeric_property_exact(self):
+        node, client = self._node({"status": "ok", "label": "Head Size", "name": "HeadSize",
+                                   "value": 1.1})
+        w = node.set_numeric_property("HeadSize", 1.1)
+        self.assertEqual((w.label, w.name, w.value), ("Head Size", "HeadSize", 1.1))
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _substring = false", script)
+        self.assertIn("lock(false)", script)
+
+    def test_set_numeric_property_substring_and_no_unlock(self):
+        node, client = self._node({"status": "ok", "label": "Mouth Smile", "name": "eCTRLMouthSmile",
+                                   "value": 0.8})
+        node.set_numeric_property("smile", 0.8, substring_fallback=True, unlock=False)
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _substring = true", script)
+        self.assertIn("var _unlock = false", script)
+
+    def test_set_numeric_property_not_found_and_not_numeric(self):
+        node, _ = self._node({"status": "missing"})
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            node.set_numeric_property("Nope", 1)
+        node, _ = self._node({"status": "not_numeric", "label": "Label"})
+        with self.assertRaises(TypeError):
+            node.set_numeric_property("Label", 1)
+
+    def test_morph_info(self):
+        node, client = self._node([{"name": "Smile", "label": "Smile", "value": 0.5,
+                                    "path": "Morphs/Face"}])
+        morphs = node.morph_info(pattern="SMI", include_zero=True)
+        self.assertEqual(morphs[0].path, "Morphs/Face")
+        script = client.execute.call_args[0][0]
+        self.assertIn('"smi"', script)
+        self.assertIn("var _includeZero = true", script)
+
+
+class TestDazSceneViewportCamera(unittest.TestCase):
+    def test_default_view_camera_not_in_scene(self):
+        client = _make_client({"label": "Perspective View", "name": "PerspectiveView",
+                               "in_scene": False, "position": [145, 190, 370]})
+        cam = DazScene(client).viewport_camera()
+        self.assertEqual(cam.label, "Perspective View")
+        self.assertFalse(cam.in_scene)
+        self.assertEqual(cam.position, (145.0, 190.0, 370.0))
+        self.assertIsNone(cam.camera)
+        self.assertIn("get3DViewport", client.execute.call_args[0][0])
+
+    def test_scene_camera_gets_proxy(self):
+        from dazpy._camera import DazCamera
+        client = _make_client({"label": "Camera 1", "name": "Camera 1",
+                               "in_scene": True, "position": [0, 150, 300]})
+        cam = DazScene(client).viewport_camera()
+        self.assertIsInstance(cam.camera, DazCamera)
+
+    def test_no_viewport_returns_none(self):
+        self.assertIsNone(DazScene(_make_client(None)).viewport_camera())
+
+
 class TestDazBoneScriptGeneration(unittest.TestCase):
     def setUp(self):
         from dazpy._bone import DazBone
@@ -4126,7 +5089,9 @@ class TestDazNodeFitting(unittest.TestCase):
         self.assertEqual(result, {"previous_figure": None, "actions": []})
 
     def test_fitted_items_returns_node_list(self):
-        node, client = self._node(["Outfit Top", "Hat"])
+        node, client = self._node([
+            {"label": "Outfit Top", "name": "Top", "type": "clothing", "element_id": 1},
+            {"label": "Hat", "name": "Hat", "type": "prop", "element_id": 2}])
         items = node.fitted_items()
         self.assertEqual(len(items), 2)
         self.assertIsInstance(items[0], DazNode)
@@ -5506,6 +6471,22 @@ class TestDazPose(unittest.TestCase):
         self.assertIn("setValue(_v)", props_section)
         self.assertNotIn("if (v !== undefined)", props_section)
 
+    def test_apply_full_skips_non_numeric_node_properties(self):
+        # Regression (found live, DS 4.24): a figure carrying DzFileProperty
+        # entries ("Preview Clothing Template", "Developer Tools") made
+        # apply_full() call setValue(0) on them, and Studio rejected the whole
+        # script ("Passing incompatible arguments to C++ functions"). capture()
+        # only records number-valued properties, so apply_full() must only
+        # zero those too -- which also leaves "Point At" / "Fit to" alone.
+        from dazpy import DazPose
+        pose = DazPose("Genesis 9", {}, {}, {})
+        skel, client = self._make_skeleton(True)
+        pose.apply_full(skel)
+        script = client.execute.call_args[0][0]
+        props_section = script[script.index("getNumProperties"):]
+        guard = props_section.index('typeof _cur !== "number"')
+        self.assertLess(guard, props_section.index("setValue(_v)"))
+
     # ── repr ──────────────────────────────────────────────────────────────────
 
     def test_repr(self):
@@ -5958,9 +6939,7 @@ class TestCallCounts(unittest.TestCase):
         client = MagicMock(spec=DazClient)
         client.execute.side_effect = _execute
 
-        skel = DazSkeleton.__new__(DazSkeleton)
-        object.__setattr__(skel, "_client", client)
-        object.__setattr__(skel, "_identifier", NodeIdentifier("Genesis 9", kind="label"))
+        skel = DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label"))
         return skel, client
 
     def test_align_hand_target_call_count_bounded(self):
@@ -6978,9 +7957,7 @@ class TestBatchPoseEvaluation(unittest.TestCase):
         client = MagicMock(spec=DazClient)
         client.execute.side_effect = _execute
 
-        skel = DazSkeleton.__new__(DazSkeleton)
-        object.__setattr__(skel, "_client", client)
-        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+        skel = DazSkeleton(client, NodeIdentifier("Test", kind="label"))
 
         result = align_single_limb_target(skel, profile, target)
 
@@ -7016,9 +7993,7 @@ class TestBatchPoseEvaluation(unittest.TestCase):
         client = MagicMock(spec=DazClient)
         client.execute.side_effect = _execute
 
-        skel = DazSkeleton.__new__(DazSkeleton)
-        object.__setattr__(skel, "_client", client)
-        object.__setattr__(skel, "_identifier", NodeIdentifier("Test", kind="label"))
+        skel = DazSkeleton(client, NodeIdentifier("Test", kind="label"))
 
         result = align_single_limb_target(skel, profile, target, tolerance=0.5)
 

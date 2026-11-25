@@ -16,13 +16,31 @@ Typical usage::
 __version__ = "2.16.0"
 
 from ._client import DazClient
-from ._scene import DazScene
-from ._node import DazNode, NodeIdentifier
-from ._skeleton import DazSkeleton
+from ._scene import (
+    BatchPropertyResult,
+    CameraInfo,
+    ContentCategory,
+    ContentFile,
+    DazScene,
+    LightInfo,
+    ViewportCamera,
+)
+from ._morph_loader import MorphLoadResult
+from ._node import (
+    DazNode,
+    FittedItem,
+    MorphInfo,
+    NodeIdentifier,
+    NodeInfo,
+    NumericCandidateMatch,
+    NumericPropertyWrite,
+    PropertyDetails,
+)
+from ._skeleton import BoneAim, DazSkeleton, LookAtResult
 from ._bone import DazBone
 from ._camera import DazCamera
 from ._light import DazLight
-from ._material import DazMaterial
+from ._material import DazMaterial, MaterialInfo, MaterialProperty, MaterialPropertyWrite
 from ._modifier import DazModifier
 from ._morph import DazMorph
 from ._dforce import DazDForce
@@ -149,6 +167,24 @@ __all__ = [
     "DazScene",
     "DazNode",
     "NodeIdentifier",
+    "NumericCandidateMatch",
+    "NodeInfo",
+    "FittedItem",
+    "MorphInfo",
+    "NumericPropertyWrite",
+    "MaterialInfo",
+    "MaterialProperty",
+    "MaterialPropertyWrite",
+    "ViewportCamera",
+    "BoneAim",
+    "LookAtResult",
+    "BatchPropertyResult",
+    "CameraInfo",
+    "ContentCategory",
+    "ContentFile",
+    "MorphLoadResult",
+    "LightInfo",
+    "PropertyDetails",
     "DazSkeleton",
     "DazBone",
     "DazCamera",
