@@ -3607,6 +3607,126 @@ class TestNodeResolution(unittest.TestCase):
         self.assertIsNone(found[0].parent)
 
 
+class TestMaterialTools(unittest.TestCase):
+    """material_info / resolve_material / property_values / set_property_value /
+    copy_from (daz-mcp-server-et7)."""
+
+    def _node(self, value):
+        client = _make_client(value)
+        return DazNode(client, NodeIdentifier("9", kind="element_id")), client
+
+    def test_material_info(self):
+        node, client = self._node([{"index": 0, "name": "Skin", "label": "Skin",
+                                    "shader": "DzUberIrayMaterial"}])
+        info = node.material_info()
+        self.assertEqual((info[0].label, info[0].shader), ("Skin", "DzUberIrayMaterial"))
+        self.assertIn("getNumMaterials", client.execute.call_args[0][0])
+
+    def test_resolve_material_by_label(self):
+        from dazpy._material import DazMaterial
+        node, client = self._node({"status": "ok", "name": "1_SkinFace"})
+        mat = node.resolve_material("Face")
+        self.assertIsInstance(mat, DazMaterial)
+        self.assertIn('findMaterial("1_SkinFace")', mat._locator)
+        self.assertIn("if (lbl === _want)", client.execute.call_args[0][0])
+
+    def test_resolve_material_missing_lists_available(self):
+        node, _ = self._node({"status": "missing", "available": ["Skin", "Lips"]})
+        with self.assertRaises(exceptions.MaterialError) as ctx:
+            node.resolve_material("Hair")
+        self.assertIn("Skin, Lips", str(ctx.exception))
+
+    def test_resolve_material_no_shape(self):
+        node, _ = self._node({"status": "no_shape"})
+        with self.assertRaises(exceptions.MaterialError):
+            node.resolve_material("Skin")
+
+    def _material(self, value):
+        from dazpy._material import DazMaterial
+        client = _make_client(value)
+        return DazMaterial(client, "MAT"), client
+
+    def test_property_values(self):
+        mat, client = self._material([{"name": "Diffuse Color", "label": "Base Color",
+                                       "type": "color", "value": "#ff8040"}])
+        props = mat.property_values()
+        self.assertEqual((props[0].label, props[0].type, props[0].value),
+                         ("Base Color", "color", "#ff8040"))
+        script = client.execute.call_args[0][0]
+        self.assertIn("getFloatColorValue", script)
+        self.assertIn("DzImageProperty", script)
+
+    def test_describe(self):
+        mat, _ = self._material({"index": 2, "name": "Skin", "label": "Skin", "shader": "X"})
+        self.assertEqual(mat.describe().index, 2)
+
+    def test_set_property_value_color_and_numeric(self):
+        mat, client = self._material({"status": "ok", "label": "Base Color", "type": "color",
+                                      "value": "#3a6ea5"})
+        w = mat.set_property_value("Diffuse Color", "#3A6EA5")
+        self.assertEqual((w.type, w.value), ("color", "#3a6ea5"))
+        script = client.execute.call_args[0][0]
+        self.assertIn("findPropertyByLabel", script)
+        self.assertIn("new QColor", script)
+        mat, client = self._material({"status": "ok", "label": "Roughness", "type": "numeric",
+                                      "value": 0.4})
+        mat.set_property_value("Glossy Roughness", 0.4)
+
+    def test_set_property_value_errors(self):
+        mat, _ = self._material({"status": "missing"})
+        with self.assertRaises(exceptions.MaterialError):
+            mat.set_property_value("Nope", 1)
+        mat, _ = self._material({"status": "unsupported", "label": "Base Color Map"})
+        with self.assertRaises(exceptions.MaterialError):
+            mat.set_property_value("Base Color Map", 1)
+        mat, client = self._material(None)
+        with self.assertRaises(ValueError):
+            mat.set_property_value("Base Color", "#12")
+        client.execute.assert_not_called()
+
+    def test_copy_from(self):
+        from dazpy._material import DazMaterial
+        mat, client = self._material({"copied": 40, "skipped": 2})
+        src = DazMaterial(client, "SRC")
+        self.assertEqual(mat.copy_from(src), (40, 2))
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _src = SRC", script)
+        self.assertIn("var _dst = MAT", script)
+
+
+class TestSurfacePreset(unittest.TestCase):
+    def test_apply_surface_preset_selects_surfaces_and_preflights(self):
+        client = _make_client({"status": "ok", "materials": [
+            {"index": 0, "name": "Skin", "label": "Skin", "shader": "DzUberIrayMaterial"}]})
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        mats = node.apply_surface_preset("C:/p.duf", map_paths=["/Runtime/Textures/a.jpg"])
+        self.assertEqual(mats[0].shader, "DzUberIrayMaterial")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getMaterial(s).select(true)", script)
+        self.assertIn("DzFileIOSettings", script)
+        self.assertIn('"/Runtime/Textures/a.jpg"', script)
+        self.assertIn("var _allowMissing = false", script)
+        self.assertLess(script.index("_missing.length"), script.index("openFile("))
+
+    def test_apply_surface_preset_missing_maps(self):
+        client = _make_client({"status": "missing_maps", "missing": ["a.jpg"]})
+        with self.assertRaises(exceptions.MaterialError) as ctx:
+            DazNode(client, NodeIdentifier("9", kind="element_id")).apply_surface_preset("C:/p.duf")
+        self.assertIn("a.jpg", str(ctx.exception))
+
+    def test_apply_surface_preset_open_failed(self):
+        client = _make_client({"status": "open_failed"})
+        with self.assertRaises(exceptions.MaterialError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).apply_surface_preset("C:/p.duf")
+
+    def test_content_path(self):
+        client = _make_client("D:/Lib/Shader Presets/x.duf")
+        self.assertEqual(DazScene(client).content_path("Shader Presets/x.duf"),
+                         "D:/Lib/Shader Presets/x.duf")
+        self.assertIn("getAbsolutePath", client.execute.call_args[0][0])
+        self.assertIsNone(DazScene(_make_client("")).content_path("nope.duf"))
+
+
 class TestSceneLoadAndHierarchy(unittest.TestCase):
     def test_load_merges_by_default(self):
         client = _make_client(None)

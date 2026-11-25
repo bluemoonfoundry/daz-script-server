@@ -40,7 +40,7 @@ _KEY_INTERP_JS = (
 )
 
 if TYPE_CHECKING:
-    from ._material import DazMaterial
+    from ._material import DazMaterial, MaterialInfo
     from ._modifier import DazModifier
     from ._morph import DazMorph
     from ._dforce import DazDForce
@@ -599,6 +599,135 @@ class DazNode(DazElement):
         )
         names = self._client.execute(script).value or []
         return [DazMaterial(self._client, self._material_locator(n)) for n in names]
+
+    def material_info(self) -> list["MaterialInfo"]:
+        """Index, name, label and shader class of every surface zone, in one call."""
+        from ._material import MaterialInfo
+        script = ScriptBuilder.node_body_from_locator(self._locator, """
+            var obj = _node.getObject ? _node.getObject() : null;
+            var shape = obj ? obj.getCurrentShape() : null;
+            if (!shape) return [];
+            var out = [];
+            for (var i = 0; i < shape.getNumMaterials(); i++) {
+                var m = shape.getMaterial(i);
+                out.push({index: i, name: m.getName(),
+                          label: (typeof m.getLabel === "function") ? m.getLabel() : m.getName(),
+                          shader: m.className()});
+            }
+            return out;
+        """)
+        raw = self._client.execute(script).value or []
+        return [MaterialInfo(int(r["index"]), r["name"], r["label"], r["shader"]) for r in raw]
+
+    def resolve_material(self, ref: str) -> "DazMaterial":
+        """Find a surface zone by label, then by internal name.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            MaterialError: If the node has no surfaces or no zone matches;
+                the message lists the available zone labels.
+        """
+        from ._material import DazMaterial
+        from .exceptions import MaterialError, NodeNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _want = {json.dumps(ref)};
+            var obj = _node.getObject ? _node.getObject() : null;
+            var shape = obj ? obj.getCurrentShape() : null;
+            if (!shape) return {{status: "no_shape"}};
+            var byName = null, labels = [];
+            for (var i = 0; i < shape.getNumMaterials(); i++) {{
+                var m = shape.getMaterial(i);
+                var lbl = (typeof m.getLabel === "function") ? m.getLabel() : m.getName();
+                if (lbl === _want) return {{status: "ok", name: m.getName()}};
+                if (!byName && m.getName() === _want) byName = m.getName();
+                labels.push(lbl);
+            }}
+            if (byName) return {{status: "ok", name: byName}};
+            return {{status: "missing", available: labels}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "no_shape":
+            raise MaterialError("Node has no surfaces")
+        if raw["status"] == "missing":
+            raise MaterialError(
+                f"Material {ref!r} not found. Available: {', '.join(raw.get('available', []))}"
+            )
+        return DazMaterial(self._client, self._material_locator(raw["name"]))
+
+    def apply_surface_preset(
+        self,
+        path: str,
+        *,
+        map_paths: Sequence[str] | None = None,
+        allow_missing: bool = False,
+    ) -> list["MaterialInfo"]:
+        """Apply a material or shader preset ``.duf`` to every surface of this node.
+
+        Selects this node alone and every one of its surfaces (preset
+        application acts on the selected surfaces; with only the node
+        selected ``openFile`` reports success and changes nothing), then
+        opens the preset through the content manager.
+
+        Args:
+            path: Absolute path to the preset file.
+            map_paths: Texture paths the preset references (absolute or
+                content-relative). Checked first: if any is missing the
+                preset is not opened, because Studio's Missing Files dialog
+                would block the script server.
+            allow_missing: Open the preset even when maps are missing.
+
+        Returns:
+            :class:`MaterialInfo` for every surface after the preset applied.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            MaterialError: If maps are missing, or Studio fails to open the preset.
+        """
+        from ._material import MaterialInfo
+        from .exceptions import MaterialError, NodeNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _maps = {json.dumps(list(map_paths or []))};
+            var _allowMissing = {"true" if allow_missing else "false"};
+            var _missing = [];
+            for (var i = 0; i < _maps.length; i++) {{
+                var rel = _maps[i];
+                if (!rel) continue;
+                var fi = new DzFileInfo(rel);
+                if (fi.exists()) continue;
+                var abs = App.getContentMgr().getAbsolutePath(rel, true, "");
+                if (abs && new DzFileInfo(abs).exists()) continue;
+                _missing.push(rel);
+            }}
+            if (_missing.length && !_allowMissing) return {{status: "missing_maps", missing: _missing}};
+            Scene.selectAllNodes(false);
+            _node.select(true);
+            var _obj = _node.getObject ? _node.getObject() : null;
+            var _shape = _obj ? _obj.getCurrentShape() : null;
+            if (_shape) for (var s = 0; s < _shape.getNumMaterials(); s++) _shape.getMaterial(s).select(true);
+            var _ok = App.getContentMgr().openFile({json.dumps(path)}, new DzFileIOSettings(), false);
+            if (!_ok) return {{status: "open_failed"}};
+            var out = [];
+            _shape = _obj ? _obj.getCurrentShape() : null;
+            if (_shape) for (var j = 0; j < _shape.getNumMaterials(); j++) {{
+                var m = _shape.getMaterial(j);
+                out.push({{index: j, name: m.getName(), label: m.getLabel(), shader: m.className()}});
+            }}
+            return {{status: "ok", materials: out}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "missing_maps":
+            raise MaterialError(
+                "Missing texture files (preset not opened, to avoid Studio's Missing "
+                f"Files dialog): {', '.join(raw.get('missing', []))}"
+            )
+        if raw["status"] == "open_failed":
+            raise MaterialError(f"Studio failed to apply the preset: {path}")
+        return [MaterialInfo(int(m["index"]), m["name"], m["label"], m["shader"])
+                for m in raw.get("materials", [])]
 
     def find_material(self, name: str) -> "DazMaterial | None":
         """Find a surface material by name.

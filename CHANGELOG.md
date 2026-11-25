@@ -60,6 +60,18 @@ All notable changes to DazScript Server are documented here.
     elementIDs. `DazScene.load(path, replace=True)` clears the scene and then
     merges, which avoids `OpenNew`'s blocking "save changes?" prompt.
   Live-verified on Studio 4.24.
+- **dazpy material helpers** (daz-mcp-server-et7), one call each:
+  `DazNode.material_info()` (index, name, label and shader for every zone),
+  `DazNode.resolve_material(ref)` (by label, then name, and the error lists
+  the available zones), `DazMaterial.describe()`, `property_values()`
+  (typed values: colors as `#rrggbb`, image maps as file paths),
+  `set_property_value(name, value)` (a number, or `#RRGGBB` for colors),
+  and `copy_from(source)`.
+  `DazNode.apply_surface_preset(path, map_paths=, allow_missing=)` selects
+  the node and all its surfaces and checks that the referenced texture maps
+  exist before opening the preset, since Studio's Missing Files dialog
+  blocks the server. `DazScene.content_path(relative)` resolves
+  content-library paths. Live-verified on Studio 4.24.
 
 ### Fixed
 

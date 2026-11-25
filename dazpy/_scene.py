@@ -198,6 +198,20 @@ class DazScene:
         """)
         return [NodeInfo._from_raw(r) for r in self._client.execute(script).value or []]
 
+    def content_path(self, relative: str) -> str | None:
+        """Resolve a content-library-relative path to an absolute path.
+
+        Searches every configured content directory, as Studio does for
+        asset references (e.g. ``"Shader Presets/Iray/DAZ Uber/!Iray Uber Base.duf"``).
+
+        Returns:
+            The absolute path, or ``None`` if no content directory has it.
+        """
+        script = ScriptBuilder.iife(
+            f"return App.getContentMgr().getAbsolutePath({json.dumps(relative)}, false, \"\") || \"\";"
+        )
+        return self._client.execute(script).value or None
+
     def find_node(self, name: str) -> DazNode:
         """Find a scene node by its internal name.
 

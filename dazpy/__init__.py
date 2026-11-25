@@ -29,7 +29,7 @@ from ._skeleton import DazSkeleton
 from ._bone import DazBone
 from ._camera import DazCamera
 from ._light import DazLight
-from ._material import DazMaterial
+from ._material import DazMaterial, MaterialInfo, MaterialProperty, MaterialPropertyWrite
 from ._modifier import DazModifier
 from ._morph import DazMorph
 from ._dforce import DazDForce
@@ -160,6 +160,9 @@ __all__ = [
     "NodeInfo",
     "MorphInfo",
     "NumericPropertyWrite",
+    "MaterialInfo",
+    "MaterialProperty",
+    "MaterialPropertyWrite",
     "ViewportCamera",
     "DazSkeleton",
     "DazBone",
