@@ -19,7 +19,7 @@ All notable changes to DazScript Server are documented here.
   low-level `DazNode.set_transform_key_interpolation()` /
   `setTransformKeyInterpolation()` sets per-key interpolation directly. Both
   fields are optional, and plans without them serialise as before. Live-verified
-  on Studio 6.26.
+  on Studio 4.24 and 6.26.
 
 ## [2.16.0] - 2026-11-23
 
