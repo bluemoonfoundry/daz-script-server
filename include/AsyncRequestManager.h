@@ -262,8 +262,17 @@ private:
     static std::string identityJson(const AsyncRequest& req);
     static std::string activityJson(const AsyncRequest& req);
     static void touchLocked(AsyncRequest& req, qint64 at);
-    void ingestReportFromWorkerLocked(AsyncRequest& req);
+    // HTTP worker, m_mutex NOT held (Studio 6; no-op on Studio 4): reads the
+    // job report's new bytes without the lock, then applies them under it
+    // unless another reader already consumed them (yau7.2.6).
+    void prefetchReport(const QString& id);
+    void prefetchAllReports();
+    // MAIN THREAD (final ingestion in markCompleted), m_mutex held.
     void ingestReportLocked(AsyncRequest& req, bool final = false);
+    // m_mutex held. Applies bytes read from req.reportFile starting at
+    // req.reportOffset (or at 0 when the file was rewritten).
+    void applyReportBytesLocked(AsyncRequest& req, bool rewritten, const QByteArray& data,
+                                const QDateTime& modified, bool final);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);
     void declareRenderOutputsLocked(AsyncRequest& req, const QVariant& result);
     void appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry);

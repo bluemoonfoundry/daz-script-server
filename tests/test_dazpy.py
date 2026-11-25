@@ -9822,18 +9822,23 @@ class TestObservationThreadingContract(unittest.TestCase):
         end = self.source.index("// ─── Main-thread API", start)
         worker_api = self.source[start:end]
 
+        # Workers never ingest under the lock (yau7.2.6): status, result and
+        # list prefetch the report first.
         self.assertNotIn("ingestReportLocked(", worker_api)
-        self.assertEqual(worker_api.count("ingestReportFromWorkerLocked("), 3)
+        self.assertEqual(worker_api.count("prefetchReport("), 2)
+        self.assertEqual(worker_api.count("prefetchAllReports("), 1)
 
-        helper_start = self.source.index(
-            "void AsyncRequestManager::ingestReportFromWorkerLocked"
-        )
+        helper_start = self.source.index("void AsyncRequestManager::prefetchReport")
         helper_end = self.source.index(
-            "std::string AsyncRequestManager::observationJson", helper_start
+            "void AsyncRequestManager::prefetchAllReports", helper_start
         )
         helper = self.source[helper_start:helper_end]
+        # Studio 4 parses JSON with QScriptEngine: no worker-side ingestion.
         self.assertIn("#if DAZ_SDK_MAJOR_VERSION >= 6", helper)
-        self.assertIn("ingestReportLocked(req);", helper)
+        # The file is read before the lock that applies it is taken.
+        read_at = helper.index("readAll()")
+        self.assertLess(read_at, helper.rindex("QMutexLocker locker(&m_mutex);"))
+        self.assertIn("applyReportBytesLocked(", helper)
 
     def test_main_thread_completion_ingests_before_terminal_guard(self):
         start = self.source.index("void AsyncRequestManager::markCompleted")
