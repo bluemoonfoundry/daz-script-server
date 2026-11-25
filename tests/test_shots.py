@@ -35,8 +35,8 @@ class FakeCamera:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        def record(*args):
-            self.calls.append((name,) + args)
+        def record(*args, **kwargs):
+            self.calls.append((name,) + args + ((kwargs,) if kwargs else ()))
         return record
 
 
@@ -388,6 +388,111 @@ class AdapterTests(unittest.TestCase):
     def test_camera_keyframe_is_still_importable_from_cinematics(self):
         from dazpy import cinematics
         self.assertIs(cinematics.CameraKeyframe, CameraKeyframe)
+
+    def test_animated_shot_easing_reaches_the_keyframed_move(self):
+        from dazpy.cinematics import CinematicAnimatedShot
+        keys = (CameraKeyframe(0, Vec3(0, 0, 1)), CameraKeyframe(5, Vec3(1, 0, 1)))
+        self.assertEqual(CinematicAnimatedShot(keyframes=keys, easing="ease_out").to_shot().movement.easing, "ease_out")
+        self.assertIsNone(CinematicAnimatedShot(keyframes=keys).to_shot().movement.easing)
+
+
+def _keys(*interps):
+    return tuple(CameraKeyframe(i * 10, Vec3(i, 0, 0), interpolation=k) for i, k in enumerate(interps))
+
+
+class EasingTests(unittest.TestCase):
+    """v6rm: per-key interpolation and whole-move easing on Keyframed."""
+
+    def test_defaults_are_omitted_and_round_trip(self):
+        plain = Keyframed(keyframes=_keys(None, None))
+        self.assertNotIn("easing", plain.to_dict())
+        self.assertNotIn("interpolation", plain.to_dict()["keyframes"][0])
+        eased = Keyframed(keyframes=_keys("constant", None), easing="ease_in")
+        d = eased.to_dict()
+        self.assertEqual((d["easing"], d["keyframes"][0]["interpolation"]), ("ease_in", "constant"))
+        self.assertEqual(Keyframed.from_dict(json.loads(json.dumps(d))), eased)
+
+    def test_unknown_values_are_rejected_with_their_path(self):
+        with self.assertRaisesRegex(ValueError, "interpolation"):
+            CameraKeyframe(0, Vec3(0, 0, 0), interpolation="bezier")
+        with self.assertRaisesRegex(ValueError, "easing"):
+            Keyframed(keyframes=_keys(None, None), easing="ease-in")
+        bad = {"kind": "keyframed", "keyframes": [{"frame": 0, "position": [0, 0, 0], "interpolation": "tcb"},
+                                                  {"frame": 1, "position": [1, 0, 0]}]}
+        with self.assertRaisesRegex(ValueError, r"keyframes\[0\]"):
+            Keyframed.from_dict(bad)
+
+    def test_key_interpolation_plan(self):
+        self.assertIsNone(Keyframed(keyframes=_keys(None, None, None)).key_interpolation())
+        self.assertEqual(Keyframed(keyframes=_keys(None, None), easing="linear").key_interpolation(),
+                         (("linear", "linear"), False, False))
+        self.assertEqual(Keyframed(keyframes=_keys(None, None), easing="smooth").key_interpolation(),
+                         (("smooth", "smooth"), False, False))
+        self.assertEqual(Keyframed(keyframes=_keys(None, None, None), easing="ease_in").key_interpolation(),
+                         (("hermite",) * 3, False, True))
+        self.assertEqual(Keyframed(keyframes=_keys(None, None, None), easing="ease_out").key_interpolation(),
+                         (("hermite",) * 3, True, False))
+        # A waypoint's own interpolation overrides the move's easing; without easing only it is set.
+        self.assertEqual(Keyframed(keyframes=_keys(None, "constant", None), easing="ease_in").key_interpolation(),
+                         (("hermite", "constant", "hermite"), False, True))
+        self.assertEqual(Keyframed(keyframes=_keys("linear", None)).key_interpolation(),
+                         (("linear", None), False, False))
+
+    def test_apply_shot_sets_interpolation_after_the_keys(self):
+        cam = FakeCamera()
+        shot = Shot(id="k", camera=Placement(position=Vec3(0, 0, 0)),
+                    movement=Keyframed(keyframes=(CameraKeyframe(0, Vec3(0, 0, 0), rotation=(0, 0, 0)),
+                                                  CameraKeyframe(24, Vec3(9, 0, 0), rotation=(0, 5, 0))),
+                                       easing="ease_out"))
+        apply_shot(FakeScene(), shot, camera=cam)
+        names = [c[0] for c in cam.calls]
+        idx = names.index("set_transform_key_interpolation")
+        self.assertGreater(idx, max(i for i, n in enumerate(names) if n == "set_rotation_at_frame"))
+        self.assertEqual(cam.calls[idx], ("set_transform_key_interpolation", [0, 24], ("hermite", "hermite"),
+                                          {"rotation": True, "fast_start": True, "fast_end": False}))
+
+    def test_apply_shot_without_easing_sends_no_interpolation(self):
+        cam = FakeCamera()
+        shot = Shot(id="k", camera=Placement(position=Vec3(0, 0, 0)), movement=Keyframed(keyframes=_keys(None, None)))
+        apply_shot(FakeScene(), shot, camera=cam)
+        self.assertNotIn("set_transform_key_interpolation", [c[0] for c in cam.calls])
+
+    def test_node_interpolation_script(self):
+        from dazpy._camera import DazCamera
+        from dazpy._node import NodeIdentifier
+        client = MagicMock()
+        cam = DazCamera(client, NodeIdentifier("Camera 1"))
+        cam.set_transform_key_interpolation([0, 10, 30], ["hermite", "linear", None], fast_end=True)
+        script = client.execute.call_args[0][0]
+        self.assertIn('var _F = [0, 10, 30], _K = ["hermite", "linear", null]', script)
+        for ctl in ("XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot"):
+            self.assertIn(f"_node.get{ctl}Control()", script)
+        self.assertIn("_kiApply(_C[_c], _F, _K, false, true);", script)
+        self.assertIn("DzProperty.InterpHermite", script)
+        cam.set_transform_key_interpolation([0, 10], ["smooth", "smooth"], rotation=False)
+        self.assertNotIn("XRotControl", client.execute.call_args[0][0])
+
+    def test_key_interp_js_matches_daz_ts(self):
+        """daz-ts/src/node.ts carries the same _kiApply helper, line for line."""
+        import re
+        from dazpy._node import _KEY_INTERP_JS
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, "daz-ts", "src", "node.ts"), encoding="utf-8") as fh:
+            src = fh.read()
+        block = re.search(r"const KEY_INTERP_JS =\n(.*?);\n", src, re.S)
+        self.assertIsNotNone(block, "KEY_INTERP_JS not found in daz-ts/src/node.ts")
+        lines = [json.loads(m) for m in re.findall(r'^\s*("(?:[^"\\]|\\.)*")(?: \+)?$', block.group(1), re.M)]
+        self.assertEqual("".join(lines), _KEY_INTERP_JS)
+
+    def test_node_interpolation_validation(self):
+        from dazpy._node import DazNode, NodeIdentifier
+        node = DazNode(MagicMock(), NodeIdentifier("n"))
+        with self.assertRaisesRegex(ValueError, "same length"):
+            node.set_transform_key_interpolation([0, 1], ["linear"])
+        with self.assertRaisesRegex(ValueError, "ascending"):
+            node.set_transform_key_interpolation([5, 1], ["linear", "linear"])
+        with self.assertRaisesRegex(ValueError, "unknown key interpolation"):
+            node.set_transform_key_interpolation([0, 1], ["ease_in", None])
 
 
 if __name__ == "__main__":

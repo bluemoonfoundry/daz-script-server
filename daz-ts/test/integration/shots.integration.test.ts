@@ -21,7 +21,18 @@ import { Quat, Vec3 } from "../../src/math3.js";
 import { DazScene } from "../../src/scene.js";
 import * as sl from "../../src/shotLibrary.js";
 import { LineOfAction } from "../../src/shotLibrary.js";
-import { Framing, Keyframed, Lens, Orbit, Placement, Shot, applyShot, framingTransform } from "../../src/shots.js";
+import {
+  CameraKeyframe,
+  Framing,
+  Keyframed,
+  Lens,
+  Orbit,
+  Placement,
+  Shot,
+  applyShot,
+  framingTransform,
+} from "../../src/shots.js";
+import type { CameraEasing } from "../../src/shots.js";
 
 const SERVER_URL = process.env.DAZ_SERVER_URL;
 const PREFIX = "ShotLive_";
@@ -199,6 +210,55 @@ describe.skipIf(!SERVER_URL)("daz-ts shots / shotLibrary against a live DAZ Stud
       expect(Math.abs(p.pos.distance(target) - 220)).toBeLessThan(POS_TOL);
       expectSameDirection(p.forward, target.sub(p.pos));
     });
+  });
+
+  it("keyframed_easing_curves", async () => {
+    // v6rm: each easing lands on its analytic curve, on position and rotation.
+    const curves: Record<CameraEasing, (t: number) => number> = {
+      linear: (t) => t,
+      smooth: (t) => 3 * t * t - 2 * t ** 3, // Studio's two-key default
+      ease_in: (t) => t * t,
+      ease_out: (t) => 2 * t - t * t,
+    };
+    const p0 = new Vec3(300, 150, 200);
+    const p1 = new Vec3(360, 150, 200);
+    const yaw1 = 40;
+    for (const [easing, curve] of Object.entries(curves) as Array<[CameraEasing, (t: number) => number]>) {
+      const shot = new Shot({
+        id: "e",
+        camera: new Placement({ position: p0 }),
+        movement: new Keyframed({
+          keyframes: [
+            new CameraKeyframe({ frame: 0, position: p0, rotation: [0, 0, 0] }),
+            new CameraKeyframe({ frame: 24, position: p1, rotation: [0, yaw1, 0] }),
+          ],
+          easing,
+        }),
+      });
+      const cam = await applyShot(scene, shot, { camera: await camera(`ease_${easing}`) });
+      for (const p of await readback(cam, [0, 6, 12, 18, 24])) {
+        const f = curve(p.frame / 24);
+        expectVecClose(p.pos, p0.add(p1.sub(p0).mul(f)));
+        const yaw = ((yaw1 * f) * Math.PI) / 180;
+        expectSameDirection(p.forward, new Vec3(-Math.sin(yaw), 0, -Math.cos(yaw)));
+      }
+    }
+  });
+
+  it("keyframed_constant_holds_until_next_key", async () => {
+    const p0 = new Vec3(300, 150, 200);
+    const p1 = new Vec3(360, 150, 200);
+    const shot = new Shot({
+      id: "c",
+      camera: new Placement({ position: p0 }),
+      movement: new Keyframed({
+        keyframes: [new CameraKeyframe({ frame: 0, position: p0, interpolation: "constant" }), new CameraKeyframe({ frame: 24, position: p1 })],
+      }),
+    });
+    const cam = await applyShot(scene, shot, { camera: await camera("hold") });
+    const poses = await readback(cam, [0, 12, 23, 24]);
+    for (const p of poses.slice(0, 3)) expectVecClose(p.pos, p0);
+    expectVecClose(poses[3].pos, p1);
   });
 
   it("orbit_bake_sets_range_and_parks_on_last_frame", async () => {

@@ -4,6 +4,23 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **dazpy and daz-ts camera-move easing:** `shots.Keyframed` takes
+  `easing` (`"linear"`, `"smooth"`, `"ease_in"`, `"ease_out"`) and each
+  `CameraKeyframe` an `interpolation` (`"linear"`, `"constant"`, `"smooth"`)
+  for the segment after it, overriding the move's easing. `applyShot` /
+  `apply_shot` set the interpolation on the camera's position and rotation
+  keys after writing them. `"smooth"` is Studio's default curve. `"ease_in"`
+  starts gently and arrives at speed (a two-key move is `t²`), and
+  `"ease_out"` is the reverse. Both use Hermite keys with tangents computed
+  per control, so speed stays continuous through interior waypoints.
+  `CinematicAnimatedShot` / `applyAnimatedShot` take `easing` too. The
+  low-level `DazNode.set_transform_key_interpolation()` /
+  `setTransformKeyInterpolation()` sets per-key interpolation directly. Both
+  fields are optional, and plans without them serialise as before. Live-verified
+  on Studio 6.26.
+
 ## [2.16.0] - 2026-11-23
 
 Plugin, dazpy and daz-ts release: plugin and dazpy 2.16.0, daz-ts 0.2.0.

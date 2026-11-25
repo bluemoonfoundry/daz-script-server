@@ -64,6 +64,14 @@ CAMERA_ANGLES: Mapping[str, float] = {
 
 COMPOSITIONS: Tuple[str, ...] = ("center", "left_third", "right_third")
 
+KeyInterpolation = Literal["linear", "constant", "smooth"]
+CameraEasing = Literal["linear", "smooth", "ease_in", "ease_out"]
+
+#: :class:`CameraKeyframe` ``interpolation`` values (the segment to the next key).
+KEY_INTERPOLATIONS: Tuple[str, ...] = ("linear", "constant", "smooth")
+#: :class:`Keyframed` ``easing`` values (the whole move).
+CAMERA_EASINGS: Tuple[str, ...] = ("linear", "smooth", "ease_in", "ease_out")
+
 #: Daz camera "Frame Width" default (mm), and the height/width ratio used when
 #: nothing sets a resolution -- the same defaults scene recipes use. Despite its
 #: name, Studio applies Frame Width to the frame *height* at any aspect
@@ -328,6 +336,11 @@ class CameraKeyframe(_Model):
             *look_at* -- see :func:`~dazpy._shot_geometry.resolve_target`.
         rotation: Explicit ``(x, y, z)`` degrees for this waypoint. Ignored
             if *look_at* is set.
+        interpolation: How Studio moves from this waypoint to the next:
+            ``"linear"``, ``"constant"`` (hold, then cut) or ``"smooth"``
+            (Studio's default curve). Overrides the move's
+            :attr:`Keyframed.easing` for this segment; ``None`` follows it.
+            Ignored on the last waypoint.
     """
 
     frame: int
@@ -335,6 +348,11 @@ class CameraKeyframe(_Model):
     look_at: Optional[Target] = None
     look_at_offset_cm: float = 0.0
     rotation: Optional[Tuple[float, float, float]] = None
+    interpolation: Optional[KeyInterpolation] = None
+
+    def __post_init__(self) -> None:
+        if self.interpolation is not None:
+            _check_enum(self.interpolation, KEY_INTERPOLATIONS, "interpolation")
 
 
 CameraKeyframe._codec = {"position": _vec, "look_at": _opt_target, "rotation": _floats(3)}
@@ -372,13 +390,30 @@ class Keyframed(_Model):
 
     Waypoints must be strictly ascending (at least two), and either every
     waypoint specifies an orientation (*look_at*/*rotation*) or none does.
+
+    *easing* shapes the whole move, on position and rotation:
+
+    - ``None``: leave Studio's interpolation as it is (new keys are smooth).
+    - ``"linear"``: constant speed along each segment, sharp turns at waypoints.
+    - ``"smooth"``: Studio's default curve: starts and stops gently, passes
+      through interior waypoints without a speed jump.
+    - ``"ease_in"``: starts gently, arrives at speed (a two-waypoint move is
+      ``t**2``).
+    - ``"ease_out"``: leaves at speed, stops gently (``2t - t**2``).
+
+    A waypoint's own :attr:`CameraKeyframe.interpolation` overrides *easing*
+    for the segment after it. See
+    :meth:`~dazpy.DazNode.set_transform_key_interpolation` for the curves.
     """
 
     _kind: ClassVar[str] = "keyframed"
 
     keyframes: Tuple[CameraKeyframe, ...]
+    easing: Optional[CameraEasing] = None
 
     def __post_init__(self) -> None:
+        if self.easing is not None:
+            _check_enum(self.easing, CAMERA_EASINGS, "easing")
         if len(self.keyframes) < 2:
             raise ValueError("CinematicAnimatedShot.keyframes needs at least two waypoints")
         frames = [kf.frame for kf in self.keyframes]
@@ -393,6 +428,18 @@ class Keyframed(_Model):
     @property
     def has_orientation(self) -> bool:
         return self.keyframes[0].look_at is not None or self.keyframes[0].rotation is not None
+
+    def key_interpolation(self) -> Optional[Tuple[Tuple[Optional[str], ...], bool, bool]]:
+        """``(kinds, fast_start, fast_end)`` for
+        :meth:`~dazpy.DazNode.set_transform_key_interpolation`, one kind per
+        waypoint; ``None`` when neither *easing* nor any waypoint asks for one.
+        """
+        base = {None: None, "linear": "linear", "smooth": "smooth",
+                "ease_in": "hermite", "ease_out": "hermite"}[self.easing]
+        kinds = tuple(kf.interpolation or base for kf in self.keyframes)
+        if all(k is None for k in kinds):
+            return None
+        return kinds, self.easing == "ease_out", self.easing == "ease_in"
 
 
 Keyframed._codec = {"keyframes": _tuple_of(CameraKeyframe)}
@@ -935,6 +982,12 @@ def apply_shot(
                 cam.set_rotation_at_frame(kf.frame, *look_at_euler(kf.position, target))
             elif kf.rotation is not None:
                 cam.set_rotation_at_frame(kf.frame, *kf.rotation)
+        plan = movement.key_interpolation()
+        if plan is not None:
+            kinds, fast_start, fast_end = plan
+            cam.set_transform_key_interpolation(
+                [kf.frame for kf in movement.keyframes], kinds,
+                rotation=movement.has_orientation, fast_start=fast_start, fast_end=fast_end)
     elif isinstance(c, Framing):
         points = [_resolve_point(s, subjects) for s in c.subjects]
         pos, aim = framing_transform(points, c, shot.lens.focal_length,
@@ -963,6 +1016,7 @@ def apply_shot(
 
 __all__ = [
     "Target", "ShotSize", "CameraAngle", "Composition", "SHOT_SIZES", "CAMERA_ANGLES", "COMPOSITIONS",
+    "KeyInterpolation", "CameraEasing", "KEY_INTERPOLATIONS", "CAMERA_EASINGS",
     "Lens", "Framing", "Placement", "CameraKeyframe", "Orbit", "Keyframed", "FocusKey", "FocusPull",
     "GazeBeat", "BlockingBeat", "Storyboard", "RenderOutput", "AspectSettings",
     "Shot", "Sequence", "CoveragePlan", "shot_from_recipe_camera",

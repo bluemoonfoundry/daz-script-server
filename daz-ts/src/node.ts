@@ -8,6 +8,44 @@ import { DazMorph } from "./morph.js";
 import { DazProperty } from "./property.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 
+/** Segment kinds accepted by {@link DazNode.setTransformKeyInterpolation}. */
+export const TRANSFORM_KEY_KINDS = Object.freeze(["linear", "constant", "smooth", "hermite"] as const);
+export type TransformKeyKind = (typeof TRANSFORM_KEY_KINDS)[number];
+
+/** Options for {@link DazNode.setTransformKeyInterpolation}. */
+export interface TransformKeyInterpolationOptions {
+  /** Also set the X/Y/Z rotation controls. Defaults to `true`. */
+  rotation?: boolean;
+  /** Leave the first key at speed (`"hermite"` only). */
+  fastStart?: boolean;
+  /** Arrive at the last key at speed (`"hermite"` only). */
+  fastEnd?: boolean;
+}
+
+// _kiApply(control, frames, kinds, fastStart, fastEnd): identical to dazpy's
+// _KEY_INTERP_JS. Hermite tangents are value per tick (live-verified on Studio
+// 6.26: a two-key fast-end move samples exactly t^2). Studio's own TCB tangent
+// drops to zero after a non-TCB key, so eased moves write every segment as
+// Hermite rather than mixing.
+const KEY_INTERP_JS =
+  "function _kiFast(s, m) { var q = 2 * s - m; if (s > 0) return Math.min(Math.max(q, s), 3 * s); if (s < 0) return Math.max(Math.min(q, s), 3 * s); return 0; }\n" +
+  "function _kiApply(c, F, K, fs, fe) {\n" +
+  "  var n = F.length, ts = Scene.getTimeStep(), t = [], v = [], T = [], i, k;\n" +
+  "  for (k = 0; k < n; k++) { t.push(F[k] * ts); v.push(c.getValue(t[k])); }\n" +
+  "  function sl(a) { return (v[a + 1] - v[a]) / (t[a + 1] - t[a]); }\n" +
+  "  for (k = 1; k < n - 1; k++) T[k] = (v[k + 1] - v[k - 1]) / (t[k + 1] - t[k - 1]);\n" +
+  "  T[0] = (fs && n > 1) ? _kiFast(sl(0), n > 2 ? T[1] : 0) : 0;\n" +
+  "  T[n - 1] = (fe && n > 1) ? _kiFast(sl(n - 2), n > 2 ? T[n - 2] : 0) : 0;\n" +
+  "  for (k = 0; k < n; k++) {\n" +
+  "    if (!K[k]) continue;\n" +
+  "    i = c.findKeyIndex(t[k]); if (i < 0 || c.getKeyTime(i) != t[k]) continue;\n" +
+  "    if (K[k] == \"linear\") c.setKeyInterpolationType(i, DzProperty.InterpLinear);\n" +
+  "    else if (K[k] == \"constant\") c.setKeyInterpolationType(i, DzProperty.InterpConstant);\n" +
+  "    else if (K[k] == \"smooth\" || k == n - 1) c.setKeyInterpolationType(i, DzProperty.InterpTCB, 0, 0, 0);\n" +
+  "    else c.setKeyInterpolationType(i, DzProperty.InterpHermite, T[k], T[k + 1], 0);\n" +
+  "  }\n" +
+  "}\n";
+
 /** Identifies a scene node by name or label. */
 export interface NodeIdentifier {
   /** The name or label string used to look up the node. */
@@ -211,6 +249,58 @@ export class DazNode extends DazElement {
     await this.client.execute(
       this.nodeScript(
         "_node.getXRotControl().deleteAllKeys(); _node.getYRotControl().deleteAllKeys(); _node.getZRotControl().deleteAllKeys();",
+      ),
+    );
+  }
+
+  /**
+   * Set how Studio interpolates this node's position (and rotation) keys.
+   *
+   * Low-level; `shots.Keyframed` `easing` and `shots.CameraKeyframe`
+   * `interpolation` build the arguments for a camera move. `kinds[k]` sets the
+   * segment from the key at `frames[k]` to the next key in `frames`, on every
+   * X/Y/Z position control (and rotation control when `rotation`):
+   *
+   * - `"linear"`: straight line (`DzProperty.InterpLinear`).
+   * - `"constant"`: hold, then jump (`InterpConstant`).
+   * - `"smooth"`: Studio's default curve (`InterpTCB`, tension/continuity/bias
+   *   0): Catmull-Rom tangents at interior keys, zero at the first and last key.
+   * - `"hermite"`: `InterpHermite` with the same Catmull-Rom tangents computed
+   *   per control, except at an end flagged `fastStart`/`fastEnd`, whose
+   *   tangent is the quadratic one (`2*slope - tangent at the other end of the
+   *   segment`) clamped to between the segment's average slope and three times
+   *   it, so the move neither stops there nor reverses. A two-key move with
+   *   `fastEnd` is exactly `t^2` (ease in); with `fastStart`, `2t - t^2`.
+   * - `null`: leave the key as it is.
+   *
+   * Tangents use only the keys in `frames`. Keys missing on a control are
+   * skipped; the last key's kind affects nothing after it.
+   *
+   * @throws Error Lengths differ, frames are not strictly ascending, or a kind is unknown.
+   */
+  async setTransformKeyInterpolation(
+    frames: readonly number[],
+    kinds: readonly (TransformKeyKind | null)[],
+    opts: TransformKeyInterpolationOptions = {},
+  ): Promise<void> {
+    const f = frames.map((x) => Math.trunc(x));
+    if (f.length !== kinds.length) {
+      throw new Error(`frames (${f.length}) and kinds (${kinds.length}) must have the same length`);
+    }
+    if (f.some((x, i) => i > 0 && x <= f[i - 1])) throw new Error("frames must be strictly ascending");
+    const bad = kinds.find((k) => k !== null && !(TRANSFORM_KEY_KINDS as readonly string[]).includes(k));
+    if (bad !== undefined) {
+      throw new Error(`unknown key interpolation '${bad}' (allowed: ${TRANSFORM_KEY_KINDS.join(", ")})`);
+    }
+    const axes = (opts.rotation ?? true) ? ["Pos", "Rot"] : ["Pos"];
+    const controls = axes.flatMap((a) => ["X", "Y", "Z"].map((c) => `_node.get${c}${a}Control()`)).join(", ");
+    await this.client.execute(
+      this.nodeScript(
+        KEY_INTERP_JS +
+          `var _F = ${JSON.stringify(f).replace(/,/g, ", ")}, _K = ${JSON.stringify(kinds).replace(/,/g, ", ")}, _C = [${controls}];\n` +
+          `for (var _c = 0; _c < _C.length; _c++) ` +
+          `_kiApply(_C[_c], _F, _K, ${ScriptBuilder.serializeArg(Boolean(opts.fastStart))}, ` +
+          `${ScriptBuilder.serializeArg(Boolean(opts.fastEnd))});`,
       ),
     );
   }

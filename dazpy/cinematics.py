@@ -16,10 +16,11 @@ Each builder is a thin adapter over the typed models in :mod:`dazpy.shots`:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from .math3 import Vec3
 from .shots import (
+    CameraEasing,
     CameraKeyframe,
     AspectSettings,
     Framing,
@@ -332,12 +333,16 @@ class CinematicAnimatedShot:
         focal_distance: Passed to :attr:`~dazpy.DazCamera.focal_distance`
             once, when not ``None``; otherwise DAZ's current value is
             untouched.
+        easing: ``"linear"``, ``"smooth"``, ``"ease_in"`` or
+            ``"ease_out"``; see :class:`~dazpy.shots.Keyframed`. ``None``
+            keeps Studio's default curve.
     """
 
     keyframes: tuple[CameraKeyframe, ...]
     focal_length: float = 50.0
     depth_of_field: bool = False
     focal_distance: float | None = None
+    easing: Optional[CameraEasing] = None
 
     def to_shot(self, shot_id: str = "animated") -> Shot:
         """The equivalent :class:`~dazpy.shots.Shot`.
@@ -345,7 +350,7 @@ class CinematicAnimatedShot:
         Raises:
             ValueError: See :func:`apply_animated_shot`.
         """
-        move = Keyframed(keyframes=tuple(self.keyframes))
+        move = Keyframed(keyframes=tuple(self.keyframes), easing=self.easing)
         return Shot(
             id=shot_id,
             camera=Placement(position=move.keyframes[0].position),

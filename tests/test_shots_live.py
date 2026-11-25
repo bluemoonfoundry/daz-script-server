@@ -29,7 +29,7 @@ from dazpy.math3 import Quat, Vec3
 from dazpy import shot_library as sl
 from dazpy.shot_library import LineOfAction
 from dazpy.shots import (
-    Framing, Lens, Orbit, Placement, Shot, apply_shot, framing_transform,
+    CameraKeyframe, Framing, Keyframed, Lens, Orbit, Placement, Shot, apply_shot, framing_transform,
 )
 
 _SERVER_UP = False
@@ -209,6 +209,38 @@ class ShotsLiveTests(unittest.TestCase):
             self.assertVecClose(p.pos, k.position)
             self.assertAlmostEqual(p.pos.distance(target), 220.0, delta=POS_TOL)
             self.assertSameDirection(p.forward, target - p.pos)
+
+    def test_keyframed_easing_curves(self):
+        """v6rm: each easing lands on its analytic curve, on position and rotation."""
+        curves = {
+            "linear": lambda t: t,
+            "smooth": lambda t: 3 * t * t - 2 * t ** 3,  # Studio's two-key default
+            "ease_in": lambda t: t * t,
+            "ease_out": lambda t: 2 * t - t * t,
+        }
+        p0, p1, yaw1 = Vec3(300.0, 150.0, 200.0), Vec3(360.0, 150.0, 200.0), 40.0
+        for easing, curve in curves.items():
+            with self.subTest(easing=easing):
+                shot = Shot(id="e", camera=Placement(position=p0), movement=Keyframed(keyframes=(
+                    CameraKeyframe(0, p0, rotation=(0.0, 0.0, 0.0)),
+                    CameraKeyframe(24, p1, rotation=(0.0, yaw1, 0.0))), easing=easing))
+                cam = apply_shot(self.scene, shot, camera=self.camera(f"ease_{easing}"))
+                for p in self.readback(cam, [0, 6, 12, 18, 24]):
+                    f = curve(p.frame / 24)
+                    self.assertVecClose(p.pos, p0 + (p1 - p0) * f, msg=f"{easing} frame {p.frame}: {p.pos}")
+                    yaw = math.radians(yaw1 * f)
+                    self.assertSameDirection(p.forward, Vec3(-math.sin(yaw), 0.0, -math.cos(yaw)),
+                                             msg=f"{easing} frame {p.frame} facing")
+
+    def test_keyframed_constant_holds_until_next_key(self):
+        p0, p1 = Vec3(300.0, 150.0, 200.0), Vec3(360.0, 150.0, 200.0)
+        shot = Shot(id="c", camera=Placement(position=p0), movement=Keyframed(keyframes=(
+            CameraKeyframe(0, p0, interpolation="constant"), CameraKeyframe(24, p1))))
+        cam = apply_shot(self.scene, shot, camera=self.camera("hold"))
+        poses = self.readback(cam, [0, 12, 23, 24])
+        for p in poses[:3]:
+            self.assertVecClose(p.pos, p0)
+        self.assertVecClose(poses[3].pos, p1)
 
     def test_orbit_bake_sets_range_and_parks_on_last_frame(self):
         shot = Shot(id="o", camera=Framing(subjects=("alice",)), lens=Lens(focal_length=35),

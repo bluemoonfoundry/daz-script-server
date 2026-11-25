@@ -47,7 +47,13 @@ export { AxisRemap, BoundingBox, Quat, Vec3, Y_UP_TO_Z_UP } from "./math3.js";
 
 export { DazElement } from "./element.js";
 export { DazProperty } from "./property.js";
-export { DazNode, type NodeIdentifier } from "./node.js";
+export {
+  DazNode,
+  TRANSFORM_KEY_KINDS,
+  type NodeIdentifier,
+  type TransformKeyInterpolationOptions,
+  type TransformKeyKind,
+} from "./node.js";
 export { DazBone } from "./bone.js";
 export { DazCamera } from "./camera.js";
 export { DazLight } from "./light.js";
@@ -118,11 +124,13 @@ export {
   AspectSettings,
   BlockingBeat,
   CAMERA_ANGLES,
+  CAMERA_EASINGS,
   CoveragePlan,
   FocusKey,
   FocusPull,
   Framing,
   GazeBeat,
+  KEY_INTERPOLATIONS,
   Keyframed,
   Lens,
   Orbit,
@@ -137,7 +145,15 @@ export {
   framingTransform,
   shotFromRecipeCamera,
 } from "./shots.js";
-export type { ApplyShotOptions, CameraAngle, Composition, ShotSize, Target as ShotTarget } from "./shots.js";
+export type {
+  ApplyShotOptions,
+  CameraAngle,
+  CameraEasing,
+  Composition,
+  KeyInterpolation,
+  ShotSize,
+  Target as ShotTarget,
+} from "./shots.js";
 export { ContinuityIssue, DialogueBeat, LineOfAction, applyCoverage, shotName } from "./shotLibrary.js";
 export type { Positions as ShotPositions } from "./shotLibrary.js";
 

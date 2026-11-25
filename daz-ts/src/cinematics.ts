@@ -16,6 +16,8 @@ import { Vec3 } from "./math3.js";
 import type { DazCamera } from "./camera.js";
 import type { DazNode } from "./node.js";
 import type { DazScene } from "./scene.js";
+import { CAMERA_EASINGS, KEY_INTERPOLATIONS, keyInterpolationPlan } from "./shots.js";
+import type { CameraEasing, KeyInterpolation } from "./shots.js";
 
 async function resolveCamera(scene: DazScene, camera: DazCamera | undefined, name: string | undefined): Promise<DazCamera> {
   if (camera !== undefined) {
@@ -238,6 +240,11 @@ export interface CameraKeyframe {
   lookAtOffsetCm?: number;
   /** Explicit `(x, y, z)` degrees for this waypoint. Ignored if `lookAt` is set. */
   rotation?: [number, number, number];
+  /**
+   * How Studio moves from this waypoint to the next (`"linear"`, `"constant"`,
+   * `"smooth"`); overrides `CinematicAnimatedShot.easing` for this segment.
+   */
+  interpolation?: KeyInterpolation;
 }
 
 /**
@@ -261,6 +268,11 @@ export interface CinematicAnimatedShot {
   depthOfField?: boolean;
   /** Passed to `DazCamera.setFocalDistance` once, when set; otherwise DAZ's current value is untouched. */
   focalDistance?: number;
+  /**
+   * `"linear"`, `"smooth"`, `"ease_in"` or `"ease_out"`; see `shots.Keyframed`.
+   * Omitted keeps Studio's default curve.
+   */
+  easing?: CameraEasing;
 }
 
 /**
@@ -296,6 +308,17 @@ export async function applyAnimatedShot(scene: DazScene, shot: CinematicAnimated
     );
   }
 
+  if (shot.easing !== undefined && !CAMERA_EASINGS.includes(shot.easing)) {
+    throw new Error(`easing: '${shot.easing}' is not one of [${CAMERA_EASINGS.map((e) => `'${e}'`).join(", ")}]`);
+  }
+  for (const kf of shot.keyframes) {
+    if (kf.interpolation !== undefined && !KEY_INTERPOLATIONS.includes(kf.interpolation)) {
+      throw new Error(
+        `interpolation: '${kf.interpolation}' is not one of [${KEY_INTERPOLATIONS.map((e) => `'${e}'`).join(", ")}]`,
+      );
+    }
+  }
+
   const cam = await resolveCamera(scene, opts.camera, opts.name);
   await cam.setFocalLength(shot.focalLength ?? 50.0);
   await cam.setDepthOfField(shot.depthOfField ?? false);
@@ -317,6 +340,11 @@ export async function applyAnimatedShot(scene: DazScene, shot: CinematicAnimated
     } else if (kf.rotation !== undefined) {
       await cam.setRotationAtFrame(kf.frame, ...kf.rotation);
     }
+  }
+  const plan = keyInterpolationPlan(shot.keyframes.map((kf) => kf.interpolation), shot.easing);
+  if (plan !== null) {
+    const [kinds, fastStart, fastEnd] = plan;
+    await cam.setTransformKeyInterpolation(frames, kinds, { rotation: anyOriented, fastStart, fastEnd });
   }
   return cam;
 }
