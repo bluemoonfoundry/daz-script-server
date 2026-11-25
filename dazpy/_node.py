@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
@@ -1699,6 +1699,192 @@ class DazNode(DazElement):
         if raw["status"] == "no_subd":
             raise PropertyNotFoundError(f"No SubD levels on {self._identifier.value!r}")
         return {"previous": raw["previous"], "current": raw["current"]}
+
+    # ── dForce ───────────────────────────────────────────────────────────────
+
+    def _dforce_call(self, body: str, *, provider: bool = False) -> dict:
+        from ._dforce import DFORCE_FIND_JS, DFORCE_PROVIDER_JS
+        from .exceptions import DazError, NodeNotFoundError
+        js = DFORCE_FIND_JS + (DFORCE_PROVIDER_JS if provider else "") + body
+        raw = self._client.execute(ScriptBuilder.node_body_from_locator(self._locator, js)).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw.get("status") == "no_dforce":
+            raise DazError(
+                f"No dForce modifier on {self._identifier.value!r} (add one with "
+                f"add_dforce_dynamic_surface). Modifiers: {', '.join(raw.get('modifiers', []))}")
+        if raw.get("status") == "no_provider":
+            raise DazError(
+                f"No dForce simulation settings for surface {raw.get('material')!r} (is a dForce "
+                f"modifier attached?). Available: {', '.join(raw.get('available', []))}")
+        if raw.get("status") in ("no_shape", "no_materials", "unsupported"):
+            raise DazError(f"dForce surface settings unavailable: {raw['status']}")
+        return raw
+
+    _NO_DFORCE = 'if (!_m) return {status: "no_dforce", modifiers: _modifierNames()};'
+
+    def add_dforce_dynamic_surface(self) -> bool:
+        """Add a dForce Dynamic Surface modifier (Studio's own action, run on
+        this node alone).
+
+        Returns:
+            ``True`` if added, ``False`` if the node already had one.
+
+        Raises:
+            DazError: If the action ran but no dForce modifier appeared.
+        """
+        from .exceptions import DazError
+        raw = self._dforce_call("""
+            if (_findDForce()) return {status: "present"};
+            var act = MainWindow.getActionMgr().findAction("DzAddDForceModifierDynamicSurfaceAction");
+            if (!act) return {status: "no_action"};
+            Scene.selectAllNodes(false);
+            _node.select(true);
+            act.trigger();
+            return {status: _findDForce() ? "added" : "not_added"};
+        """)
+        if raw["status"] in ("not_added", "no_action"):
+            raise DazError(f"Adding a dForce Dynamic Surface failed ({raw['status']})")
+        return raw["status"] == "added"
+
+    def dforce_influence_weights(self) -> list[float] | None:
+        """Per-vertex dForce influence weights (0 = pinned, 1 = free), or
+        ``None`` when the modifier has no weight map yet."""
+        raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + """
+            var wm = _m.getInfluenceWeights();
+            if (!wm) return {status: "ok", weights: null};
+            var out = [];
+            for (var i = 0; i < wm.getNumWeights(); i++) out.push(wm.getFloatWeight(i));
+            return {status: "ok", weights: out};
+        """)
+        return raw["weights"]
+
+    def set_dforce_influence_weights(
+        self, default: float = 1.0, overrides: Mapping[int, float] | None = None
+    ) -> tuple[int, int]:
+        """Set every vertex's dForce influence to *default*, then *overrides*.
+
+        Returns:
+            ``(vertex_count, overrides_applied)``; out-of-range indices are skipped.
+
+        Raises:
+            DazError: If the vertex count is unknown (simulate the node once first).
+        """
+        from .exceptions import DazError
+        payload = json.dumps({str(int(k)): float(v) for k, v in (overrides or {}).items()})
+        raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + f"""
+            var n = _m.getTargetVertexCount ? _m.getTargetVertexCount() : 0;
+            if (!n) {{ var ex = _m.getInfluenceWeights(); n = ex ? ex.getNumWeights() : 0; }}
+            if (!n) return {{status: "no_vertex_count"}};
+            var over = {payload}, wm = new DzWeightMap(), applied = 0;
+            wm.setNumWeights(n);
+            for (var i = 0; i < n; i++) wm.setFloatWeight(i, {float(default)!r});
+            for (var k in over) {{
+                var idx = parseInt(k, 10);
+                if (idx >= 0 && idx < n) {{ wm.setFloatWeight(idx, over[k]); applied++; }}
+            }}
+            _m.setInfluenceWeights(wm);
+            return {{status: "ok", vertex_count: n, overridden: applied}};
+        """)
+        if raw["status"] == "no_vertex_count":
+            raise DazError("dForce vertex count unknown: simulate this node once, then retry")
+        return int(raw["vertex_count"]), int(raw["overridden"])
+
+    def set_dforce_property(self, name: str, value: float) -> dict:
+        """Set a property on this node's dForce modifier (by name or label,
+        case-insensitive). Returns modifier, property, old_value, new_value.
+
+        Raises:
+            PropertyNotFoundError: Lists the modifier's property names.
+        """
+        from .exceptions import PropertyNotFoundError
+        raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + f"""
+            var want = {json.dumps(name.lower())}, p = null, names = [];
+            for (var i = 0; i < _m.getNumProperties(); i++) {{
+                var q = _m.getProperty(i);
+                names.push(q.getName());
+                if (!p && (q.getName().toLowerCase() === want || q.getLabel().toLowerCase() === want)) p = q;
+            }}
+            if (!p) return {{status: "no_property", available: names}};
+            var old = p.getValue();
+            p.setValue({float(value)!r});
+            return {{status: "ok", modifier: _m.className(), property: p.getName(),
+                     old: old, new: p.getValue()}};
+        """)
+        if raw["status"] == "no_property":
+            raise PropertyNotFoundError(
+                f"dForce property {name!r} not found. Available: {', '.join(raw['available'])}")
+        return {"modifier": raw["modifier"], "property": raw["property"],
+                "old_value": raw["old"], "new_value": raw["new"]}
+
+    def dforce_surface_properties(self, material: str | None = None) -> tuple[str, list[dict]]:
+        """dForce simulation settings of one surface (default: the first).
+
+        Returns:
+            ``(material_name, [{name, label, type, value}])``.
+        """
+        raw = self._dforce_call(f"""
+            var r = _provider({json.dumps(material)});
+            if (r.status !== "ok") return r;
+            var out = [];
+            for (var i = 0; i < r.provider.getNumProperties(); i++) {{
+                var q = r.provider.getProperty(i), num = q.inherits("DzNumericProperty");
+                out.push({{name: q.getName(), label: q.getLabel(), type: num ? "numeric" : "unknown",
+                          value: num ? q.getValue() : null}});
+            }}
+            return {{status: "ok", material: r.material, properties: out}};
+        """, provider=True)
+        return raw["material"], raw["properties"]
+
+    def set_dforce_surface_property(self, name: str, value: float,
+                                    material: str | None = None) -> dict:
+        """Set one numeric dForce surface setting. Returns material, property,
+        old_value, new_value.
+
+        Raises:
+            PropertyNotFoundError: Lists the surface's setting names.
+        """
+        from .exceptions import PropertyNotFoundError
+        raw = self._dforce_call(f"""
+            var r = _provider({json.dumps(material)});
+            if (r.status !== "ok") return r;
+            var p = r.provider.findProperty({json.dumps(name)}), names = [];
+            if (!p || !p.inherits("DzNumericProperty")) {{
+                for (var i = 0; i < r.provider.getNumProperties(); i++) names.push(r.provider.getProperty(i).getName());
+                return {{status: "no_property", available: names}};
+            }}
+            var old = p.getValue();
+            p.setValue({float(value)!r});
+            return {{status: "ok", material: r.material, property: p.getName(), old: old, new: p.getValue()}};
+        """, provider=True)
+        if raw["status"] == "no_property":
+            raise PropertyNotFoundError(
+                f"dForce surface setting {name!r} not found. Available: {', '.join(raw['available'])}")
+        return {"material": raw["material"], "property": raw["property"],
+                "old_value": raw["old"], "new_value": raw["new"]}
+
+    def freeze_dforce(self, on: bool = True) -> int:
+        """Freeze (bake) or release every dForce modifier on this node.
+
+        Freezing holds the simulated shape on the mesh -- Studio's dForce
+        "bake". Returns how many modifiers were changed.
+        """
+        from ._dforce import DFORCE_FIND_JS
+        script = ScriptBuilder.node_body_from_locator(self._locator, DFORCE_FIND_JS + f"""
+            var n = 0, hs = _hosts();
+            for (var h = 0; h < hs.length; h++) {{
+                var host = hs[h][1];
+                if (!host || typeof host.getNumModifiers !== "function") continue;
+                for (var i = 0; i < host.getNumModifiers(); i++) {{
+                    var m = host.getModifier(i);
+                    if (!_isDForce(m)) continue;
+                    var p = m.findPropertyByLabel("Freeze Simulation");
+                    if (p) {{ p.setValue({"true" if on else "false"}); n++; }}
+                }}
+            }}
+            return n;
+        """)
+        return int(self._client.execute(script).value or 0)
 
     def fitted_item_info(self) -> list["FittedItem"]:
         """Items fitted to this figure, with their kind, in one call.

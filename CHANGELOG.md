@@ -104,6 +104,20 @@ All notable changes to DazScript Server are documented here.
     and write Iray's Environment Mode on Studio 4 and 6.
 - `DazNode.subdivision()` / `set_subdivision(view, render=None)` read and set
   the mesh's SubD levels (the shape's `SubDIALevel` / `SubDRenderLevel`).
+- **dazpy dForce and Transfer Utility helpers** (daz-mcp-server-1kd):
+  - `DazNode.add_dforce_dynamic_surface()` adds the modifier.
+  - `dforce_influence_weights()` / `set_dforce_influence_weights(default,
+    overrides)` read and write the per-vertex weights.
+  - `set_dforce_property(name, value)` sets a modifier property.
+  - `dforce_surface_properties(material)` /
+    `set_dforce_surface_property(name, value, material)` read and write a
+    surface's simulation settings.
+  - `freeze_dforce(on=True)` freezes the simulated shape; this is dForce's
+    "bake".
+  - `DazScene.transfer_utility(source, target, ...)` runs the Transfer
+    Utility silently.
+  Errors list the modifiers or settings that are available. Verified live
+  on Studio 4.24, except the Transfer Utility (unit-tested only).
 - `DazNode.fitted_item_info()` lists the items fitted to a figure as
   `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
 

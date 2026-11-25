@@ -3713,6 +3713,90 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestDForceHelpers(unittest.TestCase):
+    """dForce surface/weights/properties/freeze and the Transfer Utility (1kd)."""
+
+    def _node(self, value):
+        client = _make_client(value)
+        return DazNode(client, NodeIdentifier("9", kind="element_id")), client
+
+    def test_add_dynamic_surface(self):
+        node, client = self._node({"status": "added"})
+        self.assertTrue(node.add_dforce_dynamic_surface())
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzAddDForceModifierDynamicSurfaceAction", script)
+        self.assertLess(script.index("_findDForce("), script.index("trigger()"))
+        node, _ = self._node({"status": "present"})
+        self.assertFalse(node.add_dforce_dynamic_surface())
+
+    def test_add_dynamic_surface_failed(self):
+        node, _ = self._node({"status": "not_added"})
+        with self.assertRaises(exceptions.DazError):
+            node.add_dforce_dynamic_surface()
+
+    def test_influence_weights(self):
+        node, client = self._node({"status": "ok", "weights": [1.0, 0.0]})
+        self.assertEqual(node.dforce_influence_weights(), [1.0, 0.0])
+        node, _ = self._node({"status": "ok", "weights": None})
+        self.assertIsNone(node.dforce_influence_weights())
+        node, _ = self._node({"status": "no_dforce", "modifiers": ["obj:DzMorph"]})
+        with self.assertRaises(exceptions.DazError) as ctx:
+            node.dforce_influence_weights()
+        self.assertIn("obj:DzMorph", str(ctx.exception))
+
+    def test_set_influence_weights(self):
+        node, client = self._node({"status": "ok", "vertex_count": 3, "overridden": 1})
+        self.assertEqual(node.set_dforce_influence_weights(1.0, {2: 0.0, 9: 0.5}), (3, 1))
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzWeightMap()", script)
+        self.assertIn('{"2": 0.0, "9": 0.5}', script)
+        node, _ = self._node({"status": "no_vertex_count"})
+        with self.assertRaises(exceptions.DazError):
+            node.set_dforce_influence_weights()
+
+    def test_set_dforce_property(self):
+        node, client = self._node({"status": "ok", "modifier": "DzDForceModifier",
+                                   "property": "Dynamics Strength", "old": 1.0, "new": 0.5})
+        r = node.set_dforce_property("dynamics strength", 0.5)
+        self.assertEqual((r["old_value"], r["new_value"]), (1.0, 0.5))
+        node, _ = self._node({"status": "no_property", "available": ["A", "B"]})
+        with self.assertRaises(exceptions.PropertyNotFoundError) as ctx:
+            node.set_dforce_property("Nope", 1)
+        self.assertIn("A, B", str(ctx.exception))
+
+    def test_surface_properties(self):
+        node, client = self._node({"status": "ok", "material": "Cloth", "properties": [
+            {"name": "Friction", "label": "Friction", "type": "numeric", "value": 0.2}]})
+        mat, props = node.dforce_surface_properties()
+        self.assertEqual((mat, props[0]["name"]), ("Cloth", "Friction"))
+        self.assertIn("findSimulationSettingsProvider", client.execute.call_args[0][0])
+        node, _ = self._node({"status": "ok", "material": "Cloth", "property": "Friction",
+                              "old": 0.2, "new": 0.4})
+        r = node.set_dforce_surface_property("Friction", 0.4, material="Cloth")
+        self.assertEqual(r["new_value"], 0.4)
+        node, _ = self._node({"status": "no_provider", "material": "Cloth", "available": []})
+        with self.assertRaises(exceptions.DazError):
+            node.dforce_surface_properties("Cloth")
+
+    def test_freeze_dforce(self):
+        node, client = self._node(2)
+        self.assertEqual(node.freeze_dforce(), 2)
+        self.assertIn('findPropertyByLabel("Freeze Simulation")', client.execute.call_args[0][0])
+
+    def test_transfer_utility(self):
+        from dazpy._node import DazNode as N
+        client = _make_client({"ok": True})
+        src, dst = N(client, NodeIdentifier("1", kind="element_id")), N(client, NodeIdentifier("2", kind="element_id"))
+        DazScene(client).transfer_utility(src, dst, morphs=True, fit_to_figure=True)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setSilentImporters(true)", script)
+        self.assertIn("setTransferMorphs(true)", script)
+        self.assertIn("setTransferUVs(false)", script)
+        client = _make_client({"ok": False})
+        with self.assertRaises(exceptions.DazError):
+            DazScene(client).transfer_utility(src, dst)
+
+
 class TestSubdivision(unittest.TestCase):
     def test_subdivision_reads_shape_levels(self):
         client = _make_client({"view": 1, "render": 3})

@@ -52,3 +52,67 @@ class DazDForce(DazModifier):
     def unfreeze(self) -> None:
         """Release a frozen simulation so it resumes following the dForce solve."""
         self.freeze_simulation = False
+
+
+# JS: locate the dForce modifier on _node (node, object or shape modifiers)
+# and list every modifier for error messages. Needs `_node` in scope.
+DFORCE_FIND_JS = """
+    function _isDForce(mod) {
+        if (!mod) return false;
+        var cn = (mod.className ? mod.className() : "").toLowerCase();
+        if (cn.indexOf("dforce") !== -1 || cn.indexOf("dynamics") !== -1) return true;
+        return typeof mod.findProperty === "function" &&
+               !!(mod.findProperty("Freeze Simulation") || mod.findProperty("Dynamics Strength"));
+    }
+    function _hosts() {
+        var obj = (typeof _node.getObject === "function") ? _node.getObject() : null;
+        var shape = obj && obj.getCurrentShape ? obj.getCurrentShape() : null;
+        return [["node", _node], ["obj", obj], ["shape", shape]];
+    }
+    function _findDForce() {
+        var hs = _hosts();
+        for (var h = 0; h < hs.length; h++) {
+            var host = hs[h][1];
+            if (!host || typeof host.getNumModifiers !== "function") continue;
+            for (var i = 0; i < host.getNumModifiers(); i++)
+                if (_isDForce(host.getModifier(i))) return host.getModifier(i);
+        }
+        return null;
+    }
+    function _modifierNames() {
+        var out = [], hs = _hosts();
+        for (var h = 0; h < hs.length; h++) {
+            var host = hs[h][1];
+            if (!host || typeof host.getNumModifiers !== "function") continue;
+            for (var i = 0; i < host.getNumModifiers(); i++) {
+                var m = host.getModifier(i);
+                out.push(hs[h][0] + ":" + (m && m.className ? m.className() : "unknown"));
+            }
+        }
+        return out;
+    }
+"""
+
+# JS: the dForce simulation-settings provider for a surface. Needs `_node`.
+DFORCE_PROVIDER_JS = """
+    function _provider(matName) {
+        var obj = _node.getObject ? _node.getObject() : null;
+        var shape = obj ? obj.getCurrentShape() : null;
+        if (!shape) return {status: "no_shape"};
+        if (typeof shape.findSimulationSettingsProvider !== "function") return {status: "unsupported"};
+        if (!matName) {
+            if (shape.getNumMaterials() === 0) return {status: "no_materials"};
+            matName = shape.getMaterial(0).getName();
+        }
+        var prov = shape.findSimulationSettingsProvider(matName);
+        if (!prov) {
+            var names = [];
+            if (typeof shape.getSimulationProviderNames === "function") {
+                var pn = shape.getSimulationProviderNames();
+                for (var i = 0; i < pn.length; i++) names.push(pn[i]);
+            }
+            return {status: "no_provider", material: matName, available: names};
+        }
+        return {status: "ok", material: matName, provider: prov};
+    }
+"""

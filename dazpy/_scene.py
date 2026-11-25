@@ -273,6 +273,47 @@ class DazScene:
         return [BatchPropertyResult(bool(r.get("ok")), r.get("node"), r.get("property"),
                                     r.get("value"), r.get("error")) for r in raw]
 
+    def transfer_utility(
+        self,
+        source: DazNode,
+        target: DazNode,
+        *,
+        binding: bool = False,
+        morphs: bool = False,
+        uvs: bool = False,
+        material_groups: bool = False,
+        face_groups: bool = False,
+        fit_to_figure: bool = False,
+        parent_to_figure: bool = False,
+        merge_hierarchies: bool = False,
+    ) -> None:
+        """Run Studio's Transfer Utility from *source* to *target*, silently.
+
+        Raises:
+            DazError: If ``doTransfer()`` reports failure.
+        """
+        from .exceptions import DazError
+        flags = {"setTransferBinding": binding, "setTransferMorphs": morphs,
+                 "setTransferUVs": uvs, "setTransferMaterialGroups": material_groups,
+                 "setTransferFaceGroups": face_groups, "setFitToFigure": fit_to_figure,
+                 "setParentToFigure": parent_to_figure, "setMergeHierarchies": merge_hierarchies}
+        calls = "\n".join(f"tu.{k}({'true' if v else 'false'});" for k, v in flags.items())
+        script = ScriptBuilder.iife(f"""
+            var src = {source._locator}, dst = {target._locator};
+            if (!src || !dst) return {{ok: false, missing: true}};
+            var tu = new DzTransferUtility();
+            tu.setSilentImporters(true);
+            tu.setSource(src);
+            tu.setTarget(dst);
+            {calls}
+            return {{ok: !!tu.doTransfer()}};
+        """)
+        raw = self._client.execute(script).value or {"ok": False}
+        if raw.get("missing"):
+            raise DazError("Transfer Utility: source or target node not found")
+        if not raw.get("ok"):
+            raise DazError("Transfer Utility: doTransfer() returned false")
+
     def find_nodes(self, query: str) -> list[NodeInfo]:
         """Every node whose label or internal name equals *query* exactly.
 
