@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import warnings
-from typing import Any
+from typing import Any, Sequence
 from dataclasses import dataclass
 
 from ._client import DazClient
@@ -319,6 +319,38 @@ class DazRenderSettings:
             return true;
         """)
         return bool(self._execute(script).value)
+
+    def set_environment_properties(
+        self, settings: Sequence[tuple[Sequence[str], object]]
+    ) -> list[str | None] | None:
+        """Set Iray environment ("Environment Options") properties in one call.
+
+        Each setting is ``(candidate_names, value)``; the first candidate
+        that exists (by name, then label) is set. Booleans and numbers are
+        written with ``setValue``.
+
+        Returns:
+            The matched name per setting (``None`` where no candidate
+            exists), or ``None`` overall when there is no environment node
+            yet (Studio 4 after ``Scene.clear()``, until the next Iray render).
+        """
+        rows = [[list(map(str, names)), value] for names, value in settings]
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return {{holder: false}};
+            var rows = {json.dumps(rows)}, matched = [];
+            for (var i = 0; i < rows.length; i++) {{
+                var hit = null, names = rows[i][0];
+                for (var j = 0; j < names.length && !hit; j++) {{
+                    var p = holder.findProperty(names[j]) || holder.findPropertyByLabel(names[j]);
+                    if (p) {{ p.setValue(rows[i][1]); hit = names[j]; }}
+                }}
+                matched.push(hit);
+            }}
+            return {{holder: true, matched: matched}};
+        """)
+        raw = self._execute(script).value or {"holder": False}
+        return list(raw["matched"]) if raw.get("holder") else None
 
     def _get_environment_property(self, name: str):
         script = ScriptBuilder.iife(f"""

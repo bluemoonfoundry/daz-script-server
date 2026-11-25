@@ -100,6 +100,8 @@ All notable changes to DazScript Server are documented here.
   - `DazScene.camera_info()` / `light_info()` list cameras (position, focal
     length) and lights (position, flux, on) in one call.
   - `DazLight.aim_at(x, y, z)`, like `DazCamera.aim_at`.
+  - `DazRenderSettings.set_environment_properties([(names, value), ...])`
+    sets Environment Options properties in one call.
   - `DazRenderSettings.environment_mode` / `set_environment_mode()` read
     and write Iray's Environment Mode on Studio 4 and 6.
 - `DazNode.subdivision()` / `set_subdivision(view, render=None)` read and set

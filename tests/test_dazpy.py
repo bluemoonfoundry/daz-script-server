@@ -3956,6 +3956,18 @@ class TestCameraLightHelpers(unittest.TestCase):
         DazLight(client, NodeIdentifier("3", kind="element_id")).aim_at(0, 150, 0)
         self.assertIn("_node.aimAt(new DzVec3(0.0, 150.0, 0.0))", client.execute.call_args[0][0])
 
+    def test_set_environment_properties(self):
+        from dazpy import DazRenderSettings
+        client = _make_client({"holder": True, "matched": ["Environment Intensity", None]})
+        r = DazRenderSettings(client).set_environment_properties(
+            [(["Environment Intensity", "Dome Intensity"], 0.5), (["Sun Intensity"], 2.0)])
+        self.assertEqual(r, ["Environment Intensity", None])
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzEnvironmentNode", script)
+        self.assertIn("findPropertyByLabel", script)
+        client = _make_client({"holder": False})
+        self.assertIsNone(DazRenderSettings(client).set_environment_properties([(["X"], 1)]))
+
     def test_environment_mode(self):
         from dazpy import DazRenderSettings
         client = _make_client(True)
