@@ -35,7 +35,9 @@
 //   uint32  indices[numVerts]                    only if flags & 1
 //   float32 verts[numFrames][numVerts][3]
 //   float32 bones[numFrames][numBones][3]
-// Errors are the usual JSON error body.
+// Errors are the usual JSON error body. Requests over MAX_FRAMES frames, or
+// whose payload would exceed MAX_OUTPUT_BYTES, are rejected with 400
+// INVALID_FIELD before any buffer is allocated.
 //
 // Per frame only the figure is evaluated (setFrame + forceCacheUpdate), not the
 // whole scene; the original frame and resolution level are restored afterwards
@@ -50,6 +52,10 @@ class GeometryExporter : public QObject {
 	Q_OBJECT
 public:
 	explicit GeometryExporter(QObject* parent = nullptr) : QObject(parent) {}
+	// Upper bounds for one request (W12). Evaluation runs on the main thread,
+	// so these also bound how long one request can hold Studio.
+	static const int     MAX_FRAMES       = 10000;
+	static const quint64 MAX_OUTPUT_BYTES = 512ull * 1024 * 1024;
 	// 200 → binary payload, anything else → JSON error body.
 	Q_INVOKABLE HttpResult exportFrames(const QByteArray& jsonBody);
 };

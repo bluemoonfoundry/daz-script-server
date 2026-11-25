@@ -971,8 +971,9 @@ paths:
                   `file_size_bytes` is the summed size of every file the job declared
                   (each frame of an animation render, whose `output_path` stays the
                   `{frame}` template).
-                  Failure or cancellation (`event: error`):
-                  `data: {"request_id":"rnd-1a2b3c4d","error":"...","duration_ms":1200}`
+                  Failure or cancellation (`event: error`; `error_code` is
+                  `SCRIPT_ERROR` or `JOB_CANCELLED`, same fields as `ErrorResponse`):
+                  `data: {"request_id":"rnd-1a2b3c4d","error_code":"SCRIPT_ERROR","error":"...","retryable":false,"duration_ms":1200}`
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

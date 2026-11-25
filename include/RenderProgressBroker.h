@@ -7,6 +7,7 @@
 
 // Full definition needed for QList<SubscriberQueue*> member
 #include "SceneEventBroker.h"
+#include "ErrorResponse.h"
 
 // Per-render SSE progress broker.
 //
@@ -60,7 +61,9 @@ public:
     // stored by setOutputPath() (-1 if none was stored).
     void notifyCompleted(const QString& requestId, int durationMs,
                          const QStringList& outputFiles);
-    void notifyFailed(const QString& requestId, const QString& error, int durationMs);
+    // code: SCRIPT_ERROR for a failed render, JOB_CANCELLED for a cancelled one.
+    void notifyFailed(const QString& requestId, ErrorCode code, const QString& error,
+                      int durationMs);
 
     // Close all queues on server stop so SSE handler threads can exit.
     void stopAll();

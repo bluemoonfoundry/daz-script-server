@@ -35,9 +35,11 @@ QString AuthenticationService::getTokenFilePath()
 {
     QString homeDir = QDir::homePath();
     QString dazDir  = homeDir + "/.daz3d";
+    // A failed mkpath is reported when the token write fails; the path is
+    // still returned so ArtifactRoots denies it either way (W13).
     QDir dir;
     if (!dir.exists(dazDir))
-        dir.mkpath(dazDir);
+        (void)dir.mkpath(dazDir);
     return dazDir + "/dazscriptserver_token.txt";
 }
 

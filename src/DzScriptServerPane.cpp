@@ -687,7 +687,9 @@ void DzScriptServerPane::startServer()
 	{
 		QStringList warnings;
 		m_artifactRoots.configure(m_artifactRoots.rawList(), &warnings);
-		m_artifactRoots.setDeniedDir(QFileInfo(AuthenticationService::getTokenFilePath()).absolutePath());
+		const QString deniedDir = QFileInfo(AuthenticationService::getTokenFilePath()).absolutePath();
+		if (!m_artifactRoots.setDeniedDir(deniedDir))
+			appendLog(QString("[WARN] Could not resolve %1; artifact downloads re-check it per request and are refused while it exists unresolved").arg(deniedDir));
 		for (const QString& w : warnings)
 			appendLog(QString("[WARN] %1").arg(w));
 		if (m_artifactRoots.isEnabled())
@@ -774,12 +776,16 @@ void DzScriptServerPane::startServer()
 	m_pServer->set_keep_alive_max_count(ServerConfig::HTTP_KEEP_ALIVE_MAX_COUNT);
 	m_pServer->set_keep_alive_timeout(ServerConfig::HTTP_KEEP_ALIVE_TIMEOUT_SEC);
 
-	// Set socket flags to improve resource handling
+	// Listening-socket options (W9). On Windows SO_REUSEADDR lets another
+	// local process bind the same address/port while we listen and steal
+	// connections (tokens included), so take the port exclusively instead;
+	// Windows has no TIME_WAIT rebind problem to work around. On POSIX,
+	// SO_REUSEADDR only allows rebinding over TIME_WAIT and cannot be used to
+	// hijack an active listener, so keep it for fast restarts.
 	m_pServer->set_socket_options([](socket_t sock) {
-		// Enable address reuse to prevent "address already in use" errors
 		int yes = 1;
 #ifdef _WIN32
-		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&yes, sizeof(yes));
+		setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char*)&yes, sizeof(yes));
 #else
 		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 #endif
@@ -1843,18 +1849,16 @@ void DzScriptServerPane::applyPluginRoutes()
 
 			// Wrap path params + body into a single JSON envelope so the slot can
 			// access both without a separate signature.
-			// All string operations use QByteArray (Qt CRT) to avoid a heap mismatch
-			// between Qt's msvcr100 and DazScriptServer's ucrtbase.
+			// The envelope is QByteArray (Qt CRT) to avoid a heap mismatch between
+			// Qt's msvcr100 and DazScriptServer's ucrtbase; the params go through
+			// variantToJsonBytes so a '"' or '\' in a path segment stays valid
+			// JSON (W10).
 			QByteArray body;
 			if (!params.isEmpty()) {
-				QByteArray paramsJson = "{";
-				bool first = true;
-				for (auto it = params.begin(); it != params.end(); ++it) {
-					if (!first) paramsJson += ",";
-					first = false;
-					paramsJson += "\"" + it.key().toUtf8() + "\":\"" + it.value().toUtf8() + "\"";
-				}
-				paramsJson += "}";
+				QVariantMap paramMap;
+				for (auto it = params.begin(); it != params.end(); ++it)
+					paramMap.insert(it.key(), it.value());
+				const QByteArray paramsJson = JsonStd::variantToJsonBytes(paramMap);
 				QByteArray rawBody(req.body.c_str(), (int)req.body.size());
 				body = "{\"_pathParams\":" + paramsJson + ",\"_body\":" +
 				       (rawBody.isEmpty() ? QByteArray("null") : rawBody) + "}";
@@ -1898,8 +1902,10 @@ std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
 	QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
 	    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
 
-	std::string body = "{\"success\":true,\"id\":\"" + JsonStd::escape(id) + "\"}";
-	return {200, body};
+	QVariantMap body;
+	body.insert("success", true);
+	body.insert("id", QString::fromUtf8(id.c_str(), (int)id.size()));
+	return {200, JsonStd::variantToJson(body)};
 }
 
 bool DzScriptServerPane::lookupRegistryScript(const std::string& id, std::string& outScript) const
@@ -1949,7 +1955,7 @@ std::pair<int, std::string> DzScriptServerPane::getAsyncResultJson(const std::st
 void DzScriptServerPane::endProgressOfCancelledRender(const QString& requestId)
 {
 	if (RenderProgressBroker* broker = m_pRenderProgress)
-		broker->notifyFailed(requestId, "Cancelled before execution started", 0);
+		broker->notifyFailed(requestId, ErrorCode::JOB_CANCELLED, "Cancelled before execution started", 0);
 }
 
 std::pair<int, std::string> DzScriptServerPane::cancelAsyncRequestJson(const std::string& requestId,
@@ -3208,9 +3214,12 @@ HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArra
     // Server-owned per-job frame report (see buildAnimationRenderScript).
     // A random name, not the request ID: the script is built before the job
     // is submitted, and the name must not be guessable or reused.
-    QString reportToken = SecureRandom::generateHexToken(8);
+    // No weak fallback (W15): an 8-char QUuid is 32 bits and not CSPRNG-backed
+    // on Qt 4, so refuse the job instead.
+    const QString reportToken = SecureRandom::generateHexToken(8);
     if (reportToken.isEmpty())
-        reportToken = QUuid::createUuid().toString().mid(1, 8);
+        return HttpResult(503, stdToQBA(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE,
+            "secure random source unavailable; cannot create the render's frame report")));
     const QString frameReportFile =
         QDir(QDir::tempPath()).filePath("dss-frames-" + reportToken + ".jsonl");
 
@@ -3689,7 +3698,9 @@ void DzScriptServerPane::processNextAsyncRequest()
 			m_pRenderProgress->notifyCompleted(id, durationMs, outputFiles);
 		}
 		else
-			m_pRenderProgress->notifyFailed(id, errorMsg, durationMs);
+			m_pRenderProgress->notifyFailed(id,
+				wasCancelled ? ErrorCode::JOB_CANCELLED : ErrorCode::SCRIPT_ERROR,
+				errorMsg, durationMs);
 	}
 
 	m_metrics.recordRequest(executed && !wasCancelled);

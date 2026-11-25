@@ -90,16 +90,33 @@ void ArtifactRoots::configure(const QString& rawList, QStringList* outWarnings)
     m_aResolved  = resolved;
 }
 
-void ArtifactRoots::setDeniedDir(const QString& dir)
+bool ArtifactRoots::setDeniedDir(const QString& dir)
 {
-    m_sDenied = realPathOfDir(dir);
+    m_sDeniedRaw = QDir::cleanPath(dir);
+    m_sDenied    = realPathOfDir(m_sDeniedRaw);
+    return !m_sDenied.isEmpty();
+}
+
+bool ArtifactRoots::deniedDirAllows(const QString& real) const
+{
+    if (m_sDeniedRaw.isEmpty()) return true;   // nothing to deny
+    QString denied = m_sDenied;
+    if (denied.isEmpty()) {
+        // Unresolved at start (W13): the folder may have been created since,
+        // so resolve it now. If it exists but still can't be resolved, we
+        // can't tell whether the file is inside it: fail closed.
+        denied = realPathOfDir(m_sDeniedRaw);
+        if (denied.isEmpty())
+            return !QFileInfo(m_sDeniedRaw).exists();
+    }
+    return !isUnder(real, denied);
 }
 
 bool ArtifactRoots::allows(FILE* f) const
 {
     const QString real = realPathOf(f);
     if (real.isEmpty()) return false;   // can't tell where it is: refuse
-    if (!m_sDenied.isEmpty() && isUnder(real, m_sDenied)) return false;
+    if (!deniedDirAllows(real)) return false;
     if (!m_bEnabled) return true;
     for (int i = 0; i < m_aResolved.size(); ++i) {
         if (isUnder(real, m_aResolved.at(i))) return true;
