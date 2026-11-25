@@ -3734,6 +3734,12 @@ class TestCameraLightHelpers(unittest.TestCase):
         lights = DazScene(client).light_info()
         self.assertEqual((lights[0].flux, lights[0].on), (2000.0, True))
 
+    def test_light_aim_at(self):
+        from dazpy._light import DazLight
+        client = _make_client(None)
+        DazLight(client, NodeIdentifier("3", kind="element_id")).aim_at(0, 150, 0)
+        self.assertIn("_node.aimAt(new DzVec3(0.0, 150.0, 0.0))", client.execute.call_args[0][0])
+
     def test_environment_mode(self):
         from dazpy import DazRenderSettings
         client = _make_client(True)

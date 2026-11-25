@@ -49,6 +49,14 @@ class DazLight(DazNode):
         )
         self._client.execute(script)
 
+    def aim_at(self, x: float, y: float, z: float) -> None:
+        """Point the light at a world-space coordinate (``DzLight`` inherits
+        ``aimAt`` from ``DzCamera``; spot, distant and point lights all have it)."""
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator, f"_node.aimAt(new DzVec3({float(x)}, {float(y)}, {float(z)}));"
+        )
+        self._client.execute(script)
+
     @property
     def shadow_type(self) -> str | None:
         """Shadow rendering mode string (read-only)."""

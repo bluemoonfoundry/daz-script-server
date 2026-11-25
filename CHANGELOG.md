@@ -99,6 +99,7 @@ All notable changes to DazScript Server are documented here.
     ...), and returns the previous camera's label.
   - `DazScene.camera_info()` / `light_info()` list cameras (position, focal
     length) and lights (position, flux, on) in one call.
+  - `DazLight.aim_at(x, y, z)`, like `DazCamera.aim_at`.
   - `DazRenderSettings.environment_mode` / `set_environment_mode()` read
     and write Iray's Environment Mode on Studio 4 and 6.
 
