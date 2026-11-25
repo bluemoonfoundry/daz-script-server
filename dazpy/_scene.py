@@ -72,6 +72,37 @@ _RESOLVE_JS = """
 
 
 @dataclass(frozen=True)
+class CameraInfo:
+    """One scene camera, from :meth:`DazScene.camera_info`."""
+
+    index: int
+    label: str
+    name: str
+    type: str
+    element_id: int
+    position: tuple[float, float, float]
+    focal_length: float | None
+
+
+@dataclass(frozen=True)
+class LightInfo:
+    """One scene light, from :meth:`DazScene.light_info`.
+
+    ``flux`` is the light's "Flux" property (``None`` for light types
+    without one); ``on`` is whether the node is visible.
+    """
+
+    index: int
+    label: str
+    name: str
+    type: str
+    element_id: int
+    position: tuple[float, float, float]
+    flux: float | None
+    on: bool
+
+
+@dataclass(frozen=True)
 class BatchPropertyResult:
     """One operation's outcome from :meth:`DazScene.set_numeric_properties`."""
 
@@ -415,6 +446,90 @@ class DazScene:
             position=(float(pos[0]), float(pos[1]), float(pos[2])),
             camera=DazCamera(self._client, NodeIdentifier(raw["name"])) if in_scene else None,
         )
+
+    def set_viewport_camera(self, camera: "DazCamera | str") -> str | None:
+        """Look through *camera* in the active 3D viewport.
+
+        *camera* is a :class:`~dazpy.DazCamera`, or a label: a scene camera's,
+        or one of Studio's built-in view cameras (``"Perspective View"``,
+        ``"Front View"``, ...), which are not scene nodes.
+
+        Returns:
+            The label of the camera the viewport used before.
+
+        Raises:
+            NodeNotFoundError: If *camera* is not in the scene.
+            TypeError: If the node is not a camera.
+            RuntimeError: If there is no active 3D viewport.
+        """
+        from .exceptions import NodeNotFoundError
+        if isinstance(camera, str):
+            label = json.dumps(camera)
+            locator = f"""(function(){{
+                for (var i = 0; i < Scene.getNumCameras(); i++)
+                    if (Scene.getCamera(i).getLabel() === {label}) return Scene.getCamera(i);
+                var vm = (typeof MainWindow !== "undefined" && MainWindow) ? MainWindow.getViewportMgr() : null;
+                if (vm) for (var j = 0; j < vm.getNumViewCameras(); j++)
+                    if (vm.getViewCamera(j).getLabel() === {label}) return vm.getViewCamera(j);
+                return null;
+            }})()"""
+            ref = camera
+        else:
+            locator, ref = camera._locator, camera._identifier.value
+        script = ScriptBuilder.iife(f"""
+            var _cam = {locator};
+            if (!_cam) return {{status: "missing"}};
+            if (!_cam.inherits("DzCamera")) return {{status: "not_camera"}};
+            var _vm = (typeof MainWindow !== "undefined" && MainWindow) ? MainWindow.getViewportMgr() : null;
+            var _vp = _vm ? _vm.getActiveViewport() : null;
+            var _v3 = _vp ? _vp.get3DViewport() : null;
+            if (!_v3) return {{status: "no_viewport"}};
+            var _prev = _v3.getCamera();
+            _v3.setCamera(_cam);
+            return {{status: "ok", previous: _prev ? _prev.getLabel() : null}};
+        """)
+        raw = self._client.execute(script).value or {"status": "missing"}
+        if raw["status"] == "missing":
+            raise NodeNotFoundError(f"Camera not found: {ref!r}")
+        if raw["status"] == "not_camera":
+            raise TypeError(f"Node is not a camera: {ref!r}")
+        if raw["status"] == "no_viewport":
+            raise RuntimeError("No active 3D viewport")
+        return raw.get("previous")
+
+    def camera_info(self) -> list[CameraInfo]:
+        """Every scene camera with position and focal length, in one call."""
+        script = ScriptBuilder.iife("""
+            var out = [];
+            for (var i = 0; i < Scene.getNumCameras(); i++) {
+                var c = Scene.getCamera(i), p = c.getWSPos();
+                var fl = c.getFocalLengthControl ? c.getFocalLengthControl() : null;
+                out.push({index: i, label: c.getLabel(), name: c.getName(), type: c.className(),
+                          element_id: c.elementID, position: [p.x, p.y, p.z],
+                          focal_length: fl ? fl.getValue() : null});
+            }
+            return out;
+        """)
+        return [CameraInfo(r["index"], r["label"], r["name"], r["type"], int(r["element_id"]),
+                           tuple(float(v) for v in r["position"]), r.get("focal_length"))  # type: ignore[arg-type]
+                for r in self._client.execute(script).value or []]
+
+    def light_info(self) -> list[LightInfo]:
+        """Every scene light with position, flux and on/off state, in one call."""
+        script = ScriptBuilder.iife("""
+            var out = [];
+            for (var i = 0; i < Scene.getNumLights(); i++) {
+                var l = Scene.getLight(i), p = l.getWSPos(), f = l.findProperty("Flux");
+                out.push({index: i, label: l.getLabel(), name: l.getName(), type: l.className(),
+                          element_id: l.elementID, position: [p.x, p.y, p.z],
+                          flux: f ? f.getValue() : null, on: l.isVisible()});
+            }
+            return out;
+        """)
+        return [LightInfo(r["index"], r["label"], r["name"], r["type"], int(r["element_id"]),
+                          tuple(float(v) for v in r["position"]), r.get("flux"),  # type: ignore[arg-type]
+                          bool(r.get("on", True)))
+                for r in self._client.execute(script).value or []]
 
     def find_camera_by_label(self, label: str) -> "DazCamera":
         """Find a camera by its user-visible label.

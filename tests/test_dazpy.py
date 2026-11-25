@@ -3694,6 +3694,59 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestCameraLightHelpers(unittest.TestCase):
+    """viewport camera setter, camera/light listings, environment mode (qrd)."""
+
+    def test_set_viewport_camera(self):
+        from dazpy._camera import DazCamera
+        client = _make_client({"status": "ok", "previous": "Perspective View"})
+        cam = DazCamera(client, NodeIdentifier("12", kind="element_id"))
+        self.assertEqual(DazScene(client).set_viewport_camera(cam), "Perspective View")
+        script = client.execute.call_args[0][0]
+        self.assertIn("setCamera(_cam)", script)
+        self.assertIn("Scene.findNodeByElementID(12)", script)
+
+    def test_set_viewport_camera_by_view_label(self):
+        client = _make_client({"status": "ok", "previous": "Camera 1"})
+        DazScene(client).set_viewport_camera("Perspective View")
+        script = client.execute.call_args[0][0]
+        self.assertIn("getViewCamera(j)", script)
+        self.assertIn('"Perspective View"', script)
+
+    def test_set_viewport_camera_errors(self):
+        from dazpy._camera import DazCamera
+        for status, exc in (("missing", exceptions.NodeNotFoundError),
+                            ("not_camera", TypeError), ("no_viewport", RuntimeError)):
+            client = _make_client({"status": status})
+            with self.assertRaises(exc):
+                DazScene(client).set_viewport_camera(DazCamera(client, NodeIdentifier("1")))
+
+    def test_camera_and_light_info(self):
+        client = _make_client([{"index": 0, "label": "Camera 1", "name": "Camera_1",
+                                "type": "DzBasicCamera", "element_id": 7,
+                                "position": [0, 150, 300], "focal_length": 65.0}])
+        cams = DazScene(client).camera_info()
+        self.assertEqual((cams[0].label, cams[0].position, cams[0].focal_length),
+                         ("Camera 1", (0.0, 150.0, 300.0), 65.0))
+        client = _make_client([{"index": 0, "label": "Key", "name": "Key", "type": "DzSpotLight",
+                                "element_id": 8, "position": [1, 2, 3], "flux": 2000.0,
+                                "on": True}])
+        lights = DazScene(client).light_info()
+        self.assertEqual((lights[0].flux, lights[0].on), (2000.0, True))
+
+    def test_environment_mode(self):
+        from dazpy import DazRenderSettings
+        client = _make_client(True)
+        self.assertTrue(DazRenderSettings(client).set_environment_mode("scene_only"))
+        script = client.execute.call_args[0][0]
+        self.assertIn('findProperty("Environment Mode")', script)
+        self.assertIn("setValue(3)", script)
+        with self.assertRaises(ValueError):
+            DazRenderSettings(client).set_environment_mode("sunny")
+        client = _make_client(2)
+        self.assertEqual(DazRenderSettings(client).environment_mode, "sun_sky")
+
+
 class TestSkeletonLookAt(unittest.TestCase):
     def _skel(self, value):
         from dazpy._skeleton import DazSkeleton

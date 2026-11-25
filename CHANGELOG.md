@@ -92,6 +92,15 @@ All notable changes to DazScript Server are documented here.
   Genesis eyes (oriented 180° about Z) aim correctly. A final weight of 1
   aims the last bone exactly, within its joint limits. Live-verified on
   Genesis 9 and Genesis 8 Female: under 1° error within joint limits.
+- **dazpy viewport, camera/light listing and environment mode**
+  (daz-mcp-server-qrd):
+  - `DazScene.set_viewport_camera(camera_or_label)` takes a `DazCamera` or
+    a label, including Studio's built-in view cameras ("Perspective View",
+    ...), and returns the previous camera's label.
+  - `DazScene.camera_info()` / `light_info()` list cameras (position, focal
+    length) and lights (position, flux, on) in one call.
+  - `DazRenderSettings.environment_mode` / `set_environment_mode()` read
+    and write Iray's Environment Mode on Studio 4 and 6.
 
 ### Fixed
 

@@ -285,6 +285,41 @@ class DazRenderSettings:
             return {render_element};
         }})()"""
 
+    _ENVIRONMENT_MODES = {"dome_and_scene": 0, "dome_only": 1, "sun_sky": 2, "scene_only": 3}
+
+    @property
+    def environment_mode(self) -> str | None:
+        """Iray "Environment Mode": ``"dome_and_scene"``, ``"dome_only"``,
+        ``"sun_sky"`` or ``"scene_only"``; ``None`` when there is no
+        environment node yet (Studio 4 after ``Scene.clear()``, until the
+        next Iray render creates it)."""
+        value = self._get_environment_property("Environment Mode")
+        by_value = {v: k for k, v in self._ENVIRONMENT_MODES.items()}
+        return by_value.get(int(value)) if value is not None else None
+
+    def set_environment_mode(self, mode: str) -> bool:
+        """Set the Iray "Environment Mode" (see :attr:`environment_mode`).
+
+        Returns:
+            ``False`` if there is no environment node to set (Studio 4
+            after ``Scene.clear()``, until the next Iray render).
+
+        Raises:
+            ValueError: For an unknown *mode*.
+        """
+        if mode not in self._ENVIRONMENT_MODES:
+            raise ValueError(
+                f"environment mode must be one of {', '.join(self._ENVIRONMENT_MODES)}; got {mode!r}")
+        script = ScriptBuilder.iife(f"""
+            var holder = {self._environment_holder()};
+            if (!holder) return false;
+            var p = holder.findProperty("Environment Mode");
+            if (!p) return false;
+            p.setValue({self._ENVIRONMENT_MODES[mode]});
+            return true;
+        """)
+        return bool(self._execute(script).value)
+
     def _get_environment_property(self, name: str):
         script = ScriptBuilder.iife(f"""
             var holder = {self._environment_holder()};
