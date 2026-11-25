@@ -14,7 +14,9 @@ TRANSFORM_KEY_KINDS = ("linear", "constant", "smooth", "hermite")
 # DazNode.set_transform_key_interpolation. Hermite tangents are value per tick
 # (live-verified on Studio 6.26: a two-key fast-end move samples exactly t^2).
 # Studio's own TCB tangent drops to zero after a non-TCB key, so eased moves
-# write every segment as Hermite rather than mixing.
+# write every segment as Hermite rather than mixing. The type is written with
+# setValue(tm, value, interp, p0, p1, p2) on the key's own value: Studio 4.24
+# ignores setKeyInterpolationType on an existing key (live-verified).
 _KEY_INTERP_JS = (
     "function _kiFast(s, m) { var q = 2 * s - m; "
     "if (s > 0) return Math.min(Math.max(q, s), 3 * s); "
@@ -29,10 +31,10 @@ _KEY_INTERP_JS = (
     "  for (k = 0; k < n; k++) {\n"
     "    if (!K[k]) continue;\n"
     "    i = c.findKeyIndex(t[k]); if (i < 0 || c.getKeyTime(i) != t[k]) continue;\n"
-    "    if (K[k] == \"linear\") c.setKeyInterpolationType(i, DzProperty.InterpLinear);\n"
-    "    else if (K[k] == \"constant\") c.setKeyInterpolationType(i, DzProperty.InterpConstant);\n"
-    "    else if (K[k] == \"smooth\" || k == n - 1) c.setKeyInterpolationType(i, DzProperty.InterpTCB, 0, 0, 0);\n"
-    "    else c.setKeyInterpolationType(i, DzProperty.InterpHermite, T[k], T[k + 1], 0);\n"
+    "    if (K[k] == \"linear\") c.setValue(t[k], v[k], DzProperty.InterpLinear, 0, 0, 0);\n"
+    "    else if (K[k] == \"constant\") c.setValue(t[k], v[k], DzProperty.InterpConstant, 0, 0, 0);\n"
+    "    else if (K[k] == \"smooth\" || k == n - 1) c.setValue(t[k], v[k], DzProperty.InterpTCB, 0, 0, 0);\n"
+    "    else c.setValue(t[k], v[k], DzProperty.InterpHermite, T[k], T[k + 1], 0);\n"
     "  }\n"
     "}\n"
 )
