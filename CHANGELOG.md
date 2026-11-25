@@ -128,6 +128,18 @@ All notable changes to DazScript Server are documented here.
   candidate dials and single bone axes at timeline frames, in one call each.
 - `DazNode.key_color(name, [(frame, (r, g, b)), ...])` keyframes a color
   property, such as a light's "Color".
+- **dazpy content, asset and Morph Loader Pro helpers** (daz-mcp-server-z2h):
+  - `DazScene.content_categories(parent)` / `content_files(category)` list
+    content-library folders and `.duf` files across every content
+    directory.
+  - `DazScene.strand_hair_nodes()` lists Strand-Based Hair nodes.
+  - `DazNode.save_support_asset(path, ...)` saves the node silently with
+    `DzNodeSupportAssetFilter`.
+  - `DazNode.load_morph(obj_path, ...)` builds a morph from an OBJ with
+    Morph Loader Pro and returns `MorphLoadResult` (morph name and the
+    loader's log).
+  Verified live on Studio 4.24, except the support-asset save itself, which
+  writes into the content library; its validation was checked.
 - `DazNode.fitted_item_info()` lists the items fitted to a figure as
   `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
 

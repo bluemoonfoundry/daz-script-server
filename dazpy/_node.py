@@ -41,6 +41,7 @@ _KEY_INTERP_JS = (
 
 if TYPE_CHECKING:
     from ._material import DazMaterial, MaterialInfo
+    from ._morph_loader import MorphLoadResult
     from ._modifier import DazModifier
     from ._morph import DazMorph
     from ._dforce import DazDForce
@@ -1328,6 +1329,104 @@ class DazNode(DazElement):
         if raw["status"] == "missing":
             raise PropertyNotFoundError(f"No color property {name!r} on {self._identifier.value!r}")
         return int(raw["keys"])
+
+    def load_morph(self, obj_path: str, *, control_node: "DazNode | None" = None,
+                   **options: Any) -> "MorphLoadResult":
+        """Create a morph on this node from an OBJ with Morph Loader Pro.
+
+        Args:
+            obj_path: The OBJ to load (on the Studio host).
+            control_node: Node owning ``control_property_name`` (default: this node).
+            **options: Morph Loader Pro settings in snake_case: ``morph_name``,
+                ``load_mode`` (``"EntireFigure"``, ``"SelectedNodes"``,
+                ``"PrimaryNode"``, ``"SingleSkinFigure"``,
+                ``"SingleSkinFigureFromGraft"``), ``overwrite_mode``
+                (``"MakeUnique"``, ``"DeltasAndERCLinks"``, ``"DeltasOnly"``),
+                ``mirroring``, ``scale``, ``delta_tolerance``, ``subdivision``,
+                ``subdivision_mapping``, ``reverse_deformations``,
+                ``reverse_deformations_pose_path``, ``control_property_name``,
+                ``control_property_erc_type``, ``property_group_path``, ... (see
+                ``dazpy/_morph_loader.py`` for the full list).
+
+        Raises:
+            DazError: If the plugin is missing or the loader reports a problem.
+        """
+        from ._morph_loader import load_morph
+        return load_morph(self, obj_path, control_node=control_node, **options)
+
+    def save_support_asset(
+        self,
+        output_path: str,
+        *,
+        vendor: str = "Author",
+        product: str = "Product",
+        item: str | None = None,
+        category: str | None = None,
+        compatibility_base: str | None = None,
+        compatible_with: str | None = None,
+        smart_parent: bool | None = None,
+        write_geometry: bool | None = None,
+        write_parameters: bool | None = None,
+        write_uvs: bool | None = None,
+        force_unique_ids: bool | None = None,
+        compress: bool | None = None,
+    ) -> str:
+        """Save this node as a support asset (``DzNodeSupportAssetFilter``), silently.
+
+        *output_path* must be inside a configured content directory.
+
+        Returns:
+            The content directory the asset was saved under.
+
+        Raises:
+            ValueError: If *output_path* is outside every content directory.
+            DazError: If the filter is unavailable or the save fails.
+        """
+        from .exceptions import DazError, NodeNotFoundError
+        strings = {"VendorName": vendor, "ProductName": product, "ItemName": item,
+                   "Category": category, "CompatibilityBase": compatibility_base,
+                   "CompatibleWith": compatible_with}
+        flags = {"SmartParentProp": smart_parent, "WriteGeometryDef": write_geometry,
+                 "WriteParameterDefs": write_parameters, "WriteUVDefs": write_uvs,
+                 "ForceUniqueIDs": force_unique_ids, "CompressOutput": compress}
+        sets = [f"settings.setStringValue({json.dumps(k)}, {json.dumps(v)});"
+                for k, v in strings.items() if v is not None]
+        sets += [f"settings.setStringValue({json.dumps(k)}, {json.dumps('yes' if v else 'no')});"
+                 for k, v in flags.items() if v is not None]
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            if (typeof DzNodeSupportAssetFilter !== "function") return {{status: "unavailable"}};
+            var out = {json.dumps(output_path)};
+            function norm(p) {{ return String(p).replace(/\\\\/g, "/").toLowerCase(); }}
+            var cm = App.getContentMgr(), base = null, dirs = [];
+            for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
+                var d = cm.getContentDirectoryPath(i);
+                dirs.push(d);
+                if (norm(out).indexOf(norm(d)) === 0) base = d;
+            }}
+            if (!base) return {{status: "outside", dirs: dirs}};
+            var filter = new DzNodeSupportAssetFilter();
+            filter.setNode(_node);
+            var settings = new DzFileIOSettings();
+            filter.getDefaultOptions(settings);
+            settings.setStringValue("RunSilent", "yes");
+            settings.setStringValue("BaseDataPath", base);
+            if (!{json.dumps(item is not None)}) settings.setStringValue("ItemName", _node.getLabel());
+            {' '.join(sets)}
+            var err = filter.doSave(settings, out, "");
+            var code = (err && typeof err.valueOf === "function") ? err.valueOf() : (err || 0);
+            return code ? {{status: "failed", code: code}} : {{status: "ok", base: base}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "outside":
+            raise ValueError("output_path must be inside a configured content directory: "
+                             + ", ".join(raw.get("dirs", [])))
+        if raw["status"] == "unavailable":
+            raise DazError("DzNodeSupportAssetFilter is not available in this DAZ Studio")
+        if raw["status"] == "failed":
+            raise DazError(f"DzNodeSupportAssetFilter.doSave failed (error {raw.get('code')})")
+        return raw["base"]
 
     def find_property_by_label(self, label: str) -> "DazProperty | None":
         """Find a node-level property by its user-visible label.

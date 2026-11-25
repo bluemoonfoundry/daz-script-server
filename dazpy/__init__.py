@@ -16,7 +16,16 @@ Typical usage::
 __version__ = "2.16.0"
 
 from ._client import DazClient
-from ._scene import BatchPropertyResult, CameraInfo, DazScene, LightInfo, ViewportCamera
+from ._scene import (
+    BatchPropertyResult,
+    CameraInfo,
+    ContentCategory,
+    ContentFile,
+    DazScene,
+    LightInfo,
+    ViewportCamera,
+)
+from ._morph_loader import MorphLoadResult
 from ._node import (
     DazNode,
     FittedItem,
@@ -171,6 +180,9 @@ __all__ = [
     "LookAtResult",
     "BatchPropertyResult",
     "CameraInfo",
+    "ContentCategory",
+    "ContentFile",
+    "MorphLoadResult",
     "LightInfo",
     "PropertyDetails",
     "DazSkeleton",

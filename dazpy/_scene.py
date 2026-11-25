@@ -103,6 +103,24 @@ class LightInfo:
 
 
 @dataclass(frozen=True)
+class ContentCategory:
+    """A sub-folder of the content library, from :meth:`DazScene.content_categories`."""
+
+    name: str
+    path: str
+    duf_count: int
+
+
+@dataclass(frozen=True)
+class ContentFile:
+    """A ``.duf`` in a content-library folder, from :meth:`DazScene.content_files`."""
+
+    name: str
+    filename: str
+    full_path: str
+
+
+@dataclass(frozen=True)
 class BatchPropertyResult:
     """One operation's outcome from :meth:`DazScene.set_numeric_properties`."""
 
@@ -339,6 +357,78 @@ class DazScene:
             raise DazError("Transfer Utility: source or target node not found")
         if not raw.get("ok"):
             raise DazError("Transfer Utility: doTransfer() returned false")
+
+    def content_categories(self, parent: str = "") -> list[ContentCategory]:
+        """Sub-folders of *parent* (content-relative) across every content
+        directory, merged by name, with their ``.duf`` counts."""
+        rel = json.dumps(parent.strip("/"))
+        script = ScriptBuilder.iife(f"""
+            var cm = App.getContentMgr(), rel = {rel}, seen = {{}}, out = [];
+            for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
+                var dir = cm.getContentDirectory(i);
+                if (!dir) continue;
+                var d = new DzDir(rel ? dir.fullPath + "/" + rel : dir.fullPath);
+                if (!d.exists()) continue;
+                var subs = d.entryList([], DzDir.Dirs | DzDir.NoDotAndDotDot);
+                for (var j = 0; j < subs.length; j++) {{
+                    if (seen[subs[j]]) continue;
+                    seen[subs[j]] = true;
+                    var sub = new DzDir(d.absoluteFilePath(subs[j]));
+                    out.push({{name: subs[j], path: rel ? rel + "/" + subs[j] : subs[j],
+                              duf_count: sub.entryList(["*.duf"], DzDir.Files).length}});
+                }}
+            }}
+            return out;
+        """)
+        raw = self._client.execute(script).value or []
+        return sorted((ContentCategory(r["name"], r["path"], int(r["duf_count"])) for r in raw),
+                      key=lambda c: c.name)
+
+    def content_files(self, category: str = "") -> list[ContentFile]:
+        """``.duf`` files in *category* (content-relative) across every
+        content directory; a name found in several directories is listed once."""
+        rel = json.dumps(category.strip("/"))
+        script = ScriptBuilder.iife(f"""
+            var cm = App.getContentMgr(), rel = {rel}, seen = {{}}, out = [];
+            for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
+                var dir = cm.getContentDirectory(i);
+                if (!dir) continue;
+                var path = rel ? dir.fullPath + "/" + rel : dir.fullPath, d = new DzDir(path);
+                if (!d.exists()) continue;
+                var files = d.entryList(["*.duf"], DzDir.Files);
+                for (var j = 0; j < files.length; j++) {{
+                    if (seen[files[j]]) continue;
+                    seen[files[j]] = true;
+                    out.push({{name: files[j].replace(/\.duf$/i, ""), filename: files[j],
+                              full_path: path + "/" + files[j]}});
+                }}
+            }}
+            return out;
+        """)
+        raw = self._client.execute(script).value or []
+        return sorted((ContentFile(r["name"], r["filename"], r["full_path"]) for r in raw),
+                      key=lambda f: f.name)
+
+    def strand_hair_nodes(self) -> list[dict]:
+        """Every Strand-Based Hair node: label, name, elementID, target figure,
+        whether it has geometry, and its surface labels."""
+        script = ScriptBuilder.iife("""
+            var out = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {
+                var n = Scene.getNode(i);
+                if (!n || !n.inherits("DzStrandHairNode")) continue;
+                var t = n.getTargetNode(), obj = n.getObject(), mats = [];
+                var shape = obj ? obj.getCurrentShape() : null;
+                if (shape) for (var m = 0; m < shape.getNumMaterials(); m++) {
+                    var mat = shape.getMaterial(m);
+                    mats.push((typeof mat.getLabel === "function" && mat.getLabel()) || mat.getName());
+                }
+                out.push({label: n.getLabel(), name: n.getName(), element_id: n.elementID,
+                          target: t ? t.getLabel() : null, has_geometry: !!obj, materials: mats});
+            }
+            return out;
+        """)
+        return list(self._client.execute(script).value or [])
 
     def find_nodes(self, query: str) -> list[NodeInfo]:
         """Every node whose label or internal name equals *query* exactly.

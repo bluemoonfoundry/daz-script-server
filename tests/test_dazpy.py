@@ -3748,6 +3748,56 @@ class TestKeyedCandidatesAndBones(unittest.TestCase):
             skel.key_bone_axes({"hip": {"w": [(0, 1.0)]}})
 
 
+class TestContentAssetMorphLoader(unittest.TestCase):
+    """content listing, strand hair listing, support asset save, Morph Loader Pro (z2h)."""
+
+    def test_content_categories_and_files(self):
+        client = _make_client([{"name": "Poses", "path": "People/Poses", "duf_count": 3}])
+        cats = DazScene(client).content_categories("/People/")
+        self.assertEqual((cats[0].path, cats[0].duf_count), ("People/Poses", 3))
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumContentDirectories()", script)
+        self.assertIn('"People"', script)
+        client = _make_client([{"name": "Hero", "filename": "Hero.duf", "full_path": "D:/x/Hero.duf"}])
+        files = DazScene(client).content_files("People/Poses")
+        self.assertEqual(files[0].full_path, "D:/x/Hero.duf")
+
+    def test_strand_hair_nodes(self):
+        client = _make_client([{"label": "Hair", "name": "Hair", "target": "Genesis 9",
+                                "has_geometry": True, "materials": ["Hair"], "element_id": 4}])
+        nodes = DazScene(client).strand_hair_nodes()
+        self.assertEqual(nodes[0]["target"], "Genesis 9")
+        self.assertIn('inherits("DzStrandHairNode")', client.execute.call_args[0][0])
+
+    def test_save_support_asset(self):
+        client = _make_client({"status": "ok", "base": "D:/Lib"})
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        self.assertEqual(node.save_support_asset("D:/Lib/data/x.duf", vendor="Me", smart_parent=True), "D:/Lib")
+        script = client.execute.call_args[0][0]
+        self.assertIn("DzNodeSupportAssetFilter", script)
+        self.assertIn('"SmartParentProp", "yes"', script)
+        self.assertIn('"RunSilent", "yes"', script)
+        self.assertIn('replace(/\\\\/g, "/")', script)  # JS regex matching one backslash
+        for status, exc in (("outside", ValueError), ("failed", exceptions.DazError),
+                            ("unavailable", exceptions.DazError)):
+            client = _make_client({"status": status, "dirs": ["D:/Lib"], "code": 3})
+            with self.assertRaises(exc):
+                DazNode(client, NodeIdentifier("9", kind="element_id")).save_support_asset("C:/x.duf")
+
+    def test_load_morph(self):
+        client = _make_client({"status": "ok", "morph": "MyMorph", "log": "",
+                               "control": None})
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        r = node.load_morph("C:/m.obj", morph_name="MyMorph", load_mode="PrimaryNode")
+        self.assertEqual(r.morph_name, "MyMorph")
+        script = client.execute.call_args[0][0]
+        self.assertIn("new DzMorphLoader()", script)
+        self.assertIn('"loadMode": "PrimaryNode"', script)
+        client = _make_client({"status": "error", "message": "Unknown loadMode: Bad"})
+        with self.assertRaises(exceptions.DazError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).load_morph("C:/m.obj", load_mode="Bad")
+
+
 class TestKeyColor(unittest.TestCase):
     def test_key_color(self):
         client = _make_client({"status": "ok", "keys": 2, "label": "Color"})
