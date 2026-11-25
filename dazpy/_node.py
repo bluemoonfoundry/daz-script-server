@@ -387,6 +387,33 @@ class DazNode(DazElement):
         script = ScriptBuilder.node_body_from_locator(self._locator, "return Scene.removeNode(_node);")
         return bool(self._client.execute(script).value)
 
+    def unparent(self, *, preserve_world_transform: bool = True) -> None:
+        """Detach this node from its parent so it sits at the scene root.
+
+        A no-op for a node that is already at the root.
+
+        Args:
+            preserve_world_transform: Keep the node's world-space transform
+                (default), adjusting its local values; ``False`` keeps the
+                local values, which may move it in world space.
+
+        Raises:
+            :class:`~dazpy.exceptions.ScriptRuntimeError`: If Studio refuses
+                the detach.
+        """
+        from .exceptions import ScriptRuntimeError
+        in_place = "true" if preserve_world_transform else "false"
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _parent = _node.getNodeParent();
+            if (!_parent) return null;
+            var _err = _parent.removeNodeChild(_node, {in_place});
+            var _errNum = _err ? _err.valueOf() : 0;
+            return _errNum !== 0 ? ("DzError code " + _errNum) : null;
+        """)
+        result = self._client.execute(script).value
+        if result:
+            raise ScriptRuntimeError(f"unparent failed: {result}")
+
     def reparent(self, new_parent: "DazNode", *, preserve_world_transform: bool = True) -> None:
         """Move this node to a new position in the scene hierarchy.
 

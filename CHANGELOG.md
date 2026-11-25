@@ -55,6 +55,7 @@ All notable changes to DazScript Server are documented here.
   - `DazNode.morph_info(pattern, include_zero)` lists morphs with label,
     value and group path.
   - New exceptions: `AmbiguousNodeError`, `PropertyNotFoundError`.
+  - `DazNode.unparent()` moves a node to the scene root.
   Live-verified on Studio 4.24.
 
 ### Fixed

@@ -3607,6 +3607,24 @@ class TestNodeResolution(unittest.TestCase):
         self.assertIsNone(found[0].parent)
 
 
+class TestDazNodeUnparent(unittest.TestCase):
+    def test_unparent_moves_to_scene_root(self):
+        client = _make_client(None)
+        DazNode(client, NodeIdentifier("7", kind="element_id")).unparent()
+        script = client.execute.call_args[0][0]
+        self.assertIn("removeNodeChild(_node, true)", script)
+
+    def test_unparent_keep_local(self):
+        client = _make_client(None)
+        DazNode(client, NodeIdentifier("7", kind="element_id")).unparent(preserve_world_transform=False)
+        self.assertIn("removeNodeChild(_node, false)", client.execute.call_args[0][0])
+
+    def test_unparent_failure_raises(self):
+        client = _make_client("DzError code 3")
+        with self.assertRaises(exceptions.ScriptRuntimeError):
+            DazNode(client, NodeIdentifier("7", kind="element_id")).unparent()
+
+
 class TestNodePropertySearch(unittest.TestCase):
     """describe / numeric_properties / set_numeric_property / morph_info (nde)."""
 
