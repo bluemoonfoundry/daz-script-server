@@ -3748,6 +3748,20 @@ class TestKeyedCandidatesAndBones(unittest.TestCase):
             skel.key_bone_axes({"hip": {"w": [(0, 1.0)]}})
 
 
+class TestTransformTypesAndTimeStep(unittest.TestCase):
+    def test_all_node_transforms_types_lights_before_cameras(self):
+        client = _make_client([])
+        DazScene(client).all_node_transforms()
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index('inherits("DzLight")'), script.index('inherits("DzCamera")'))
+        self.assertIn('"wearables"', script)
+        self.assertIn("element_id: n.elementID", script)
+
+    def test_time_step(self):
+        self.assertEqual(DazScene(_make_client(160)).time_step(), 160)
+        self.assertEqual(DazScene(_make_client(None)).time_step(), 160)
+
+
 class TestContentAssetMorphLoader(unittest.TestCase):
     """content listing, strand hair listing, support asset save, Morph Loader Pro (z2h)."""
 

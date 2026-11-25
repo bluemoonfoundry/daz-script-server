@@ -140,6 +140,9 @@ All notable changes to DazScript Server are documented here.
     loader's log).
   Verified live on Studio 4.24, except the support-asset save itself, which
   writes into the content library; its validation was checked.
+- `DazScene.all_node_transforms()` entries add `element_id` and `type`
+  (lights, cameras, bones, figures, wearables, props). `DazScene.time_step()`
+  returns ticks per frame.
 - `DazNode.fitted_item_info()` lists the items fitted to a figure as
   `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
 

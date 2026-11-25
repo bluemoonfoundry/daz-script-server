@@ -1026,15 +1026,34 @@ class DazScene:
         """)
         return self._client.execute(script).value or []
 
+    def time_step(self) -> int:
+        """DzTime ticks per timeline frame (``Scene.getTimeStep()``; 160 at 30 fps)."""
+        value = self._client.execute(
+            ScriptBuilder.iife("return Scene.getTimeStep().valueOf();")).value
+        return int(value) if isinstance(value, (int, float)) and value > 0 else 160
+
     def all_node_transforms(self) -> list[dict]:
         """Return world-space transforms for every node in a single call.
 
         Returns:
             A list of dicts, each with keys ``"name"``, ``"label"``,
-            ``"position"`` (``[x, y, z]``), ``"rotation"`` (``[x, y, z]``),
-            and ``"visible"``.
+            ``"element_id"``, ``"type"`` (``"lights"``, ``"cameras"``,
+            ``"bones"``, ``"figures"``, ``"wearables"`` -- a figure parented
+            to another figure -- or ``"props"``), ``"position"``
+            (``[x, y, z]``), ``"rotation"`` (``[x, y, z]``), and ``"visible"``.
         """
         script = ScriptBuilder.iife("""
+            function nodeType(n) {
+                // DzLight inherits DzCamera: test lights first.
+                if (n.inherits("DzLight")) return "lights";
+                if (n.inherits("DzCamera")) return "cameras";
+                if (n.inherits("DzBone")) return "bones";
+                if (n.inherits("DzSkeleton")) {
+                    var p = n.getNodeParent();
+                    return (p && p.inherits("DzFigure")) ? "wearables" : "figures";
+                }
+                return "props";
+            }
             var result = [];
             for (var i = 0; i < Scene.getNumNodes(); i++) {
                 var n = Scene.getNode(i);
@@ -1043,6 +1062,8 @@ class DazScene:
                 result.push({
                     name: n.getName(),
                     label: n.getLabel(),
+                    element_id: n.elementID,
+                    type: nodeType(n),
                     position: [pos.x, pos.y, pos.z],
                     rotation: [rot.x, rot.y, rot.z],
                     visible: n.isVisible()
