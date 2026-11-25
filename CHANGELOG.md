@@ -36,6 +36,26 @@ All notable changes to DazScript Server are documented here.
     camera the active viewport looks through, including Studio's built-in
     view cameras ("Perspective View"), which aren't scene nodes.
   Live-verified on Studio 4.24 with Genesis 9 and Genesis 8 Female.
+- **dazpy node references and property search** (daz-mcp-server-nde), so
+  MCP tools that resolve user-written node references can drop their
+  embedded DazScript:
+  - `DazScene.resolve_node(ref)` accepts an elementID, a `Parent/Label` path
+    or a label/name. It raises `AmbiguousNodeError` (with `matches`) when a
+    label fits several nodes, and returns a proxy bound to the node's
+    elementID, typed as skeleton, camera, light or node.
+  - `NodeIdentifier(kind="element_id")` is supported by every node,
+    skeleton and bone lookup. `DazNode.element_id` reads it.
+  - `DazScene.find_nodes(query)` and `DazNode.describe()` return `NodeInfo`
+    (label, name, type, elementID, parent, child count).
+  - `DazNode.set_numeric_property(name, value, substring_fallback=,
+    unlock=)` finds a property by label or name across node properties and
+    the modifier stack, unlocks it, writes it, and reads it back.
+  - `DazNode.numeric_properties(include_modifiers=True)` also collects morph
+    channels and modifier properties. The default stays node-only.
+  - `DazNode.morph_info(pattern, include_zero)` lists morphs with label,
+    value and group path.
+  - New exceptions: `AmbiguousNodeError`, `PropertyNotFoundError`.
+  Live-verified on Studio 4.24.
 
 ### Fixed
 

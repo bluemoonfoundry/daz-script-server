@@ -3537,6 +3537,144 @@ class TestDazNodeNumericCandidates(unittest.TestCase):
         self.assertNotIn('a"); Scene.clear()', script)
 
 
+class TestNodeResolution(unittest.TestCase):
+    """elementID identifiers, resolve_node, find_nodes (daz-mcp-server-nde)."""
+
+    def test_element_id_identifier_uses_find_by_element_id(self):
+        client = _make_client({"x": 0, "y": 0, "z": 0})
+        DazNode(client, NodeIdentifier("4217", kind="element_id")).position
+        self.assertIn("Scene.findNodeByElementID(4217)", client.execute.call_args[0][0])
+
+    def test_element_id_skeleton_and_bone_lookup(self):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(["head"])
+        skel = DazSkeleton(client, NodeIdentifier("4217", kind="element_id"))
+        skel.bone_names()
+        script = client.execute.call_args[0][0]
+        self.assertIn("_skels[_i].elementID === 4217", script)
+        bone = skel.bones()[0]
+        client.execute.return_value = ExecutionResult(value="Head", output=[], request_id="t")
+        bone.label
+        self.assertIn("_skels[_i].elementID === 4217", client.execute.call_args[0][0])
+
+    def test_element_id_must_be_numeric(self):
+        with self.assertRaises(ValueError):
+            ScriptBuilder.find_node_expr(NodeIdentifier("abc", kind="element_id"))
+
+    def test_resolve_node_returns_typed_element_id_proxy(self):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client({"status": "ok", "element_id": 77, "type": "DzSkeleton"})
+        node = DazScene(client).resolve_node("Genesis 9")
+        self.assertIsInstance(node, DazSkeleton)
+        self.assertEqual(node._identifier, NodeIdentifier("77", kind="element_id"))
+        script = client.execute.call_args[0][0]
+        self.assertIn('"Genesis 9"', script)
+        self.assertIn("findNodeChildByLabel", script)
+        self.assertIn("findNodeByElementID", script)
+
+    def test_resolve_node_accepts_int(self):
+        client = _make_client({"status": "ok", "element_id": 5, "type": "DzNode"})
+        DazScene(client).resolve_node(5)
+        self.assertIn('"5"', client.execute.call_args[0][0])
+
+    def test_resolve_node_missing(self):
+        client = _make_client({"status": "missing", "ref": "Ghost"})
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            DazScene(client).resolve_node("Ghost")
+
+    def test_resolve_node_ambiguous_lists_candidates(self):
+        matches = [
+            {"label": "Chair", "name": "Chair", "type": "DzNode", "element_id": 1, "parent": None},
+            {"label": "Chair", "name": "Chair_2", "type": "DzNode", "element_id": 2, "parent": "Room"},
+        ]
+        client = _make_client({"status": "ambiguous", "ref": "Chair", "count": 2, "matches": matches})
+        with self.assertRaises(exceptions.AmbiguousNodeError) as ctx:
+            DazScene(client).resolve_node("Chair")
+        err = ctx.exception
+        self.assertEqual([m.element_id for m in err.matches], [1, 2])
+        self.assertIn("elementID", str(err))
+        self.assertIn("Room", str(err))
+
+    def test_resolve_node_empty_ref(self):
+        with self.assertRaises(ValueError):
+            DazScene(_make_client(None)).resolve_node("")
+
+    def test_find_nodes(self):
+        client = _make_client([
+            {"label": "Chair", "name": "Chair", "type": "DzNode", "element_id": 1, "parent": None}])
+        found = DazScene(client).find_nodes("Chair")
+        self.assertEqual(found[0].element_id, 1)
+        self.assertIsNone(found[0].parent)
+
+
+class TestNodePropertySearch(unittest.TestCase):
+    """describe / numeric_properties / set_numeric_property / morph_info (nde)."""
+
+    def _node(self, value):
+        client = _make_client(value)
+        return DazNode(client, NodeIdentifier("12", kind="element_id")), client
+
+    def test_describe(self):
+        node, client = self._node({"name": "Chair", "label": "Chair", "type": "DzNode",
+                                   "element_id": 12, "parent": "Room", "num_children": 3})
+        info = node.describe()
+        self.assertEqual((info.label, info.element_id, info.parent, info.num_children),
+                         ("Chair", 12, "Room", 3))
+
+    def test_describe_missing_raises(self):
+        node, _ = self._node(None)
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            node.describe()
+
+    def test_numeric_properties_searches_modifiers(self):
+        node, client = self._node({"X Translate": 0.0, "Smile": 0.4})
+        self.assertEqual(node.numeric_properties(include_modifiers=True),
+                         {"X Translate": 0.0, "Smile": 0.4})
+        script = client.execute.call_args[0][0]
+        self.assertIn("getNumModifiers", script)
+        self.assertIn("getValueChannel", script)
+        self.assertIn("DzNumericProperty", script)
+
+    def test_numeric_properties_default_is_node_only(self):
+        node, client = self._node({"X Translate": 0.0})
+        node.numeric_properties()
+        self.assertNotIn("getNumModifiers", client.execute.call_args[0][0])
+
+    def test_set_numeric_property_exact(self):
+        node, client = self._node({"status": "ok", "label": "Head Size", "name": "HeadSize",
+                                   "value": 1.1})
+        w = node.set_numeric_property("HeadSize", 1.1)
+        self.assertEqual((w.label, w.name, w.value), ("Head Size", "HeadSize", 1.1))
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _substring = false", script)
+        self.assertIn("lock(false)", script)
+
+    def test_set_numeric_property_substring_and_no_unlock(self):
+        node, client = self._node({"status": "ok", "label": "Mouth Smile", "name": "eCTRLMouthSmile",
+                                   "value": 0.8})
+        node.set_numeric_property("smile", 0.8, substring_fallback=True, unlock=False)
+        script = client.execute.call_args[0][0]
+        self.assertIn("var _substring = true", script)
+        self.assertIn("var _unlock = false", script)
+
+    def test_set_numeric_property_not_found_and_not_numeric(self):
+        node, _ = self._node({"status": "missing"})
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            node.set_numeric_property("Nope", 1)
+        node, _ = self._node({"status": "not_numeric", "label": "Label"})
+        with self.assertRaises(TypeError):
+            node.set_numeric_property("Label", 1)
+
+    def test_morph_info(self):
+        node, client = self._node([{"name": "Smile", "label": "Smile", "value": 0.5,
+                                    "path": "Morphs/Face"}])
+        morphs = node.morph_info(pattern="SMI", include_zero=True)
+        self.assertEqual(morphs[0].path, "Morphs/Face")
+        script = client.execute.call_args[0][0]
+        self.assertIn('"smi"', script)
+        self.assertIn("var _includeZero = true", script)
+
+
 class TestDazSceneViewportCamera(unittest.TestCase):
     def test_default_view_camera_not_in_scene(self):
         client = _make_client({"label": "Perspective View", "name": "PerspectiveView",

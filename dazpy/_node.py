@@ -63,6 +63,94 @@ class NodeIdentifier:
 
 
 @dataclass(frozen=True)
+class NodeInfo:
+    """Identity of a scene node, as returned by :meth:`DazScene.find_nodes`,
+    :meth:`DazNode.describe` and :class:`~dazpy.exceptions.AmbiguousNodeError`.
+
+    Attributes:
+        label: Display label.
+        name: Internal name.
+        type: DazScript class name (``"DzFigure"``, ``"DzNode"``, ...).
+        element_id: Studio's per-session unique id; stable while the scene is open.
+        parent: Parent node's label, or ``None`` at the scene root.
+        num_children: Direct child count (``None`` where not collected).
+    """
+
+    label: str
+    name: str
+    type: str
+    element_id: int
+    parent: str | None
+    num_children: int | None = None
+
+    @classmethod
+    def _from_raw(cls, raw: dict) -> "NodeInfo":
+        return cls(
+            label=raw.get("label", ""),
+            name=raw.get("name", ""),
+            type=raw.get("type", ""),
+            element_id=int(raw.get("element_id", 0)),
+            parent=raw.get("parent"),
+            num_children=raw.get("num_children"),
+        )
+
+
+@dataclass(frozen=True)
+class MorphInfo:
+    """One ``DzMorph`` on a node, from :meth:`DazNode.morph_info`."""
+
+    name: str
+    label: str
+    value: float
+    path: str
+
+
+@dataclass(frozen=True)
+class NumericPropertyWrite:
+    """Result of :meth:`DazNode.set_numeric_property`: the property that was
+    written and the value read back after the write."""
+
+    label: str
+    name: str
+    value: float
+
+
+# JS: collect every numeric channel on _node in search order -- node
+# properties, then each modifier's value channel and its own properties.
+_NUMERIC_CHANNELS_JS = """
+    function _numericChannels(node) {
+        var out = [];
+        function add(p, alias) {
+            if (p && p.inherits("DzNumericProperty")) out.push({prop: p, alias: alias || null});
+        }
+        var i, j, m;
+        for (i = 0; i < node.getNumProperties(); i++) add(node.getProperty(i));
+        var obj = (typeof node.getObject === "function") ? node.getObject() : null;
+        if (obj && typeof obj.getNumModifiers === "function") {
+            for (i = 0; i < obj.getNumModifiers(); i++) {
+                m = obj.getModifier(i);
+                if (!m) continue;
+                if (typeof m.getValueChannel === "function") add(m.getValueChannel(), m);
+                if (typeof m.getNumProperties === "function") {
+                    for (j = 0; j < m.getNumProperties(); j++) add(m.getProperty(j));
+                }
+            }
+        }
+        return out;
+    }
+"""
+
+_NODE_INFO_JS = """
+    function _nodeInfo(n) {
+        var p = n.getNodeParent ? n.getNodeParent() : null;
+        return {label: n.getLabel(), name: n.getName(), type: n.className(),
+                element_id: n.elementID, parent: p ? p.getLabel() : null,
+                num_children: n.getNumNodeChildren()};
+    }
+"""
+
+
+@dataclass(frozen=True)
 class NumericCandidateMatch:
     """One slot's outcome from :meth:`DazNode.set_numeric_candidates`.
 
@@ -528,6 +616,185 @@ class DazNode(DazElement):
         if not exists:
             return None
         return DazProperty._from_locator(self._client, locator)
+
+    @property
+    def element_id(self) -> int | None:
+        """Studio's unique ``elementID`` for this node (``None`` if not in the scene).
+
+        ``NodeIdentifier(str(node.element_id), kind="element_id")`` addresses
+        the node unambiguously even when labels repeat.
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, "return _node.elementID;")
+        value = self._client.execute(script).value
+        return None if value is None else int(value)
+
+    def describe(self) -> NodeInfo:
+        """Return this node's label, name, type, elementID, parent and child count.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+        script = ScriptBuilder.node_body_from_locator(
+            self._locator, _NODE_INFO_JS + "return _nodeInfo(_node);"
+        )
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return NodeInfo._from_raw(raw)
+
+    def numeric_properties(self, include_modifiers: bool = False) -> dict[str, object]:
+        """Every numeric property on the node, in one call: ``{label: value}``.
+
+        Args:
+            include_modifiers: Also collect the object's modifier stack (morph
+                value channels and modifier properties), where most of a
+                figure's dials live. A property reached twice is reported
+                once; when two properties share a label, the first in search
+                order (node, then modifiers) wins. (Morph value channels are
+                all named ``Value``, so labels are the only usable key.)
+                Default ``False`` keeps
+                :meth:`DazElement.numeric_properties`' node-only behaviour.
+
+        Returns:
+            ``{label: value}``, or ``{}`` if the node is not in the scene.
+        """
+        if not include_modifiers:
+            return super().numeric_properties()
+        script = ScriptBuilder.node_body_from_locator(self._locator, _NUMERIC_CHANNELS_JS + """
+            var _all = _numericChannels(_node), _out = {};
+            for (var _i = 0; _i < _all.length; _i++) {
+                var _p = _all[_i].prop;
+                if (!_out.hasOwnProperty(_p.getLabel())) _out[_p.getLabel()] = _p.getValue();
+            }
+            return _out;
+        """)
+        return dict(self._client.execute(script).value or {})
+
+    def set_numeric_property(
+        self,
+        name: str,
+        value: float,
+        *,
+        substring_fallback: bool = False,
+        unlock: bool = True,
+    ) -> NumericPropertyWrite:
+        """Set a numeric property found by label or name, searching modifiers too.
+
+        Searches node-level properties, then each modifier (a morph matched
+        by its own name or label resolves to its value channel) and the
+        modifier's properties, matching label or name exactly
+        (case-insensitive). With *substring_fallback*, a second pass accepts
+        the first property whose label or name contains *name*.
+
+        Args:
+            name: Property label or internal name.
+            value: Value to write.
+            substring_fallback: Accept a substring match when nothing matches exactly.
+            unlock: Unlock a locked property before writing (Studio ignores
+                writes to locked properties).
+
+        Returns:
+            :class:`NumericPropertyWrite` with the matched label, the name
+            (the morph's name when matched through a morph, since its value
+            channel is always called ``Value``) and the value read back.
+
+        Raises:
+            NodeNotFoundError: If this node is not in the scene.
+            PropertyNotFoundError: If no property matches.
+            TypeError: If the match is not numeric.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _want = {json.dumps(name.lower())};
+            var _substring = {"true" if substring_fallback else "false"};
+            var _unlock = {"true" if unlock else "false"};
+            function _names(p, alias) {{
+                var out = [p.getLabel().toLowerCase(), p.getName().toLowerCase()];
+                if (alias) {{ out.push(alias.getLabel().toLowerCase()); out.push(alias.getName().toLowerCase()); }}
+                return out;
+            }}
+            var _hit = null, _owner = null;
+            function _scan(test) {{
+                var i, j, n, p, obj, m;
+                for (i = 0; i < _node.getNumProperties(); i++) {{
+                    p = _node.getProperty(i);
+                    n = _names(p, null);
+                    for (j = 0; j < n.length; j++) if (test(n[j])) return p;
+                }}
+                obj = (typeof _node.getObject === "function") ? _node.getObject() : null;
+                if (!obj || typeof obj.getNumModifiers !== "function") return null;
+                for (i = 0; i < obj.getNumModifiers(); i++) {{
+                    m = obj.getModifier(i);
+                    if (!m) continue;
+                    if (typeof m.getValueChannel === "function" && m.getValueChannel()) {{
+                        n = _names(m.getValueChannel(), m);
+                        for (j = 0; j < n.length; j++) if (test(n[j])) {{ _owner = m; return m.getValueChannel(); }}
+                    }}
+                    if (typeof m.getNumProperties === "function") {{
+                        for (var k = 0; k < m.getNumProperties(); k++) {{
+                            p = m.getProperty(k);
+                            n = _names(p, null);
+                            for (j = 0; j < n.length; j++) if (test(n[j])) return p;
+                        }}
+                    }}
+                }}
+                return null;
+            }}
+            _hit = _scan(function (s) {{ return s === _want; }});
+            if (!_hit && _substring) _hit = _scan(function (s) {{ return s.indexOf(_want) !== -1; }});
+            if (!_hit) return {{status: "missing"}};
+            if (!_hit.inherits("DzNumericProperty")) return {{status: "not_numeric", label: _hit.getLabel()}};
+            if (_unlock && typeof _hit.lock === "function" && _hit.isLocked && _hit.isLocked()) _hit.lock(false);
+            _hit.setValue({float(value)!r});
+            return {{status: "ok", label: _hit.getLabel(),
+                     name: _owner ? _owner.getName() : _hit.getName(), value: _hit.getValue()}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw.get("status") == "missing":
+            raise PropertyNotFoundError(f"Property not found: {name!r} on {self._identifier.value!r}")
+        if raw.get("status") == "not_numeric":
+            raise TypeError(f"Property is not numeric: {raw.get('label', name)!r}")
+        return NumericPropertyWrite(label=raw["label"], name=raw["name"], value=raw["value"])
+
+    def morph_info(
+        self, pattern: str | None = None, include_zero: bool = False
+    ) -> list[MorphInfo]:
+        """List the node's ``DzMorph`` modifiers with label, value and group path.
+
+        Args:
+            pattern: Case-insensitive substring of the morph's name or label;
+                ``None`` lists every morph.
+            include_zero: Include morphs whose value is exactly 0.
+
+        Returns:
+            :class:`MorphInfo` per matching morph (``[]`` if the node has no
+            object or is not in the scene).
+        """
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _pat = {json.dumps((pattern or "").lower())};
+            var _includeZero = {"true" if include_zero else "false"};
+            var _obj = (typeof _node.getObject === "function") ? _node.getObject() : null;
+            if (!_obj) return [];
+            var _out = [];
+            for (var _i = 0; _i < _obj.getNumModifiers(); _i++) {{
+                var _m = _obj.getModifier(_i);
+                if (!_m || _m.className() !== "DzMorph") continue;
+                var _n = _m.getName(), _l = _m.getLabel();
+                if (_pat && _n.toLowerCase().indexOf(_pat) === -1 &&
+                        _l.toLowerCase().indexOf(_pat) === -1) continue;
+                var _ch = _m.getValueChannel(), _v = _ch.getValue();
+                if (!_includeZero && _v === 0) continue;
+                var _path = "";
+                try {{ var _g = _ch.getPropertyGroup(); if (_g) _path = _g.getPath(); }} catch (e) {{}}
+                _out.push({{name: _n, label: _l, value: _v, path: _path}});
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value or []
+        return [MorphInfo(r["name"], r["label"], r["value"], r.get("path", "")) for r in raw]
 
     def set_numeric_candidates(
         self, slots: Sequence[tuple[Sequence[str], float]]

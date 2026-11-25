@@ -17,7 +17,14 @@ __version__ = "2.16.0"
 
 from ._client import DazClient
 from ._scene import DazScene, ViewportCamera
-from ._node import DazNode, NodeIdentifier, NumericCandidateMatch
+from ._node import (
+    DazNode,
+    MorphInfo,
+    NodeIdentifier,
+    NodeInfo,
+    NumericCandidateMatch,
+    NumericPropertyWrite,
+)
 from ._skeleton import DazSkeleton
 from ._bone import DazBone
 from ._camera import DazCamera
@@ -150,6 +157,9 @@ __all__ = [
     "DazNode",
     "NodeIdentifier",
     "NumericCandidateMatch",
+    "NodeInfo",
+    "MorphInfo",
+    "NumericPropertyWrite",
     "ViewportCamera",
     "DazSkeleton",
     "DazBone",

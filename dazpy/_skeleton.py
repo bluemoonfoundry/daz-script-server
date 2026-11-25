@@ -21,12 +21,7 @@ class DazSkeleton(DazNode):
         # Scene.findNode() returns DzNode which lacks DzSkeleton methods like
         # findBone(). Retrieve a properly typed DzSkeleton by iterating
         # getSkeletonList(), which is the only proven-typed accessor in the API.
-        kind = self._identifier.kind
-        value = json.dumps(self._identifier.value)
-        if kind == "label":
-            match = f"_skels[_i].getLabel() === {value}"
-        else:
-            match = f"_skels[_i].getName() === {value}"
+        match = ScriptBuilder.skeleton_match(self._identifier)
         lookup = (
             f"var _node = null;"
             f" var _skels = Scene.getSkeletonList();"
@@ -41,13 +36,7 @@ class DazSkeleton(DazNode):
         Uses the skeleton list rather than Scene.findNode() so that two figures
         with the same internal name (e.g. two Genesis 9 figures) are kept distinct.
         """
-        kind = self._identifier.kind
-        value = json.dumps(self._identifier.value)
-        match = (
-            f"_skels[_i].getLabel() === {value}"
-            if kind == "label"
-            else f"_skels[_i].getName() === {value}"
-        )
+        match = ScriptBuilder.skeleton_match(self._identifier)
         return (
             f"(function(){{"
             f"var _skel=null,_skels=Scene.getSkeletonList();"

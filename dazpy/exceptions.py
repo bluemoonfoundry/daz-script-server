@@ -124,6 +124,36 @@ class NodeNotFoundError(DazError):
     """Raised when a requested scene node, bone, or skeleton cannot be found."""
 
 
+class AmbiguousNodeError(DazError):
+    """Raised when a node reference matches more than one scene node.
+
+    Not a :class:`NodeNotFoundError`: the node exists, the reference just
+    doesn't pick one. Retry with an elementID or a ``Parent/Label`` path.
+
+    Attributes:
+        ref: The reference that was ambiguous.
+        count: How many nodes matched.
+        matches: :class:`~dazpy.NodeInfo` for up to the first 12 matches.
+    """
+
+    def __init__(self, ref: str, count: int, matches: list):
+        self.ref = ref
+        self.count = count
+        self.matches = list(matches)
+        bits = " | ".join(
+            f"{m.label} name={m.name} elementID={m.element_id} parent={m.parent or ''}"
+            for m in self.matches
+        )
+        super().__init__(
+            f"Ambiguous node {ref!r} ({count} matches). "
+            f"Use elementID or Parent/Label. {bits}"
+        )
+
+
+class PropertyNotFoundError(DazError):
+    """Raised when a node has no property matching the requested name."""
+
+
 class AsyncExecutionError(DazError):
     """Raised when an async request fails, is cancelled, or times out while polling.
 

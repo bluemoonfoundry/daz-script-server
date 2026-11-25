@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._client import DazClient
-from ._node import DazNode, NodeIdentifier
+from ._node import _NODE_INFO_JS, DazNode, NodeIdentifier, NodeInfo
 from ._script_builder import ScriptBuilder
 
 if TYPE_CHECKING:
@@ -95,6 +95,108 @@ class DazScene:
             _NODE_CLASS_MAP.get(item["className"], DazNode)(self._client, NodeIdentifier(item["name"]))
             for item in items
         ]
+
+    _NODE_CLASSES = ("DzSkeleton", "DzCamera", "DzLight")
+
+    def _typed_node(self, identifier: NodeIdentifier, class_name: str) -> DazNode:
+        from ._skeleton import DazSkeleton
+        from ._camera import DazCamera
+        from ._light import DazLight
+        cls = {"DzSkeleton": DazSkeleton, "DzCamera": DazCamera, "DzLight": DazLight}.get(
+            class_name, DazNode)
+        return cls(self._client, identifier)
+
+    def resolve_node(self, ref: str | int) -> DazNode:
+        """Resolve a node reference the way users and agents write them, in one call.
+
+        *ref* may be:
+
+        - an elementID (``4217`` or ``"4217"``),
+        - a ``Parent/Label`` path (each step a label or name; the child is
+          searched recursively under the parent), or
+        - a label or internal name, which must match exactly one node.
+
+        Returns:
+            A proxy bound to the node's elementID (so later calls can't drift
+            to a same-named node), typed :class:`~dazpy.DazSkeleton`,
+            :class:`~dazpy.DazCamera`, :class:`~dazpy.DazLight` or
+            :class:`~dazpy.DazNode`.
+
+        Raises:
+            ValueError: If *ref* is empty.
+            NodeNotFoundError: If nothing matches.
+            AmbiguousNodeError: If a label/name matches several nodes; its
+                ``matches`` list the candidates with their elementIDs.
+        """
+        from .exceptions import AmbiguousNodeError, NodeNotFoundError
+        text = str(ref).strip() if ref is not None else ""
+        if not text:
+            raise ValueError("resolve_node: a node reference is required")
+        script = ScriptBuilder.iife(_NODE_INFO_JS + f"""
+            function _resolve(s) {{
+                if (/^[0-9]+$/.test(s)) {{
+                    var byId = Scene.findNodeByElementID(parseInt(s, 10));
+                    return byId ? {{node: byId}} : {{missing: s}};
+                }}
+                var slash = s.lastIndexOf("/");
+                if (slash > 0) {{
+                    var parent = _resolve(s.substring(0, slash));
+                    if (!parent.node) return parent;
+                    var part = s.substring(slash + 1), child = null;
+                    if (typeof parent.node.findNodeChildByLabel === "function")
+                        child = parent.node.findNodeChildByLabel(part, true);
+                    if (!child && typeof parent.node.findNodeChild === "function")
+                        child = parent.node.findNodeChild(part, true);
+                    return child ? {{node: child}} : {{missing: s}};
+                }}
+                var matches = [];
+                for (var i = 0; i < Scene.getNumNodes(); i++) {{
+                    var n = Scene.getNode(i);
+                    if (n && (n.getLabel() === s || n.getName() === s)) matches.push(n);
+                }}
+                if (matches.length === 1) return {{node: matches[0]}};
+                if (matches.length === 0) return {{missing: s}};
+                var info = [];
+                for (var k = 0; k < matches.length && k < 12; k++) info.push(_nodeInfo(matches[k]));
+                return {{ambiguous: s, count: matches.length, matches: info}};
+            }}
+            var r = _resolve({json.dumps(text)});
+            if (r.node) {{
+                var t = "DzNode", kinds = {json.dumps(list(self._NODE_CLASSES))};
+                for (var c = 0; c < kinds.length; c++) if (r.node.inherits(kinds[c])) {{ t = kinds[c]; break; }}
+                return {{status: "ok", element_id: r.node.elementID, type: t}};
+            }}
+            if (r.ambiguous) return {{status: "ambiguous", ref: r.ambiguous, count: r.count, matches: r.matches}};
+            return {{status: "missing", ref: r.missing}};
+        """)
+        raw = self._client.execute(script).value or {"status": "missing", "ref": text}
+        if raw["status"] == "ok":
+            ident = NodeIdentifier(str(int(raw["element_id"])), kind="element_id")
+            return self._typed_node(ident, raw.get("type", "DzNode"))
+        if raw["status"] == "ambiguous":
+            raise AmbiguousNodeError(
+                raw.get("ref", text), int(raw.get("count", 0)),
+                [NodeInfo._from_raw(m) for m in raw.get("matches", [])],
+            )
+        missing = raw.get("ref", text)
+        detail = f" (no node at {missing!r})" if missing != text else ""
+        raise NodeNotFoundError(f"Node not found: {text!r}{detail}")
+
+    def find_nodes(self, query: str) -> list[NodeInfo]:
+        """Every node whose label or internal name equals *query* exactly.
+
+        Use it to list same-labelled nodes and pick one by
+        :attr:`NodeInfo.element_id`.
+        """
+        script = ScriptBuilder.iife(_NODE_INFO_JS + f"""
+            var q = {json.dumps(query)}, out = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {{
+                var n = Scene.getNode(i);
+                if (n && (n.getLabel() === q || n.getName() === q)) out.push(_nodeInfo(n));
+            }}
+            return out;
+        """)
+        return [NodeInfo._from_raw(r) for r in self._client.execute(script).value or []]
 
     def find_node(self, name: str) -> DazNode:
         """Find a scene node by its internal name.
