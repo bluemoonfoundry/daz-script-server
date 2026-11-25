@@ -3694,6 +3694,37 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestSkeletonLookAt(unittest.TestCase):
+    def _skel(self, value):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(value)
+        return DazSkeleton(client, NodeIdentifier("4", kind="element_id")), client
+
+    def test_look_at_one_call_parent_frame(self):
+        skel, client = self._skel({"applied": [{"bone": "head", "x": -10.0, "y": 20.0}],
+                                   "missing": ["l_eye"]})
+        r = skel.look_at((0, 160, 200), [("head", 0.6), ("l_eye", 1.0)])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertEqual(r.applied[0].bone, "head")
+        self.assertEqual(r.missing, ["l_eye"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("getWSRot()", script)
+        self.assertIn("getOrientation()", script)
+        self.assertIn(".inverse().multVec(", script)
+        self.assertIn('[["head", 0.6], ["l_eye", 1.0]]', script)
+
+    def test_look_at_rejects_bad_weight(self):
+        skel, client = self._skel(None)
+        with self.assertRaises(ValueError):
+            skel.look_at((0, 0, 0), [("head", 1.5)])
+        client.execute.assert_not_called()
+
+    def test_look_at_missing_skeleton(self):
+        skel, _ = self._skel(None)
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            skel.look_at((0, 0, 0), [("head", 1.0)])
+
+
 class TestPropertyDetailsAndBatchSet(unittest.TestCase):
     """property_details / property_detail / set_numeric_properties (daz-mcp-server-ksl)."""
 

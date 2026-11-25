@@ -26,7 +26,7 @@ from ._node import (
     NumericPropertyWrite,
     PropertyDetails,
 )
-from ._skeleton import DazSkeleton
+from ._skeleton import BoneAim, DazSkeleton, LookAtResult
 from ._bone import DazBone
 from ._camera import DazCamera
 from ._light import DazLight
@@ -165,6 +165,8 @@ __all__ = [
     "MaterialProperty",
     "MaterialPropertyWrite",
     "ViewportCamera",
+    "BoneAim",
+    "LookAtResult",
     "BatchPropertyResult",
     "PropertyDetails",
     "DazSkeleton",

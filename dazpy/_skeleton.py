@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
@@ -9,6 +10,23 @@ from ._script_builder import ScriptBuilder
 if TYPE_CHECKING:
     from ._interaction import LimbAlignmentResult
     from ._bone import DazBone
+
+
+@dataclass(frozen=True)
+class BoneAim:
+    """One bone's rotation after :meth:`DazSkeleton.look_at` (degrees, read back)."""
+
+    bone: str
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class LookAtResult:
+    """Outcome of :meth:`DazSkeleton.look_at`."""
+
+    applied: list[BoneAim]
+    missing: list[str]
 
 
 class DazSkeleton(DazNode):
@@ -316,6 +334,73 @@ class DazSkeleton(DazNode):
         if missing is None:  # skeleton not in the scene
             return list(payload)
         return list(missing)
+
+    def look_at(
+        self,
+        point: Sequence[float],
+        chain: Sequence[tuple[str, float]],
+    ) -> LookAtResult:
+        """Turn a chain of bones toward a world-space point, in one call.
+
+        *chain* lists ``(bone_name, weight)`` from the root of the chain to
+        the tip (e.g. chest, neck, head, eyes). Each bone, in order, turns
+        *weight* of the way toward the point from where its parents left
+        it, so a final weight of 1.0 aims the last bone exactly (as far as
+        its joint limits allow). The direction is worked out in the bone's
+        own rotation frame (parent world rotation times the bone's
+        orientation), so a turned or leaning figure still looks the right
+        way. Only the X (pitch) and Y (yaw) rotations are written; Z (roll)
+        is left alone. Bones whose rest pose faces +Z, as Genesis heads and
+        eyes do, are assumed.
+
+        Args:
+            point: World ``(x, y, z)`` to look at.
+            chain: ``(bone_name, weight)`` pairs, weight in ``[0, 1]``.
+
+        Returns:
+            :class:`LookAtResult`: each bone's rotation as Studio kept it,
+            and the chain bones not on this figure.
+
+        Raises:
+            ValueError: If a weight is outside ``[0, 1]``.
+            NodeNotFoundError: If the skeleton is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+        pairs = []
+        for bone, weight in chain:
+            if not 0.0 <= float(weight) <= 1.0:
+                raise ValueError(f"look_at: weight for {bone!r} must be in [0, 1], got {weight}")
+            pairs.append([str(bone), float(weight)])
+        tx, ty, tz = (float(v) for v in point)
+        script = self._skeleton_body(f"""
+            var _chain = {json.dumps(pairs)};
+            var _target = new DzVec3({tx!r}, {ty!r}, {tz!r});
+            var _byName = {{}}, _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) _byName[_bones[i].getName()] = _bones[i];
+            var _deg = 180 / Math.PI, _applied = [], _missing = [];
+            for (var c = 0; c < _chain.length; c++) {{
+                var b = _byName[_chain[c][0]], w = _chain[c][1];
+                if (!b) {{ _missing.push(_chain[c][0]); continue; }}
+                var parent = b.getNodeParent();
+                var frame = b.getOrientation();
+                if (parent) frame = parent.getWSRot().multiply(frame);
+                var v = frame.inverse().multVec(_target.subtract(b.getWSPos()));
+                var yaw = Math.atan2(v.x, v.z) * _deg;
+                var pitch = -Math.atan2(v.y, Math.sqrt(v.x * v.x + v.z * v.z)) * _deg;
+                var xc = b.getXRotControl(), yc = b.getYRotControl();
+                xc.setValue(pitch * w);
+                yc.setValue(yaw * w);
+                _applied.push({{bone: b.getName(), x: xc.getValue(), y: yc.getValue()}});
+            }}
+            return {{applied: _applied, missing: _missing}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Skeleton not found: {self._identifier.value!r}")
+        return LookAtResult(
+            [BoneAim(a["bone"], a["x"], a["y"]) for a in raw.get("applied", [])],
+            list(raw.get("missing", [])),
+        )
 
     def _zero_bones_and_morphs(self) -> None:
         """Drive every bone rotation to 0 and every non-zero DzMorph to 0, in

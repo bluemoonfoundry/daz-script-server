@@ -85,6 +85,13 @@ All notable changes to DazScript Server are documented here.
   animatability via `canAnimate()`). `DazScene.set_numeric_properties(ops)`
   sets many properties across nodes in one call and reports each
   operation's error separately (`BatchPropertyResult`).
+- **`DazSkeleton.look_at(point, chain)`** turns a weighted bone chain
+  (for example chest, neck, head, eyes) toward a world point in one call
+  and returns each bone's kept rotation (`LookAtResult`). Directions are
+  worked out in each bone's own rotation frame, so turned figures and
+  Genesis eyes (oriented 180° about Z) aim correctly. A final weight of 1
+  aims the last bone exactly, within its joint limits. Live-verified on
+  Genesis 9 and Genesis 8 Female: under 1° error within joint limits.
 
 ### Fixed
 
