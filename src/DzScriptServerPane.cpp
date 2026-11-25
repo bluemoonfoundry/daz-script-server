@@ -263,7 +263,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_pLogView(nullptr)
 	, m_pPersistentScript(nullptr)
 {
-	// Register return type for BlockingQueuedConnection on execute/register handlers.
+	// HttpResult crosses threads in queued calls (MainThreadCall, plugin slots).
 	qRegisterMetaType<HttpResult>("HttpResult");
 
 	// m_pPersistentScript is lazily created on first use (see
@@ -850,9 +850,9 @@ void DzScriptServerPane::teardownServer()
 		m_pServer->stop();
 
 	// 3. Join the listen thread. httplib joins every request-handler thread
-	//    before listen() returns. Handlers may be blocked in a
-	//    BlockingQueuedConnection call to this (main) thread, so keep
-	//    delivering non-input events while waiting, or they could never finish.
+	//    before listen() returns. Handlers may be waiting on a MainThreadCall
+	//    posted to this (main) thread, so keep delivering non-input events
+	//    while waiting, or they could only finish by timing out.
 	bool joined = true;
 	if (m_pServerThread) {
 		QElapsedTimer timer;
@@ -1049,6 +1049,14 @@ static HttpContext toContext(const httplib::Request& req)
 
 static void applyContext(const HttpContext& ctx, httplib::Response& res)
 {
+	// A status outside 100-599 (e.g. a handler that never answered) would make
+	// httplib send no response at all.
+	if (ctx.responseStatus < 100 || ctx.responseStatus > 599) {
+		res.status = 500;
+		res.set_content(ErrorResponse::build(ErrorCode::INTERNAL_ERROR, "handler produced no valid HTTP status"),
+		                "application/json");
+		return;
+	}
 	res.status = ctx.responseStatus;
 	if (!ctx.responseBody.empty())
 		res.set_content(ctx.responseBody, ctx.responseContentType);
@@ -1312,9 +1320,9 @@ void DzScriptServerPane::handleMainThreadCall(qulonglong call)
 // ─── Route setup ──────────────────────────────────────────────────────────────
 //
 // THREADING RULE: httplib invokes these handlers on raw std::threads (not QThreads).
-// Sync handlers cross to the main thread with BlockingQueuedConnection, except
-// sync script execution, which uses MainThreadCall so a request still queued
-// behind a busy main thread gives up instead of pinning its slot. On
+// Sync handlers cross to the main thread only through callOnMainThread()
+// (MainThreadCall), so a request still queued behind a busy main thread gives
+// up instead of pinning its slot. On
 // Studio 6, async script enqueue handlers may build local reentrant Qt Core
 // values and call mutex-protected services; Studio 4 crosses to the main thread
 // because its JSON parser uses QScriptEngine. Execution later reaches the main
@@ -1368,7 +1376,7 @@ void DzScriptServerPane::setupRoutes()
 	m_pRenderAnimationHandler.reset(new RenderAnimationHandler(this));
 	m_pRenderCancelHandler.reset(new RenderCancelHandler(this));
 	m_pSaveCopyHandler.reset(new SaveCopyHandler(this));
-	m_pGeometryFramesHandler.reset(new GeometryFramesHandler());
+	m_pGeometryFramesHandler.reset(new GeometryFramesHandler(this));
 
 	// ── Routes ───────────────────────────────────────────────────────────────
 
@@ -1821,13 +1829,6 @@ void DzScriptServerPane::applyPluginRoutes()
 				}
 			}
 
-			if (!receiver) {
-				res.status = 503;
-				res.set_content(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE, "plugin handler unloaded"),
-				                "application/json");
-				return;
-			}
-
 			// Wrap path params + body into a single JSON envelope so the slot can
 			// access both without a separate signature.
 			// All string operations use QByteArray (Qt CRT) to avoid a heap mismatch
@@ -1850,26 +1851,11 @@ void DzScriptServerPane::applyPluginRoutes()
 			}
 
 			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());
-			HttpResult result(0, QByteArray());
-			const bool invoked = QMetaObject::invokeMethod(receiver.data(), slotBytes.constData(),
-			                          Qt::BlockingQueuedConnection,
-			                          Q_RETURN_ARG(HttpResult, result),
-			                          Q_ARG(QByteArray, body),
-			                          Q_ARG(QByteArray, ip));
-			// A slot that doesn't exist (or has the wrong signature) leaves
-			// result untouched; status 0 made httplib send no response at all.
-			if (!invoked || result.first < 100 || result.first > 599) {
-				res.status = 500;
-				res.set_content(ErrorResponse::build(ErrorCode::INTERNAL_ERROR, invoked
-				                    ? "companion plugin handler returned an invalid HTTP status"
-				                    : "companion plugin handler could not be called"),
-				                "application/json");
-				return;
-			}
-			res.status = result.first;
-			if (!result.second.isEmpty())
-				res.set_content(result.second.constData(), static_cast<size_t>(result.second.size()),
-				                "application/json");
+			// Busy check, bounded wait, and the receiver check all happen in
+			// the shared main-thread crossing (yau7.2.1).
+			HttpContext ctx = toContext(req);
+			callPluginRouteOnMainThread(this, ctx, mainThreadQueueTimeoutSec(), receiver, slotBytes, body, ip);
+			applyContext(ctx, res);
 		};
 	};
 

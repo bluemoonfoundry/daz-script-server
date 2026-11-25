@@ -45,7 +45,7 @@
 #include <QtCore/qbytearray.h>
 #include "DzScriptServerPane.h"  // HttpResult + its metatype, IRequestHandler
 
-// Lives on the main thread; called via BlockingQueuedConnection.
+// Lives on the main thread; reached through callOnMainThread().
 class GeometryExporter : public QObject {
 	Q_OBJECT
 public:
@@ -57,9 +57,10 @@ public:
 class GeometryFramesHandler : public IRequestHandler {
 public:
 	// Must be constructed on the main thread (the exporter's thread affinity).
-	GeometryFramesHandler();
+	explicit GeometryFramesHandler(DzScriptServerPane* pane);
 	~GeometryFramesHandler() override;
 	void handle(HttpContext& ctx) override;
 private:
-	GeometryExporter* m_pExporter;
+	DzScriptServerPane* m_pPane;
+	GeometryExporter*   m_pExporter;
 };

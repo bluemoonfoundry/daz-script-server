@@ -2,6 +2,7 @@
 #include "GeometryExport.h"
 #include "JsonStd.h"
 #include "ErrorResponse.h"
+#include "MainThreadCall.h"
 
 #include <cstring>
 #include <vector>
@@ -213,7 +214,8 @@ HttpResult GeometryExporter::exportFrames(const QByteArray& jsonBody)
 
 // ─── HTTP handler (worker thread) ────────────────────────────────────────────
 
-GeometryFramesHandler::GeometryFramesHandler() : m_pExporter(new GeometryExporter()) {}
+GeometryFramesHandler::GeometryFramesHandler(DzScriptServerPane* pane)
+	: m_pPane(pane), m_pExporter(new GeometryExporter()) {}
 
 GeometryFramesHandler::~GeometryFramesHandler()
 {
@@ -222,14 +224,11 @@ GeometryFramesHandler::~GeometryFramesHandler()
 
 void GeometryFramesHandler::handle(HttpContext& ctx)
 {
-	QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-	HttpResult result;
-	QMetaObject::invokeMethod(m_pExporter, "exportFrames",
-		Qt::BlockingQueuedConnection,
-		Q_RETURN_ARG(HttpResult, result),
-		Q_ARG(QByteArray, bodyBytes));
-	ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
-	if (result.first == 200)
+	const QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+	GeometryExporter* exporter = m_pExporter;
+	callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(),
+		[exporter, bodyBytes](DzScriptServerPane*) { return exporter->exportFrames(bodyBytes); });
+	if (ctx.responseStatus == 200)
 		ctx.responseContentType = "application/octet-stream";
 }
 

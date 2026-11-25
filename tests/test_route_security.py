@@ -149,7 +149,8 @@ class TestRouteSecurity(unittest.TestCase):
         # and before the plugin slot is invoked.
         not_found = dispatch.index("ErrorCode::ROUTE_NOT_FOUND")
         chain_run = dispatch.index("chain.run(ctx)")
-        invoke = dispatch.index("QMetaObject::invokeMethod(receiver.data()")
+        # The slot is invoked by callPluginRouteOnMainThread (RequestHandlers.cpp).
+        invoke = dispatch.index("callPluginRouteOnMainThread(")
         self.assertLess(not_found, chain_run)
         self.assertLess(chain_run, invoke)
 

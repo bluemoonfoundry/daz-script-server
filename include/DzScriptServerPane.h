@@ -49,7 +49,7 @@
 #include "RenderProgressBroker.h"
 #include "ArtifactThumbnail.h"
 
-// Required for BlockingQueuedConnection return from execute/register handlers.
+// Metatype needed to pass HttpResult through queued calls.
 typedef QPair<int, QByteArray> HttpResult;
 Q_DECLARE_METATYPE(HttpResult)
 
@@ -156,7 +156,7 @@ public slots:
 	Q_INVOKABLE void startServer();
 	Q_INVOKABLE void stopServer();
 
-	// Called on main thread via BlockingQueuedConnection from httplib handler threads.
+	// Called on the main thread through callOnMainThread() from httplib handler threads.
 	// Returns HttpResult (status, jsonBody) so handlers can set the correct HTTP status code.
 	Q_INVOKABLE HttpResult handleExecuteRequest(const QByteArray& jsonBody, const QByteArray& clientIP, qint64 acceptedAtMs);
 	Q_INVOKABLE HttpResult handleRegisterScript(const QByteArray& jsonBody, const QByteArray& clientIP);
@@ -164,7 +164,7 @@ public slots:
 
 	// On Studio 6 these are called directly from HTTP workers and use only local,
 	// reentrant Qt Core values plus mutex-protected services. Studio 4 routes them
-	// through BlockingQueuedConnection because its JSON parser uses QScriptEngine.
+	// through callOnMainThread() because its JSON parser uses QScriptEngine.
 	// Neither path touches GUI, DzScript, or DAZ SDK state off the main thread.
 	// The script limit is an immutable snapshot captured before server start.
 	// correlationId is the job route's resolved X-Correlation-Id, stored on the job.
@@ -185,7 +185,7 @@ public slots:
 	Q_INVOKABLE HttpResult handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody,
 	                                                        const QByteArray& correlationId);
 
-	// Scene I/O helpers — called on main thread via BlockingQueuedConnection.
+	// Scene I/O helpers — called on the main thread through callOnMainThread().
 	Q_INVOKABLE HttpResult handleSaveCopy(const QByteArray& jsonBody);
 
 	// GET /capabilities — main thread (reads render engines live from DzRenderMgr).
@@ -216,6 +216,9 @@ public:
 
 	// Main-thread busy state — called from HTTP threads (lock-free atomic read via SceneEventBroker)
 	bool        isMainThreadBusy() const;
+	// How long a worker waits for the main thread to start its call before
+	// answering 503 (the request timeout; fixed while the server runs).
+	int         mainThreadQueueTimeoutSec() const { return m_nTimeoutSec; }
 	std::string mainThreadBusyMessage() const;
 
 	// Last capabilities document built on the main thread, with render engines
