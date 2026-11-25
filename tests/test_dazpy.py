@@ -3760,6 +3760,7 @@ class TestTransformTypesAndTimeStep(unittest.TestCase):
     def test_time_step(self):
         self.assertEqual(DazScene(_make_client(160)).time_step(), 160)
         self.assertEqual(DazScene(_make_client(None)).time_step(), 160)
+        self.assertEqual(DazScene(_make_client(True)).time_step(), 160)
 
 
 class TestContentAssetMorphLoader(unittest.TestCase):

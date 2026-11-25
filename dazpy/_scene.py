@@ -1030,7 +1030,8 @@ class DazScene:
         """DzTime ticks per timeline frame (``Scene.getTimeStep()``; 160 at 30 fps)."""
         value = self._client.execute(
             ScriptBuilder.iife("return Scene.getTimeStep().valueOf();")).value
-        return int(value) if isinstance(value, (int, float)) and value > 0 else 160
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        return int(value) if ok else 160
 
     def all_node_transforms(self) -> list[dict]:
         """Return world-space transforms for every node in a single call.
