@@ -3713,6 +3713,41 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestKeyedCandidatesAndBones(unittest.TestCase):
+    """key_numeric_candidates / key_bone_axes (timed expressions, ord)."""
+
+    def test_key_numeric_candidates(self):
+        client = _make_client([{"matched": "facs_ctrl_Happy", "source": "property", "value": None},
+                               {"matched": None, "source": None, "value": None}])
+        node = DazNode(client, NodeIdentifier("9", kind="element_id"))
+        r = node.key_numeric_candidates([(["facs_ctrl_Happy"], [(0, 0.0), (10, 0.7)]),
+                                         (["Nope"], [(0, 1.0)])])
+        self.assertEqual(r[0].matched, "facs_ctrl_Happy")
+        self.assertFalse(r[1].found)
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getTimeStep()", script)
+        self.assertIn("[[0, 0.0], [10, 0.7]]", script)
+        self.assertIn("findPropertyByLabel", script)
+
+    def test_key_numeric_candidates_rejects_bare_string(self):
+        node = DazNode(_make_client([]), NodeIdentifier("9", kind="element_id"))
+        with self.assertRaises(TypeError):
+            node.key_numeric_candidates([("Smile", [(0, 1.0)])])
+
+    def test_key_bone_axes(self):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(["lShldr"])
+        skel = DazSkeleton(client, NodeIdentifier("9", kind="element_id"))
+        missing = skel.key_bone_axes({"spine4": {"x": [(0, 0.0), (10, 2.1)]},
+                                      "lShldr": {"z": [(0, 1.0)]}})
+        self.assertEqual(missing, ["lShldr"])
+        script = client.execute.call_args[0][0]
+        self.assertIn("Scene.getTimeStep()", script)
+        self.assertIn("getXRotControl", script)
+        with self.assertRaises(ValueError):
+            skel.key_bone_axes({"hip": {"w": [(0, 1.0)]}})
+
+
 class TestDForceHelpers(unittest.TestCase):
     """dForce surface/weights/properties/freeze and the Transfer Utility (1kd)."""
 

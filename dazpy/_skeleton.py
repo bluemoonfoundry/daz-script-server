@@ -335,6 +335,49 @@ class DazSkeleton(DazNode):
             return list(payload)
         return list(missing)
 
+    def key_bone_axes(
+        self, data: Mapping[str, Mapping[str, Sequence[tuple[int, float]]]]
+    ) -> list[str]:
+        """Keyframe individual rotation axes of bones at timeline frames, in one call.
+
+        Args:
+            data: ``{bone: {"x"|"y"|"z": [(frame, degrees), ...]}}``.
+
+        Returns:
+            Bone names from *data* not on this figure.
+
+        Raises:
+            ValueError: For an axis other than x/y/z.
+        """
+        payload: dict[str, dict[str, list]] = {}
+        for bone, axes in data.items():
+            bad = set(axes) - {"x", "y", "z"}
+            if bad:
+                raise ValueError(f"key_bone_axes: bone {bone!r} has unknown axes {sorted(bad)}")
+            payload[bone] = {a: [[int(f), float(v)] for f, v in keys] for a, keys in axes.items()}
+        if not payload:
+            return []
+        script = self._skeleton_body(f"""
+            var _data = {json.dumps(payload)}, _step = Scene.getTimeStep(), _found = {{}};
+            var _ctl = {{x: "getXRotControl", y: "getYRotControl", z: "getZRotControl"}};
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {{
+                var b = _bones[i], n = b.getName();
+                if (!_data.hasOwnProperty(n)) continue;
+                _found[n] = true;
+                for (var a in _data[n]) {{
+                    if (!_data[n].hasOwnProperty(a)) continue;
+                    var keys = _data[n][a], ctl = b[_ctl[a]]();
+                    for (var k = 0; k < keys.length; k++) ctl.setValue(keys[k][0] * _step, keys[k][1]);
+                }}
+            }}
+            var _missing = [];
+            for (var key in _data) if (_data.hasOwnProperty(key) && !_found[key]) _missing.push(key);
+            return _missing;
+        """)
+        missing = self._client.execute(script).value
+        return list(payload) if missing is None else list(missing)
+
     def look_at(
         self,
         point: Sequence[float],
