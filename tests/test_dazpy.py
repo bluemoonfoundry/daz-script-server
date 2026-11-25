@@ -899,14 +899,14 @@ class TestDazScene(unittest.TestCase):
 
     def test_create_camera_returns_daz_camera(self):
         from dazpy._camera import DazCamera
-        client = _make_client("Camera")
+        client = _make_client(42)
         scene = DazScene(client)
         camera = scene.create_camera()
         self.assertIsInstance(camera, DazCamera)
-        self.assertEqual(camera._identifier.value, "Camera")
+        self.assertEqual(camera._identifier, NodeIdentifier("42", kind="element_id"))
 
     def test_create_camera_script_uses_basic_camera_and_add_node(self):
-        client = _make_client("Camera")
+        client = _make_client(42)
         scene = DazScene(client)
         scene.create_camera()
         script = client.execute.call_args[0][0]
@@ -914,7 +914,7 @@ class TestDazScene(unittest.TestCase):
         self.assertIn("Scene.addNode(cam)", script)
 
     def test_create_camera_with_name_sets_name(self):
-        client = _make_client("MyCam")
+        client = _make_client(42)
         scene = DazScene(client)
         scene.create_camera(name="MyCam")
         script = client.execute.call_args[0][0]
@@ -964,11 +964,11 @@ class TestDazScene(unittest.TestCase):
 
     def test_create_light_returns_daz_light(self):
         from dazpy._light import DazLight
-        client = _make_client("Spotlight1")
+        client = _make_client(42)
         scene = DazScene(client)
         light = scene.create_light("spot")
         self.assertIsInstance(light, DazLight)
-        self.assertEqual(light._identifier.value, "Spotlight1")
+        self.assertEqual(light._identifier, NodeIdentifier("42", kind="element_id"))
 
     def test_create_light_script_uses_correct_class_per_type(self):
         cases = {
@@ -977,15 +977,23 @@ class TestDazScene(unittest.TestCase):
             "distant": "DzDistantLight",
         }
         for light_type, class_name in cases.items():
-            client = _make_client("Light1")
+            client = _make_client(42)
             scene = DazScene(client)
             scene.create_light(light_type)
             script = client.execute.call_args[0][0]
             self.assertIn(f"new {class_name}()", script)
             self.assertIn("Scene.addNode(light)", script)
 
+    def test_create_light_unnamed_is_bound_by_element_id(self):
+        # Studio leaves getName() empty for an unnamed light; a name-bound
+        # proxy was Scene.findNode("") and unusable.
+        client = _make_client(42)
+        light = DazScene(client).create_light("spot")
+        self.assertIn("return light.elementID", client.execute.call_args[0][0])
+        self.assertEqual(light._identifier, NodeIdentifier("42", kind="element_id"))
+
     def test_create_light_with_name_sets_name(self):
-        client = _make_client("Key Light")
+        client = _make_client(42)
         scene = DazScene(client)
         scene.create_light("point", name="Key Light")
         script = client.execute.call_args[0][0]
@@ -3571,6 +3579,17 @@ class TestNodeResolution(unittest.TestCase):
         self.assertIn('"Genesis 9"', script)
         self.assertIn("findNodeChildByLabel", script)
         self.assertIn("findNodeByElementID", script)
+
+    def test_lights_typed_before_cameras(self):
+        # DzLight inherits DzCamera; a light must come back as DazLight.
+        script_client = _make_client({"status": "ok", "element_id": 5, "type": "DzLight"})
+        DazScene(script_client).resolve_node("Key")
+        script = script_client.execute.call_args[0][0]
+        self.assertLess(script.index('"DzLight"'), script.index('"DzCamera"'))
+        client = _make_client([])
+        DazScene(client).nodes()
+        script = client.execute.call_args[0][0]
+        self.assertLess(script.index('inherits("DzLight")'), script.index('inherits("DzCamera")'))
 
     def test_resolve_node_accepts_int(self):
         client = _make_client({"status": "ok", "element_id": 5, "type": "DzNode"})

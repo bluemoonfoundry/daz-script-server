@@ -105,6 +105,14 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy: lights were typed as cameras.** `DzLight` inherits `DzCamera`,
+  and `DazScene.nodes()` checked for cameras first, so every light came
+  back as a `DazCamera`. Lights are now checked first, and `resolve_node()`
+  does the same.
+- **dazpy: `create_light()` / `create_camera()` without a name returned an
+  unusable proxy.** Studio leaves a new node's name empty, so the proxy
+  looked up `Scene.findNode("")`. Both now return a proxy bound to the new
+  node's elementID.
 - **dazpy: `DazBone` methods inherited from `DazNode` read the wrong figure.**
   `position`, `label`, visibility, transforms and the other `DazNode` methods
   looked the bone up with `Scene.findNode(<bone name>)`. Every Genesis

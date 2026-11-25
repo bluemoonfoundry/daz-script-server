@@ -151,9 +151,10 @@ class DazScene:
             for (var i = 0; i < Scene.getNumNodes(); i++) {
                 var n = Scene.getNode(i);
                 var nodeType = "DzNode";
+                // DzLight inherits DzCamera: test lights first.
                 if (n.inherits("DzSkeleton")) { nodeType = "DzSkeleton"; }
-                else if (n.inherits("DzCamera")) { nodeType = "DzCamera"; }
                 else if (n.inherits("DzLight")) { nodeType = "DzLight"; }
+                else if (n.inherits("DzCamera")) { nodeType = "DzCamera"; }
                 result.push({name: n.getName(), className: nodeType});
             }
             return result;
@@ -172,7 +173,8 @@ class DazScene:
             for item in items
         ]
 
-    _NODE_CLASSES = ("DzSkeleton", "DzCamera", "DzLight")
+    # DzLight inherits DzCamera, so lights must be tested before cameras.
+    _NODE_CLASSES = ("DzSkeleton", "DzLight", "DzCamera")
 
     def _typed_node(self, identifier: NodeIdentifier, class_name: str) -> DazNode:
         from ._skeleton import DazSkeleton
@@ -577,10 +579,12 @@ class DazScene:
             var cam = new DzBasicCamera();
             if ({name_expr} !== null) cam.setName({name_expr});
             Scene.addNode(cam);
-            return cam.getName();
+            return cam.elementID;
         """)
-        created_name = self._client.execute(script).value
-        return DazCamera(self._client, NodeIdentifier(created_name))
+        # Bound by elementID: without a name Studio leaves getName() empty,
+        # and a name lookup would be ambiguous or fail.
+        element_id = self._client.execute(script).value
+        return DazCamera(self._client, NodeIdentifier(str(int(element_id)), kind="element_id"))
 
     def create_light(self, light_type: str, name: str | None = None) -> "DazLight":
         """Create a new light node and add it to the scene.
@@ -608,10 +612,11 @@ class DazScene:
             var light = new {class_name}();
             if ({name_expr} !== null) light.setName({name_expr});
             Scene.addNode(light);
-            return light.getName();
+            return light.elementID;
         """)
-        created_name = self._client.execute(script).value
-        return DazLight(self._client, NodeIdentifier(created_name))
+        # Bound by elementID: without a name Studio leaves getName() empty.
+        element_id = self._client.execute(script).value
+        return DazLight(self._client, NodeIdentifier(str(int(element_id)), kind="element_id"))
 
     def create_group(
         self,
