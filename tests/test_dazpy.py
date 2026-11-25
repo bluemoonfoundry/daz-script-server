@@ -3397,6 +3397,131 @@ class TestDazSkeletonScriptGeneration(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+class TestDazSkeletonBoneAxes(unittest.TestCase):
+    """bone_names() and set_bone_axes() (5d6f.29: morph-tool primitives)."""
+
+    def _make_skeleton(self, return_value=None):
+        from dazpy._skeleton import DazSkeleton
+        client = _make_client(return_value)
+        return DazSkeleton(client, NodeIdentifier("Genesis 9", kind="label")), client
+
+    def test_bone_names_single_call(self):
+        skel, client = self._make_skeleton(["hip", "spine4", "head"])
+        self.assertEqual(skel.bone_names(), ["hip", "spine4", "head"])
+        self.assertEqual(client.execute.call_count, 1)
+        self.assertIn("getAllBones", client.execute.call_args[0][0])
+
+    def test_bone_names_missing_skeleton_is_empty(self):
+        skel, _ = self._make_skeleton(None)
+        self.assertEqual(skel.bone_names(), [])
+
+    def test_set_bone_axes_writes_only_named_axes(self):
+        skel, client = self._make_skeleton([])
+        skel.set_bone_axes({"spine4": {"x": 5.0}, "l_upperarm": {"z": -5.0, "y": 1.5}})
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        payload = json.loads(script.split("var _data = ", 1)[1].split(";\n", 1)[0])
+        self.assertEqual(payload, {"spine4": {"x": 5.0}, "l_upperarm": {"z": -5.0, "y": 1.5}})
+        self.assertIn("getXRotControl", script)
+        self.assertIn("hasOwnProperty", script)
+
+    def test_set_bone_axes_returns_missing_bones(self):
+        skel, _ = self._make_skeleton(["lShldr"])
+        self.assertEqual(skel.set_bone_axes({"lShldr": {"z": 3}, "hip": {"x": 1}}), ["lShldr"])
+
+    def test_set_bone_axes_missing_skeleton_reports_all_missing(self):
+        skel, _ = self._make_skeleton(None)
+        self.assertEqual(sorted(skel.set_bone_axes({"a": {"x": 1}, "b": {"y": 2}})), ["a", "b"])
+
+    def test_set_bone_axes_rejects_unknown_axis(self):
+        skel, client = self._make_skeleton([])
+        with self.assertRaises(ValueError):
+            skel.set_bone_axes({"hip": {"w": 1.0}})
+        client.execute.assert_not_called()
+
+    def test_set_bone_axes_empty_is_noop(self):
+        skel, client = self._make_skeleton([])
+        self.assertEqual(skel.set_bone_axes({}), [])
+        client.execute.assert_not_called()
+
+
+class TestDazNodeNumericCandidates(unittest.TestCase):
+    """DazNode.set_numeric_candidates() (5d6f.29: emotion/expression dials)."""
+
+    def _node(self, return_value):
+        client = _make_client(return_value)
+        return DazNode(client, NodeIdentifier("Genesis 9", kind="label")), client
+
+    def test_single_call_and_payload(self):
+        node, client = self._node([
+            {"matched": "Smile", "source": "property", "value": 0.6},
+            {"matched": None, "source": None, "value": None},
+        ])
+        results = node.set_numeric_candidates([
+            (["PHMSmile", "Smile"], 0.6),
+            (("BrowUp",), 0.4),
+        ])
+        self.assertEqual(client.execute.call_count, 1)
+        script = client.execute.call_args[0][0]
+        self.assertIn("findProperty", script)
+        self.assertIn("findPropertyByLabel", script)
+        self.assertIn("DzMorph", script)
+        self.assertIn("DzNumericProperty", script)
+        self.assertIn('"PHMSmile"', script)
+        self.assertEqual(results[0].matched, "Smile")
+        self.assertEqual(results[0].source, "property")
+        self.assertAlmostEqual(results[0].value, 0.6)
+        self.assertEqual(results[0].candidates, ("PHMSmile", "Smile"))
+        self.assertTrue(results[0].found)
+        self.assertFalse(results[1].found)
+        self.assertEqual(results[1].requested, 0.4)
+
+    def test_missing_node_raises(self):
+        node, _ = self._node(None)
+        with self.assertRaises(exceptions.NodeNotFoundError):
+            node.set_numeric_candidates([(["Smile"], 1.0)])
+
+    def test_empty_slots_is_noop(self):
+        node, client = self._node([])
+        self.assertEqual(node.set_numeric_candidates([]), [])
+        client.execute.assert_not_called()
+
+    def test_rejects_string_candidates(self):
+        # A bare string would be iterated per character -- refuse it.
+        node, client = self._node([])
+        with self.assertRaises(TypeError):
+            node.set_numeric_candidates([("Smile", 1.0)])
+        client.execute.assert_not_called()
+
+    def test_names_are_json_escaped(self):
+        node, client = self._node([{"matched": None, "source": None, "value": None}])
+        node.set_numeric_candidates([(['a"); Scene.clear(); ("'], 1.0)])
+        script = client.execute.call_args[0][0]
+        self.assertNotIn('a"); Scene.clear()', script)
+
+
+class TestDazSceneViewportCamera(unittest.TestCase):
+    def test_default_view_camera_not_in_scene(self):
+        client = _make_client({"label": "Perspective View", "name": "PerspectiveView",
+                               "in_scene": False, "position": [145, 190, 370]})
+        cam = DazScene(client).viewport_camera()
+        self.assertEqual(cam.label, "Perspective View")
+        self.assertFalse(cam.in_scene)
+        self.assertEqual(cam.position, (145.0, 190.0, 370.0))
+        self.assertIsNone(cam.camera)
+        self.assertIn("get3DViewport", client.execute.call_args[0][0])
+
+    def test_scene_camera_gets_proxy(self):
+        from dazpy._camera import DazCamera
+        client = _make_client({"label": "Camera 1", "name": "Camera 1",
+                               "in_scene": True, "position": [0, 150, 300]})
+        cam = DazScene(client).viewport_camera()
+        self.assertIsInstance(cam.camera, DazCamera)
+
+    def test_no_viewport_returns_none(self):
+        self.assertIsNone(DazScene(_make_client(None)).viewport_camera())
+
+
 class TestDazBoneScriptGeneration(unittest.TestCase):
     def setUp(self):
         from dazpy._bone import DazBone

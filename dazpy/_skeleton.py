@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
@@ -56,9 +56,16 @@ class DazSkeleton(DazNode):
             f"}})()"
         )
 
-    def bones(self) -> list["DazBone"]:
-        """Return all bones in this skeleton."""
-        from ._bone import DazBone
+    def bone_names(self) -> list[str]:
+        """Return the internal name of every bone in this skeleton, in one call.
+
+        Cheaper than :meth:`bones` when only the names are needed, e.g. to
+        pick the bone a figure generation uses for a role (``chestUpper`` on
+        Genesis 3/8, ``spine4`` on Genesis 9).
+
+        Returns:
+            Bone names, or ``[]`` if the skeleton is not in the scene.
+        """
         script = self._skeleton_body(
             """
             var bones = _node.getAllBones();
@@ -69,7 +76,12 @@ class DazSkeleton(DazNode):
             return names;
             """
         )
-        names = self._client.execute(script).value or []
+        return list(self._client.execute(script).value or [])
+
+    def bones(self) -> list["DazBone"]:
+        """Return all bones in this skeleton."""
+        from ._bone import DazBone
+        names = self.bone_names()
         return [DazBone._from_locator(self._client, self._bone_locator(n), n) for n in names]
 
     def bone_metadata(self) -> list[dict]:
@@ -259,6 +271,62 @@ class DazSkeleton(DazNode):
             }}
         """)
         self._client.execute(script)
+
+    def set_bone_axes(self, data: Mapping[str, Mapping[str, float]]) -> list[str]:
+        """Set individual rotation axes on any subset of bones in one HTTP call.
+
+        Unlike :meth:`set_bone_rotations`, which writes all three axes, this
+        writes only the axes named for each bone, so an adjustment like "tilt
+        the chest forward 5 degrees" leaves the chest's twist and side-bend
+        alone.
+
+        Args:
+            data: ``{bone_name: {"x": deg, "y": deg, "z": deg}}``; each inner
+                mapping may name any subset of ``"x"``, ``"y"``, ``"z"``.
+
+        Returns:
+            Names from *data* that matched no bone (all of them if the
+            skeleton is not in the scene). Bones that matched were written.
+
+        Raises:
+            ValueError: If an inner mapping names an axis other than x/y/z.
+        """
+        payload: dict[str, dict[str, float]] = {}
+        for bone, axes in data.items():
+            bad = set(axes) - {"x", "y", "z"}
+            if bad:
+                raise ValueError(
+                    f"set_bone_axes: bone {bone!r} has unknown axes {sorted(bad)}; "
+                    "use 'x', 'y' or 'z'"
+                )
+            payload[bone] = {axis: float(v) for axis, v in axes.items()}
+        if not payload:
+            return []
+        script = self._skeleton_body(f"""
+            var _data = {json.dumps(payload)};
+            var _ctl = {{x: "getXRotControl", y: "getYRotControl", z: "getZRotControl"}};
+            var _found = {{}};
+            var _bones = _node.getAllBones();
+            for (var i = 0; i < _bones.length; i++) {{
+                var _b = _bones[i];
+                var _n = _b.getName();
+                if (!_data.hasOwnProperty(_n)) continue;
+                _found[_n] = true;
+                var _axes = _data[_n];
+                for (var _a in _axes) {{
+                    if (_axes.hasOwnProperty(_a)) _b[_ctl[_a]]().setValue(_axes[_a]);
+                }}
+            }}
+            var _missing = [];
+            for (var _k in _data) {{
+                if (_data.hasOwnProperty(_k) && !_found[_k]) _missing.push(_k);
+            }}
+            return _missing;
+        """)
+        missing = self._client.execute(script).value
+        if missing is None:  # skeleton not in the scene
+            return list(payload)
+        return list(missing)
 
     def _zero_bones_and_morphs(self) -> None:
         """Drive every bone rotation to 0 and every non-zero DzMorph to 0, in

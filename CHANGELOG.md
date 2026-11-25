@@ -20,6 +20,22 @@ All notable changes to DazScript Server are documented here.
   `setTransformKeyInterpolation()` sets per-key interpolation directly. Both
   fields are optional, and plans without them serialise as before. Live-verified
   on Studio 4.24 and 6.26.
+- **dazpy primitives for expression, posture and gaze tools** (5d6f.29), added
+  so daz-mcp-server's morph tools can drop their embedded DazScript:
+  - `DazNode.set_numeric_candidates([(names, value), ...])` sets one dial per
+    slot, using the first name that resolves (node property name, then
+    property label, then `DzMorph` modifier name/label), reads it back, and
+    returns a `NumericCandidateMatch` per slot. Expression controls on stock
+    Genesis 8/9 are node-level controller properties, not morph modifiers, so
+    `set_morph_values` can't reach them.
+  - `DazSkeleton.set_bone_axes({bone: {"x": deg}})` writes only the named
+    axes and returns the bones it couldn't find. `set_bone_rotations` always
+    writes all three axes.
+  - `DazSkeleton.bone_names()` returns every bone name in one call.
+  - `DazScene.viewport_camera()` returns a `ViewportCamera` snapshot of the
+    camera the active viewport looks through, including Studio's built-in
+    view cameras ("Perspective View"), which aren't scene nodes.
+  Live-verified on Studio 4.24 with Genesis 9 and Genesis 8 Female.
 
 ## [2.16.0] - 2026-11-23
 

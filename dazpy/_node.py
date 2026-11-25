@@ -62,6 +62,32 @@ class NodeIdentifier:
     kind: str = "name"  # "name" or "label"
 
 
+@dataclass(frozen=True)
+class NumericCandidateMatch:
+    """One slot's outcome from :meth:`DazNode.set_numeric_candidates`.
+
+    Attributes:
+        candidates: The names tried, in order.
+        requested: The value the slot asked for.
+        matched: The candidate name that resolved, or ``None`` if none did.
+        source: ``"property"`` (a node-level property, e.g. an expression
+            controller dial) or ``"modifier"`` (a morph's value channel);
+            ``None`` when nothing matched.
+        value: The value read back after the write (``None`` when nothing
+            matched). Can differ from *requested* if the dial clamps.
+    """
+
+    candidates: tuple[str, ...]
+    requested: float
+    matched: str | None
+    source: str | None
+    value: float | None
+
+    @property
+    def found(self) -> bool:
+        return self.matched is not None
+
+
 class DazNode(DazElement):
     """Proxy for a ``DzNode`` in the active DAZ Studio scene.
 
@@ -502,6 +528,105 @@ class DazNode(DazElement):
         if not exists:
             return None
         return DazProperty._from_locator(self._client, locator)
+
+    def set_numeric_candidates(
+        self, slots: Sequence[tuple[Sequence[str], float]]
+    ) -> list[NumericCandidateMatch]:
+        """Set numeric dials chosen from per-slot candidate names, in one call.
+
+        Each slot is ``(candidate_names, value)``. The first candidate that
+        resolves on this node is set to *value* and read back; later
+        candidates in that slot are ignored. This handles dials whose names
+        differ between figure generations or products, e.g. a smile that is
+        ``"Smile"`` on Genesis 9 but something else on another figure.
+
+        A name resolves, in order, as a node-level property name
+        (``findProperty``: expression and pose controller dials), then a
+        node-level property label, then a ``DzMorph`` modifier name or
+        label (its value channel). Only numeric properties count.
+
+        Writes use plain ``setValue()``, like
+        :meth:`~dazpy.DazElement.set_property`.
+
+        Args:
+            slots: ``[(names, value), ...]``. *names* must be a sequence of
+                strings, not a bare string.
+
+        Returns:
+            One :class:`NumericCandidateMatch` per slot, in order.
+
+        Raises:
+            TypeError: If a slot's names is a bare string.
+            NodeNotFoundError: If this node is not in the scene.
+        """
+        from .exceptions import NodeNotFoundError
+
+        normalized: list[tuple[tuple[str, ...], float]] = []
+        for names, value in slots:
+            if isinstance(names, str):
+                raise TypeError(
+                    "set_numeric_candidates: each slot's names must be a list of "
+                    f"strings, got the bare string {names!r}"
+                )
+            normalized.append((tuple(str(n) for n in names), float(value)))
+        if not normalized:
+            return []
+        payload = json.dumps([{"names": list(n), "value": v} for n, v in normalized])
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var _slots = {payload};
+            var _mods = null;
+            function _numeric(p) {{ return p && p.inherits("DzNumericProperty") ? p : null; }}
+            function _modChannel(n) {{
+                if (_mods === null) {{
+                    _mods = {{byName: {{}}, byLabel: {{}}}};
+                    var _obj = _node.getObject ? _node.getObject() : null;
+                    if (_obj) {{
+                        for (var _i = 0; _i < _obj.getNumModifiers(); _i++) {{
+                            var _m = _obj.getModifier(_i);
+                            if (!_m || _m.className() !== "DzMorph") continue;
+                            var _ch = _m.getValueChannel();
+                            if (!_mods.byName.hasOwnProperty(_m.getName())) _mods.byName[_m.getName()] = _ch;
+                            if (!_mods.byLabel.hasOwnProperty(_m.getLabel())) _mods.byLabel[_m.getLabel()] = _ch;
+                        }}
+                    }}
+                }}
+                if (_mods.byName.hasOwnProperty(n)) return _numeric(_mods.byName[n]);
+                if (_mods.byLabel.hasOwnProperty(n)) return _numeric(_mods.byLabel[n]);
+                return null;
+            }}
+            var _out = [];
+            for (var _s = 0; _s < _slots.length; _s++) {{
+                var _slot = _slots[_s];
+                var _hit = null;
+                for (var _c = 0; _c < _slot.names.length && !_hit; _c++) {{
+                    var _n = _slot.names[_c];
+                    var _p = _numeric(_node.findProperty(_n)) || _numeric(_node.findPropertyByLabel(_n));
+                    if (_p) {{ _hit = {{name: _n, source: "property", prop: _p}}; break; }}
+                    _p = _modChannel(_n);
+                    if (_p) {{ _hit = {{name: _n, source: "modifier", prop: _p}}; break; }}
+                }}
+                if (_hit) {{
+                    _hit.prop.setValue(_slot.value);
+                    _out.push({{matched: _hit.name, source: _hit.source, value: _hit.prop.getValue()}});
+                }} else {{
+                    _out.push({{matched: null, source: null, value: null}});
+                }}
+            }}
+            return _out;
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        return [
+            NumericCandidateMatch(
+                candidates=names,
+                requested=value,
+                matched=r.get("matched"),
+                source=r.get("source"),
+                value=r.get("value"),
+            )
+            for (names, value), r in zip(normalized, raw)
+        ]
 
     def find_property_by_label(self, label: str) -> "DazProperty | None":
         """Find a node-level property by its user-visible label.

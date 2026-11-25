@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._client import DazClient
@@ -14,6 +15,26 @@ if TYPE_CHECKING:
     from ._light import DazLight
     from ._skeleton import DazSkeleton
     from ._undo import UndoGroup
+
+
+@dataclass(frozen=True)
+class ViewportCamera:
+    """Snapshot of the camera the active 3D viewport is looking through.
+
+    Attributes:
+        label: The camera's label (e.g. ``"Perspective View"``, ``"Camera 1"``).
+        name: The camera's internal name.
+        in_scene: ``False`` for Studio's built-in view cameras (Perspective,
+            Front, Top, ...), which are not scene nodes.
+        position: World-space ``(x, y, z)`` at the time of the call.
+        camera: A :class:`~dazpy.DazCamera` proxy when *in_scene*, else ``None``.
+    """
+
+    label: str
+    name: str
+    in_scene: bool
+    position: tuple[float, float, float]
+    camera: "DazCamera | None" = None
 
 
 class DazScene:
@@ -185,6 +206,41 @@ class DazScene:
         """)
         names = self._client.execute(script).value or []
         return [DazLight(self._client, NodeIdentifier(n)) for n in names]
+
+    def viewport_camera(self) -> ViewportCamera | None:
+        """Return the camera the active 3D viewport is looking through.
+
+        This is often one of Studio's built-in view cameras (``"Perspective
+        View"``), which is not a scene node and so is not in :meth:`cameras`;
+        :attr:`ViewportCamera.in_scene` says which kind it is.
+
+        Returns:
+            A :class:`ViewportCamera` snapshot, or ``None`` when there is no
+            active 3D viewport (e.g. Studio is running without a main window).
+        """
+        from ._camera import DazCamera
+        script = ScriptBuilder.iife("""
+            var _vm = (typeof MainWindow !== "undefined" && MainWindow) ? MainWindow.getViewportMgr() : null;
+            var _vp = _vm ? _vm.getActiveViewport() : null;
+            var _v3 = _vp ? _vp.get3DViewport() : null;
+            var _cam = _v3 ? _v3.getCamera() : null;
+            if (!_cam) return null;
+            var _p = _cam.getWSPos();
+            return {label: _cam.getLabel(), name: _cam.getName(),
+                    in_scene: _cam.isInScene(), position: [_p.x, _p.y, _p.z]};
+        """)
+        raw = self._client.execute(script).value
+        if not raw:
+            return None
+        in_scene = bool(raw.get("in_scene"))
+        pos = raw.get("position") or [0.0, 0.0, 0.0]
+        return ViewportCamera(
+            label=raw.get("label", ""),
+            name=raw.get("name", ""),
+            in_scene=in_scene,
+            position=(float(pos[0]), float(pos[1]), float(pos[2])),
+            camera=DazCamera(self._client, NodeIdentifier(raw["name"])) if in_scene else None,
+        )
 
     def find_camera_by_label(self, label: str) -> "DazCamera":
         """Find a camera by its user-visible label.

@@ -16,8 +16,8 @@ Typical usage::
 __version__ = "2.16.0"
 
 from ._client import DazClient
-from ._scene import DazScene
-from ._node import DazNode, NodeIdentifier
+from ._scene import DazScene, ViewportCamera
+from ._node import DazNode, NodeIdentifier, NumericCandidateMatch
 from ._skeleton import DazSkeleton
 from ._bone import DazBone
 from ._camera import DazCamera
@@ -149,6 +149,8 @@ __all__ = [
     "DazScene",
     "DazNode",
     "NodeIdentifier",
+    "NumericCandidateMatch",
+    "ViewportCamera",
     "DazSkeleton",
     "DazBone",
     "DazCamera",
