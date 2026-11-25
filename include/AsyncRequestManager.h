@@ -9,6 +9,7 @@
 #include <QtCore/qstringlist.h>
 #include <QtCore/qbytearray.h>
 #include <string>
+#include <functional>
 #include <utility>
 
 // Forward declaration — AsyncRequestManager calls back into the pane via
@@ -86,9 +87,16 @@ public:
     // leaves report parsing to the main-thread completion path because its
     // JsonStd parser constructs a thread-affine QScriptEngine.
     std::pair<int, std::string> getStatusJson(const std::string& requestId);
-    std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec);
-    std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP);
-    std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP);
+    // With doWait, polls until the job is final, timeoutSec passes, or
+    // isClientGone() reports the client disconnected (then stops waiting).
+    std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec,
+                                              const std::function<bool()>& isClientGone = std::function<bool()>());
+    // *cancelledQueuedRender (optional) is set when a render was cancelled
+    // before it started, so the caller can end its progress stream.
+    std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP,
+                                           bool* cancelledQueuedRender = nullptr);
+    std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP,
+                                                 bool* cancelledQueuedRender = nullptr);
     std::string                 listJson(const std::string& statusFilter);
 
     // ── Artifacts (GET /artifacts/...) — HTTP threads ─────────────────────
@@ -248,7 +256,8 @@ private:
     };
 
     std::string statusToString(RequestStatus s) const;
-    std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly);
+    std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly,
+                                           bool* cancelledQueuedRender);
     static std::string lifecycleTimesJson(const AsyncRequest& req);
     static std::string identityJson(const AsyncRequest& req);
     static std::string activityJson(const AsyncRequest& req);

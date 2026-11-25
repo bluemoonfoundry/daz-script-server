@@ -1,5 +1,7 @@
 #pragma once
 #include <memory>
+#include <atomic>
+#include <functional>
 #include <string>
 #include <utility>
 #include <dzpane.h>
@@ -125,7 +127,7 @@ public:
 	Q_INVOKABLE void    setPort(int p)   { m_nPort = p; }
 	Q_INVOKABLE QString getHost()  const { return m_sHost; }
 	Q_INVOKABLE void    setHost(const QString& h) { m_sHost = h; }
-	Q_INVOKABLE bool    isRunning() const { return m_bRunning; }
+	Q_INVOKABLE bool    isRunning() const { return m_bRunning.load(); }
 
 	// Plugin route registration — called by companion plugins loaded in the same process.
 	// Registers method+path on the httplib server immediately (or at next server start if
@@ -250,7 +252,8 @@ public:
 	                                         const QString& idPrefix, const QString& correlationId,
 	                                         qint64& outSubmittedAt, QString& outError);
 	std::pair<int, std::string> getAsyncStatusJson(const std::string& requestId);
-	std::pair<int, std::string> getAsyncResultJson(const std::string& requestId, bool doWait, int timeoutSec);
+	std::pair<int, std::string> getAsyncResultJson(const std::string& requestId, bool doWait, int timeoutSec,
+	                                               const std::function<bool()>& isClientGone);
 	std::pair<int, std::string> cancelAsyncRequestJson(const std::string& requestId, const std::string& clientIP);
 	std::pair<int, std::string> cancelRenderRequestJson(const std::string& requestId, const std::string& clientIP);
 	std::string                 listAsyncRequestsJson(const std::string& statusFilter);
@@ -293,6 +296,7 @@ private:
 	void   serveArtifactThumbnail(const httplib::Request& req, httplib::Response& res);
 	void   updateUI();
 	DzScript* ensurePersistentScript();
+	void      endProgressOfCancelledRender(const QString& requestId);
 
 	// One script run on the persistent DzScript with print() output captured
 	// (yau7.5.1). Loads scriptFile when set, else runs scriptText. MAIN THREAD.
@@ -324,7 +328,8 @@ private:
 	int              m_nPort;
 	QString          m_sHost;
 	QByteArray       m_aHostUtf8;
-	bool             m_bRunning;
+	// Written on the main thread, read by HTTP workers (GET /health).
+	std::atomic<bool> m_bRunning;
 	int              m_nTimeoutSec;
 	bool             m_bAutoStart;
 

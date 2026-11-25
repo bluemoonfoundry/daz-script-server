@@ -20,7 +20,8 @@
 //                       handler thread, polling AsyncRequestManager::
 //                       frameProgress() for the job's frame report.
 //   notifyCompleted() — called on main thread after successful render
-//   notifyFailed()    — called on main thread after failed/cancelled render
+//   notifyFailed()    — main thread after a failed/cancelled render; also any
+//                       thread when a render is cancelled before it starts
 //
 // DAZ SDK reality: DzRenderer exposes no renderProgress(int) signal, and
 // live testing confirmed Iray posts no parseable progress text through the

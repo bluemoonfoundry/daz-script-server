@@ -489,7 +489,8 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
 }
 
 std::pair<int, std::string> AsyncRequestManager::getResultJson(
-    const std::string& requestId, bool doWait, int timeoutSec)
+    const std::string& requestId, bool doWait, int timeoutSec,
+    const std::function<bool()>& isClientGone)
 {
     QString qid = QString::fromStdString(requestId);
 
@@ -506,6 +507,9 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
             // STALE isn't final, but the server has given up waiting on it,
             // so long-pollers get its success:false answer instead of hanging.
             if (isTerminal(s) || s == REQUEST_STALE)
+                break;
+            // Don't hold a worker for a client that has gone.
+            if (isClientGone && isClientGone())
                 break;
             SleepThread::msleep(RESULT_POLL_INTERVAL_MS);
         }
@@ -572,17 +576,17 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
 }
 
 std::pair<int, std::string> AsyncRequestManager::cancelJson(
-    const std::string& requestId, const std::string& clientIP)
+    const std::string& requestId, const std::string& clientIP, bool* cancelledQueuedRender)
 {
     (void)clientIP;
-    return cancelImpl(requestId, false);
+    return cancelImpl(requestId, false, cancelledQueuedRender);
 }
 
 std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
-    const std::string& requestId, const std::string& clientIP)
+    const std::string& requestId, const std::string& clientIP, bool* cancelledQueuedRender)
 {
     (void)clientIP;
-    return cancelImpl(requestId, true);
+    return cancelImpl(requestId, true, cancelledQueuedRender);
 }
 
 // QUEUED requests are removed from the queue and become CANCELLED at once.
@@ -590,8 +594,9 @@ std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
 // becomes CANCEL_REQUESTED (STALE stays STALE), render jobs get a best-effort
 // killRender(), and markCompleted() later records what really happened.
 std::pair<int, std::string> AsyncRequestManager::cancelImpl(
-    const std::string& requestId, bool renderOnly)
+    const std::string& requestId, bool renderOnly, bool* cancelledQueuedRender)
 {
+    if (cancelledQueuedRender) *cancelledQueuedRender = false;
     QString qid = QString::fromStdString(requestId);
 
     bool needKillRender = false;
@@ -627,6 +632,8 @@ std::pair<int, std::string> AsyncRequestManager::cancelImpl(
             req.status      = REQUEST_CANCELLED;
             req.error       = "Cancelled by client before it started";
             req.completedAt = now;
+            if (cancelledQueuedRender && req.requestType == REQUEST_TYPE_RENDER)
+                *cancelledQueuedRender = true;
         } else {
             if (req.status == REQUEST_RUNNING)
                 req.status = REQUEST_CANCEL_REQUESTED;

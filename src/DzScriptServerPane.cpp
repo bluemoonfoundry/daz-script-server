@@ -578,6 +578,10 @@ DzScriptServerPane::~DzScriptServerPane()
 		QCoreApplication::instance()->setProperty("DzScriptServerPane", QVariant());
 	stopServer();
 	saveSettings();
+	// Not a QObject child: delete it ourselves, after stopServer() has
+	// cancelled its jobs and no HTTP worker can reach it.
+	delete m_pAsyncMgr;
+	m_pAsyncMgr = nullptr;
 	DzScriptDeleter::cleanup(m_pPersistentScript);
 }
 
@@ -1924,15 +1928,29 @@ std::pair<int, std::string> DzScriptServerPane::getAsyncStatusJson(const std::st
 }
 
 std::pair<int, std::string> DzScriptServerPane::getAsyncResultJson(const std::string& requestId,
-                                                                   bool doWait, int timeoutSec)
+                                                                   bool doWait, int timeoutSec,
+                                                                   const std::function<bool()>& isClientGone)
 {
-	return m_pAsyncMgr->getResultJson(requestId, doWait, timeoutSec);
+	return m_pAsyncMgr->getResultJson(requestId, doWait, timeoutSec, isClientGone);
+}
+
+// Any thread. A render cancelled before it started never reaches
+// notifyStarted/notifyFailed in processNextAsyncRequest, so end its
+// /render/:id/progress stream here (yau7.2.8). The broker is mutex-protected
+// and stores the event for subscribers that connect later.
+void DzScriptServerPane::endProgressOfCancelledRender(const QString& requestId)
+{
+	if (RenderProgressBroker* broker = m_pRenderProgress)
+		broker->notifyFailed(requestId, "Cancelled before execution started", 0);
 }
 
 std::pair<int, std::string> DzScriptServerPane::cancelAsyncRequestJson(const std::string& requestId,
                                                                        const std::string& clientIP)
 {
-	std::pair<int, std::string> result = m_pAsyncMgr->cancelJson(requestId, clientIP);
+	bool cancelledQueuedRender = false;
+	std::pair<int, std::string> result = m_pAsyncMgr->cancelJson(requestId, clientIP, &cancelledQueuedRender);
+	if (cancelledQueuedRender)
+		endProgressOfCancelledRender(QString::fromStdString(requestId));
 	if (result.first == 200) {
 		std::string logLine = "[" + JsonStd::currentTime() + "] [ASYNC CANCEL] " + requestId;
 		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
@@ -1944,7 +1962,10 @@ std::pair<int, std::string> DzScriptServerPane::cancelAsyncRequestJson(const std
 std::pair<int, std::string> DzScriptServerPane::cancelRenderRequestJson(const std::string& requestId,
                                                                         const std::string& clientIP)
 {
-	std::pair<int, std::string> result = m_pAsyncMgr->cancelRenderJson(requestId, clientIP);
+	bool cancelledQueuedRender = false;
+	std::pair<int, std::string> result = m_pAsyncMgr->cancelRenderJson(requestId, clientIP, &cancelledQueuedRender);
+	if (cancelledQueuedRender)
+		endProgressOfCancelledRender(QString::fromStdString(requestId));
 	if (result.first == 200) {
 		std::string logLine = "[" + JsonStd::currentTime() + "] [RENDER CANCEL] " + requestId;
 		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
@@ -3599,6 +3620,8 @@ void DzScriptServerPane::processNextAsyncRequest()
 	// Request may have been cancelled while queued
 	if (m_pAsyncMgr->isCancelRequested(id)) {
 		m_pAsyncMgr->markCancelled(id, "Cancelled before execution started");
+		if (id.startsWith("rnd-"))
+			endProgressOfCancelledRender(id);
 		m_pAsyncMgr->clearCurrent();
 		QMetaObject::invokeMethod(this, "processNextAsyncRequest", Qt::QueuedConnection);
 		return;

@@ -381,7 +381,7 @@ void AsyncResultHandler::handle(HttpContext& ctx)
         long t = std::strtol(ts.c_str(), &end, 10);
         if (end != ts.c_str() && t > 0) timeoutSec = (int)t;
     }
-    std::pair<int, std::string> result = m_pPane->getAsyncResultJson(ctx.urlMatch, doWait, timeoutSec);
+    std::pair<int, std::string> result = m_pPane->getAsyncResultJson(ctx.urlMatch, doWait, timeoutSec, ctx.isClientGone);
     ctx.respond(result.first, result.second);
 }
 
