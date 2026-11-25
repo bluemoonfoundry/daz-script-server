@@ -102,9 +102,17 @@ All notable changes to DazScript Server are documented here.
   - `DazLight.aim_at(x, y, z)`, like `DazCamera.aim_at`.
   - `DazRenderSettings.environment_mode` / `set_environment_mode()` read
     and write Iray's Environment Mode on Studio 4 and 6.
+- `DazNode.fitted_item_info()` lists the items fitted to a figure as
+  `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
 
 ### Fixed
 
+- **dazpy: `fitted_items()` included the figure's bones** (the root bone is
+  a direct child of the figure) and returned name-bound proxies. It now
+  skips bones and binds by elementID.
+- **dazpy: `export_fbx()` / `export_obj()` failed silently** when the
+  exporter was missing or `writeFile` returned an error. Both now raise
+  `DazError`.
 - **dazpy: lights were typed as cameras.** `DzLight` inherits `DzCamera`,
   and `DazScene.nodes()` checked for cameras first, so every light came
   back as a `DazCamera`. Lights are now checked first, and `resolve_node()`

@@ -145,6 +145,16 @@ _PROPERTY_DETAIL_JS = """
 
 
 @dataclass(frozen=True)
+class FittedItem:
+    """An item fitted to a figure, from :meth:`DazNode.fitted_item_info`."""
+
+    label: str
+    name: str
+    type: str  # "clothing" | "hair" | "prop"
+    element_id: int
+
+
+@dataclass(frozen=True)
 class MorphInfo:
     """One ``DzMorph`` on a node, from :meth:`DazNode.morph_info`."""
 
@@ -1643,40 +1653,46 @@ class DazNode(DazElement):
         )
         return self._client.execute(script).value or {"previous_figure": None, "actions": []}
 
-    def fitted_items(self) -> list["DazNode"]:
-        """Return all clothing, hair, and prop nodes fitted to this figure.
+    def fitted_item_info(self) -> list["FittedItem"]:
+        """Items fitted to this figure, with their kind, in one call.
 
-        A node counts as fitted if it either follows this node (figure-based
-        conforming clothing/hair) or is directly parented to it (props and
-        accessories).
-
-        Returns:
-            A list of :class:`~dazpy.DazNode` proxies for each fitted item.
+        A node counts as fitted if it follows this node (conforming clothing
+        and hair) or is a direct non-bone child of it (props and
+        accessories). ``type`` is ``"hair"`` for ``DzHair`` nodes, otherwise
+        ``"clothing"`` for followers and ``"prop"`` for children.
         """
-        script = ScriptBuilder.node_body_from_locator(
-            self._locator,
-            """
-            var _fitted = [];
-            var _numNodes = Scene.getNumNodes();
-            for (var i = 0; i < _numNodes; i++) {
+        script = ScriptBuilder.node_body_from_locator(self._locator, """
+            var _out = [];
+            for (var i = 0; i < Scene.getNumNodes(); i++) {
                 var _n = Scene.getNode(i);
-                if (!_n || _n === _node) continue;
-                var _isFitted = false;
+                if (!_n || _n === _node || _n.inherits("DzBone")) continue;
+                var _type = null;
                 if (typeof _n.getFollowTarget === 'function') {
                     var _ft = _n.getFollowTarget();
-                    if (_ft && _ft.elementID === _node.elementID) _isFitted = true;
+                    if (_ft && _ft.elementID === _node.elementID) _type = "clothing";
                 }
-                if (!_isFitted && typeof _n.getNodeParent === 'function') {
+                if (!_type && typeof _n.getNodeParent === 'function') {
                     var _p = _n.getNodeParent();
-                    if (_p && _p.elementID === _node.elementID) _isFitted = true;
+                    if (_p && _p.elementID === _node.elementID) _type = "prop";
                 }
-                if (_isFitted) _fitted.push(_n.getName());
+                if (!_type) continue;
+                if (_n.inherits("DzHair")) _type = "hair";
+                _out.push({label: _n.getLabel(), name: _n.getName(), type: _type,
+                           element_id: _n.elementID});
             }
-            return _fitted;
-            """
-        )
-        names = self._client.execute(script).value or []
-        return [DazNode(self._client, NodeIdentifier(n)) for n in names]
+            return _out;
+        """)
+        return [FittedItem(r["label"], r["name"], r["type"], int(r["element_id"]))
+                for r in self._client.execute(script).value or []]
+
+    def fitted_items(self) -> list["DazNode"]:
+        """Proxies for the items fitted to this figure (see :meth:`fitted_item_info`).
+
+        Bound by elementID. Bones are not fitted items (a figure's root bone
+        is its direct child).
+        """
+        return [DazNode(self._client, NodeIdentifier(str(i.element_id), kind="element_id"))
+                for i in self.fitted_item_info()]
 
     @property
     def geometry_vertex_count(self) -> int | None:

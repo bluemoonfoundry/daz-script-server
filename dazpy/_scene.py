@@ -1204,6 +1204,10 @@ class DazScene:
         ``RunSilent`` must be forced to 1 or the native exporter shows a modal
         options dialog, which would hang the main thread the HTTP handler
         blocks on.
+
+        Raises:
+            DazError: If the exporter is not installed, or ``writeFile``
+                returns an error code.
         """
         settings_calls = []
         for key, value in overrides.items():
@@ -1220,13 +1224,20 @@ class DazScene:
         script = ScriptBuilder.iife(f"""
             var mgr = App.getExportMgr();
             var exp = mgr.findExporterByClassName({json.dumps(exporter_class)});
-            if (!exp) return;
+            if (!exp) return {{status: "no_exporter"}};
             var settings = new DzFileIOSettings();
             exp.getDefaultOptions(settings);
             {' '.join(settings_calls)}
-            exp.writeFile({json.dumps(path)}, settings);
+            var err = exp.writeFile({json.dumps(path)}, settings);
+            var code = (err && typeof err.valueOf === "function") ? err.valueOf() : (err || 0);
+            return code ? {{status: "error", code: code}} : {{status: "ok"}};
         """)
-        self._client.execute(script)
+        from .exceptions import DazError
+        raw = self._client.execute(script).value or {"status": "ok"}
+        if raw.get("status") == "no_exporter":
+            raise DazError(f"Exporter {exporter_class} is not installed in this DAZ Studio")
+        if raw.get("status") == "error":
+            raise DazError(f"{exporter_class} failed writing {path!r} (DzError {raw.get('code')})")
 
     def export_fbx(
         self,

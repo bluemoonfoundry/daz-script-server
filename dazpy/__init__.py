@@ -19,6 +19,7 @@ from ._client import DazClient
 from ._scene import BatchPropertyResult, CameraInfo, DazScene, LightInfo, ViewportCamera
 from ._node import (
     DazNode,
+    FittedItem,
     MorphInfo,
     NodeIdentifier,
     NodeInfo,
@@ -159,6 +160,7 @@ __all__ = [
     "NodeIdentifier",
     "NumericCandidateMatch",
     "NodeInfo",
+    "FittedItem",
     "MorphInfo",
     "NumericPropertyWrite",
     "MaterialInfo",

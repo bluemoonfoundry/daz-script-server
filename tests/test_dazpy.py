@@ -3713,6 +3713,39 @@ class TestMaterialTools(unittest.TestCase):
         self.assertIn("var _dst = MAT", script)
 
 
+class TestExportErrors(unittest.TestCase):
+    def test_missing_exporter_raises(self):
+        client = _make_client({"status": "no_exporter"})
+        with self.assertRaises(exceptions.DazError):
+            DazScene(client).export_fbx("C:/out.fbx")
+
+    def test_write_error_raises(self):
+        client = _make_client({"status": "error", "code": 5})
+        with self.assertRaises(exceptions.DazError) as ctx:
+            DazScene(client).export_obj("C:/out.obj")
+        self.assertIn("5", str(ctx.exception))
+
+    def test_ok(self):
+        client = _make_client({"status": "ok"})
+        DazScene(client).export_obj("C:/out.obj")
+        self.assertIn("writeFile", client.execute.call_args[0][0])
+
+
+class TestFittedItems(unittest.TestCase):
+    def test_fitted_items_skip_bones_and_bind_by_element_id(self):
+        client = _make_client([{"label": "Shirt", "name": "Shirt", "type": "clothing",
+                                "element_id": 21}])
+        items = DazNode(client, NodeIdentifier("9", kind="element_id")).fitted_items()
+        self.assertEqual(items[0]._identifier, NodeIdentifier("21", kind="element_id"))
+        self.assertIn('inherits("DzBone")', client.execute.call_args[0][0])
+
+    def test_fitted_item_info(self):
+        client = _make_client([{"label": "Hair", "name": "Hair", "type": "hair", "element_id": 5}])
+        info = DazNode(client, NodeIdentifier("9", kind="element_id")).fitted_item_info()
+        self.assertEqual((info[0].label, info[0].type, info[0].element_id), ("Hair", "hair", 5))
+        self.assertIn('inherits("DzHair")', client.execute.call_args[0][0])
+
+
 class TestCameraLightHelpers(unittest.TestCase):
     """viewport camera setter, camera/light listings, environment mode (qrd)."""
 
@@ -4805,7 +4838,9 @@ class TestDazNodeFitting(unittest.TestCase):
         self.assertEqual(result, {"previous_figure": None, "actions": []})
 
     def test_fitted_items_returns_node_list(self):
-        node, client = self._node(["Outfit Top", "Hat"])
+        node, client = self._node([
+            {"label": "Outfit Top", "name": "Top", "type": "clothing", "element_id": 1},
+            {"label": "Hat", "name": "Hat", "type": "prop", "element_id": 2}])
         items = node.fitted_items()
         self.assertEqual(len(items), 2)
         self.assertIsInstance(items[0], DazNode)
