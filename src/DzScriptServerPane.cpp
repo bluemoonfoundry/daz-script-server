@@ -40,6 +40,8 @@
 #include <QtCore/qcryptographichash.h>
 #include <QtCore/qsettings.h>
 #include <QtCore/qdatetime.h>
+#include <QtCore/qelapsedtimer.h>
+#include <QtCore/qeventloop.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qdir.h>
@@ -624,7 +626,9 @@ void DzScriptServerPane::onStopClicked()
 
 void DzScriptServerPane::startServer()
 {
-	if (m_bRunning)
+	// m_pServerThread is non-null while teardownServer() is joining it (it
+	// pumps events, so a queued start could otherwise run mid-teardown).
+	if (m_bRunning || m_pServerThread)
 		return;
 
 	// ── Fail-fast: verify critical startup requirements ──────────────────────
@@ -793,6 +797,14 @@ void DzScriptServerPane::startServer()
 		return;
 	}
 
+	// SSE routes dereference both brokers on worker threads, so they must
+	// exist before the listen thread accepts its first connection.
+	m_pEventBroker = new SceneEventBroker(this);
+	m_pEventBroker->setRevisionCounter(&m_sceneRevision);
+	m_pEventBroker->start();
+
+	m_pRenderProgress = new RenderProgressBroker();
+
 	m_pServerThread->start();
 
 	ServerListenThread::msSleep(ServerConfig::SERVER_BIND_WAIT_MS);
@@ -801,23 +813,13 @@ void DzScriptServerPane::startServer()
 	if (!m_pServer->is_running()) {
 		appendLog(QString("[ERROR] Failed to bind to %1:%2 - Port is already in use by another application. Try a different port or stop the conflicting service.")
 			.arg(m_sHost).arg(m_nPort));
-		delete m_pServer;
-		m_pServer = nullptr;
-		if (m_pServerThread) {
-			m_pServerThread->wait(ServerConfig::SERVER_THREAD_REAP_WAIT_MS);
-			delete m_pServerThread;
-			m_pServerThread = nullptr;
-		}
+		// listen() may still be running on the thread: stop and join it
+		// before freeing the server it uses.
+		teardownServer();
 		return;
 	}
 
 	m_bRunning = true;
-
-	m_pEventBroker = new SceneEventBroker(this);
-	m_pEventBroker->setRevisionCounter(&m_sceneRevision);
-	m_pEventBroker->start();
-
-	m_pRenderProgress = new RenderProgressBroker();
 
 	// Prime the snapshot GET /capabilities serves while the main thread is busy.
 	refreshCapabilitiesSnapshot();
@@ -832,6 +834,62 @@ void DzScriptServerPane::startServer()
 	m_pCleanupTimer->start(ServerConfig::ASYNC_CLEANUP_INTERVAL_MIN * 60 * 1000);
 }
 
+void DzScriptServerPane::teardownServer()
+{
+	// 1. Stop the event and progress brokers: unblocks all SSE pop() calls so
+	//    content-provider callbacks drain quickly before the server is torn down.
+	//    Not deleted yet: SSE resource-releaser lambdas hold raw pointers to them.
+	if (m_pRenderProgress)
+		m_pRenderProgress->stopAll();
+	if (m_pEventBroker)
+		m_pEventBroker->stop();
+
+	// 2. Close the listening socket and flag shutdown, so listen() returns and
+	//    chunked write loops exit. m_pServer stays alive: run() still uses it.
+	if (m_pServer)
+		m_pServer->stop();
+
+	// 3. Join the listen thread. httplib joins every request-handler thread
+	//    before listen() returns. Handlers may be blocked in a
+	//    BlockingQueuedConnection call to this (main) thread, so keep
+	//    delivering non-input events while waiting, or they could never finish.
+	bool joined = true;
+	if (m_pServerThread) {
+		QElapsedTimer timer;
+		timer.start();
+		while (!m_pServerThread->wait(50)) {
+			if (timer.elapsed() >= ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS) {
+				joined = false;
+				break;
+			}
+			QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 50);
+		}
+	}
+
+	if (!joined) {
+		// terminate() would kill a thread that may hold locks (undefined
+		// behaviour). Leak the thread, server and brokers instead: still-running
+		// handlers keep valid pointers. A restart builds new ones.
+		appendLog("[WARN] Server thread did not stop within the timeout; leaking it "
+		          "rather than terminating it. Restart DAZ Studio if the port stays in use.");
+		m_pServerThread = nullptr;
+		m_pServer = nullptr;
+		m_pRenderProgress = nullptr;
+		m_pEventBroker = nullptr;
+		return;
+	}
+
+	// 4. run() has returned and every handler thread is joined: free it all.
+	delete m_pServerThread;
+	m_pServerThread = nullptr;
+	delete m_pServer;
+	m_pServer = nullptr;
+	delete m_pRenderProgress;
+	m_pRenderProgress = nullptr;
+	delete m_pEventBroker;
+	m_pEventBroker = nullptr;
+}
+
 void DzScriptServerPane::stopServer()
 {
 	if (!m_bRunning)
@@ -840,58 +898,7 @@ void DzScriptServerPane::stopServer()
 	// Stop async cleanup timer
 	m_pCleanupTimer->stop();
 
-	// 1. Stop the event and progress brokers: unblocks all SSE pop() calls so
-	//    content-provider callbacks drain quickly before the server is torn down.
-	if (m_pRenderProgress) {
-		m_pRenderProgress->stopAll();
-	}
-	if (m_pEventBroker) {
-		m_pEventBroker->stop();
-		// Do NOT delete yet — SSE resource-releaser lambdas still hold a
-		// raw pointer to the broker (captured as `broker`).  We delete below,
-		// after all handler threads have been joined.
-	}
-
-	// 2. Signal the HTTP server to shut down: closes the listening socket so
-	//    the accept loop in ServerListenThread::run() unblocks and returns,
-	//    and sets is_shutting_down = true so chunked write loops exit on
-	//    their next iteration. Do NOT delete m_pServer yet — run() is still
-	//    executing on m_pServerThread and holds a raw pointer to it; deleting
-	//    it now would be a use-after-free race with that thread.
-	if (m_pServer) {
-		m_pServer->stop();
-	}
-
-	// 3. Join the listen thread before touching m_pServer again. httplib's
-	//    ThreadPool::shutdown() joins every request-handler thread before
-	//    listen() returns, so by the time wait() completes ALL SSE
-	//    resource-releaser lambdas have already run.
-	if (m_pServerThread) {
-		if (!m_pServerThread->wait(ServerConfig::SERVER_THREAD_STOP_TIMEOUT_MS)) {
-			appendLog("[WARN] Server thread did not stop within timeout; forcing termination.");
-			m_pServerThread->terminate();
-			m_pServerThread->wait(ServerConfig::SERVER_THREAD_REAP_WAIT_MS);
-		}
-		delete m_pServerThread;
-		m_pServerThread = nullptr;
-	}
-
-	// Now that run() has returned (or the thread was forcibly killed), it's
-	// safe to free the Server object.
-	if (m_pServer) {
-		delete m_pServer;
-		m_pServer = nullptr;
-	}
-
-	// 4. Now safe to delete brokers — all resource releasers have run.
-	if (m_pRenderProgress) {
-		delete m_pRenderProgress;
-		m_pRenderProgress = nullptr;
-	}
-	if (m_pEventBroker) {
-		delete m_pEventBroker;
-		m_pEventBroker = nullptr;
-	}
+	teardownServer();
 
 	// Clear rate limit state
 	m_rateLimiter.reset();

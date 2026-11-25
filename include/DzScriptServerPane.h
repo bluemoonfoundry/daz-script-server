@@ -73,8 +73,7 @@ namespace ServerConfig {
 
     // Server lifecycle timing
     const int SERVER_BIND_WAIT_MS = 100;           // Wait after listen() before checking is_running()
-    const int SERVER_THREAD_STOP_TIMEOUT_MS = 5000; // Max wait for server thread to join on stop
-    const int SERVER_THREAD_REAP_WAIT_MS = 1000;    // Short join after a failed bind or forced terminate()
+    const int SERVER_THREAD_STOP_TIMEOUT_MS = 5000; // Max wait for the listen thread to join on stop/failed bind (then leaked, never terminated)
     const int HTTP_KEEP_ALIVE_MAX_COUNT = 5;        // Max requests per persistent connection
     const int HTTP_KEEP_ALIVE_TIMEOUT_SEC = 5;      // Keep-alive idle timeout in seconds
 
@@ -273,6 +272,12 @@ private slots:
 	void killRenderOnMainThread();
 
 private:
+	// Stops brokers and the HTTP server, joins the listen thread (pumping
+	// non-input events so blocked main-thread calls can finish), then frees
+	// thread, server and brokers. On join timeout they are leaked, never
+	// terminate()d. Used by stopServer() and by a failed bind in startServer().
+	void teardownServer();
+
 	void   setupRoutes();
 	// Job routes (execute, async submit, render submit): write chain, then
 	// X-Correlation-Id / Idempotency-Key handling, then the handler, then the
