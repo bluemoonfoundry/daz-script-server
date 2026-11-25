@@ -100,6 +100,8 @@ All notable changes to DazScript Server are documented here.
   - `DazScene.camera_info()` / `light_info()` list cameras (position, focal
     length) and lights (position, flux, on) in one call.
   - `DazLight.aim_at(x, y, z)`, like `DazCamera.aim_at`.
+  - `DazRenderSettings.draw_ground_plane` reads or sets whether renders
+    draw the ground plane.
   - `DazRenderSettings.set_environment_properties([(names, value), ...])`
     sets Environment Options properties in one call.
   - `DazRenderSettings.environment_mode` / `set_environment_mode()` read

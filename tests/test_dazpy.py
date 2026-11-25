@@ -3956,6 +3956,16 @@ class TestCameraLightHelpers(unittest.TestCase):
         DazLight(client, NodeIdentifier("3", kind="element_id")).aim_at(0, 150, 0)
         self.assertIn("_node.aimAt(new DzVec3(0.0, 150.0, 0.0))", client.execute.call_args[0][0])
 
+    def test_draw_ground_plane(self):
+        from dazpy import DazRenderSettings
+        client = _make_client(True)
+        rs = DazRenderSettings(client)
+        self.assertTrue(rs.draw_ground_plane)
+        rs.draw_ground_plane = False
+        script = client.execute.call_args[0][0]
+        self.assertIn("opts.drawGroundPlane = false", script)
+        self.assertIn("applyChanges()", script)
+
     def test_set_environment_properties(self):
         from dazpy import DazRenderSettings
         client = _make_client({"holder": True, "matched": ["Environment Intensity", None]})

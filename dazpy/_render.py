@@ -285,6 +285,26 @@ class DazRenderSettings:
             return {render_element};
         }})()"""
 
+    @property
+    def draw_ground_plane(self) -> bool | None:
+        """Whether renders draw Studio's ground plane (``DzRenderOptions.drawGroundPlane``)."""
+        script = ScriptBuilder.iife(f"""
+            var mgr = {self._render_mgr()};
+            return mgr ? !!mgr.getRenderOptions().drawGroundPlane : null;
+        """)
+        return self._client.execute(script).value
+
+    @draw_ground_plane.setter
+    def draw_ground_plane(self, on: bool) -> None:
+        script = ScriptBuilder.iife(f"""
+            var mgr = {self._render_mgr()};
+            if (!mgr) return;
+            var opts = mgr.getRenderOptions();
+            opts.drawGroundPlane = {"true" if on else "false"};
+            opts.applyChanges();
+        """)
+        self._client.execute(script)
+
     _ENVIRONMENT_MODES = {"dome_and_scene": 0, "dome_only": 1, "sun_sky": 2, "scene_only": 3}
 
     @property
