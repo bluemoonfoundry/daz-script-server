@@ -122,6 +122,8 @@ All notable changes to DazScript Server are documented here.
 - `DazNode.key_numeric_candidates([(names, [(frame, value), ...]), ...])` and
   `DazSkeleton.key_bone_axes({bone: {axis: [(frame, deg), ...]}})` keyframe
   candidate dials and single bone axes at timeline frames, in one call each.
+- `DazNode.key_color(name, [(frame, (r, g, b)), ...])` keyframes a color
+  property, such as a light's "Color".
 - `DazNode.fitted_item_info()` lists the items fitted to a figure as
   `FittedItem` (label, name, `clothing`/`hair`/`prop`, elementID).
 

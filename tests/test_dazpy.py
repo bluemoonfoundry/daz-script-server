@@ -3748,6 +3748,22 @@ class TestKeyedCandidatesAndBones(unittest.TestCase):
             skel.key_bone_axes({"hip": {"w": [(0, 1.0)]}})
 
 
+class TestKeyColor(unittest.TestCase):
+    def test_key_color(self):
+        client = _make_client({"status": "ok", "keys": 2, "label": "Color"})
+        n = DazNode(client, NodeIdentifier("9", kind="element_id")).key_color(
+            "Color", [(0, (255, 200, 128)), (30, (128, 178, 255))])
+        self.assertEqual(n, 2)
+        script = client.execute.call_args[0][0]
+        self.assertIn("setColorValue(k[0] * _step, new Color(k[1], k[2], k[3]))", script)
+        self.assertIn("[0, 255, 200, 128]", script)
+
+    def test_key_color_missing(self):
+        client = _make_client({"status": "missing"})
+        with self.assertRaises(exceptions.PropertyNotFoundError):
+            DazNode(client, NodeIdentifier("9", kind="element_id")).key_color("Tint", [(0, (1, 2, 3))])
+
+
 class TestDForceHelpers(unittest.TestCase):
     """dForce surface/weights/properties/freeze and the Transfer Utility (1kd)."""
 

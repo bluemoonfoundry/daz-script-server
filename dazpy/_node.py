@@ -1296,6 +1296,39 @@ class DazNode(DazElement):
                                       r.get("matched"), r.get("source"), None)
                 for (names, keys), r in zip(norm, raw)]
 
+    def key_color(self, name: str, keys: Sequence[tuple[int, Sequence[int]]]) -> int:
+        """Keyframe a color property (label or name) at timeline frames.
+
+        Args:
+            name: Property label or name, e.g. a light's ``"Color"``.
+            keys: ``[(frame, (r, g, b)), ...]`` with 0-255 components.
+
+        Returns:
+            How many keys were written.
+
+        Raises:
+            PropertyNotFoundError: If no color property matches.
+        """
+        from .exceptions import NodeNotFoundError, PropertyNotFoundError
+        rows = [[int(f), *(max(0, min(255, int(round(c)))) for c in rgb)] for f, rgb in keys]
+        script = ScriptBuilder.node_body_from_locator(self._locator, f"""
+            var p = _node.findPropertyByLabel({json.dumps(name)}) || _node.findProperty({json.dumps(name)});
+            if (!p || !(p.inherits("DzColorProperty") || p.inherits("DzFloatColorProperty")))
+                return {{status: "missing"}};
+            var _step = Scene.getTimeStep(), rows = {json.dumps(rows)};
+            for (var i = 0; i < rows.length; i++) {{
+                var k = rows[i];
+                p.setColorValue(k[0] * _step, new Color(k[1], k[2], k[3]));
+            }}
+            return {{status: "ok", keys: rows.length, label: p.getLabel()}};
+        """)
+        raw = self._client.execute(script).value
+        if raw is None:
+            raise NodeNotFoundError(f"Node not found: {self._identifier.value!r}")
+        if raw["status"] == "missing":
+            raise PropertyNotFoundError(f"No color property {name!r} on {self._identifier.value!r}")
+        return int(raw["keys"])
+
     def find_property_by_label(self, label: str) -> "DazProperty | None":
         """Find a node-level property by its user-visible label.
 
