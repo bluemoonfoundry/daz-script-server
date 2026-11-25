@@ -229,6 +229,30 @@ describe("DazNode transforms", () => {
     );
   });
 
+  it("setTransformKeyInterpolation sends the per-control interpolation script (v6rm)", async () => {
+    const fetchMock = stub(null);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "Camera 1", kind: "name" });
+    await node.setTransformKeyInterpolation([0, 10, 30], ["hermite", "linear", null], { fastEnd: true });
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script as string;
+    expect(script).toContain('var _F = [0, 10, 30], _K = ["hermite", "linear", null]');
+    for (const ctl of ["XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot"]) expect(script).toContain(`_node.get${ctl}Control()`);
+    expect(script).toContain("_kiApply(_C[_c], _F, _K, false, true);");
+    expect(script).toContain("DzProperty.InterpHermite");
+    const fetchMock2 = stub(null);
+    await node.setTransformKeyInterpolation([0, 10], ["smooth", "smooth"], { rotation: false });
+    expect(JSON.parse(fetchMock2.mock.calls[0][1].body as string).script).not.toContain("XRotControl");
+  });
+
+  it("setTransformKeyInterpolation validates its arguments", async () => {
+    stub(null);
+    const node = new DazNode(new DazClient({ token: "" }), { value: "n", kind: "name" });
+    await expect(node.setTransformKeyInterpolation([0, 1], ["linear"])).rejects.toThrow(/same length/);
+    await expect(node.setTransformKeyInterpolation([5, 1], ["linear", "linear"])).rejects.toThrow(/ascending/);
+    await expect(node.setTransformKeyInterpolation([0, 1], ["ease_in" as never, null])).rejects.toThrow(
+      /unknown key interpolation/,
+    );
+  });
+
   it("localPosition() reads getLocalPos as {x,y,z}", async () => {
     const fetchMock = stub({ x: 1, y: 2, z: 3 });
     const node = new DazNode(new DazClient({ token: "" }), { value: "Genesis9", kind: "name" });

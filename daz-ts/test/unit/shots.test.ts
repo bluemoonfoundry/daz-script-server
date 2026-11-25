@@ -27,6 +27,7 @@ import {
   applyShot,
   framingDistance,
   framingTransform,
+  keyInterpolationPlan,
   shotFromRecipeCamera,
 } from "../../src/shots.js";
 import { jsonResponse } from "../helpers.js";
@@ -293,6 +294,90 @@ describe("applyShot", () => {
     expect(rots.length).toBe(2);
     expect(rots[0][2]).toBeCloseTo(0, 9); // straight down -Z: no yaw
     expect(rots[0][1]).toBeCloseTo(0, 9); // level
+  });
+});
+
+const easedKeys = (...interps: Array<"linear" | "constant" | "smooth" | null>) =>
+  interps.map((interpolation, i) => new CameraKeyframe({ frame: i * 10, position: new Vec3(i, 0, 0), interpolation }));
+
+describe("easing (v6rm)", () => {
+  it("omits defaults and round-trips, matching dazpy's JSON", () => {
+    const plain = new Keyframed({ keyframes: easedKeys(null, null) });
+    expect(plain.toDict()).not.toHaveProperty("easing");
+    expect((plain.toDict().keyframes as Record<string, unknown>[])[0]).not.toHaveProperty("interpolation");
+    const eased = new Keyframed({ keyframes: easedKeys("constant", null), easing: "ease_in" });
+    expect(eased.toDict()).toEqual({
+      kind: "keyframed",
+      keyframes: [
+        { frame: 0, position: [0, 0, 0], interpolation: "constant" },
+        { frame: 10, position: [1, 0, 0] },
+      ],
+      easing: "ease_in",
+    });
+    expect(Keyframed.fromDict(JSON.parse(JSON.stringify(eased.toDict()))).toDict()).toEqual(eased.toDict());
+  });
+
+  it("rejects unknown values with their path", () => {
+    expect(() => new CameraKeyframe({ frame: 0, position: new Vec3(0, 0, 0), interpolation: "bezier" as never })).toThrow(
+      /interpolation/,
+    );
+    expect(() => new Keyframed({ keyframes: easedKeys(null, null), easing: "ease-in" as never })).toThrow(/easing/);
+    const bad = {
+      kind: "keyframed",
+      keyframes: [
+        { frame: 0, position: [0, 0, 0], interpolation: "tcb" },
+        { frame: 1, position: [1, 0, 0] },
+      ],
+    };
+    expect(() => Keyframed.fromDict(bad)).toThrow(/keyframes\[0\]/);
+  });
+
+  it("plans one kind per waypoint", () => {
+    expect(new Keyframed({ keyframes: easedKeys(null, null, null) }).keyInterpolation()).toBeNull();
+    expect(new Keyframed({ keyframes: easedKeys(null, null), easing: "linear" }).keyInterpolation()).toEqual([
+      ["linear", "linear"],
+      false,
+      false,
+    ]);
+    expect(new Keyframed({ keyframes: easedKeys(null, null, null), easing: "ease_in" }).keyInterpolation()).toEqual([
+      ["hermite", "hermite", "hermite"],
+      false,
+      true,
+    ]);
+    expect(new Keyframed({ keyframes: easedKeys(null, null, null), easing: "ease_out" }).keyInterpolation()).toEqual([
+      ["hermite", "hermite", "hermite"],
+      true,
+      false,
+    ]);
+    expect(new Keyframed({ keyframes: easedKeys(null, "constant", null), easing: "ease_in" }).keyInterpolation()).toEqual([
+      ["hermite", "constant", "hermite"],
+      false,
+      true,
+    ]);
+    expect(keyInterpolationPlan(["linear", undefined], undefined)).toEqual([["linear", null], false, false]);
+  });
+
+  it("applyShot sets interpolation after the keys, and only when asked", async () => {
+    const cam = new FakeCamera();
+    const keyframes = [
+      new CameraKeyframe({ frame: 0, position: new Vec3(0, 0, 0), rotation: [0, 0, 0] }),
+      new CameraKeyframe({ frame: 24, position: new Vec3(9, 0, 0), rotation: [0, 5, 0] }),
+    ];
+    const shot = (easing: "ease_out" | null) =>
+      new Shot({ id: "k", camera: new Placement({ position: new Vec3(0, 0, 0) }), movement: new Keyframed({ keyframes, easing }) });
+    await applyShot(asScene(new FakeScene()), shot("ease_out"), { camera: asCamera(cam) });
+    const names = cam.calls.map((c) => c[0]);
+    const idx = names.indexOf("setTransformKeyInterpolation");
+    expect(idx).toBeGreaterThan(names.lastIndexOf("setRotationAtFrame"));
+    expect(cam.calls[idx]).toEqual([
+      "setTransformKeyInterpolation",
+      [0, 24],
+      ["hermite", "hermite"],
+      { rotation: true, fastStart: true, fastEnd: false },
+    ]);
+    const plain = new FakeCamera();
+    await applyShot(asScene(new FakeScene()), shot(null), { camera: asCamera(plain) });
+    expect(plain.calls.map((c) => c[0])).not.toContain("setTransformKeyInterpolation");
   });
 });
 

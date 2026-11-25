@@ -26,7 +26,7 @@
 import { Vec3 } from "./math3.js";
 import { lookAtEuler, resolveTarget, sphericalOffset } from "./shotGeometry.js";
 import type { DazCamera } from "./camera.js";
-import type { DazNode } from "./node.js";
+import type { DazNode, TransformKeyKind } from "./node.js";
 import type { DazScene } from "./scene.js";
 
 /** An actor/prop key, a world point, or a live node. */
@@ -71,6 +71,38 @@ export const CAMERA_ANGLES: Readonly<Record<CameraAngle, number>> = Object.freez
 });
 
 export const COMPOSITIONS: readonly Composition[] = Object.freeze(["center", "left_third", "right_third"]);
+
+/** {@link CameraKeyframe} `interpolation`: the segment to the next waypoint. */
+export type KeyInterpolation = "linear" | "constant" | "smooth";
+/** {@link Keyframed} `easing`: the whole move. */
+export type CameraEasing = "linear" | "smooth" | "ease_in" | "ease_out";
+export const KEY_INTERPOLATIONS: readonly KeyInterpolation[] = Object.freeze(["linear", "constant", "smooth"]);
+export const CAMERA_EASINGS: readonly CameraEasing[] = Object.freeze(["linear", "smooth", "ease_in", "ease_out"]);
+
+/** `[kinds, fastStart, fastEnd]` for `DazNode.setTransformKeyInterpolation`. */
+export type KeyInterpolationPlan = [kinds: (TransformKeyKind | null)[], fastStart: boolean, fastEnd: boolean];
+
+const EASING_KIND: Record<CameraEasing, TransformKeyKind> = {
+  linear: "linear",
+  smooth: "smooth",
+  ease_in: "hermite",
+  ease_out: "hermite",
+};
+
+/**
+ * The interpolation plan for a keyframed move: one kind per waypoint (its own
+ * `interpolation`, else the move's `easing`), or `null` when nothing asks for
+ * one. Shared by {@link Keyframed.keyInterpolation} and `applyAnimatedShot`.
+ */
+export function keyInterpolationPlan(
+  interpolations: readonly (KeyInterpolation | null | undefined)[],
+  easing: CameraEasing | null | undefined,
+): KeyInterpolationPlan | null {
+  const base = easing ? EASING_KIND[easing] : null;
+  const kinds = interpolations.map((k) => k ?? base);
+  if (kinds.every((k) => k === null)) return null;
+  return [kinds, easing === "ease_out", easing === "ease_in"];
+}
 
 /** Daz camera "Frame Width" default (mm). */
 export const DEFAULT_FRAME_WIDTH_MM = 36.0;
@@ -381,6 +413,13 @@ export interface CameraKeyframeInit {
   lookAt?: Target | null;
   lookAtOffsetCm?: number;
   rotation?: Rotation | null;
+  /**
+   * How Studio moves from this waypoint to the next: `"linear"`, `"constant"`
+   * (hold, then cut) or `"smooth"` (Studio's default curve). Overrides the
+   * move's {@link Keyframed} `easing` for this segment; `null` follows it.
+   * Ignored on the last waypoint.
+   */
+  interpolation?: KeyInterpolation | null;
 }
 
 /**
@@ -393,6 +432,7 @@ export class CameraKeyframe {
   readonly lookAt: Target | null;
   readonly lookAtOffsetCm: number;
   readonly rotation: Rotation | null;
+  readonly interpolation: KeyInterpolation | null;
 
   constructor(init: CameraKeyframeInit) {
     this.frame = init.frame;
@@ -400,6 +440,8 @@ export class CameraKeyframe {
     this.lookAt = init.lookAt ?? null;
     this.lookAtOffsetCm = init.lookAtOffsetCm ?? 0.0;
     this.rotation = init.rotation ? (Object.freeze([...init.rotation]) as unknown as Rotation) : null;
+    this.interpolation = init.interpolation ?? null;
+    if (this.interpolation !== null) checkEnum(this.interpolation, KEY_INTERPOLATIONS, "interpolation");
     Object.freeze(this);
   }
 
@@ -408,17 +450,25 @@ export class CameraKeyframe {
     if (this.lookAt !== null) out.look_at = encTarget(this.lookAt, join(path, "look_at"));
     put(out, "look_at_offset_cm", this.lookAtOffsetCm, 0.0);
     if (this.rotation !== null) out.rotation = [...this.rotation];
+    put(out, "interpolation", this.interpolation);
     return out;
   }
 
   static fromDict(data: unknown, path = ""): CameraKeyframe {
-    const d = fields(data, path, "CameraKeyframe", ["frame", "position", "look_at", "look_at_offset_cm", "rotation"]);
+    const d = fields(data, path, "CameraKeyframe", ["frame", "position", "look_at", "look_at_offset_cm", "rotation", "interpolation"]);
     const frame = required(d, "frame", path, "CameraKeyframe") as number;
     const position = decVec(required(d, "position", path, "CameraKeyframe"), join(path, "position"));
     const lookAt = opt(d.look_at, (v) => decTarget(v, join(path, "look_at")));
     const rotation = opt(d.rotation, (v) => decFloats(v, 3, join(path, "rotation")) as unknown as Rotation);
     return construct(path, () =>
-      new CameraKeyframe({ frame, position, lookAt, lookAtOffsetCm: d.look_at_offset_cm as number | undefined, rotation }),
+      new CameraKeyframe({
+        frame,
+        position,
+        lookAt,
+        lookAtOffsetCm: d.look_at_offset_cm as number | undefined,
+        rotation,
+        interpolation: d.interpolation as KeyInterpolation | null | undefined,
+      }),
     );
   }
 }
@@ -495,12 +545,28 @@ export class Orbit {
  * Movement: real Daz keyframes, one per waypoint; Studio interpolates between.
  * Waypoints must be strictly ascending (at least two), and either every
  * waypoint specifies an orientation (`lookAt`/`rotation`) or none does.
+ *
+ * `easing` shapes the whole move, on position and rotation:
+ *
+ * - `null`: leave Studio's interpolation as it is (new keys are smooth).
+ * - `"linear"`: constant speed along each segment, sharp turns at waypoints.
+ * - `"smooth"`: Studio's default curve: starts and stops gently, passes
+ *   through interior waypoints without a speed jump.
+ * - `"ease_in"`: starts gently, arrives at speed (a two-waypoint move is `t^2`).
+ * - `"ease_out"`: leaves at speed, stops gently (`2t - t^2`).
+ *
+ * A waypoint's own {@link CameraKeyframe} `interpolation` overrides `easing`
+ * for the segment after it. See `DazNode.setTransformKeyInterpolation` for the
+ * curves.
  */
 export class Keyframed {
   readonly kind = "keyframed" as const;
   readonly keyframes: readonly CameraKeyframe[];
+  readonly easing: CameraEasing | null;
 
-  constructor(init: { keyframes: readonly CameraKeyframe[] }) {
+  constructor(init: { keyframes: readonly CameraKeyframe[]; easing?: CameraEasing | null }) {
+    this.easing = init.easing ?? null;
+    if (this.easing !== null) checkEnum(this.easing, CAMERA_EASINGS, "easing");
     this.keyframes = Object.freeze([...init.keyframes]);
     if (this.keyframes.length < 2) throw new Error("CinematicAnimatedShot.keyframes needs at least two waypoints");
     if (!ascendingUnique(this.keyframes.map((k) => k.frame))) {
@@ -519,16 +585,23 @@ export class Keyframed {
     return this.keyframes[0].lookAt !== null || this.keyframes[0].rotation !== null;
   }
 
+  /** `[kinds, fastStart, fastEnd]` for `DazNode.setTransformKeyInterpolation`, or `null` when nothing asks for one. */
+  keyInterpolation(): KeyInterpolationPlan | null {
+    return keyInterpolationPlan(this.keyframes.map((k) => k.interpolation), this.easing);
+  }
+
   toDict(path = ""): Dict {
     const kp = join(path, "keyframes");
-    return { kind: this.kind, keyframes: this.keyframes.map((k, i) => k.toDict(`${kp}[${i}]`)) };
+    const out: Dict = { kind: this.kind, keyframes: this.keyframes.map((k, i) => k.toDict(`${kp}[${i}]`)) };
+    put(out, "easing", this.easing);
+    return out;
   }
 
   static fromDict(data: unknown, path = ""): Keyframed {
-    const d = fields(data, path, "Keyframed", ["keyframes"], "keyframed");
+    const d = fields(data, path, "Keyframed", ["keyframes", "easing"], "keyframed");
     const kp = join(path, "keyframes");
     const keyframes = decArray(required(d, "keyframes", path, "Keyframed"), kp).map((k, i) => CameraKeyframe.fromDict(k, `${kp}[${i}]`));
-    return construct(path, () => new Keyframed({ keyframes }));
+    return construct(path, () => new Keyframed({ keyframes, easing: d.easing as CameraEasing | null | undefined }));
   }
 }
 
@@ -1332,6 +1405,15 @@ export async function applyShot(scene: DazScene, shot: Shot, opts: ApplyShotOpti
       } else if (kf.rotation !== null) {
         await cam.setRotationAtFrame(kf.frame, kf.rotation[0], kf.rotation[1], kf.rotation[2]);
       }
+    }
+    const plan = movement.keyInterpolation();
+    if (plan !== null) {
+      const [kinds, fastStart, fastEnd] = plan;
+      await cam.setTransformKeyInterpolation(movement.keyframes.map((k) => k.frame), kinds, {
+        rotation: movement.hasOrientation,
+        fastStart,
+        fastEnd,
+      });
     }
   } else if (c instanceof Framing) {
     const points: Array<[Vec3, boolean]> = [];

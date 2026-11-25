@@ -2,10 +2,42 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
+
+#: Segment kinds accepted by :meth:`DazNode.set_transform_key_interpolation`.
+TRANSFORM_KEY_KINDS = ("linear", "constant", "smooth", "hermite")
+
+# _kiApply(control, frames, kinds, fastStart, fastEnd): see
+# DazNode.set_transform_key_interpolation. Hermite tangents are value per tick
+# (live-verified on Studio 6.26: a two-key fast-end move samples exactly t^2).
+# Studio's own TCB tangent drops to zero after a non-TCB key, so eased moves
+# write every segment as Hermite rather than mixing. The type is written with
+# setValue(tm, value, interp, p0, p1, p2) on the key's own value: Studio 4.24
+# ignores setKeyInterpolationType on an existing key (live-verified).
+_KEY_INTERP_JS = (
+    "function _kiFast(s, m) { var q = 2 * s - m; "
+    "if (s > 0) return Math.min(Math.max(q, s), 3 * s); "
+    "if (s < 0) return Math.max(Math.min(q, s), 3 * s); return 0; }\n"
+    "function _kiApply(c, F, K, fs, fe) {\n"
+    "  var n = F.length, ts = Scene.getTimeStep(), t = [], v = [], T = [], i, k;\n"
+    "  for (k = 0; k < n; k++) { t.push(F[k] * ts); v.push(c.getValue(t[k])); }\n"
+    "  function sl(a) { return (v[a + 1] - v[a]) / (t[a + 1] - t[a]); }\n"
+    "  for (k = 1; k < n - 1; k++) T[k] = (v[k + 1] - v[k - 1]) / (t[k + 1] - t[k - 1]);\n"
+    "  T[0] = (fs && n > 1) ? _kiFast(sl(0), n > 2 ? T[1] : 0) : 0;\n"
+    "  T[n - 1] = (fe && n > 1) ? _kiFast(sl(n - 2), n > 2 ? T[n - 2] : 0) : 0;\n"
+    "  for (k = 0; k < n; k++) {\n"
+    "    if (!K[k]) continue;\n"
+    "    i = c.findKeyIndex(t[k]); if (i < 0 || c.getKeyTime(i) != t[k]) continue;\n"
+    "    if (K[k] == \"linear\") c.setValue(t[k], v[k], DzProperty.InterpLinear, 0, 0, 0);\n"
+    "    else if (K[k] == \"constant\") c.setValue(t[k], v[k], DzProperty.InterpConstant, 0, 0, 0);\n"
+    "    else if (K[k] == \"smooth\" || k == n - 1) c.setValue(t[k], v[k], DzProperty.InterpTCB, 0, 0, 0);\n"
+    "    else c.setValue(t[k], v[k], DzProperty.InterpHermite, T[k], T[k + 1], 0);\n"
+    "  }\n"
+    "}\n"
+)
 
 if TYPE_CHECKING:
     from ._material import DazMaterial
@@ -595,6 +627,72 @@ class DazNode(DazElement):
             "_node.getXRotControl().deleteAllKeys(); "
             "_node.getYRotControl().deleteAllKeys(); "
             "_node.getZRotControl().deleteAllKeys();"
+        )
+        self._client.execute(script)
+
+    def set_transform_key_interpolation(
+        self,
+        frames: Sequence[int],
+        kinds: Sequence[Optional[str]],
+        *,
+        rotation: bool = True,
+        fast_start: bool = False,
+        fast_end: bool = False,
+    ) -> None:
+        """Set how Studio interpolates this node's position (and rotation) keys.
+
+        Low-level; :class:`~dazpy.shots.Keyframed` ``easing`` and
+        :class:`~dazpy.shots.CameraKeyframe` ``interpolation`` build the
+        arguments for a camera move. ``kinds[k]`` sets the segment from the key
+        at ``frames[k]`` to the next key in *frames*, on every X/Y/Z position
+        control (and rotation control when *rotation*):
+
+        - ``"linear"``: straight line (``DzProperty.InterpLinear``).
+        - ``"constant"``: hold, then jump (``InterpConstant``).
+        - ``"smooth"``: Studio's default curve (``InterpTCB``, tension,
+          continuity and bias 0): Catmull-Rom tangents at interior keys, zero
+          at the first and last key.
+        - ``"hermite"``: ``InterpHermite`` with the same Catmull-Rom tangents
+          computed per control, except at an end flagged *fast_start* /
+          *fast_end*, whose tangent is the quadratic one (``2*slope - tangent
+          at the other end of the segment``) clamped to between the segment's
+          average slope and three times it, so the move neither stops there
+          nor reverses. A two-key move with *fast_end* is exactly ``t**2``
+          (ease in); with *fast_start*, ``2t - t**2`` (ease out).
+        - ``None``: leave the key as it is.
+
+        Tangents use only the keys in *frames*. Keys missing on a control are
+        skipped; the last key's kind affects nothing after it.
+
+        Args:
+            frames: Frame numbers of existing keys, strictly ascending.
+            kinds: One entry per frame.
+            rotation: Also set the X/Y/Z rotation controls.
+            fast_start: Leave the first key at speed (``"hermite"`` only).
+            fast_end: Arrive at the last key at speed (``"hermite"`` only).
+
+        Raises:
+            ValueError: Lengths differ, frames are not strictly ascending, or a
+                kind is unknown.
+        """
+        frames = [int(f) for f in frames]
+        kinds = list(kinds)
+        if len(frames) != len(kinds):
+            raise ValueError(f"frames ({len(frames)}) and kinds ({len(kinds)}) must have the same length")
+        if any(b <= a for a, b in zip(frames, frames[1:])):
+            raise ValueError("frames must be strictly ascending")
+        bad = [k for k in kinds if k is not None and k not in TRANSFORM_KEY_KINDS]
+        if bad:
+            raise ValueError(f"unknown key interpolation {bad[0]!r} (allowed: {', '.join(TRANSFORM_KEY_KINDS)})")
+        axes = ("Pos", "Rot") if rotation else ("Pos",)
+        controls = ", ".join(f"_node.get{a}{c}Control()" for c in axes for a in "XYZ")
+        script = ScriptBuilder.node_body(
+            self._identifier,
+            _KEY_INTERP_JS
+            + f"var _F = {json.dumps(frames)}, _K = {json.dumps(kinds)}, _C = [{controls}];\n"
+            f"for (var _c = 0; _c < _C.length; _c++) "
+            f"_kiApply(_C[_c], _F, _K, {ScriptBuilder.serialize_arg(bool(fast_start))}, "
+            f"{ScriptBuilder.serialize_arg(bool(fast_end))});"
         )
         self._client.execute(script)
 

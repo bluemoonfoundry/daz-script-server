@@ -160,4 +160,38 @@ describe("applyAnimatedShot", () => {
     // createCamera, setFocalLength, setDepthOfField, clearPositionKeys, setPositionAtFrame x2 = 6 calls (no clearRotationKeys)
     expect(fetchMock.mock.calls.length).toBe(6);
   });
+
+  it("applies easing as one interpolation script after the waypoints (v6rm)", async () => {
+    const fetchMock = stubSequence(["Cam1", undefined]);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await applyAnimatedShot(scene, {
+      keyframes: [
+        { frame: 0, position: new Vec3(0, 0, 0) },
+        { frame: 10, position: new Vec3(1, 0, 0), interpolation: "constant" },
+        { frame: 20, position: new Vec3(2, 0, 0) },
+      ],
+      easing: "ease_in",
+    });
+    // 7 calls as above (3 waypoints) + 1 interpolation script
+    expect(fetchMock.mock.calls.length).toBe(8);
+    const script = scriptOf(fetchMock, 7);
+    expect(script).toContain('var _F = [0, 10, 20], _K = ["hermite", "constant", "hermite"]');
+    expect(script).toContain("_kiApply(_C[_c], _F, _K, false, true);");
+    expect(script).not.toContain("XRotControl");
+  });
+
+  it("rejects an unknown easing before touching the scene", async () => {
+    const fetchMock = stubSequence(["Cam1"]);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await expect(
+      applyAnimatedShot(scene, {
+        keyframes: [
+          { frame: 0, position: new Vec3(0, 0, 0) },
+          { frame: 10, position: new Vec3(1, 0, 0) },
+        ],
+        easing: "ease-in" as never,
+      }),
+    ).rejects.toThrow(/easing/);
+    expect(fetchMock.mock.calls.length).toBe(0);
+  });
 });
