@@ -44,6 +44,33 @@ class TestCli(unittest.TestCase):
         self.assertEqual(smoke_live.EXPECTED_ENGINE["filament"][3], "DzFilamentRenderer")
 
 
+class TestMcpEnv(unittest.TestCase):
+    """k3b0: the mcp stage must import this checkout's dazpy, not the MCP venv's wheel."""
+
+    def test_checkout_is_first_on_pythonpath(self):
+        env = smoke_live.mcp_subprocess_env({"PYTHONPATH": "other"}, "127.0.0.1", 18811)
+        parts = env["PYTHONPATH"].split(os.pathsep)
+        self.assertEqual(parts, [str(smoke_live.ROOT), "other"])
+        self.assertEqual(env["DAZ_HOST"], "127.0.0.1")
+        self.assertEqual(env["DAZ_PORT"], "18811")
+
+    def test_no_existing_pythonpath(self):
+        env = smoke_live.mcp_subprocess_env({}, "h", 1)
+        self.assertEqual(env["PYTHONPATH"], str(smoke_live.ROOT))
+
+    def test_does_not_mutate_input(self):
+        base = {"PYTHONPATH": "x"}
+        smoke_live.mcp_subprocess_env(base, "h", 1)
+        self.assertEqual(base, {"PYTHONPATH": "x"})
+
+    def test_dazpy_origin_check(self):
+        inside = str(smoke_live.ROOT / "dazpy" / "__init__.py")
+        self.assertTrue(smoke_live.is_checkout_dazpy(inside))
+        self.assertFalse(smoke_live.is_checkout_dazpy(
+            os.path.join(os.sep, "venv", "site-packages", "dazpy", "__init__.py")))
+        self.assertFalse(smoke_live.is_checkout_dazpy(None))
+
+
 class TestResultsIndex(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

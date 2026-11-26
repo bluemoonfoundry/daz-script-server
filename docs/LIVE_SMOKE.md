@@ -17,7 +17,7 @@ one-line scripts, and read-only MCP tools.
 | `api` | `/status`, `/health`, `/capabilities` shape, sync `/execute` (plain + `args`), DAZ globals reachable, `SCRIPT_ERROR` envelope on HTTP 200, 401 on a bad token |
 | `async` | `/execute/async` submit and long-poll result, `/requests/{id}/status` (incl. `progress_source`/`progress_supported`/`last_activity_at`), `Idempotency-Key` replay returns the same job |
 | `render` | Per engine: `/render` submit → `/render/{id}/progress` SSE terminal event → job result → **engine readback** (in the job result *and* an independent live read afterwards) → artifact download is a PNG → `?thumbnail` of it is a PNG scaled to half the render size. Iray also checks the `iray_samples` readback (applied, then restored to the previous value). The first render also checks `GET /scene/events?filter=render` delivers `render.finished`. With viewport selected, a 3-frame 64×64 `/render/animation` checks the job status reports frame progress (`progress_source: frames`, final `current == total == 3`) and that its `/render/{id}/progress` stream ends `complete` with frame events in strict order and `total_frames == 3` (the frames seen are recorded; fast viewport frames may land between polls). |
-| `mcp` | Optional (`--mcp-dir`). Spawns the `daz-mcp-server` package from a checkout, registers its scripts, and calls `daz_status`, `daz_scene_info`, `daz_get_render_settings` |
+| `mcp` | Optional (`--mcp-dir`). Spawns the `daz-mcp-server` package from a checkout, registers its scripts, and calls `daz_status`, `daz_scene_info`, `daz_get_render_settings`. This checkout's `dazpy` goes first on `PYTHONPATH` (not the MCP venv's wheel); `register_scripts` fails if another copy loads |
 
 ### Render settings are read back after every change
 
