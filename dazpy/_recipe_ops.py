@@ -107,6 +107,25 @@ class SceneOps(Protocol):
 
     def write_manifest(self, manifest: Manifest) -> None: ...
 
+    def take_over(self, node_name: str) -> None:
+        """Validate that *node_name* exists; changes nothing in the scene."""
+
+    def apply_presets(self, node_name: str, paths: list[str]) -> None:
+        """Apply Daz pose/preset files to the figure, in order (it is the sole
+        primary selection while each opens; the prior selection is restored)."""
+
+    def fit(self, entity: DesiredEntity, figure_name: str) -> list[str]:
+        """Load ``entity.create["asset_path"]`` and fit every node it adds to the
+        figure; return all added root names, the primary first.  Raises, with
+        everything it added removed, when an added root cannot be fitted."""
+
+    def unfit(self, node_names: list[str]) -> None:
+        """Delete the named nodes (and their subtrees) in one exact-selection delete."""
+
+    def restore(self, source_paths: list[str], figure_name: str) -> list[str]:
+        """Reload each source file and fit it to the figure (undoes a removal);
+        return the new root names."""
+
 
 # HTTP timeout for a call that opens a content file (asset merge-load, pose
 # preset).  The client default (30s) is too short for the first load after
@@ -247,9 +266,12 @@ def _check_pose_ext(path: str) -> None:
                        f"({', '.join(_POSE_JSON_EXTS)})")
 
 
-def _claim_script(before: list[str], label: str) -> str:
-    """New root nodes since *before*: make their names unique, label the first."""
+def _claim_script(before: list[str], label: str | None) -> str:
+    """New root nodes since *before*: make their names unique, label the first
+    (no label change when *label* is None)."""
     esc = ScriptBuilder.escape_string
+    fallback = label if label is not None else "node"
+    set_label = f"if (_new.length) _new[0].setLabel({esc(label)});" if label is not None else ""
     return ScriptBuilder.iife(f"""// recipe:claim{_KEY_JS}
 var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
@@ -268,7 +290,7 @@ for (var _m = 0; _m < _new.length; _m++) {{
     var nm = _new[_m].getName();
     if (!nm) {{
         // DS4 gives a new camera/light a label but no name; later steps find nodes by name.
-        nm = {esc(label)}.replace(/[^A-Za-z0-9_]/g, "_");
+        nm = {esc(fallback)}.replace(/[^A-Za-z0-9_]/g, "_");
         _new[_m].setName(nm);
         _nodes = Scene.getNodeList();
     }}
@@ -279,8 +301,48 @@ for (var _m = 0; _m < _new.length; _m++) {{
     }}
     _names.push(_new[_m].getName());
 }}
-if (_new.length) _new[0].setLabel({esc(label)});
+{set_label}
 return _names;""")
+
+
+# Provisional until the Task 1 live probe confirms these calls.
+def _fit_script(names: list[str], figure_name: str) -> str:
+    """Fit each named scene-root node that is a figure to *figure_name*: follow
+    it and parent it under it.  Returns ``{error, fitted, unfitted}``.
+
+    Added non-figure roots (a prop in an outfit preset) stay unfitted.
+    """
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:fit
+var _fig = Scene.findNode({esc(figure_name)});
+if (!_fig) return {{error: {esc(figure_name)} + ": figure not found", fitted: [], unfitted: []}};
+var _names = {ScriptBuilder.to_js(names)}, _fitted = [], _unfitted = [];
+for (var _i = 0; _i < _names.length; _i++) {{
+    var _n = Scene.findNode(_names[_i]);
+    if (_n && _n.inherits("DzFigure")) {{
+        _n.setFollowTarget(_fig);
+        _fig.addNodeChild(_n, true);
+        _fitted.push(_names[_i]);
+    }} else _unfitted.push(_names[_i]);
+}}
+return {{error: "", fitted: _fitted, unfitted: _unfitted}};""")
+
+
+def _unfit_script(names: list[str]) -> str:
+    """Delete the named nodes with one exact-selection DzDeleteAction; returns the missing names."""
+    return ScriptBuilder.iife(f"""// recipe:unfit{_DELETE_SELECTED_JS}
+var _names = {ScriptBuilder.to_js(names)}, _nodes = [], _missing = [];
+for (var _i = 0; _i < _names.length; _i++) {{
+    var _n = Scene.findNode(_names[_i]);
+    if (_n) _nodes.push(_n); else _missing.push(_names[_i]);
+}}
+if (!_missing.length) _deleteSelected(_nodes);
+return _missing;""")
+
+
+def _exists_script(node_name: str) -> str:
+    return ScriptBuilder.iife(f"""// recipe:exists
+return !!Scene.findNode({ScriptBuilder.escape_string(node_name)});""")
 
 
 def is_local_pose_file(path: str) -> bool:
@@ -630,3 +692,64 @@ class DazSceneOps:
 
     def write_manifest(self, manifest: Manifest) -> None:
         self._client.execute(write_manifest_script(manifest))
+
+    # ── take over, presets, fitting ───────────────────────────────────────────
+
+    def take_over(self, node_name: str) -> None:
+        if not self._client.execute(_exists_script(node_name)).value:
+            raise NodeNotFoundError(f"Cannot take over, node not found: {node_name!r}")
+
+    def apply_presets(self, node_name: str, paths: list[str]) -> None:
+        for path in paths:
+            resolved = self._resolve_asset(path)
+            result = self._client.execute(_pose_preset_script(node_name, resolved),
+                                          timeout=ASSET_LOAD_TIMEOUT_S).value
+            if result == "node_not_found":
+                raise NodeNotFoundError(f"Cannot apply preset, node not found: {node_name!r}")
+            if result is not True:
+                raise DazError(f"Daz Studio failed to open preset {resolved!r} on {node_name!r}")
+
+    def fit(self, entity: DesiredEntity, figure_name: str) -> list[str]:
+        return self._load_and_fit(entity.create["asset_path"], entity.label, figure_name,
+                                  entity.path)
+
+    def restore(self, source_paths: list[str], figure_name: str) -> list[str]:
+        names: list[str] = []
+        for path in source_paths:
+            names += self._load_and_fit(path, None, figure_name, path)
+        return names
+
+    def unfit(self, node_names: list[str]) -> None:
+        missing = self._client.execute(_unfit_script(list(node_names))).value
+        if missing:
+            raise DazError(f"Cannot remove, node(s) not found: {', '.join(map(str, missing))}")
+
+    def _load_and_fit(self, asset_path: str, label: str | None, figure_name: str,
+                      where: str) -> list[str]:
+        """Load with nothing selected, then fit every added root to the figure.
+
+        Anything not fitted (or any failure after the snapshot) removes all
+        the nodes the load added.
+        """
+        path = self._resolve_asset(asset_path)
+        before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
+        try:
+            self._client.execute(_load_asset_script(path), timeout=ASSET_LOAD_TIMEOUT_S)
+            names = self._client.execute(_claim_script(before, label)).value or []
+            if not names or not all(names):
+                raise DazError(f"{where}: loading it added no named root node to the scene; "
+                               "every node it added was removed")
+            out = self._client.execute(_fit_script(list(names), figure_name)).value
+            if not isinstance(out, dict):
+                raise DazError(f"{where}: Daz Studio returned no result for the fit; "
+                               "every node it added was removed")
+            if out.get("error"):
+                raise DazError(f"{where}: {out['error']}; every node it added was removed")
+            stray = [n for n in names if n not in (out.get("fitted") or [])]
+            if stray:
+                raise DazError(f"{asset_path}: loading it added nodes that are not fitted to "
+                               f"{figure_name}: {', '.join(stray)}; every node it added was removed")
+        except Exception as e:
+            self._remove_added(before, where, e)
+            raise
+        return list(names)

@@ -254,7 +254,8 @@ class FakeOps:
     def __init__(self, fail_on=None, exc: Exception | None = None, *,
                  create_names: dict | None = None, observed: dict | None = None,
                  environment: dict | None = None, native: dict | None = None,
-                 moved: dict | None = None) -> None:
+                 moved: dict | None = None, fit_names: dict | None = None,
+                 restore_names: dict | None = None) -> None:
         if fail_on is None:
             fail_on = []
         elif isinstance(fail_on, tuple):
@@ -266,6 +267,8 @@ class FakeOps:
         self.environment = environment
         self.native = native or {}
         self.moved = moved or {}
+        self.fit_names = fit_names or {}          # entity path -> names fit returns
+        self.restore_names = restore_names or {}  # source path -> names restore returns
         self.calls: list[tuple] = []
         self.calls_with_args: list[tuple] = []
         self._counts: dict[str, int] = {}
@@ -324,6 +327,23 @@ class FakeOps:
 
     def write_manifest(self, manifest):
         self._call("write_manifest", manifest)
+
+    def take_over(self, node_name):
+        self._call("take_over", node_name)
+
+    def apply_presets(self, node_name, paths):
+        self._call("apply_presets", node_name, paths)
+
+    def fit(self, entity, figure_name):
+        self._call("fit", entity.path, figure_name)
+        return list(self.fit_names.get(entity.path, [entity.label]))
+
+    def unfit(self, node_names):
+        self._call("unfit", node_names)
+
+    def restore(self, source_paths, figure_name):
+        self._call("restore", source_paths, figure_name)
+        return [n for p in source_paths for n in self.restore_names.get(p, [p])]
 
 
 FAKE_OBSERVED = {"transform": {"position": [1.0, 2.0, 3.0], "rotation": [0.0, 0.0, 0.0]}}
