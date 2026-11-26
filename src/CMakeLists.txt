@@ -36,6 +36,7 @@ add_library(DazScriptServer SHARED
 	ZipInstaller.cpp
 	miniz.c
 	PackagePaths.cpp
+	FileSha256.cpp
 	PythonToolchainBootstrapper.cpp
 	PackageDependencyInstaller.cpp
 	PackageManifest.cpp
@@ -72,6 +73,7 @@ add_library(DazScriptServer SHARED
 	../include/ZipInstaller.h
 	../include/PortableFs.h
 	../include/PackagePaths.h
+	../include/FileSha256.h
 	../include/PythonToolchainBootstrapper.h
 	../include/PackageDependencyInstaller.h
 	../include/PackageManifest.h

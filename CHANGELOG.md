@@ -148,6 +148,15 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **Package Runner: first-run uv install piped an unpinned script into a
+  shell** (yau7.4.6). The toolchain bootstrap ran astral's install script
+  (`irm … | iex` on Windows, `curl … | sh` on macOS) with no version pin or
+  checksum, so a compromised endpoint would run code in the user's session.
+  It now downloads the uv 0.13.7 release archive for the platform with the
+  system `curl` (HTTPS only, no shell), checks its SHA-256 against a digest
+  built into the plugin, and only then extracts the `uv` binary. A mismatch
+  fails the `install-uv` step and deletes the download. An existing
+  `bin/uv` is still reused as before.
 - **Package Runner: `.dzpkg` extraction accepted Windows device names and
   alternate data streams** (yau7.4.4). An archive entry such as `CON`,
   `nul.txt`, `sub/COM1.json` or `foo:bar` passed the path check. Each path
