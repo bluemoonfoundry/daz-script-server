@@ -38,6 +38,7 @@ add_library(DazScriptServer SHARED
 	PackagePaths.cpp
 	PythonToolchainBootstrapper.cpp
 	PackageDependencyInstaller.cpp
+	PackageManifest.cpp
 	DzPackageInputsDialog.cpp
 	DzPackageImporter.cpp
 	GeometryExport.cpp
@@ -73,6 +74,7 @@ add_library(DazScriptServer SHARED
 	../include/PackagePaths.h
 	../include/PythonToolchainBootstrapper.h
 	../include/PackageDependencyInstaller.h
+	../include/PackageManifest.h
 	../include/DzPackageInputsDialog.h
 	../include/DzPackageImporter.h
 	../include/GeometryExport.h

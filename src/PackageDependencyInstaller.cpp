@@ -1,6 +1,7 @@
 #include "PackageDependencyInstaller.h"
 
 #include "JsonStd.h"
+#include "PackageManifest.h"
 #include "PackagePaths.h"
 
 #include <QDir>
@@ -129,6 +130,17 @@ void PackageDependencyInstaller::onCreateVenvFinished(int exitCode, QProcess::Ex
 
 void PackageDependencyInstaller::installDeps() {
 	emit stepStarted("install-deps");
+
+	// Defense in depth: DzPackageImporter already validated the manifest,
+	// but a requirement starting with '-' would reach uv as an option. Kept
+	// here rather than in run(): this step runs from a QProcess::finished
+	// slot, so fail()'s finished signal lands after the caller's loop.exec().
+	for (const QString &dep : m_dependencies) {
+		if (!PackageManifest::isValidDependency(dep)) {
+			fail("install-deps", QString::fromLatin1("Refusing invalid dependency requirement: %1").arg(dep));
+			return;
+		}
+	}
 
 	m_process = new QProcess(this);
 	QStringList arguments = QStringList()

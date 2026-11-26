@@ -14,10 +14,14 @@ for a complete, working reference implementation (also packaged as
   "description": "...",           // optional.
   "author": "...",                // optional.
 
-  "entryPoint": "main.py",        // required. Relative path within the package; must define run(inputs: dict) -> Any.
+  "entryPoint": "main.py",        // required. Relative path to a file within the package; must define run(inputs: dict) -> Any.
+                                   // Absolute/drive paths, ':' and '..' segments are rejected.
   "interactive": true,            // required. false => run() is called immediately with inputs = {}, no dialog.
 
-  "dependencies": ["numpy>=1.26"],// optional, defaults to []. uv pip install target list.
+  "dependencies": ["numpy>=1.26"],// optional, defaults to []. uv pip install target list. Each entry must be a
+                                   // plain requirement: name, optional [extras], optional version specifiers
+                                   // (e.g. "requests[socks]>=2,<3"). Options ("-..."), URLs ("name @ url"),
+                                   // paths and environment markers are rejected.
                                    // `dazpy` is ALWAYS implicit -- never declare it here.
 
   "inputs": [                     // required if interactive is true; ignored otherwise.

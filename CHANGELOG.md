@@ -148,6 +148,14 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **Package Runner: manifest `dependencies` and `entryPoint` were not
+  validated** (yau7.4.5). A dependency starting with `-` reached
+  `uv pip install` as an option (for example `--index-url` pointing at
+  another index), and `entryPoint` could be an absolute path or climb out
+  of the package with `..`. Dependencies must now be plain requirements
+  (name, optional extras and version specifiers), and `entryPoint` must
+  resolve to a file inside the package. Both are checked before the package
+  replaces an existing install.
 - **dazpy: `fitted_items()` included the figure's bones** (the root bone is
   a direct child of the figure) and returned name-bound proxies. It now
   skips bones and binds by elementID.

@@ -2,6 +2,7 @@
 
 #include "JsonStd.h"
 #include "PackageDependencyInstaller.h"
+#include "PackageManifest.h"
 #include "PackagePaths.h"
 #include "PortableFs.h"
 #include "PythonToolchainBootstrapper.h"
@@ -97,6 +98,15 @@ bool readManifest(const QString &stagingDir, QVariantMap &manifest, QString &err
 	if (manifest.value("id").toString().isEmpty() ||
 		manifest.value("entryPoint").toString().isEmpty()) {
 		errorMessage = QString::fromLatin1("%1 must declare \"id\" and \"entryPoint\"").arg(kManifestFileName);
+		return false;
+	}
+
+	// dependencies go to `uv pip install` and entryPoint to the runner
+	// subprocess: reject option-like requirements and paths that leave the
+	// package (yau7.4.5). Checked on the staged copy, before commit().
+	QStringList dependencies;
+	if (!PackageManifest::readDependencies(manifest.value("dependencies"), dependencies, errorMessage) ||
+		!PackageManifest::validateEntryPoint(stagingDir, manifest.value("entryPoint").toString(), errorMessage)) {
 		return false;
 	}
 
@@ -319,7 +329,8 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 		return DZ_OPERATION_FAILED_ERROR;
 	}
 
-	const QStringList dependencies = manifest.value("dependencies").toStringList();
+	QStringList dependencies;
+	PackageManifest::readDependencies(manifest.value("dependencies"), dependencies, errorMessage); // validated in readManifest()
 	if (!ensureDependencies(stage.packageId, commitResult.finalPackageDir, dependencies, errorMessage)) {
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"),
 			QString::fromLatin1("Could not prepare %1's Python environment: %2")
