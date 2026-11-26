@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -254,7 +253,7 @@ class DazMaterial(DazElement):
                     raise ValueError(f"Color values must be '#RRGGBB', got {value!r}") from None
             else:
                 h = value.strip().lstrip("#")
-                rgb = json.dumps([int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)])
+                rgb = ScriptBuilder.to_js([int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)])
         num = "null"
         if not isinstance(value, str) or rgb == "null":
             try:
@@ -264,7 +263,7 @@ class DazMaterial(DazElement):
         script = ScriptBuilder.iife(_MATERIAL_JS + f"""
             var m = {self._locator};
             if (!m) return {{status: "no_material"}};
-            var want = {json.dumps(name)};
+            var want = {ScriptBuilder.to_js(name)};
             var p = m.findProperty(want) || m.findPropertyByLabel(want);
             if (!p) return {{status: "missing"}};
             var rgb = {rgb}, num = {num};

@@ -21,7 +21,6 @@ live DAZ Studio instance -- see
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -133,7 +132,7 @@ def _set_channel_value(material: "DazMaterial", label: str, value: object) -> No
     script = ScriptBuilder.iife(f"""
         var m = {material._locator};
         if (!m) return {{"error": "material_not_found"}};
-        var p = m.findPropertyByLabel({json.dumps(label)});
+        var p = m.findPropertyByLabel({ScriptBuilder.to_js(label)});
         if (!p) return {{"error": "property_not_found"}};
         p.setValue({serialized});
         return {{"success": true}};
@@ -148,7 +147,7 @@ def _get_channel_value(material: "DazMaterial", label: str) -> object:
     script = ScriptBuilder.iife(f"""
         var m = {material._locator};
         if (!m) return {{"error": "material_not_found"}};
-        var p = m.findPropertyByLabel({json.dumps(label)});
+        var p = m.findPropertyByLabel({ScriptBuilder.to_js(label)});
         if (!p) return {{"error": "property_not_found"}};
         return {{"success": true, "value": p.getValue()}};
     """)
@@ -167,9 +166,9 @@ def _set_channel_map(material: "DazMaterial", label: str, path: str) -> None:
     script = ScriptBuilder.iife(f"""
         var m = {material._locator};
         if (!m) return {{"error": "material_not_found"}};
-        var p = m.findPropertyByLabel({json.dumps(label)});
+        var p = m.findPropertyByLabel({ScriptBuilder.to_js(label)});
         if (!p) return {{"error": "property_not_found"}};
-        p.setMap({json.dumps(path)});
+        p.setMap({ScriptBuilder.to_js(path)});
         return {{"success": true}};
     """)
     result = material._client.execute(script).value

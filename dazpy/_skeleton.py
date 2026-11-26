@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping, Sequence
 
@@ -59,7 +58,7 @@ class DazSkeleton(DazNode):
             f"(function(){{"
             f"var _skel=null,_skels=Scene.getSkeletonList();"
             f"for(var _i=0;_i<_skels.length;_i++){{if({match}){{_skel=_skels[_i];break;}}}}"
-            f"return _skel?_skel.findBone({json.dumps(bone_name)}):null;"
+            f"return _skel?_skel.findBone({ScriptBuilder.to_js(bone_name)}):null;"
             f"}})()"
         )
 
@@ -262,7 +261,7 @@ class DazSkeleton(DazNode):
             data: ``{bone_name: (x, y, z)}`` or ``{bone_name: [x, y, z]}``,
                   angles in degrees.  Bones not in this dict are left as-is.
         """
-        data_json = json.dumps({k: list(v) for k, v in data.items()})
+        data_json = ScriptBuilder.to_js({k: list(v) for k, v in data.items()})
         script = self._skeleton_body(f"""
             var _data = {data_json};
             var _bones = _node.getAllBones();
@@ -310,7 +309,7 @@ class DazSkeleton(DazNode):
         if not payload:
             return []
         script = self._skeleton_body(f"""
-            var _data = {json.dumps(payload)};
+            var _data = {ScriptBuilder.to_js(payload)};
             var _ctl = {{x: "getXRotControl", y: "getYRotControl", z: "getZRotControl"}};
             var _found = {{}};
             var _bones = _node.getAllBones();
@@ -358,7 +357,7 @@ class DazSkeleton(DazNode):
         if not payload:
             return []
         script = self._skeleton_body(f"""
-            var _data = {json.dumps(payload)}, _step = Scene.getTimeStep(), _found = {{}};
+            var _data = {ScriptBuilder.to_js(payload)}, _step = Scene.getTimeStep(), _found = {{}};
             var _ctl = {{x: "getXRotControl", y: "getYRotControl", z: "getZRotControl"}};
             var _bones = _node.getAllBones();
             for (var i = 0; i < _bones.length; i++) {{
@@ -416,7 +415,7 @@ class DazSkeleton(DazNode):
             pairs.append([str(bone), float(weight)])
         tx, ty, tz = (float(v) for v in point)
         script = self._skeleton_body(f"""
-            var _chain = {json.dumps(pairs)};
+            var _chain = {ScriptBuilder.to_js(pairs)};
             var _target = new DzVec3({ScriptBuilder.js_num(tx)}, {ScriptBuilder.js_num(ty)}, {ScriptBuilder.js_num(tz)});
             var _byName = {{}}, _bones = _node.getAllBones();
             for (var i = 0; i < _bones.length; i++) _byName[_bones[i].getName()] = _bones[i];
@@ -503,7 +502,7 @@ class DazSkeleton(DazNode):
         """
         lines = []
         if bones:
-            bones_json = json.dumps({k: list(v) for k, v in bones.items()})
+            bones_json = ScriptBuilder.to_js({k: list(v) for k, v in bones.items()})
             lines.append(f"""
                 var _bonesData = {bones_json};
                 var _allBones = _node.getAllBones();
@@ -519,7 +518,7 @@ class DazSkeleton(DazNode):
                 }}
             """)
         if morphs:
-            morphs_json = json.dumps(morphs)
+            morphs_json = ScriptBuilder.to_js(morphs)
             lines.append(f"""
                 var _morphsData = {morphs_json};
                 var _obj = _node.getObject();
@@ -533,7 +532,7 @@ class DazSkeleton(DazNode):
                 }}
             """)
         if props:
-            props_json = json.dumps(props)
+            props_json = ScriptBuilder.to_js(props)
             lines.append(f"""
                 var _propsData = {props_json};
                 for (var k = 0; k < _node.getNumProperties(); k++) {{
@@ -570,8 +569,8 @@ class DazSkeleton(DazNode):
             ``{bone_name: (x, y, z)}`` world-space positions for each requested
             effector bone.  Bones not found in the skeleton are omitted.
         """
-        rotations_json = json.dumps({k: list(v) for k, v in rotations.items()})
-        effectors_json = json.dumps(effector_bone_names)
+        rotations_json = ScriptBuilder.to_js({k: list(v) for k, v in rotations.items()})
+        effectors_json = ScriptBuilder.to_js(effector_bone_names)
         script = self._skeleton_body(f"""
             var _data = {rotations_json};
             var _effNames = {effectors_json};
@@ -649,8 +648,8 @@ class DazSkeleton(DazNode):
 
             Returns ``None`` if the effector bone cannot be found.
         """
-        chain_json = json.dumps(chain_bone_names)
-        effector_json = json.dumps(effector_bone_name)
+        chain_json = ScriptBuilder.to_js(chain_bone_names)
+        effector_json = ScriptBuilder.to_js(effector_bone_name)
         step_js = float(step_degrees)
         script = self._skeleton_body(f"""
             var _chain = {chain_json};
@@ -732,7 +731,7 @@ class DazSkeleton(DazNode):
             data: ``{morph_name: float}`` mapping.  Morphs not in this dict
                   are left at their current value.
         """
-        data_json = json.dumps(data)
+        data_json = ScriptBuilder.to_js(data)
         script = self._skeleton_body(f"""
             var _data = {data_json};
             var _obj = _node.getObject();
@@ -824,7 +823,7 @@ class DazSkeleton(DazNode):
         """
         start_js      = str(start) if start is not None else "null"
         end_js        = str(end)   if end   is not None else "null"
-        bone_filter_js = json.dumps({n: True for n in bone_names}) if bone_names is not None else "null"
+        bone_filter_js = ScriptBuilder.to_js({n: True for n in bone_names}) if bone_names is not None else "null"
 
         script = self._skeleton_body(f"""
             var _step    = Scene.getTimeStep();
@@ -881,7 +880,7 @@ class DazSkeleton(DazNode):
         """
         start_js       = str(start) if start is not None else "null"
         end_js         = str(end)   if end   is not None else "null"
-        morph_filter_js = json.dumps({n: True for n in morph_names}) if morph_names is not None else "null"
+        morph_filter_js = ScriptBuilder.to_js({n: True for n in morph_names}) if morph_names is not None else "null"
 
         script = self._skeleton_body(f"""
             var _step    = Scene.getTimeStep();
@@ -941,8 +940,8 @@ class DazSkeleton(DazNode):
         """
         start_js        = str(start) if start is not None else "null"
         end_js          = str(end)   if end   is not None else "null"
-        bone_filter_js  = json.dumps({n: True for n in bone_names})  if bone_names  is not None else "null"
-        morph_filter_js = json.dumps({n: True for n in morph_names}) if morph_names is not None else "null"
+        bone_filter_js  = ScriptBuilder.to_js({n: True for n in bone_names})  if bone_names  is not None else "null"
+        morph_filter_js = ScriptBuilder.to_js({n: True for n in morph_names}) if morph_names is not None else "null"
         with_morphs_js  = "true" if include_morphs else "false"
 
         script = self._skeleton_body(f"""

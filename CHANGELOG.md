@@ -171,7 +171,10 @@ All notable changes to DazScript Server are documented here.
   `NaN`/`Infinity`, written into the scene. It now raises `ValueError`
   (dazpy) or `RangeError` (daz-ts) before any request is sent, via the new
   `ScriptBuilder.js_num` / `ScriptBuilder.jsNum` helpers, which
-  `serialize_arg` / `serializeArg` also use (nested values too).
+  `serialize_arg` / `serializeArg` also use (nested values too). JSON payloads
+  embedded in dazpy scripts (poses, recipe transforms, numeric candidates,
+  dForce weight overrides, ...) go through `ScriptBuilder.to_js`
+  (`json.dumps(..., allow_nan=False)`), so they are checked too (yau7.6.10).
 - **dazpy: render-progress SSE streams are always closed, and `on_progress`
   errors are raised** (yau7.6.4). `render(..., on_progress=...)` (sync and
   async) used to treat an exception from the callback as "SSE unavailable"

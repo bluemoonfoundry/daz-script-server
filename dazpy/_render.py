@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import warnings
 from typing import Any, Sequence
@@ -215,7 +214,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._iray_property_holder()};
             if (!holder) return null;
-            var p = holder.findProperty({json.dumps(name)});
+            var p = holder.findProperty({ScriptBuilder.to_js(name)});
             return p ? p.getValue() : null;
         """)
         return self._client.execute(script).value
@@ -225,7 +224,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._iray_property_holder()};
             if (!holder) return;
-            var p = holder.findProperty({json.dumps(name)});
+            var p = holder.findProperty({ScriptBuilder.to_js(name)});
             if (p) p.setValue({serialized});
         """)
         self._client.execute(script)
@@ -245,14 +244,14 @@ class DazRenderSettings:
             var _i, _o;
             for (_i = 0; _i < _objs.length; _i++) {{
                 _o = _objs[_i];
-                if (_o && _o.inherits && _o.inherits({json.dumps(class_name)})) return _o;
+                if (_o && _o.inherits && _o.inherits({ScriptBuilder.to_js(class_name)})) return _o;
             }}
             for (_i = 0; _i < _objs.length; _i++) {{
                 _o = _objs[_i];
-                if (_o && _o.getLabel && _o.getLabel() == {json.dumps(label)}) return _o;
+                if (_o && _o.getLabel && _o.getLabel() == {ScriptBuilder.to_js(label)}) return _o;
             }}
             _o = _objs.length > {fallback_index} ? _objs[{fallback_index}] : null;
-            if (_o) print({json.dumps(_HOLDER_FALLBACK_MARKER)} + " {class_name} not found by class or label; using render element index {fallback_index} (" + _o.className() + ")");
+            if (_o) print({ScriptBuilder.to_js(_HOLDER_FALLBACK_MARKER)} + " {class_name} not found by class or label; using render element index {fallback_index} (" + _o.className() + ")");
             return _o || null;
         }})()"""
 
@@ -358,7 +357,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._environment_holder()};
             if (!holder) return {{holder: false}};
-            var rows = {json.dumps(rows)}, matched = [];
+            var rows = {ScriptBuilder.to_js(rows)}, matched = [];
             for (var i = 0; i < rows.length; i++) {{
                 var hit = null, names = rows[i][0];
                 for (var j = 0; j < names.length && !hit; j++) {{
@@ -376,7 +375,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._environment_holder()};
             if (!holder) return null;
-            var p = holder.findProperty({json.dumps(name)});
+            var p = holder.findProperty({ScriptBuilder.to_js(name)});
             return p ? p.getValue() : null;
         """)
         return self._execute(script).value
@@ -386,7 +385,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._environment_holder()};
             if (!holder) return;
-            var p = holder.findProperty({json.dumps(name)});
+            var p = holder.findProperty({ScriptBuilder.to_js(name)});
             if (p) p.setValue({serialized});
         """)
         self._execute(script)
@@ -395,8 +394,8 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._environment_holder()};
             if (!holder) return;
-            var p = holder.findProperty({json.dumps(name)});
-            if (p) p.setValueFromString({json.dumps(value)});
+            var p = holder.findProperty({ScriptBuilder.to_js(name)});
+            if (p) p.setValueFromString({ScriptBuilder.to_js(value)});
         """)
         self._execute(script)
 
@@ -419,8 +418,8 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._environment_holder()};
             if (!holder) return;
-            var p = holder.findProperty({json.dumps("Environment Map")});
-            if (p) p.setMap({json.dumps(path)});
+            var p = holder.findProperty({ScriptBuilder.to_js("Environment Map")});
+            if (p) p.setMap({ScriptBuilder.to_js(path)});
         """)
         self._execute(script)
 
@@ -527,7 +526,7 @@ class DazRenderSettings:
                 f"Unknown render engine {engine!r}; expected 'iray' or 'viewport'"
             )
 
-        requested_js = json.dumps(requested)
+        requested_js = ScriptBuilder.to_js(requested)
         script = ScriptBuilder.iife(
             self._engine_readback_body()
             + f"""
@@ -686,7 +685,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var mgr = {self._render_mgr()};
             if (!mgr) return false;
-            var renderer = mgr.findRenderer({json.dumps(engine_class)});
+            var renderer = mgr.findRenderer({ScriptBuilder.to_js(engine_class)});
             if (!renderer) return false;
             var opts = mgr.getRenderOptions();
             opts.renderType = opts.Software;
@@ -741,7 +740,7 @@ class DazRenderSettings:
             var mgr = {self._render_mgr()};
             if (!mgr) return;
             var opts = mgr.getRenderOptions();
-            opts.renderImgFilename = {json.dumps(path)};
+            opts.renderImgFilename = {ScriptBuilder.to_js(path)};
             opts.applyChanges();
         """)
         self._client.execute(script)
@@ -827,9 +826,9 @@ class DazRenderSettings:
         if camera_name is not None and camera_label is not None:
             raise ValueError("Pass at most one of camera_name or camera_label")
         if camera_label is not None:
-            cam_expr = f"Scene.findCameraByLabel({json.dumps(camera_label)})"
+            cam_expr = f"Scene.findCameraByLabel({ScriptBuilder.to_js(camera_label)})"
         elif camera_name is not None:
-            cam_expr = f"Scene.findCamera({json.dumps(camera_name)})"
+            cam_expr = f"Scene.findCamera({ScriptBuilder.to_js(camera_name)})"
         else:
             cam_expr = (
                 "MainWindow.getViewportMgr().getActiveViewport()"
@@ -1036,8 +1035,8 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._iray_render_options_holder()};
             if (!holder) return null;
-            var c = holder.findCanvasDefinition({json.dumps(name)}, true);
-            c.canvasType = c.canvasTypeFromString({json.dumps(canvas_type)});
+            var c = holder.findCanvasDefinition({ScriptBuilder.to_js(name)}, true);
+            c.canvasType = c.canvasTypeFromString({ScriptBuilder.to_js(canvas_type)});
             {self._refresh_render_settings_pane_script()}
             return {{
                 name: c.name,
@@ -1063,7 +1062,7 @@ class DazRenderSettings:
         script = ScriptBuilder.iife(f"""
             var holder = {self._iray_render_options_holder()};
             if (!holder) return false;
-            var c = holder.findCanvasDefinition({json.dumps(name)}, false);
+            var c = holder.findCanvasDefinition({ScriptBuilder.to_js(name)}, false);
             if (!c) return false;
             holder.removeCanvasDefinition(c);
             {self._refresh_render_settings_pane_script()}

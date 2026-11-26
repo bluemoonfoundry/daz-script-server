@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from ._script_builder import ScriptBuilder
@@ -44,7 +43,7 @@ class DazElement:
         script = ScriptBuilder.iife(f"""
             var obj = {self._locator};
             if (!obj) return null;
-            var prop = obj.findPropertyByLabel({json.dumps(label)});
+            var prop = obj.findPropertyByLabel({ScriptBuilder.to_js(label)});
             if (!prop) return null;
             return prop.getValue();
         """)
@@ -61,7 +60,7 @@ class DazElement:
         script = ScriptBuilder.iife(f"""
             var obj = {self._locator};
             if (!obj) return {{"error": "not_found"}};
-            var prop = obj.findPropertyByLabel({json.dumps(label)});
+            var prop = obj.findPropertyByLabel({ScriptBuilder.to_js(label)});
             if (!prop) return {{"error": "property_not_found"}};
             prop.setValue({serialized});
             return {{"success": true}};
@@ -78,7 +77,7 @@ class DazElement:
             ``{label: True}`` for labels that resolved to a real property and
             were written, ``{label: False}`` for labels that did not resolve.
         """
-        data_json = json.dumps(values)
+        data_json = ScriptBuilder.to_js(values)
         script = ScriptBuilder.iife(f"""
             var obj = {self._locator};
             if (!obj) return null;
@@ -162,7 +161,7 @@ class DazElement:
             missing property both resolve to ``None`` for the affected label(s).
         """
         cache = object.__getattribute__(self, "_cache")
-        fields_json = json.dumps(fields)
+        fields_json = ScriptBuilder.to_js(fields)
         script = ScriptBuilder.iife(f"""
             var obj = {self._locator};
             if (!obj) return null;

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from typing import TYPE_CHECKING
 
@@ -188,7 +187,7 @@ class DazSceneState:
             follow_targets[name] = target._identifier.value if target is not None else None
 
         cam_script = ScriptBuilder.iife(f"""
-            var _keys = {json.dumps(_TRANSFORM_KEYS)};
+            var _keys = {ScriptBuilder.to_js(_TRANSFORM_KEYS)};
             {_RAW_READ_JS}
             function _captureTransforms(node) {{
                 var t = {{}};
@@ -208,8 +207,8 @@ class DazSceneState:
         camera_transforms = scene._client.execute(cam_script).value or {}
 
         light_script = ScriptBuilder.iife(f"""
-            var _keys = {json.dumps(_TRANSFORM_KEYS)};
-            var _extraKeys = {json.dumps(_LIGHT_EXTRA_KEYS)};
+            var _keys = {ScriptBuilder.to_js(_TRANSFORM_KEYS)};
+            var _extraKeys = {ScriptBuilder.to_js(_LIGHT_EXTRA_KEYS)};
             {_RAW_READ_JS}
             function _captureTransforms(node) {{
                 var t = {{}};
@@ -419,9 +418,9 @@ class DazSceneState:
                 errors.append(f"Failed to restore follow-target for skeleton {name}: {exc}")
 
         restore_script = ScriptBuilder.iife(f"""
-            var _camTransforms = {json.dumps(self.camera_transforms)};
-            var _lightTransforms = {json.dumps(self.light_transforms)};
-            var _lightExtra = {json.dumps(self.light_extra)};
+            var _camTransforms = {ScriptBuilder.to_js(self.camera_transforms)};
+            var _lightTransforms = {ScriptBuilder.to_js(self.light_transforms)};
+            var _lightExtra = {ScriptBuilder.to_js(self.light_extra)};
             {_RAW_WRITE_JS}
             function _applyTransforms(node, transforms) {{
                 for (var key in transforms) {{

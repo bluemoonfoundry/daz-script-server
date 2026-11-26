@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from ._element import DazElement
@@ -30,7 +29,7 @@ class DazProperty(DazElement):
         locator = (
             f"(function(){{"
             f"var obj = {owner_locator};"
-            f"return obj ? obj.findPropertyByLabel({json.dumps(property_label)}) : null;"
+            f"return obj ? obj.findPropertyByLabel({ScriptBuilder.to_js(property_label)}) : null;"
             f"}})()"
         )
         super().__init__(client, locator)

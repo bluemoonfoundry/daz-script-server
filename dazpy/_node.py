@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
@@ -311,7 +310,7 @@ class DazNode(DazElement):
     def label(self, value: str) -> None:
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
-            f"_node.setLabel({json.dumps(value)});"
+            f"_node.setLabel({ScriptBuilder.to_js(value)});"
         )
         self._client.execute(script)
 
@@ -614,7 +613,7 @@ class DazNode(DazElement):
             f"(function(){{"
             f" var _o = {self._locator};"
             f" _o = _o ? _o.getObject() : null;"
-            f" return _o ? _o.findModifier({json.dumps(modifier_name)}) : null;"
+            f" return _o ? _o.findModifier({ScriptBuilder.to_js(modifier_name)}) : null;"
             f"}})()"
         )
 
@@ -661,7 +660,7 @@ class DazNode(DazElement):
             f"""
             var obj = _node.getObject();
             if (!obj) return null;
-            var m = obj.findModifier({json.dumps(name)});
+            var m = obj.findModifier({ScriptBuilder.to_js(name)});
             return m ? {{name: m.getName(), className: m.className()}} : null;
             """
         )
@@ -679,7 +678,7 @@ class DazNode(DazElement):
             f" var _o = _n.getObject();"
             f" if (!_o) return null;"
             f" var _s = _o.getCurrentShape();"
-            f" return _s ? _s.findMaterial({json.dumps(material_name)}) : null;"
+            f" return _s ? _s.findMaterial({ScriptBuilder.to_js(material_name)}) : null;"
             f"}})()"
         )
 
@@ -733,7 +732,7 @@ class DazNode(DazElement):
         from ._material import DazMaterial
         from .exceptions import MaterialError, NodeNotFoundError
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
-            var _want = {json.dumps(ref)};
+            var _want = {ScriptBuilder.to_js(ref)};
             var obj = _node.getObject ? _node.getObject() : null;
             var shape = obj ? obj.getCurrentShape() : null;
             if (!shape) return {{status: "no_shape"}};
@@ -791,7 +790,7 @@ class DazNode(DazElement):
         from ._material import MaterialInfo
         from .exceptions import MaterialError, NodeNotFoundError
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
-            var _maps = {json.dumps(list(map_paths or []))};
+            var _maps = {ScriptBuilder.to_js(list(map_paths or []))};
             var _allowMissing = {"true" if allow_missing else "false"};
             var _missing = [];
             for (var i = 0; i < _maps.length; i++) {{
@@ -809,7 +808,7 @@ class DazNode(DazElement):
             var _obj = _node.getObject ? _node.getObject() : null;
             var _shape = _obj ? _obj.getCurrentShape() : null;
             if (_shape) for (var s = 0; s < _shape.getNumMaterials(); s++) _shape.getMaterial(s).select(true);
-            var _ok = App.getContentMgr().openFile({json.dumps(path)}, new DzFileIOSettings(), false);
+            var _ok = App.getContentMgr().openFile({ScriptBuilder.to_js(path)}, new DzFileIOSettings(), false);
             if (!_ok) return {{status: "open_failed"}};
             var out = [];
             _shape = _obj ? _obj.getCurrentShape() : null;
@@ -849,7 +848,7 @@ class DazNode(DazElement):
             if (!obj) return null;
             var shape = obj.getCurrentShape();
             if (!shape) return null;
-            var m = shape.findMaterial({json.dumps(name)});
+            var m = shape.findMaterial({ScriptBuilder.to_js(name)});
             return m ? m.getName() : null;
             """
         )
@@ -879,7 +878,7 @@ class DazNode(DazElement):
             if (!obj) return null;
             for (var i = 0; i < obj.getNumModifiers(); i++) {{
                 var m = obj.getModifier(i);
-                if (m.getLabel() === {json.dumps(label)}) {{
+                if (m.getLabel() === {ScriptBuilder.to_js(label)}) {{
                     return {{name: m.getName(), className: m.className()}};
                 }}
             }}
@@ -909,7 +908,7 @@ class DazNode(DazElement):
         from ._property import DazProperty
         locator = (
             f"(function(){{var _n={self._locator};"
-            f"return _n ? _n.findProperty({json.dumps(name)}) : null;}})()"
+            f"return _n ? _n.findProperty({ScriptBuilder.to_js(name)}) : null;}})()"
         )
         exists = self._client.execute(
             ScriptBuilder.iife(f"return !!({locator});")
@@ -1007,7 +1006,7 @@ class DazNode(DazElement):
         """
         from .exceptions import NodeNotFoundError, PropertyNotFoundError
         script = ScriptBuilder.node_body_from_locator(self._locator, _FIND_NUMERIC_JS + f"""
-            var _want = {json.dumps(name.lower())};
+            var _want = {ScriptBuilder.to_js(name.lower())};
             var _substring = {"true" if substring_fallback else "false"};
             var _unlock = {"true" if unlock else "false"};
             var _found = _findNumeric(_node, _want, _substring);
@@ -1043,7 +1042,7 @@ class DazNode(DazElement):
         if kind not in _PROPERTY_KINDS:
             raise ValueError(f"kind must be one of {', '.join(_PROPERTY_KINDS)}; got {kind!r}")
         script = ScriptBuilder.node_body_from_locator(self._locator, _PROPERTY_DETAIL_JS + f"""
-            var _kind = {json.dumps(kind)}, _out = [];
+            var _kind = {ScriptBuilder.to_js(kind)}, _out = [];
             for (var i = 0; i < _node.getNumProperties(); i++) {{
                 var p = _node.getProperty(i), k = _kindOf(p);
                 var keep = _kind === "all" || (_kind === "morph" ? (k.numeric && !k.transform) : k[_kind]);
@@ -1062,7 +1061,7 @@ class DazNode(DazElement):
         """
         from .exceptions import NodeNotFoundError, PropertyNotFoundError
         script = ScriptBuilder.node_body_from_locator(self._locator, _PROPERTY_DETAIL_JS + f"""
-            var _want = {json.dumps(name.lower())};
+            var _want = {ScriptBuilder.to_js(name.lower())};
             for (var i = 0; i < _node.getNumProperties(); i++) {{
                 var p = _node.getProperty(i);
                 if (p.getLabel().toLowerCase() === _want || p.getName().toLowerCase() === _want)
@@ -1092,7 +1091,7 @@ class DazNode(DazElement):
         locator = (
             "(function(){" + _FIND_NUMERIC_JS
             + f"var _node = {self._locator}; if (!_node) return null;"
-            + f" var _h = _findNumeric(_node, {json.dumps(name.lower())}, false);"
+            + f" var _h = _findNumeric(_node, {ScriptBuilder.to_js(name.lower())}, false);"
             + ' return (_h && _h.prop.inherits("DzNumericProperty")) ? _h.prop : null;})()'
         )
         if not self._client.execute(ScriptBuilder.iife(f"return !!({locator});")).value:
@@ -1115,7 +1114,7 @@ class DazNode(DazElement):
             object or is not in the scene).
         """
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
-            var _pat = {json.dumps((pattern or "").lower())};
+            var _pat = {ScriptBuilder.to_js((pattern or "").lower())};
             var _includeZero = {"true" if include_zero else "false"};
             var _obj = (typeof _node.getObject === "function") ? _node.getObject() : null;
             if (!_obj) return [];
@@ -1179,7 +1178,7 @@ class DazNode(DazElement):
             normalized.append((tuple(str(n) for n in names), float(value)))
         if not normalized:
             return []
-        payload = json.dumps([{"names": list(n), "value": v} for n, v in normalized])
+        payload = ScriptBuilder.to_js([{"names": list(n), "value": v} for n, v in normalized])
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
             var _slots = {payload};
             var _mods = null;
@@ -1256,7 +1255,7 @@ class DazNode(DazElement):
                          [[int(f), float(v)] for f, v in keys]))
         if not norm:
             return []
-        payload = json.dumps([{"names": list(n), "keys": k} for n, k in norm])
+        payload = ScriptBuilder.to_js([{"names": list(n), "keys": k} for n, k in norm])
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
             var _slots = {payload}, _step = Scene.getTimeStep(), _mods = null, _out = [];
             function _num(p) {{ return p && p.inherits("DzNumericProperty") ? p : null; }}
@@ -1313,10 +1312,10 @@ class DazNode(DazElement):
         from .exceptions import NodeNotFoundError, PropertyNotFoundError
         rows = [[int(f), *(max(0, min(255, int(round(c)))) for c in rgb)] for f, rgb in keys]
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
-            var p = _node.findPropertyByLabel({json.dumps(name)}) || _node.findProperty({json.dumps(name)});
+            var p = _node.findPropertyByLabel({ScriptBuilder.to_js(name)}) || _node.findProperty({ScriptBuilder.to_js(name)});
             if (!p || !(p.inherits("DzColorProperty") || p.inherits("DzFloatColorProperty")))
                 return {{status: "missing"}};
-            var _step = Scene.getTimeStep(), rows = {json.dumps(rows)};
+            var _step = Scene.getTimeStep(), rows = {ScriptBuilder.to_js(rows)};
             for (var i = 0; i < rows.length; i++) {{
                 var k = rows[i];
                 p.setColorValue(k[0] * _step, new Color(k[1], k[2], k[3]));
@@ -1389,13 +1388,13 @@ class DazNode(DazElement):
         flags = {"SmartParentProp": smart_parent, "WriteGeometryDef": write_geometry,
                  "WriteParameterDefs": write_parameters, "WriteUVDefs": write_uvs,
                  "ForceUniqueIDs": force_unique_ids, "CompressOutput": compress}
-        sets = [f"settings.setStringValue({json.dumps(k)}, {json.dumps(v)});"
+        sets = [f"settings.setStringValue({ScriptBuilder.to_js(k)}, {ScriptBuilder.to_js(v)});"
                 for k, v in strings.items() if v is not None]
-        sets += [f"settings.setStringValue({json.dumps(k)}, {json.dumps('yes' if v else 'no')});"
+        sets += [f"settings.setStringValue({ScriptBuilder.to_js(k)}, {ScriptBuilder.to_js('yes' if v else 'no')});"
                  for k, v in flags.items() if v is not None]
         script = ScriptBuilder.node_body_from_locator(self._locator, f"""
             if (typeof DzNodeSupportAssetFilter !== "function") return {{status: "unavailable"}};
-            var out = {json.dumps(output_path)};
+            var out = {ScriptBuilder.to_js(output_path)};
             function norm(p) {{ return String(p).replace(/\\\\/g, "/").toLowerCase(); }}
             var cm = App.getContentMgr(), base = null, dirs = [];
             for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
@@ -1410,7 +1409,7 @@ class DazNode(DazElement):
             filter.getDefaultOptions(settings);
             settings.setStringValue("RunSilent", "yes");
             settings.setStringValue("BaseDataPath", base);
-            if (!{json.dumps(item is not None)}) settings.setStringValue("ItemName", _node.getLabel());
+            if (!{ScriptBuilder.to_js(item is not None)}) settings.setStringValue("ItemName", _node.getLabel());
             {' '.join(sets)}
             var err = filter.doSave(settings, out, "");
             var code = (err && typeof err.valueOf === "function") ? err.valueOf() : (err || 0);
@@ -1444,7 +1443,7 @@ class DazNode(DazElement):
         from ._property import DazProperty
         locator = (
             f"(function(){{var _n={self._locator};"
-            f"return _n ? _n.findPropertyByLabel({json.dumps(label)}) : null;}})()"
+            f"return _n ? _n.findPropertyByLabel({ScriptBuilder.to_js(label)}) : null;}})()"
         )
         exists = self._client.execute(
             ScriptBuilder.iife(f"return !!({locator});")
@@ -1614,7 +1613,7 @@ class DazNode(DazElement):
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
             _KEY_INTERP_JS
-            + f"var _F = {json.dumps(frames)}, _K = {json.dumps(kinds)}, _C = [{controls}];\n"
+            + f"var _F = {ScriptBuilder.to_js(frames)}, _K = {ScriptBuilder.to_js(kinds)}, _C = [{controls}];\n"
             f"for (var _c = 0; _c < _C.length; _c++) "
             f"_kiApply(_C[_c], _F, _K, {ScriptBuilder.serialize_arg(bool(fast_start))}, "
             f"{ScriptBuilder.serialize_arg(bool(fast_end))});"
@@ -1964,7 +1963,7 @@ class DazNode(DazElement):
             DazError: If the vertex count is unknown (simulate the node once first).
         """
         from .exceptions import DazError
-        payload = json.dumps({str(int(k)): float(v) for k, v in (overrides or {}).items()})
+        payload = ScriptBuilder.to_js({str(int(k)): float(v) for k, v in (overrides or {}).items()})
         raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + f"""
             var n = _m.getTargetVertexCount ? _m.getTargetVertexCount() : 0;
             if (!n) {{ var ex = _m.getInfluenceWeights(); n = ex ? ex.getNumWeights() : 0; }}
@@ -1992,7 +1991,7 @@ class DazNode(DazElement):
         """
         from .exceptions import PropertyNotFoundError
         raw = self._dforce_call("var _m = _findDForce();" + self._NO_DFORCE + f"""
-            var want = {json.dumps(name.lower())}, p = null, names = [];
+            var want = {ScriptBuilder.to_js(name.lower())}, p = null, names = [];
             for (var i = 0; i < _m.getNumProperties(); i++) {{
                 var q = _m.getProperty(i);
                 names.push(q.getName());
@@ -2017,7 +2016,7 @@ class DazNode(DazElement):
             ``(material_name, [{name, label, type, value}])``.
         """
         raw = self._dforce_call(f"""
-            var r = _provider({json.dumps(material)});
+            var r = _provider({ScriptBuilder.to_js(material)});
             if (r.status !== "ok") return r;
             var out = [];
             for (var i = 0; i < r.provider.getNumProperties(); i++) {{
@@ -2039,9 +2038,9 @@ class DazNode(DazElement):
         """
         from .exceptions import PropertyNotFoundError
         raw = self._dforce_call(f"""
-            var r = _provider({json.dumps(material)});
+            var r = _provider({ScriptBuilder.to_js(material)});
             if (r.status !== "ok") return r;
-            var p = r.provider.findProperty({json.dumps(name)}), names = [];
+            var p = r.provider.findProperty({ScriptBuilder.to_js(name)}), names = [];
             if (!p || !p.inherits("DzNumericProperty")) {{
                 for (var i = 0; i < r.provider.getNumProperties(); i++) names.push(r.provider.getProperty(i).getName());
                 return {{status: "no_property", available: names}};

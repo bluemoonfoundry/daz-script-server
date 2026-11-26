@@ -253,9 +253,9 @@ class DazPose:
                 ``True``.
         """
         lookup = ScriptBuilder.skeleton_lookup(skeleton._identifier)
-        bones_json  = json.dumps({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
-        morphs_json = json.dumps({k: round(v, 6) for k, v in self.morphs.items()})
-        props_json  = json.dumps({k: round(v, 6) for k, v in self.props.items()})
+        bones_json  = ScriptBuilder.to_js({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
+        morphs_json = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.morphs.items()})
+        props_json  = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.props.items()})
 
         script = f"""(function(){{
             {lookup}
@@ -337,9 +337,9 @@ class DazPose:
                 ``True``.
         """
         lookup = ScriptBuilder.skeleton_lookup(skeleton._identifier)
-        bones_json  = json.dumps({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
-        morphs_json = json.dumps({k: round(v, 6) for k, v in self.morphs.items()})
-        props_json  = json.dumps({k: round(v, 6) for k, v in self.props.items()})
+        bones_json  = ScriptBuilder.to_js({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
+        morphs_json = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.morphs.items()})
+        props_json  = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.props.items()})
 
         script = f"""(function(){{
             {lookup}

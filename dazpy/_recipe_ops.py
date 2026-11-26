@@ -33,7 +33,6 @@ int, written back with ``setValue(int)`` for rollback).
 
 from __future__ import annotations
 
-import json
 import os
 from typing import TYPE_CHECKING, Callable, Iterable, Protocol
 
@@ -180,7 +179,7 @@ return _count() < _was;""")
 def _cleanup_script(before: list[str]) -> str:
     """Remove every node whose key is not in *before*; return how many were removed."""
     return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}{_DELETE_SELECTED_JS}
-var _before = {{}}, _keys = {json.dumps(before)};
+var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
 var _nodes = Scene.getNodeList(), _tops = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
@@ -218,7 +217,7 @@ def _read_node_xform_script(node_name: str) -> str:
     return ScriptBuilder.iife(f"""// recipe:read-xform
 var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
 if (!_node) return null;
-var _c = {json.dumps(list(_NODE_XFORM_CONTROLS))}, _out = {{}};
+var _c = {ScriptBuilder.to_js(list(_NODE_XFORM_CONTROLS))}, _out = {{}};
 for (var _i = 0; _i < _c.length; _i++) _out[_c[_i]] = _node["get" + _c[_i] + "Control"]().getValue();
 return _out;""")
 
@@ -230,7 +229,7 @@ var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
 if (!_node) return false;
 // An array, not for-in over an object: Studio 6's script engine enumerates
 // inherits/className/deleteLater/name on plain objects too.
-var _v = {json.dumps([[c, values[c]] for c in _NODE_XFORM_CONTROLS if c in values])};
+var _v = {ScriptBuilder.to_js([[c, values[c]] for c in _NODE_XFORM_CONTROLS if c in values])};
 for (var _i = 0; _i < _v.length; _i++) _node["get" + _v[_i][0] + "Control"]().setValue(_v[_i][1]);
 return true;""")
 
@@ -251,7 +250,7 @@ def _claim_script(before: list[str], label: str) -> str:
     """New root nodes since *before*: make their names unique, label the first."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""// recipe:claim{_KEY_JS}
-var _before = {{}}, _keys = {json.dumps(before)};
+var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
 var _nodes = Scene.getNodeList(), _new = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
@@ -297,7 +296,7 @@ def resolve_script(paths: list[str]) -> str:
     path must be an existing absolute file (``DzFileInfo``).
     """
     return ScriptBuilder.iife(f"""// recipe:resolve
-var _paths = {json.dumps(paths)}, _out = {{}};
+var _paths = {ScriptBuilder.to_js(paths)}, _out = {{}};
 var _cm = App.getContentMgr();
 function _resolve(_p) {{
     if (_p.charAt(0) === "/") {{
@@ -343,7 +342,7 @@ def _unparent_script(owner_name: str, child_names: list[str]) -> str:
     return ScriptBuilder.iife(f"""// recipe:unparent{_KEY_JS}
 var _owner = Scene.findNode({owner});
 if (!_owner) return {{errors: [{owner} + ": owner not found"], moved: []}};
-var _names = {json.dumps(child_names)}, _all = _owner.getNodeChildren(true);
+var _names = {ScriptBuilder.to_js(child_names)}, _all = _owner.getNodeChildren(true);
 var _picked = {{}}, _nodes = [], _errs = [];
 for (var _i = 0; _i < _names.length; _i++) {{
     var _n = null;
@@ -377,7 +376,7 @@ def _reparent_script(child_keys: list[str], parent_name: str) -> str:
     return ScriptBuilder.iife(f"""// recipe:reparent{_KEY_JS}
 var _parent = Scene.findNode({parent});
 if (!_parent) return [{parent} + ": parent not found"];
-var _keys = {json.dumps(child_keys)}, _nodes = Scene.getNodeList(), _found = {{}}, _errs = [];
+var _keys = {ScriptBuilder.to_js(child_keys)}, _nodes = Scene.getNodeList(), _found = {{}}, _errs = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
     var _k = _key(_nodes[_i]);
     if (!_nodes[_i].getNodeParent() && _keys.indexOf(_k) >= 0 && !_found[_k]) _found[_k] = _nodes[_i];

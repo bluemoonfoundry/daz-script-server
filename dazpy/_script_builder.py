@@ -12,6 +12,20 @@ class ScriptBuilder:
         return json.dumps(value)
 
     @staticmethod
+    def to_js(value: object) -> str:
+        """*value* as a JSON literal to embed in a script.
+
+        Use this, not ``json.dumps``, for every value interpolated into a
+        script: ``json.dumps`` writes nan/inf as ``NaN``/``Infinity``, which
+        DazScript accepts and would write into the scene. Raises
+        ``ValueError`` on a non-finite number anywhere in *value*.
+        """
+        try:
+            return json.dumps(value, allow_nan=False)
+        except ValueError:
+            raise ValueError(f"expected only finite numbers, got {value!r}") from None
+
+    @staticmethod
     def iife(body: str) -> str:
         return f"(function(){{\n{body}\n}})()"
 
@@ -38,7 +52,7 @@ class ScriptBuilder:
         if isinstance(value, float):
             return ScriptBuilder.js_num(value)
         # allow_nan=False: NaN/Infinity inside a list or dict raise ValueError.
-        return json.dumps(value, allow_nan=False)
+        return ScriptBuilder.to_js(value)
 
     @staticmethod
     def find_node_expr(identifier: "NodeIdentifier") -> str:
