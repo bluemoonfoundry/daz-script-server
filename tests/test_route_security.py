@@ -228,6 +228,20 @@ class TestRouteSecurity(unittest.TestCase):
         self.assertNotIn("ArtifactFile::openForRead(", serve)
         # httplib only answers Range with 206 when the handler leaves status unset.
         self.assertNotIn("res.status", serve[serve.index("const QByteArray disposition"):])
+        # S7: SVG/XML/HTML served inline get a script-blocking sandbox CSP.
+        self.assertIn("X-Content-Type-Options", serve)
+        self.assertRegex(serve, r"if \(ArtifactFile::isScriptable\(path\)\)\s*"
+                                r"res\.set_header\(\"Content-Security-Policy\", ArtifactFile::kScriptableCsp\)")
+        with open(os.path.join(os.path.dirname(ARTIFACT_ROUTES_CPP), "ArtifactFile.cpp"),
+                  encoding="utf-8") as f:
+            file_src = f.read()
+        csp = re.search(r'kScriptableCsp = "([^"]+)"', file_src).group(1)
+        self.assertTrue(csp.startswith("sandbox;"), csp)
+        self.assertNotIn("allow-scripts", csp)
+        self.assertNotIn("script-src", csp)
+        scriptable = body("bool isScriptable(", file_src)
+        for ext in ("svg", "svgz", "xml", "xhtml", "html", "htm"):
+            self.assertIn(f'QLatin1String("{ext}")', scriptable)
 
         # ?thumbnail: same lookup, IDs checked before anything else, and the
         # worker never touches QtGui or blocks on the main thread unbounded.

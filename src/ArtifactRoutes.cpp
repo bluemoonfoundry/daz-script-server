@@ -131,6 +131,8 @@ void serve(AsyncRequestManager& mgr, const ArtifactRoots& roots,
 	res.set_header("Content-Disposition", disposition.constData());
 	res.set_header("Cache-Control", "private, no-store");
 	res.set_header("X-Content-Type-Options", "nosniff");
+	if (ArtifactFile::isScriptable(path))
+		res.set_header("Content-Security-Policy", ArtifactFile::kScriptableCsp);
 	res.set_content_provider(
 		static_cast<size_t>(size), ArtifactFile::contentTypeFor(path),
 		[file](size_t offset, size_t length, httplib::DataSink& sink) {

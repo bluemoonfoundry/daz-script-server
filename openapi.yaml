@@ -693,6 +693,12 @@ paths:
             Content-Disposition:
               description: '`inline; filename="..."; filename*=UTF-8''''...`'
               schema: {type: string}
+            Content-Security-Policy:
+              description: >-
+                Only on scriptable types (`.svg`, `.svgz`, `.xml`, `.xhtml`, `.html`, `.htm`):
+                `sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:`,
+                so the file can't run script under the API origin when opened directly
+              schema: {type: string}
             X-Thumbnail-Cache:
               description: '`hit` or `miss`; only on `?thumbnail` responses'
               schema: {type: string, enum: [hit, miss]}
