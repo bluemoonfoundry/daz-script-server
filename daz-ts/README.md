@@ -402,11 +402,11 @@ blocking-dialog-avoidance pattern — a bad path reaching DAZ Studio's
 underlying `setMap()`/environment-map call can hang or crash the app via a
 modal file-not-found dialog rather than raising a script error.
 
-`_interaction.py` (multi-figure IK posing) is Phase 5, below.
+dazpy's `_interaction*.py` modules (multi-figure IK posing) are Phase 5, below.
 
 ## Phase 5: Interaction / IK (multi-figure posing)
 
-Phase 5 ports dazpy's `_interaction.py`: stage two figures relative to each
+Phase 5 ports dazpy's `_interaction_*.py` modules (profile, solver, facing, recipes): stage two figures relative to each
 other and pull their hands/feet onto contact points with a
 damped-least-squares IK pass.
 

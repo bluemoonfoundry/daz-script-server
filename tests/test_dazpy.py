@@ -1124,7 +1124,7 @@ class TestInteractionAdapter(unittest.TestCase):
 
     def test_looks_like_helper_ignores_bend_bones(self):
         """'end' is a whole token, not a substring: G3/G8 *Bend bones are real joints (i9b6)."""
-        from dazpy._interaction import _looks_like_helper
+        from dazpy._interaction_profile import _looks_like_helper
 
         for name, label in (
             ("lForearmBend", "Left Forearm Bend"),
@@ -1143,7 +1143,7 @@ class TestInteractionAdapter(unittest.TestCase):
 
     def test_build_rig_profile_genesis_8_shoulder_and_bend_chain(self):
         """G8 lShldrBend is the shoulder anchor/arm chain, and Bend bones stay in the alignment chain (i9b6)."""
-        from dazpy._interaction import _alignment_chain_names
+        from dazpy._interaction_profile import _alignment_chain_names
 
         hip = _FakeBone("hip", "Hip")
         chest = _FakeBone("chestUpper", "Chest Upper", parent=hip)
@@ -1552,7 +1552,7 @@ class TestInteractionAdapter(unittest.TestCase):
         scene = MagicMock()
         scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(set_position=lambda x, y, z, label=label: moved.__setitem__(label, (x, y, z)))
         seen = []
-        with patch("dazpy._interaction.align_single_limb_target", side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or MagicMock()):
+        with patch("dazpy._interaction_recipes.align_single_limb_target", side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or MagicMock()):
             prepared.apply(scene, align_limb_targets=True)
 
         expected = (3.5 + moved["B"][0], 135.5 + moved["B"][1], -3.6 + moved["B"][2])
@@ -1633,7 +1633,7 @@ class TestInteractionAdapter(unittest.TestCase):
         scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(set_position=lambda x, y, z, label=label: moved.__setitem__(label, (x, y, z)))
         seen = []
         with patch(
-            "dazpy._interaction.align_single_limb_target",
+            "dazpy._interaction_recipes.align_single_limb_target",
             side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or LimbAlignmentResult(resolved.figure_label, resolved.anchor_name, resolved.bone_name, [], resolved.target_point),
         ):
             result = prepared.apply(scene, align_limb_targets=True)
@@ -1851,7 +1851,7 @@ class TestInteractionAdapter(unittest.TestCase):
             seen.append((resolved.figure_label, resolved.target_point))
             return LimbAlignmentResult(resolved.figure_label, resolved.anchor_name, resolved.bone_name, [], resolved.target_point, iterations=5, converged=True, initial_error=float(len(seen)), final_error=0.1)
 
-        with patch("dazpy._interaction.align_single_limb_target", side_effect=_fake):
+        with patch("dazpy._interaction_recipes.align_single_limb_target", side_effect=_fake):
             result = prepared.apply(scene, align_limb_targets=True)
         a, b = result.alignment_results
         staged, original = result.pose_patch.figure_positions["Partner"], prepared.rig_profiles["Partner"].figure_position
@@ -1872,7 +1872,7 @@ class TestInteractionAdapter(unittest.TestCase):
         scene.find_skeleton_by_label.side_effect = lambda label: MagicMock(local_euler=(0.0, 0.0, 0.0))
         seen = []
         with patch(
-            "dazpy._interaction.align_single_limb_target",
+            "dazpy._interaction_recipes.align_single_limb_target",
             side_effect=lambda skel, prof, resolved, **kw: seen.append(resolved.target_point) or LimbAlignmentResult(resolved.figure_label, resolved.anchor_name, resolved.bone_name, [], resolved.target_point),
         ):
             result = prepared.apply(scene, align_limb_targets=True)
@@ -7615,7 +7615,7 @@ class TestSceneSnapshot(unittest.TestCase):
 
     def test_build_rig_profiles_anchor_uses_world_position(self):
         from dazpy import build_rig_profiles_from_snapshot
-        from dazpy._interaction import _anchor_world_point_hint
+        from dazpy._interaction_profile import _anchor_world_point_hint
         profiles = build_rig_profiles_from_snapshot(self._SAMPLE_SNAPSHOT)
         profile = profiles["Genesis 9"]
         point = _anchor_world_point_hint(profile, "r_hand")
