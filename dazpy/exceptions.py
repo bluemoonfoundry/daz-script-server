@@ -44,15 +44,18 @@ class ServerResponseError(DazError):
         detail: Optional structured detail from the server response.
         retryable: True when the server says an identical retry may succeed
             (e.g. queue full, ``IDEMPOTENCY_KEY_IN_FLIGHT``).
+        retry_after: Seconds from the response's ``Retry-After`` header, or
+            0.0 when the server sent none.
     """
 
     def __init__(self, message: str, status_code: int, error_code: str = "", detail: str = "",
-                 retryable: bool = False):
+                 retryable: bool = False, retry_after: float = 0.0):
         super().__init__(message)
         self.status_code = status_code
         self.error_code = error_code
         self.detail = detail
         self.retryable = retryable
+        self.retry_after = retry_after
 
 
 class DazBusyError(DazError):

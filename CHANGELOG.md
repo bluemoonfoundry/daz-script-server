@@ -173,6 +173,16 @@ All notable changes to DazScript Server are documented here.
   `AsyncDazClient` closes it as soon as the wait returns rather than at
   garbage collection, and `DazClient.stream_render_progress()` /
   `stream_scene_events()` close a non-200 response before returning `None`.
+- **dazpy: `retry_on_busy` honours `Retry-After` and the server's
+  `retryable` flag; `AsyncDazClient.waiting_out_busy()`** (yau7.6.3). Each
+  retry now waits at least the server's `Retry-After` (it used to ignore it
+  and back off from 1 s). Errors the server marks `retryable`
+  (`RATE_LIMIT_EXCEEDED`, `SERVER_UNAVAILABLE`, `IDEMPOTENCY_KEY_IN_FLIGHT`)
+  are retried too, except on `render_batch_submit`, where a queue-full 503
+  can follow a partial accept. `ServerResponseError.retry_after` carries the
+  header. `AsyncDazClient` gains `waiting_out_busy(max_wait)`, scoped to the
+  current task, and its retry deadline uses `time.monotonic()` instead of the
+  deprecated `asyncio.get_event_loop()`.
 - **Package Runner: first-run uv install piped an unpinned script into a
   shell** (yau7.4.6). The toolchain bootstrap ran astral's install script
   (`irm … | iex` on Windows, `curl … | sh` on macOS) with no version pin or

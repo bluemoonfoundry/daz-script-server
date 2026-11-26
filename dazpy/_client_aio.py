@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
-from typing import Any, Callable, cast
+import time
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator, cast
 
 try:
     import httpx
@@ -16,7 +19,6 @@ except ImportError as e:  # pragma: no cover - exercised via test_client_aio_imp
 from .exceptions import (
     ConnectionError,
     DazError,
-    DazBusyError,
     TimeoutError,
 )
 from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
@@ -30,8 +32,12 @@ from ._version import (
 )
 from ._client import (
     _DEFAULT_HOST, _DEFAULT_PORT, _job_headers, _load_token, _raise_for_error, _map_response,
-    _safe_artifact_filename,
+    _safe_artifact_filename, _MAX_BACKOFF, _retry_delay,
 )
+
+# AsyncDazClient.waiting_out_busy scopes, keyed by id(client). A ContextVar
+# makes a block apply to the current task (and tasks it starts) only.
+_BUSY_WAIT: contextvars.ContextVar[dict[int, float]] = contextvars.ContextVar("dazpy_busy_wait")
 
 
 class AsyncDazClient:
@@ -190,22 +196,47 @@ class AsyncDazClient:
             self._versions.mark_stale()
             raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
 
-    async def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
-        """Await *fn* (a zero-arg async callable), retrying on DazBusyError
-        while *retry_on_busy* is true, up to *max_wait* seconds total."""
+    @contextmanager
+    def waiting_out_busy(self, max_wait: float) -> Iterator["AsyncDazClient"]:
+        """Within the block, this client's script execution and submission calls
+        made from the current task retry a busy Studio for up to *max_wait*
+        seconds, as if passed ``retry_on_busy=True``. See
+        :meth:`dazpy.DazClient.waiting_out_busy`.
+
+        A plain ``with`` block (usable inside ``async def``). It applies to the
+        current task and to tasks started inside it; other tasks are
+        unaffected. Nested blocks keep the longer wait.
+        """
+        scopes = _BUSY_WAIT.get({})
+        prev = scopes.get(id(self))
+        wait = float(max_wait) if prev is None else max(prev, float(max_wait))
+        token = _BUSY_WAIT.set({**scopes, id(self): wait})
+        try:
+            yield self
+        finally:
+            _BUSY_WAIT.reset(token)
+
+    async def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *,
+                               retry_server_errors: bool = True):
+        """Await *fn* (a zero-arg async callable). See
+        :meth:`dazpy.DazClient._with_busy_retry`."""
         if not retry_on_busy:
-            return await fn()
-        deadline = asyncio.get_event_loop().time() + max_wait
+            waiting = _BUSY_WAIT.get({}).get(id(self))
+            if waiting is None:
+                return await fn()
+            max_wait = waiting
+        deadline = time.monotonic() + max_wait
         backoff = 1.0
         while True:
             try:
                 return await fn()
-            except DazBusyError:
-                remaining = deadline - asyncio.get_event_loop().time()
-                if remaining <= 0:
+            except DazError as exc:
+                delay = _retry_delay(exc, backoff, retry_server_errors)
+                remaining = deadline - time.monotonic()
+                if delay is None or remaining <= 0:
                     raise
-                await asyncio.sleep(min(backoff, remaining))
-                backoff = min(backoff + 1.0, 5.0)
+                await asyncio.sleep(min(delay, remaining))
+                backoff = min(backoff + 1.0, _MAX_BACKOFF)
 
     async def execute(
         self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
@@ -567,7 +598,8 @@ class AsyncDazClient:
             _raise_for_error(resp)
             return resp.json()
 
-        return await self._with_busy_retry(_do, retry_on_busy, max_wait)
+        # See DazClient.render_batch_submit: no resubmit after a partial accept.
+        return await self._with_busy_retry(_do, retry_on_busy, max_wait, retry_server_errors=False)
 
     async def render_animation_submit(
         self,
