@@ -85,6 +85,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # delete the previous nightly, create the new release
+    # An explicit `shell: bash` runs steps with -eo pipefail (the implicit
+    # default is plain `bash -e`), so a failing command mid-pipeline fails
+    # the step instead of being masked by the last command's exit status.
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
@@ -95,9 +101,15 @@ jobs:
       - name: Get previous nightly date
         id: prev-nightly
         run: |
-          # Try to get the previous nightly release
-          PREV_NIGHTLY=$(gh release list --limit 100 --json tagName,createdAt --jq '.[] | select(.tagName | startswith("nightly-")) | .tagName' | head -1 || echo "")
-          echo "prev-nightly=$PREV_NIGHTLY" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          # Newest nightly tag, or empty when there is none. A gh failure
+          # (auth, API outage) fails the step rather than reading as "no
+          # previous nightly", which would leave the old release undeleted.
+          # jq picks the first match itself: piping to `head -1` under
+          # pipefail could fail on SIGPIPE.
+          PREV_NIGHTLY=$(gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | reverse | (first // {}) | .tagName // ""')
+          echo "prev-nightly=$PREV_NIGHTLY" >> "$GITHUB_OUTPUT"
 
           if [ -z "$PREV_NIGHTLY" ]; then
             echo "No previous nightly found"
@@ -224,10 +236,12 @@ jobs:
       - name: Delete previous nightly release
         if: steps.commits.outputs.has-commits == 'true' && steps.prev-nightly.outputs.prev-nightly != ''
         run: |
-          echo "Deleting previous nightly release: ${{ steps.prev-nightly.outputs.prev-nightly }}"
-          gh release delete ${{ steps.prev-nightly.outputs.prev-nightly }} --yes --cleanup-tag || true
+          set -euo pipefail
+          echo "Deleting previous nightly release: $PREV_NIGHTLY"
+          gh release delete "$PREV_NIGHTLY" --yes --cleanup-tag
         env:
           GH_TOKEN: ${{ github.token }}
+          PREV_NIGHTLY: ${{ steps.prev-nightly.outputs.prev-nightly }}
 
       - name: Create Nightly Release
         if: steps.commits.outputs.has-commits == 'true'

@@ -31,6 +31,12 @@ on:
 permissions:
   contents: read
 
+# Pinned commit of the private SDK repo (bluemoonfoundry/daz-studio-sdks,
+# main as of 2026-11-14). Bump it deliberately when the SDKs change; it is
+# also part of the SDK cache key, so a bump re-fetches.
+env:
+  SDK_REPO_REF: ed1de6a59e6486c749aa900746150af13063ec2b
+
 jobs:
   build:
     runs-on: ${{ inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
@@ -105,14 +111,16 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
-          key: ${{ steps.sdk-paths.outputs.cache-key }}
+          key: ${{ steps.sdk-paths.outputs.cache-key }}-${{ env.SDK_REPO_REF }}
 
       - name: Checkout DAZ Studio SDK repo
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bluemoonfoundry/daz-studio-sdks
+          ref: ${{ env.SDK_REPO_REF }}
           token: ${{ secrets.sdk-repo-token }}
+          persist-credentials: false
           path: temp-sdk
           sparse-checkout: |
             ${{ steps.sdk-paths.outputs.sparse-path }}

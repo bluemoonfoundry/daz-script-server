@@ -47,7 +47,12 @@ jobs:
           </head>
           <body>
             <redoc spec-url='openapi.yaml'></redoc>
-            <script src="https://cdn.jsdelivr.net/npm/redoc/bundles/redoc.standalone.js"></script>
+            <!-- Pinned Redoc + Subresource Integrity. To bump, update the version and
+                 regenerate the hash:
+                 curl -fsSL <url> | openssl dgst -sha384 -binary | openssl base64 -A -->
+            <script src="https://cdn.jsdelivr.net/npm/redoc@3.1.0/bundles/redoc.standalone.js"
+                    integrity="sha384-JeMYOUn7XELj12XQpz8IRcyCi5pih2IAwvXmTcH3IAFVWrAXJVRNa64PuS3MIj9/"
+                    crossorigin="anonymous"></script>
           </body>
           </html>
           REDOC_EOF

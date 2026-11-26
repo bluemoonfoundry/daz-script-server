@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# Pinned commit of the private SDK repo (bluemoonfoundry/daz-studio-sdks,
+# main as of 2026-11-14). Bump it deliberately when the SDKs change; it is
+# also part of the SDK cache key, so a bump re-fetches.
+env:
+  SDK_REPO_REF: ed1de6a59e6486c749aa900746150af13063ec2b
+
 jobs:
   build:
     runs-on: windows-2022
@@ -61,14 +67,16 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
-          key: ${{ steps.sdk-paths.outputs.cache-key }}
+          key: ${{ steps.sdk-paths.outputs.cache-key }}-${{ env.SDK_REPO_REF }}
 
       - name: Checkout DAZ Studio SDK repo
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bluemoonfoundry/daz-studio-sdks
+          ref: ${{ env.SDK_REPO_REF }}
           token: ${{ secrets.sdk-repo-token }}
+          persist-credentials: false
           path: temp-sdk
           sparse-checkout: |
             ${{ steps.sdk-paths.outputs.sparse-path }}
@@ -117,16 +125,32 @@ jobs:
         run: |
           # Qt 4.8 from 2014 likely needs VS 2010 redistributables
           # Download and install VC++ 2010 x64
+          $ErrorActionPreference = 'Stop'
           $vcRedistUrl = "https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x64.exe"
+          # SHA-256 of the 10,277,328-byte installer at that URL (verified 2026-11-26).
+          $expectedSha256 = "F3B7A76D84D23F91957AA18456A14B4E90609E4CE8194C5653384ED38DADA6F3"
           $installerPath = "$env:TEMP\vcredist_x64_2010.exe"
 
           Write-Host "Downloading VC++ 2010 Redistributable..."
           Invoke-WebRequest -Uri $vcRedistUrl -OutFile $installerPath
 
-          Write-Host "Installing VC++ 2010 Redistributable..."
-          Start-Process -FilePath $installerPath -ArgumentList "/install", "/quiet", "/norestart" -Wait
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $installerPath).Hash
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "vcredist_x64.exe SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+          }
+          $sig = Get-AuthenticodeSignature -FilePath $installerPath
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') {
+            throw "vcredist_x64.exe Authenticode check failed: status=$($sig.Status) signer=$($sig.SignerCertificate.Subject)"
+          }
 
-          Write-Host "VC++ 2010 Redistributable installed"
+          Write-Host "Installing VC++ 2010 Redistributable..."
+          $proc = Start-Process -FilePath $installerPath -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
+          # 0 = installed, 3010 = installed (reboot pending), 1638 = same or newer version already present.
+          if ($proc.ExitCode -notin 0, 3010, 1638) {
+            throw "VC++ 2010 Redistributable installer failed with exit code $($proc.ExitCode)"
+          }
+
+          Write-Host "VC++ 2010 Redistributable installed (exit code $($proc.ExitCode))"
 
       - name: Cache Qt6
         if: inputs.sdk-version == '6'
