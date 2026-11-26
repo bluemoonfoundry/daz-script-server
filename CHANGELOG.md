@@ -148,6 +148,15 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy: every exception is importable from `dazpy` and `dazpy.aio`**
+  (yau7.6.1). `DazError`, `AuthenticationError`, `ServerResponseError`,
+  `StudioBusyError`, `ScriptRuntimeError`, `ScriptSyntaxError` and the rest
+  were only reachable through `dazpy.exceptions`. `ConnectionError` and
+  `TimeoutError` are importable by name but stay out of `__all__`, so
+  `from dazpy import *` never shadows the builtins.
+- **dazpy: `except TimeoutError:` / `except ConnectionError:` now catch SDK
+  errors** (yau7.6.2). `dazpy.TimeoutError` and `dazpy.ConnectionError`
+  subclass the builtins as well as `DazError`; messages are unchanged.
 - **Package Runner: first-run uv install piped an unpinned script into a
   shell** (yau7.4.6). The toolchain bootstrap ran astral's install script
   (`irm … | iex` on Windows, `curl … | sh` on macOS) with no version pin or

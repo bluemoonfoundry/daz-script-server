@@ -141,8 +141,30 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import (RenderError, MaterialError, RecipeValidationError, RecipeNotAppliedError,
-                         SceneCheckError)
+from .exceptions import (
+    AmbiguousNodeError,
+    AsyncExecutionError,
+    AuthenticationError,
+    BatchLimitExceededError,
+    ConcurrencyLimitError,
+    ConnectionError as ConnectionError,  # re-export; not in __all__
+    DazBusyError,
+    DazError,
+    MaterialError,
+    NodeNotFoundError,
+    PropertyNotFoundError,
+    RecipeNotAppliedError,
+    RecipeValidationError,
+    RenderError,
+    SceneCheckError,
+    ScriptError,
+    ScriptRuntimeError,
+    ScriptSyntaxError,
+    ServerResponseError,
+    ServerVersionWarning,
+    StudioBusyError,
+    TimeoutError as TimeoutError,  # re-export; not in __all__
+)
 from ._scene_check import CheckFinding, CheckReport
 from ._version import MIN_SERVER_VERSION, VersionCheck
 from ._recipe_model import SceneRecipe
@@ -283,9 +305,6 @@ __all__ = [
     "RenderVariant",
     "RenderBase",
     "RenderResult",
-    "RenderError",
-    "MaterialError",
-    "RecipeValidationError",
     "SceneRecipe",
     "RecipeIssue",
     "ValidationReport",
@@ -294,8 +313,6 @@ __all__ = [
     "ApplyResult",
     "ObserveReport",
     "ShotRender",
-    "RecipeNotAppliedError",
-    "SceneCheckError",
     "CheckFinding",
     "CheckReport",
     "render",
@@ -304,4 +321,27 @@ __all__ = [
     "watch_scene_events",
     "wait_for_scene_event",
     "exceptions",
+    # Every dazpy exception. ConnectionError and TimeoutError are importable as
+    # dazpy.<name> but stay out of __all__ so a star import never shadows the
+    # builtins of the same name.
+    "AmbiguousNodeError",
+    "AsyncExecutionError",
+    "AuthenticationError",
+    "BatchLimitExceededError",
+    "ConcurrencyLimitError",
+    "DazBusyError",
+    "DazError",
+    "MaterialError",
+    "NodeNotFoundError",
+    "PropertyNotFoundError",
+    "RecipeNotAppliedError",
+    "RecipeValidationError",
+    "RenderError",
+    "SceneCheckError",
+    "ScriptError",
+    "ScriptRuntimeError",
+    "ScriptSyntaxError",
+    "ServerResponseError",
+    "ServerVersionWarning",
+    "StudioBusyError",
 ]

@@ -1,9 +1,18 @@
+"""dazpy exception hierarchy. Every SDK error derives from :class:`DazError`."""
+
+import builtins
+
+
 class DazError(Exception):
     """Base class for all dazpy exceptions."""
 
 
-class ConnectionError(DazError):
-    """Raised when the SDK cannot reach the DAZ Studio Script Server."""
+class ConnectionError(DazError, builtins.ConnectionError):  # noqa: A001
+    """Raised when the SDK cannot reach the DAZ Studio Script Server.
+
+    Also a :class:`builtins.ConnectionError`, so a plain
+    ``except ConnectionError:`` catches it too.
+    """
 
 
 class AuthenticationError(DazError):
@@ -116,8 +125,12 @@ class ScriptRuntimeError(ScriptError):
     """Raised when a DazScript execution fails at runtime (TypeError, ReferenceError, etc.)."""
 
 
-class TimeoutError(DazError):
-    """Raised when an HTTP request or async poll exceeds its timeout."""
+class TimeoutError(DazError, builtins.TimeoutError):  # noqa: A001
+    """Raised when an HTTP request or async poll exceeds its timeout.
+
+    Also a :class:`builtins.TimeoutError`, so a plain ``except TimeoutError:``
+    catches it too.
+    """
 
 
 class NodeNotFoundError(DazError):
