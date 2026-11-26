@@ -93,7 +93,7 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 | `ServerListenThread` | `src/DzScriptServerPane.cpp` | QThread wrapper for httplib |
 | `SecureRandom` | `src/SecureRandom.cpp` | Crypto-secure RNG (OS APIs) |
 | `JsonBuilder` | `src/JsonBuilder.cpp` | Type-safe JSON with auto-escaping |
-| `ServerConfig` | `include/DzScriptServerPane.h` | Centralized config constants |
+| `ServerConfig` | `include/ServerConfig.h` | Qt-free config constants, defaults and setting ranges |
 | `ArtifactRoutes` | `src/ArtifactRoutes.cpp` | `GET /artifacts` list/download handlers |
 | `ArtifactRoots` | `src/ArtifactRoots.cpp` | Artifact trust boundary (allowed folders) |
 | `Capabilities` | `src/Capabilities.cpp` | `GET /capabilities` document + route table |

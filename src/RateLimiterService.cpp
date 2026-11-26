@@ -1,8 +1,7 @@
 #include "RateLimiterService.h"
+#include "ServerConfig.h"
 
 #include <ctime>
-
-static const int CLEANUP_INTERVAL = 100;  // matches ServerConfig::RATE_LIMIT_CLEANUP_INTERVAL
 
 RateLimiterService::RateLimiterService(int maxRequests, int windowSec)
     : m_bEnabled(false)
@@ -45,7 +44,7 @@ bool RateLimiterService::checkRequest(const std::string& clientIP)
     info.timestamps.append(now);
 
     m_cleanupCounter++;
-    if (m_cleanupCounter >= CLEANUP_INTERVAL) {
+    if (m_cleanupCounter >= ServerConfig::RATE_LIMIT_CLEANUP_INTERVAL) {
         m_cleanupCounter = 0;
         lock.unlock();
         cleanupStale();

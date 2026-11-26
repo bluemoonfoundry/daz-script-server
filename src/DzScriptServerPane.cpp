@@ -316,12 +316,12 @@ DzScriptServerPane::DzScriptServerPane()
 	formLayout->addRow(tr("Host:"), m_pHostEdit);
 
 	m_pPortSpin = new QSpinBox(this);
-	m_pPortSpin->setRange(1024, 65535);
+	m_pPortSpin->setRange(ServerConfig::PORT_RANGE.min, ServerConfig::PORT_RANGE.max);
 	m_pPortSpin->setValue(m_nPort);
 	formLayout->addRow(tr("Port:"), m_pPortSpin);
 
 	m_pTimeoutSpin = new QSpinBox(this);
-	m_pTimeoutSpin->setRange(5, 300);
+	m_pTimeoutSpin->setRange(ServerConfig::TIMEOUT_SEC_RANGE.min, ServerConfig::TIMEOUT_SEC_RANGE.max);
 	m_pTimeoutSpin->setSuffix(tr(" sec"));
 	m_pTimeoutSpin->setValue(m_nTimeoutSec);
 	formLayout->addRow(tr("Timeout:"), m_pTimeoutSpin);
@@ -420,13 +420,13 @@ DzScriptServerPane::DzScriptServerPane()
 	QFormLayout* rateLimitFormLayout = new QFormLayout();
 
 	m_pRateLimitMaxSpin = new QSpinBox(this);
-	m_pRateLimitMaxSpin->setRange(10, 1000);
+	m_pRateLimitMaxSpin->setRange(ServerConfig::RATE_LIMIT_MAX_RANGE.min, ServerConfig::RATE_LIMIT_MAX_RANGE.max);
 	m_pRateLimitMaxSpin->setValue(ServerConfig::DEFAULT_RATE_LIMIT_MAX);
 	m_pRateLimitMaxSpin->setSuffix(tr(" requests"));
 	rateLimitFormLayout->addRow(tr("Max Requests:"), m_pRateLimitMaxSpin);
 
 	m_pRateLimitWindowSpin = new QSpinBox(this);
-	m_pRateLimitWindowSpin->setRange(10, 300);
+	m_pRateLimitWindowSpin->setRange(ServerConfig::RATE_LIMIT_WINDOW_RANGE.min, ServerConfig::RATE_LIMIT_WINDOW_RANGE.max);
 	m_pRateLimitWindowSpin->setValue(ServerConfig::DEFAULT_RATE_LIMIT_WINDOW);
 	m_pRateLimitWindowSpin->setSuffix(tr(" sec"));
 	rateLimitFormLayout->addRow(tr("Time Window:"), m_pRateLimitWindowSpin);
@@ -443,19 +443,19 @@ DzScriptServerPane::DzScriptServerPane()
 	QFormLayout* limitsFormLayout = new QFormLayout(limitsGroup);
 
 	m_pMaxConcurrentSpin = new QSpinBox(this);
-	m_pMaxConcurrentSpin->setRange(5, 50);
+	m_pMaxConcurrentSpin->setRange(ServerConfig::MAX_CONCURRENT_REQUESTS_RANGE.min, ServerConfig::MAX_CONCURRENT_REQUESTS_RANGE.max);
 	m_pMaxConcurrentSpin->setValue(m_nMaxConcurrentRequests);
 	m_pMaxConcurrentSpin->setSuffix(tr(" concurrent"));
 	limitsFormLayout->addRow(tr("Max Concurrent Requests:"), m_pMaxConcurrentSpin);
 
 	m_pMaxBodySizeSpin = new QSpinBox(this);
-	m_pMaxBodySizeSpin->setRange(1, 50);
+	m_pMaxBodySizeSpin->setRange(ServerConfig::MAX_BODY_SIZE_MB_RANGE.min, ServerConfig::MAX_BODY_SIZE_MB_RANGE.max);
 	m_pMaxBodySizeSpin->setValue(m_nMaxBodySizeMB);
 	m_pMaxBodySizeSpin->setSuffix(tr(" MB"));
 	limitsFormLayout->addRow(tr("Max Request Body Size:"), m_pMaxBodySizeSpin);
 
 	m_pMaxScriptLengthSpin = new QSpinBox(this);
-	m_pMaxScriptLengthSpin->setRange(100, 10240);
+	m_pMaxScriptLengthSpin->setRange(ServerConfig::MAX_SCRIPT_LENGTH_KB_RANGE.min, ServerConfig::MAX_SCRIPT_LENGTH_KB_RANGE.max);
 	m_pMaxScriptLengthSpin->setValue(m_nMaxScriptLengthKB);
 	m_pMaxScriptLengthSpin->setSuffix(tr(" KB"));
 	limitsFormLayout->addRow(tr("Max Script Length:"), m_pMaxScriptLengthSpin);
@@ -466,8 +466,8 @@ DzScriptServerPane::DzScriptServerPane()
 	limitsFormLayout->addRow(limitsHint);
 
 	m_pStaleTimeoutSpin = new QSpinBox(this);
-	m_pStaleTimeoutSpin->setRange(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN_MIN,
-	                              ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MAX_MIN);
+	m_pStaleTimeoutSpin->setRange(ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_RANGE_MIN.min,
+	                              ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_RANGE_MIN.max);
 	m_pStaleTimeoutSpin->setValue(m_nStaleJobTimeoutMin);
 	m_pStaleTimeoutSpin->setSuffix(tr(" min"));
 	m_pStaleTimeoutSpin->setToolTip(tr(
@@ -704,9 +704,8 @@ void DzScriptServerPane::startServer()
 	m_pServer = new httplib::Server();
 	m_pServer->set_read_timeout(m_nTimeoutSec, 0);
 	// SSE connections are long-lived; the write timeout must exceed the
-	// content-provider pop timeout (3 s) plus some slack.  5 s is the httplib
-	// default but we set it explicitly so the intent is clear.
-	m_pServer->set_write_timeout(5, 0);
+	// keepalive / pop timeout (ServerConfig static_asserts it).
+	m_pServer->set_write_timeout(ServerConfig::HTTP_WRITE_TIMEOUT_SEC, 0);
 
 	// Cap request bodies while httplib is still reading them. Without this,
 	// httplib buffers up to its 100 MB compile-time default on every route before
@@ -1183,7 +1182,7 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 		}
 		case IdempotencyCache::IN_FLIGHT:
 			ctx.respond(409, ErrorResponse::build(ErrorCode::IDEMPOTENCY_KEY_IN_FLIGHT));
-			ctx.setHeader("Retry-After", "1");
+			ctx.setHeader("Retry-After", ServerConfig::RETRY_AFTER_IN_FLIGHT_SEC);
 			stampIdentity();
 			applyContext(ctx, res);
 			return;
@@ -1274,7 +1273,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 
 	if (isMainThreadBusy()) {
 		std::fclose(file);
-		res.set_header("Retry-After", "2");
+		res.set_header("Retry-After", ServerConfig::RETRY_AFTER_BUSY_SEC);
 		respondError(res, ErrorCode::STUDIO_BUSY, mainThreadBusyMessage());
 		return;
 	}
@@ -1308,7 +1307,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 		// The main thread skips the job when it gets to it and frees it.
 		job->abandoned.fetchAndStoreOrdered(1);
 		release(job);
-		res.set_header("Retry-After", "2");
+		res.set_header("Retry-After", ServerConfig::RETRY_AFTER_BUSY_SEC);
 		respondError(res, ErrorCode::STUDIO_BUSY,
 			"DAZ Studio's main thread did not get to the thumbnail within "
 			+ std::to_string(kMainThreadTimeoutMs / 1000) + " s");

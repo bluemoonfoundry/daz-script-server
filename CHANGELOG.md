@@ -148,6 +148,15 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **Imported and saved settings use the pane's ranges** (yau7.5.2).
+  `SettingsService` validated and clamped some settings against wider
+  ranges than the settings pane allowed (timeout 1-300 s, concurrent
+  requests 1-50, rate limit 1-10000 requests per 1-3600 s). A value
+  inside the wide range but outside the pane's range was then silently
+  clamped to the nearest bound by the spin box. Both now share the
+  documented ranges in `include/ServerConfig.h`, so an out-of-range value
+  is reported and replaced with the default.
+
 - **`POST /render/batch` is all-or-nothing** (9qph). When the queue ran out
   of room partway through a batch, the server returned a retryable 503 after
   some variants were already queued, so an identical retry queued them

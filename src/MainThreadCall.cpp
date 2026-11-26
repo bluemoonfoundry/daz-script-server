@@ -1,14 +1,12 @@
 #include "MainThreadCall.h"
 #include "ErrorResponse.h"
+#include "ServerConfig.h"
 #include <exception>
 #include <QtCore/qelapsedtimer.h>
 #include <QtCore/qmetaobject.h>
 #include <QtCore/qlist.h>
 
 namespace MainThreadCall {
-
-// How often a waiting worker re-checks the client socket and the deadline.
-static const int kPollSliceMs = 250;
 
 // Re-entrancy guard (daz-script-server-29gd). Main thread only.
 namespace {
@@ -100,7 +98,7 @@ Outcome post(DzScriptServerPane* pane, Call* call, int queueTimeoutMs,
     QElapsedTimer waited;
     waited.start();
     for (;;) {
-        if (call->done.tryAcquire(1, kPollSliceMs))
+        if (call->done.tryAcquire(1, ServerConfig::MAIN_THREAD_POLL_SLICE_MS))
             break;
         if (call->state.testAndSetOrdered(Running, Running)) {
             // The main thread has started it: the work is really in progress,

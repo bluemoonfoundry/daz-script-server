@@ -47,6 +47,7 @@
 #include "IdempotencyCache.h"
 #include "SettingsService.h"
 #include "ServerSettings.h"
+#include "ServerConfig.h"
 #include "SceneEventBroker.h"
 #include "RenderProgressBroker.h"
 #include "ArtifactThumbnail.h"
@@ -57,59 +58,6 @@ Q_DECLARE_METATYPE(HttpResult)
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; struct Request; struct Response; }
-
-// ─── Configuration Constants ──────────────────────────────────────────────────
-
-namespace ServerConfig {
-    // Configurable defaults
-    const int DEFAULT_MAX_CONCURRENT_REQUESTS = 10;
-    const int DEFAULT_MAX_BODY_SIZE_MB = 5;
-    const int DEFAULT_MAX_SCRIPT_LENGTH_KB = 1024;  // 1MB in KB
-    const int DEFAULT_RATE_LIMIT_MAX = 60;
-    const int DEFAULT_RATE_LIMIT_WINDOW = 60;
-
-    // Fixed internal constants
-    const int MAX_LOG_LINES = 1000;
-    const int MAX_CAPTURED_LINES = 10000;
-    const int RATE_LIMIT_CLEANUP_INTERVAL = 100;
-
-    // Server lifecycle timing
-    const int PROGRESS_POLL_INTERVAL_MS = 200;     // Main-thread sampling of DzProgress for busy checks
-    const int SERVER_BIND_WAIT_MS = 100;           // Wait after listen() before checking is_running()
-    const int SERVER_THREAD_STOP_TIMEOUT_MS = 5000; // Max wait for the listen thread to join on stop/failed bind (then leaked, never terminated)
-    const int HTTP_KEEP_ALIVE_MAX_COUNT = 5;        // Max requests per persistent connection
-    const int HTTP_KEEP_ALIVE_TIMEOUT_SEC = 5;      // Keep-alive idle timeout in seconds
-
-    // SSE streams (/events, render progress). The keepalive interval is also
-    // the subscriber-queue pop timeout; it must stay well under httplib's
-    // default 5 s write timeout so a keepalive goes out before the stream's
-    // wait_writable() check can time out.
-    const int SSE_KEEPALIVE_INTERVAL_MS = 3000;
-    const int SSE_FRAME_POLL_MS = 500;              // Studio 6 render-progress frame polling
-
-    // Body-size settings are in MB; httplib and the middleware compare bytes.
-    inline size_t mbToBytes(int mb) { return static_cast<size_t>(mb) * 1024 * 1024; }
-
-    // Async request management
-    const int ASYNC_CLEANUP_INTERVAL_MIN = 5;       // How often to purge TTL-expired async requests
-    // Default for the "Stuck job timeout" setting (ServerSettings::staleJobTimeoutMin):
-    // a running request older than this is presumed blocked (e.g. behind a DAZ
-    // Studio modal) and reported as "stale" so it doesn't poll as "running"
-    // forever. See failStaleRunning(). Checked every ASYNC_CLEANUP_INTERVAL_MIN,
-    // so the UI minimum matches that interval.
-    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN = 30;
-    const int ASYNC_STALE_RUNNING_TIMEOUT_MIN_MIN = 5;
-    const int ASYNC_STALE_RUNNING_TIMEOUT_MAX_MIN = 1440;
-    // Finished async requests are kept this long (AsyncRequestManager::cleanupExpired()).
-    const int ASYNC_RESULT_TTL_SEC = 3600;
-
-    // Per-request limits on the render endpoints (also reported by GET /capabilities)
-    const int MAX_BATCH_VARIANTS = 100;     // POST /render/batch "variants"
-    const int MAX_ANIMATION_FRAMES = 1000;  // POST /render/animation frame range
-
-    // GET /capabilities document schema. Bump on any breaking change to its shape.
-    const int CAPABILITIES_SCHEMA_VERSION = 1;
-}
 
 class DzScript;
 class GeometryFramesHandler;  // fork: GeometryExport.h

@@ -84,7 +84,7 @@ Read it before touching any code that runs on an HTTP thread.
 - [ ] All existing tests pass (`python tests.py`)
 - [ ] New behaviour has test coverage
 - [ ] Threading model respected (no Qt calls from HTTP threads)
-- [ ] No new magic numbers — add constants to `ServerConfig`
+- [ ] No new magic numbers — add constants to `ServerConfig` (`include/ServerConfig.h`)
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`
 - [ ] README updated if API surface changed
 - [ ] `openapi.yaml` updated if API surface changed

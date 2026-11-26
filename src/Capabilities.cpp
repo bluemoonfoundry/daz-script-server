@@ -1,7 +1,7 @@
 // GET /capabilities document. Split out of DzScriptServerPane.cpp (x7ul.32);
 // see Capabilities.h.
 #include "Capabilities.h"
-#include "DzScriptServerPane.h"   // ServerConfig
+#include "ServerConfig.h"
 #include "JsonBuilder.h"
 #include "ArtifactThumbnail.h"
 #include "common_version.h"

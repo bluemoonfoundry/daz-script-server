@@ -1,5 +1,6 @@
 #pragma once
 #include <QtCore/qstring.h>
+#include "ServerConfig.h"
 #include <QtCore/qmap.h>
 #include <QtCore/qqueue.h>
 #include <QtCore/qmutex.h>
@@ -35,10 +36,10 @@ class QObject;
 
 class AsyncRequestManager {
 public:
-    static const int DEFAULT_MAX_QUEUE_DEPTH      = 100;
-    static const int DEFAULT_MAX_TRACKED_REQUESTS = 1000;
-    static const int DEFAULT_LOG_TAIL_LINES       = 100;
-    static const int RESULT_POLL_INTERVAL_MS      = 500; // Long-poll sleep interval in getResultJson()
+    static const int DEFAULT_MAX_QUEUE_DEPTH      = ServerConfig::ASYNC_MAX_QUEUE_DEPTH;
+    static const int DEFAULT_MAX_TRACKED_REQUESTS = ServerConfig::ASYNC_MAX_TRACKED_REQUESTS;
+    static const int DEFAULT_LOG_TAIL_LINES       = ServerConfig::ASYNC_LOG_TAIL_LINES;
+    static const int RESULT_POLL_INTERVAL_MS      = ServerConfig::ASYNC_RESULT_POLL_INTERVAL_MS;
 
     // notifyTarget must be a DzScriptServerPane* (QObject subclass).
     // Stored as QObject* to avoid the DAZ header dependency here.
@@ -170,7 +171,7 @@ public:
 
     // Remove completed/failed/cancelled entries older than ttlMs.
     // Called from cleanup timer on the main thread. Returns count removed.
-    int cleanupExpired(qint64 ttlMs = 60LL * 60LL * 1000LL);
+    int cleanupExpired(qint64 ttlMs = ServerConfig::ASYNC_RESULT_TTL_SEC * 1000LL);
 
     // Mark any request stuck in RUNNING/CANCEL_REQUESTED for longer than
     // staleMs as STALE. Covers the case where the underlying DazScript call

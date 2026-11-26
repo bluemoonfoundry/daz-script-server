@@ -223,8 +223,10 @@ Client JSON body
 | macOS    | `~/Library/Preferences/com.daz3d.DazScriptServer.plist` |
 | Linux    | `~/.config/DAZ 3D/DazScriptServer.conf` |
 
-All settings are accessed through `ServerSettings`, which wraps `QSettings`
-and provides typed getters with range clamping from `ServerConfig` constants.
+Settings are a plain `ServerSettings` struct; `SettingsService` reads and
+writes it through `QSettings`, validating and clamping each value against
+the ranges in `include/ServerConfig.h` (the same ranges the settings pane
+spin boxes use).
 
 ---
 

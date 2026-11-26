@@ -36,7 +36,7 @@ static bool respondIfMainThreadBusy(DzScriptServerPane* pane, HttpContext& ctx)
 {
     if (!pane->isMainThreadBusy()) return false;
     ctx.respond(503, ErrorResponse::build(ErrorCode::STUDIO_BUSY, pane->mainThreadBusyMessage()));
-    ctx.setHeader("Retry-After", "2");
+    ctx.setHeader("Retry-After", ServerConfig::RETRY_AFTER_BUSY_SEC);
     return true;
 }
 
@@ -63,7 +63,7 @@ void callOnMainThread(DzScriptServerPane* pane, HttpContext& ctx, int queueTimeo
         ctx.respond(503, ErrorResponse::build(ErrorCode::STUDIO_BUSY,
             "DAZ Studio's main thread did not start this request within "
             + std::to_string(queueTimeoutSec) + " s (another script is still running); it was not run"));
-        ctx.setHeader("Retry-After", "2");
+        ctx.setHeader("Retry-After", ServerConfig::RETRY_AFTER_BUSY_SEC);
         return;
     case MainThreadCall::PostFailed:
         ctx.respond(500, ErrorResponse::build(ErrorCode::INTERNAL_ERROR, "could not reach the main thread"));

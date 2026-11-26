@@ -37,6 +37,22 @@ bool SettingsService::save(const ServerSettings& s)
     return validate(s).valid;
 }
 
+namespace {
+void checkRange(SettingsValidationResult& vr, const char* name, int value,
+                ServerConfig::IntRange range)
+{
+    if (!range.contains(value))
+        vr.addError(QString("%1 %2 out of range [%3, %4]")
+                        .arg(name).arg(value).arg(range.min).arg(range.max));
+}
+
+// Out-of-range values fall back to the default (not the nearest bound).
+void clampRange(int& value, ServerConfig::IntRange range, int fallback)
+{
+    if (!range.contains(value)) value = fallback;
+}
+}  // namespace
+
 SettingsValidationResult SettingsService::validate(const ServerSettings& s) const
 {
     SettingsValidationResult vr;
@@ -44,32 +60,15 @@ SettingsValidationResult SettingsService::validate(const ServerSettings& s) cons
     if (s.host.trimmed().isEmpty())
         vr.addError("host must not be empty");
 
-    if (s.port < 1024 || s.port > 65535)
-        vr.addError(QString("port %1 out of range [1024, 65535]").arg(s.port));
-
-    if (s.timeoutSec < 1 || s.timeoutSec > 300)
-        vr.addError(QString("timeout %1 out of range [1, 300]").arg(s.timeoutSec));
-
-    if (s.maxConcurrentRequests < 1 || s.maxConcurrentRequests > 50)
-        vr.addError(QString("maxConcurrentRequests %1 out of range [1, 50]")
-                        .arg(s.maxConcurrentRequests));
-
-    if (s.maxBodySizeMB < 1 || s.maxBodySizeMB > 50)
-        vr.addError(QString("maxBodySizeMB %1 out of range [1, 50]").arg(s.maxBodySizeMB));
-
-    if (s.maxScriptLengthKB < 100 || s.maxScriptLengthKB > 10240)
-        vr.addError(QString("maxScriptLengthKB %1 out of range [100, 10240]")
-                        .arg(s.maxScriptLengthKB));
-
-    if (s.staleJobTimeoutMin < 5 || s.staleJobTimeoutMin > 1440)
-        vr.addError(QString("staleJobTimeoutMin %1 out of range [5, 1440]")
-                        .arg(s.staleJobTimeoutMin));
-
-    if (s.rateLimitMax < 1 || s.rateLimitMax > 10000)
-        vr.addError(QString("rateLimitMax %1 out of range [1, 10000]").arg(s.rateLimitMax));
-
-    if (s.rateLimitWindow < 1 || s.rateLimitWindow > 3600)
-        vr.addError(QString("rateLimitWindow %1 out of range [1, 3600]").arg(s.rateLimitWindow));
+    // Ranges are shared with the settings pane spin boxes (ServerConfig.h).
+    checkRange(vr, "port",                  s.port,                  ServerConfig::PORT_RANGE);
+    checkRange(vr, "timeout",               s.timeoutSec,            ServerConfig::TIMEOUT_SEC_RANGE);
+    checkRange(vr, "maxConcurrentRequests", s.maxConcurrentRequests, ServerConfig::MAX_CONCURRENT_REQUESTS_RANGE);
+    checkRange(vr, "maxBodySizeMB",         s.maxBodySizeMB,         ServerConfig::MAX_BODY_SIZE_MB_RANGE);
+    checkRange(vr, "maxScriptLengthKB",     s.maxScriptLengthKB,     ServerConfig::MAX_SCRIPT_LENGTH_KB_RANGE);
+    checkRange(vr, "staleJobTimeoutMin",    s.staleJobTimeoutMin,    ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_RANGE_MIN);
+    checkRange(vr, "rateLimitMax",          s.rateLimitMax,          ServerConfig::RATE_LIMIT_MAX_RANGE);
+    checkRange(vr, "rateLimitWindow",       s.rateLimitWindow,       ServerConfig::RATE_LIMIT_WINDOW_RANGE);
 
     if (s.ipWhitelistEnabled && s.ipWhitelist.trimmed().isEmpty())
         vr.addWarning("IP whitelist is enabled but the whitelist is empty — all IPs will be blocked");
@@ -210,21 +209,14 @@ ServerSettings SettingsService::clampToValid(const ServerSettings& s) const
     ServerSettings out = s;
 
     if (out.host.trimmed().isEmpty())           out.host                  = def.host;
-    if (out.port < 1024 || out.port > 65535)    out.port                  = def.port;
-    if (out.timeoutSec < 1 || out.timeoutSec > 300)
-                                                out.timeoutSec            = def.timeoutSec;
-    if (out.maxConcurrentRequests < 1 || out.maxConcurrentRequests > 50)
-                                                out.maxConcurrentRequests = def.maxConcurrentRequests;
-    if (out.maxBodySizeMB < 1 || out.maxBodySizeMB > 50)
-                                                out.maxBodySizeMB         = def.maxBodySizeMB;
-    if (out.maxScriptLengthKB < 100 || out.maxScriptLengthKB > 10240)
-                                                out.maxScriptLengthKB     = def.maxScriptLengthKB;
-    if (out.staleJobTimeoutMin < 5 || out.staleJobTimeoutMin > 1440)
-                                                out.staleJobTimeoutMin    = def.staleJobTimeoutMin;
-    if (out.rateLimitMax < 1 || out.rateLimitMax > 10000)
-                                                out.rateLimitMax          = def.rateLimitMax;
-    if (out.rateLimitWindow < 1 || out.rateLimitWindow > 3600)
-                                                out.rateLimitWindow       = def.rateLimitWindow;
+    clampRange(out.port,                  ServerConfig::PORT_RANGE,                    def.port);
+    clampRange(out.timeoutSec,            ServerConfig::TIMEOUT_SEC_RANGE,             def.timeoutSec);
+    clampRange(out.maxConcurrentRequests, ServerConfig::MAX_CONCURRENT_REQUESTS_RANGE, def.maxConcurrentRequests);
+    clampRange(out.maxBodySizeMB,         ServerConfig::MAX_BODY_SIZE_MB_RANGE,        def.maxBodySizeMB);
+    clampRange(out.maxScriptLengthKB,     ServerConfig::MAX_SCRIPT_LENGTH_KB_RANGE,    def.maxScriptLengthKB);
+    clampRange(out.staleJobTimeoutMin,    ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_RANGE_MIN, def.staleJobTimeoutMin);
+    clampRange(out.rateLimitMax,          ServerConfig::RATE_LIMIT_MAX_RANGE,          def.rateLimitMax);
+    clampRange(out.rateLimitWindow,       ServerConfig::RATE_LIMIT_WINDOW_RANGE,       def.rateLimitWindow);
 
     return out;
 }

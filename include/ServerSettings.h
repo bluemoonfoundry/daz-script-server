@@ -1,18 +1,19 @@
 #pragma once
 #include <QtCore/qstring.h>
 #include <QtCore/qstringlist.h>
+#include "ServerConfig.h"
 
 // All user-configurable server settings in one place.
 struct ServerSettings {
     QString host                  = "127.0.0.1";
-    int     port                  = 18811;
-    int     timeoutSec            = 30;
+    int     port                  = ServerConfig::DEFAULT_PORT;
+    int     timeoutSec            = ServerConfig::DEFAULT_TIMEOUT_SEC;
     bool    autoStart             = false;
 
-    int     maxConcurrentRequests = 10;
-    int     maxBodySizeMB         = 5;
-    int     maxScriptLengthKB     = 1024;
-    int     staleJobTimeoutMin    = 30;   // async job running longer than this → "stale"
+    int     maxConcurrentRequests = ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS;
+    int     maxBodySizeMB         = ServerConfig::DEFAULT_MAX_BODY_SIZE_MB;
+    int     maxScriptLengthKB     = ServerConfig::DEFAULT_MAX_SCRIPT_LENGTH_KB;
+    int     staleJobTimeoutMin    = ServerConfig::ASYNC_STALE_RUNNING_TIMEOUT_MIN;  // async job running longer than this → "stale"
 
     bool    authEnabled           = true;
 
@@ -25,8 +26,8 @@ struct ServerSettings {
     QString artifactRoots;
 
     bool    rateLimitEnabled      = false;
-    int     rateLimitMax          = 60;
-    int     rateLimitWindow       = 60;
+    int     rateLimitMax          = ServerConfig::DEFAULT_RATE_LIMIT_MAX;
+    int     rateLimitWindow       = ServerConfig::DEFAULT_RATE_LIMIT_WINDOW;
 };
 
 struct SettingsValidationResult {
