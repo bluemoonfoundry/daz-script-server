@@ -611,3 +611,14 @@ def patch_sim(test) -> None:
     p = patch("dazpy.recipe.DazSceneOps", side_effect=lambda scene: scene)
     p.start()
     test.addCleanup(p.stop)
+
+
+def fake_resolve_client(found: dict[str, str]) -> MagicMock:
+    """A client whose batched ``recipe:resolve`` answers *found* (absent paths -> "")."""
+    import re
+
+    def answer(script: str) -> dict:
+        paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
+        return {p: found.get(p, "") for p in paths}
+
+    return scripted_client(("recipe:resolve", answer))
