@@ -9,6 +9,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from dazpy._recipe_desired import compute_desired
+from dazpy._asset_ref import AssetRef
+from dazpy._asset_resolve import ResolvedAsset
 from dazpy._recipe_model import SceneRecipe
 
 
@@ -173,6 +175,77 @@ class DesiredTests(unittest.TestCase):
     def test_compute_desired_is_deterministic(self):
         r = self._r(10)
         self.assertEqual(compute_desired(r), compute_desired(SceneRecipe.from_dict(copy.deepcopy(r.to_dict()))))
+
+
+
+
+def _ra(path, **ref):
+    return ResolvedAsset(AssetRef(**(ref or {"path": path})), path, None, None, None, None, "path")
+
+
+def v2_recipe(actor_extra=None, **kw):
+    a = {"asset": {"product": "G9"}, "presets": ["/P/shape.duf", "/P/skin.duf"],
+         "wearing": [{"replace": {"type": "hair"}, "key": "hair", "with": {"find": "Updo"}},
+                     {"add": {"find": "Outfit"}, "key": "outfit"},
+                     {"remove": {"type": "hat"}}]}
+    a.update(actor_extra or {})
+    return SceneRecipe.from_dict({"recipe_version": 2, "id": "r", "actors": {"abby": a}, **kw})
+
+
+RESOLVED = {"actors.abby.asset": _ra("/P/G9.duf"),
+            "actors.abby.presets[0]": _ra("/P/shape.duf"),
+            "actors.abby.presets[1]": _ra("/P/skin.duf"),
+            "actors.abby.wearing.hair": _ra("/W/updo.duf"),
+            "actors.abby.wearing.outfit": _ra("/W/outfit.duf")}
+
+
+class DesiredV2Tests(unittest.TestCase):
+    def test_v1_unchanged(self):
+        d = compute_desired(recipe_with(), None)
+        self.assertEqual(d["actors.a"].create, {"asset_path": "/People/G.duf"})
+        self.assertEqual(d["actors.a"].label, "r:a")
+        self.assertEqual(d["actors.a"].channels["transform"]["position"], (0.0, 0.0, 0.0))
+
+    def test_taken_over_actor_without_position_has_no_transform(self):
+        d = compute_desired(v2_recipe({"node": "Abby"}), RESOLVED)
+        self.assertNotIn("transform", d["actors.abby"].channels)
+        self.assertEqual(d["actors.abby"].create["take_over"], "Abby")
+        self.assertEqual(d["actors.abby"].create["asset_path"], "/P/G9.duf")
+        self.assertEqual(d["actors.abby"].label, "Abby")
+
+    def test_taken_over_actor_with_position_has_transform(self):
+        d = compute_desired(v2_recipe({"node": "Abby", "position": [5, 0, 0]}), RESOLVED)
+        self.assertEqual(d["actors.abby"].channels["transform"]["position"], (5.0, 0.0, 0.0))
+
+    def test_created_actor_default_position(self):
+        d = compute_desired(v2_recipe(), RESOLVED)
+        self.assertEqual(d["actors.abby"].channels["transform"]["position"], (0.0, 0.0, 0.0))
+        self.assertNotIn("take_over", d["actors.abby"].create)
+        self.assertEqual(d["actors.abby"].label, "r:abby")
+
+    def test_items_from_wearing(self):
+        d = compute_desired(v2_recipe(), RESOLVED)
+        self.assertEqual(list(d), ["actors.abby", "actors.abby.wearing.hair",
+                                   "actors.abby.wearing.outfit"])
+        hair = d["actors.abby.wearing.hair"]
+        self.assertEqual((hair.kind, hair.label, hair.channels), ("item", "r:abby.hair", {}))
+        self.assertEqual(hair.create["fit_to"], "actors.abby")
+        self.assertEqual(hair.create["asset_path"], "/W/updo.duf")
+        self.assertEqual(hair.create["source"], RESOLVED["actors.abby.wearing.hair"].to_dict())
+
+    def test_presets_channel_order(self):
+        d = compute_desired(v2_recipe(), RESOLVED)
+        self.assertEqual(d["actors.abby"].channels["presets"],
+                         {"paths": ["/P/shape.duf", "/P/skin.duf"]})
+        d = compute_desired(v2_recipe({"presets": [], "wearing": []}),
+                            {"actors.abby.asset": _ra("/P/G9.duf")})
+        self.assertNotIn("presets", d["actors.abby"].channels)
+
+    def test_missing_resolution_names_path(self):
+        with self.assertRaisesRegex(ValueError, r"actors\.abby\.presets\[1\]"):
+            compute_desired(v2_recipe(), {k: v for k, v in RESOLVED.items() if "[1]" not in k})
+        with self.assertRaises(ValueError):
+            compute_desired(v2_recipe())
 
 
 if __name__ == "__main__":
