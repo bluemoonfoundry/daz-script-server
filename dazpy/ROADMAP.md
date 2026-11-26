@@ -19,7 +19,8 @@ local HTTP server (the DazScriptServer plugin at `127.0.0.1:18811`).
   `_script_builder.py:ScriptBuilder.escape_string()`.
 - `DazElement.get_property(label)` / `set_property(label, value)` are the
   generic fallback for anything not wrapped explicitly.
-- Unit tests live in `tests/test_dazpy.py` (mock-based, no server needed).
+- Unit tests live in `tests/test_dazpy_<domain>.py` (mock-based, no server needed;
+  shared fakes in `tests/dazpy_fakes.py`).
 - Integration tests live in `tests/test_dazpy_integration.py` (skip gracefully
   when server is down; further skip with `@skip_no_daz` when `Scene` global
   is unavailable).
@@ -427,7 +428,7 @@ Section 11 — Cinematic shot library (5d6f.20)
 2. Pick the first unchecked item.
 3. Run `mcp__daz-api__get_class_details("DzXxx")` for the relevant class.
 4. Implement in the appropriate `dazpy/_xxx.py` file.
-5. Add unit tests to `tests/test_dazpy.py` (mock-based).
+5. Add unit tests to the matching `tests/test_dazpy_<domain>.py` (mock-based).
 6. Add integration tests to `tests/test_dazpy_integration.py` (gated with `@skip_no_daz`).
 7. Run both test suites and confirm green.
 8. Check off the item in this file.

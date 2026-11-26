@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+import os
+import sys
 
 import httpx
 import pytest
@@ -20,6 +21,9 @@ from dazpy._client_base import (
     _script_payload,
 )
 from dazpy._version import VersionTracker
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dazpy_fakes import async_client, sync_client  # noqa: E402
 
 
 def _stale(tracker: VersionTracker) -> bool:
@@ -48,9 +52,7 @@ def test_both_clients_share_the_base():
     (AsyncDazClient, httpx.RemoteProtocolError("x"), exceptions.ConnectionError),
 ])
 def test_transport_error_mapping_marks_stale(cls, exc, expected):
-    client = cls.__new__(cls)
-    client._base = "http://h:1"
-    client._timeout = 30.0
+    client, _ = (sync_client if cls is DazClient else async_client)()
     client._versions = _fresh_tracker()
     err = client._transport_error(exc, 7.0)
     assert type(err) is expected
@@ -60,24 +62,20 @@ def test_transport_error_mapping_marks_stale(cls, exc, expected):
 
 
 def test_sync_artifact_download_failure_marks_version_check_stale():
-    client = DazClient.__new__(DazClient)
-    client._base, client._token, client._timeout = "http://h:1", "", 30.0
+    client, session = sync_client()
     client._versions = _fresh_tracker()
-    client._session = MagicMock()
-    client._session.get.side_effect = requests.exceptions.ConnectionError("down")
+    session.get.side_effect = requests.exceptions.ConnectionError("down")
     with pytest.raises(exceptions.ConnectionError):
         client.download_artifact("req", 0)
     assert _stale(client._versions)
 
 
 def test_async_delete_timeout_reports_client_timeout():
-    client = AsyncDazClient.__new__(AsyncDazClient)
-    client._base, client._token, client._timeout = "http://h:1", "", 12.0
-    client._http = MagicMock()
-    client._http.delete = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+    client, http = async_client(timeout=12.0)
+    http.delete.side_effect = httpx.ReadTimeout("slow")
     with pytest.raises(exceptions.TimeoutError, match="12.0s"):
         asyncio.run(client.delete_script("x"))
-    assert client._http.delete.call_args.kwargs["timeout"] == 12.0
+    assert http.delete.call_args.kwargs["timeout"] == 12.0
 
 
 def test_payload_helpers():

@@ -3,32 +3,24 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 import respx
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import httpx
 
 from dazpy import exceptions
 from dazpy._result import ExecutionResult
 from dazpy.aio import AsyncDazClient
+from dazpy_fakes import async_client
 
 
 def _client_with_mock_http(token: str = "") -> tuple[AsyncDazClient, MagicMock]:
-    client = AsyncDazClient.__new__(AsyncDazClient)
-    object.__setattr__(client, "_base", "http://127.0.0.1:18811")
-    object.__setattr__(client, "_token", token)
-    object.__setattr__(client, "_timeout", 30.0)
-    mock_http = MagicMock()
-    mock_http.post = AsyncMock()
-    mock_http.get = AsyncMock()
-    mock_http.delete = AsyncMock()
-    mock_http.aclose = AsyncMock()
-    object.__setattr__(client, "_http", mock_http)
-    return client, mock_http
+    return async_client(token=token)
 
 
 def _mock_resp(status_code: int = 200, json_data: dict | None = None, headers: dict | None = None):
@@ -231,55 +223,6 @@ class TestAsyncDazClientExecuteBatchAsync:
         _, kwargs = mock_http.post.call_args
         assert kwargs["json"]["args"] == {"mode": "probe"}
         assert kwargs["json"]["reportFile"] == "C:/runs/probe/batch.jsonl"
-
-
-class TestAsyncDazClientRetryOnBusy:
-    @pytest.mark.asyncio
-    async def test_retries_then_succeeds(self, monkeypatch):
-        client, mock_http = _client_with_mock_http()
-        busy_resp = _mock_resp(
-            status_code=503,
-            json_data={"success": False, "error_code": "STUDIO_BUSY", "error": "busy", "detail": "busy"},
-            headers={"Retry-After": "0"},
-        )
-        ok_resp = _mock_resp(json_data={"success": True, "result": 1, "request_id": "x"})
-        mock_http.post.side_effect = [busy_resp, ok_resp]
-
-        sleeps = []
-
-        async def fake_sleep(seconds):
-            sleeps.append(seconds)
-
-        monkeypatch.setattr("asyncio.sleep", fake_sleep)
-
-        result = await client.execute("1;", retry_on_busy=True, max_wait=5.0)
-        assert result.value == 1
-        assert mock_http.post.await_count == 2
-        assert len(sleeps) == 1
-
-    @pytest.mark.asyncio
-    async def test_raises_after_max_wait_exceeded(self, monkeypatch):
-        client, mock_http = _client_with_mock_http()
-        busy_resp = _mock_resp(
-            status_code=503,
-            json_data={"success": False, "error_code": "STUDIO_BUSY", "error": "busy", "detail": "busy"},
-            headers={"Retry-After": "0"},
-        )
-        mock_http.post.return_value = busy_resp
-
-        clock = {"t": 0.0}
-
-        def fake_time():
-            return clock["t"]
-
-        async def fake_sleep(seconds):
-            clock["t"] += seconds + 0.01
-
-        monkeypatch.setattr("asyncio.get_event_loop", lambda: MagicMock(time=fake_time))
-        monkeypatch.setattr("asyncio.sleep", fake_sleep)
-
-        with pytest.raises(exceptions.StudioBusyError):
-            await client.execute("1;", retry_on_busy=True, max_wait=2.0)
 
 
 class TestAsyncDazClientRequests:

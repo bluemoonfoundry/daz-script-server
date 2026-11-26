@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from dazpy import DazClient
 from dazpy._client import _raise_for_error
 from dazpy.aio import AsyncDazClient
+from dazpy_fakes import async_client, sync_client  # noqa: E402
 from dazpy.exceptions import (
     AuthenticationError,
     ConcurrencyLimitError,
@@ -172,6 +177,59 @@ def test_server_response_error_retry_after_defaults_to_zero():
     with pytest.raises(ServerResponseError) as info:
         _raise_for_error(_resp(429, body))
     assert info.value.retry_after == 0.0
+
+
+# ── execute(retry_on_busy=...) wiring, through each client's transport ─────
+
+_BUSY_BODY = {"success": False, "error_code": "STUDIO_BUSY", "error": "busy", "detail": "rendering"}
+_OK_BODY = {"success": True, "result": 2, "output": [], "request_id": "ok1"}
+
+
+def _sync_execute(responses, **kwargs):
+    client, session = sync_client()
+    session.post.side_effect = responses
+    try:
+        return client.execute("1+1;", **kwargs)
+    finally:
+        _sync_execute.posts = session.post.call_count
+
+
+def _async_execute(responses, **kwargs):
+    client, http = async_client()
+    http.post.side_effect = responses
+    try:
+        return asyncio.run(client.execute("1+1;", **kwargs))
+    finally:
+        _async_execute.posts = http.post.await_count
+
+
+EXECUTORS = pytest.mark.parametrize("run", [_sync_execute, _async_execute], ids=["sync", "async"])
+
+
+@EXECUTORS
+def test_execute_retry_on_busy_retries_until_success(clock, run):
+    busy = _resp(503, _BUSY_BODY, {"Retry-After": "1"})
+    result = run([busy, busy, _resp(200, _OK_BODY)], retry_on_busy=True, max_wait=10.0)
+    assert result.value == 2
+    assert run.posts == 3
+    assert clock.sleeps == [1.0, 2.0]
+
+
+@EXECUTORS
+def test_execute_retry_on_busy_gives_up_at_max_wait(clock, run):
+    busy = _resp(503, _BUSY_BODY, {"Retry-After": "4"})
+    with pytest.raises(StudioBusyError):
+        run([busy] * 5, retry_on_busy=True, max_wait=6.0)
+    assert run.posts == 3  # last sleep is capped at the deadline, then one final try
+    assert clock.sleeps == [4.0, 2.0]
+
+
+@EXECUTORS
+def test_execute_does_not_retry_by_default(clock, run):
+    with pytest.raises(StudioBusyError):
+        run([_resp(503, _BUSY_BODY, {"Retry-After": "1"}), _resp(200, _OK_BODY)])
+    assert run.posts == 1
+    assert clock.sleeps == []
 
 
 # ── AsyncDazClient.waiting_out_busy ────────────────────────────────────────

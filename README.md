@@ -2185,7 +2185,7 @@ pip install dazpy-*.whl      # from the release page
 ```
 
 **Files:**
-- `tests/test_dazpy.py` — SDK unit tests (mock-based, no server needed)
+- `tests/test_dazpy_*.py` — SDK unit tests, split by domain (mock-based, no server needed); shared fakes in `tests/dazpy_fakes.py`
 - `tests/test_dazpy_integration.py` — SDK integration tests (requires running server)
 
 **Usage:**
