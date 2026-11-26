@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Callable
 
@@ -25,26 +26,38 @@ async def _wait_render_sse_async(
     polling fallback.
     """
     deadline = time.monotonic() + timeout
+    # See _wait_render_sse: on_progress errors propagate, not "SSE unavailable".
+    progress_error: BaseException | None = None
 
     try:
-        async for event_type, data in client.stream_render_progress(request_id, stream_timeout=timeout + 5.0):
-            if time.monotonic() > deadline:
-                break
-            if event_type == "complete":
-                return RenderResult(
-                    success=True,
-                    output_path=data.get("output_path", ""),
-                    file_size_bytes=int(data.get("file_size_bytes", -1)),
-                    duration_ms=int(data.get("duration_ms", 0)),
-                )
-            if event_type == "error":
-                raise RenderError(data.get("error", "Render failed"), request_id=request_id)
-            if event_type == "progress" and on_progress is not None:
-                on_progress(data)
+        # aclosing: leaving the loop early (return/raise/break) closes the
+        # httpx stream now, not whenever the generator is garbage-collected.
+        stream = client.stream_render_progress(request_id, stream_timeout=timeout + 5.0)
+        async with contextlib.aclosing(stream) as events:
+            async for event_type, data in events:
+                if time.monotonic() > deadline:
+                    break
+                if event_type == "complete":
+                    return RenderResult(
+                        success=True,
+                        output_path=data.get("output_path", ""),
+                        file_size_bytes=int(data.get("file_size_bytes", -1)),
+                        duration_ms=int(data.get("duration_ms", 0)),
+                    )
+                if event_type == "error":
+                    raise RenderError(data.get("error", "Render failed"), request_id=request_id)
+                if event_type == "progress" and on_progress is not None:
+                    try:
+                        on_progress(data)
+                    except Exception as exc:
+                        progress_error = exc
+                        break
     except (RenderError, TimeoutError):
         raise
     except Exception:
         pass  # SSE unavailable — fall through to polling
+    if progress_error is not None:
+        raise progress_error
 
     # Polling fallback
     while time.monotonic() < deadline:

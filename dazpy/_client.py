@@ -1182,9 +1182,12 @@ class DazClient:
                 stream=True,
                 timeout=stream_timeout,
             )
-            return resp if resp.status_code == 200 else None
         except _requests.exceptions.RequestException:
             return None
+        if resp.status_code != 200:
+            resp.close()
+            return None
+        return resp
 
     def stream_scene_events(
         self,
@@ -1216,9 +1219,12 @@ class DazClient:
                 stream=True,
                 timeout=stream_timeout,
             )
-            return resp if resp.status_code == 200 else None
         except _requests.exceptions.RequestException:
             return None
+        if resp.status_code != 200:
+            resp.close()
+            return None
+        return resp
 
     # ── Server health ─────────────────────────────────────────────────────────
 

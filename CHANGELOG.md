@@ -165,6 +165,14 @@ All notable changes to DazScript Server are documented here.
   (dazpy) or `RangeError` (daz-ts) before any request is sent, via the new
   `ScriptBuilder.js_num` / `ScriptBuilder.jsNum` helpers, which
   `serialize_arg` / `serializeArg` also use (nested values too).
+- **dazpy: render-progress SSE streams are always closed, and `on_progress`
+  errors are raised** (yau7.6.4). `render(..., on_progress=...)` (sync and
+  async) used to treat an exception from the callback as "SSE unavailable"
+  and silently fall back to polling. It now closes the stream and re-raises
+  it. The sync wait closes the stream response on every exit,
+  `AsyncDazClient` closes it as soon as the wait returns rather than at
+  garbage collection, and `DazClient.stream_render_progress()` /
+  `stream_scene_events()` close a non-200 response before returning `None`.
 - **Package Runner: first-run uv install piped an unpinned script into a
   shell** (yau7.4.6). The toolchain bootstrap ran astral's install script
   (`irm … | iex` on Windows, `curl … | sh` on macOS) with no version pin or
