@@ -2036,6 +2036,11 @@ DzScriptServerPane::CapturedScriptRun DzScriptServerPane::runCapturedScript(
 
 	// Args are reachable in scripts via getArguments()[0].
 	const ScriptRunResult r = runDazScript(m_pPersistentScript, args, scriptFile);
+	// The busy sample is taken every PROGRESS_POLL_INTERVAL_MS, and the last
+	// one may date from inside this script (a render's DzProgress). Refresh it
+	// before the caller publishes the result, or a client's next request can
+	// get 503 STUDIO_BUSY for a progress dialog that has already closed.
+	pollProgressBusy();
 	run.success = r.success;
 	run.result  = r.result;
 	if (!r.success)
