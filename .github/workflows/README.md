@@ -110,6 +110,11 @@ git push origin daz-ts-v0.2.0
 - **Purpose:** Runs unit tests for dazpy Python package
 - **Python versions:** 3.10, 3.11, 3.12
 
+## Shared building blocks
+
+- **`build-all.yml`** (reusable): the five plugin builds plus the dazpy wheel and daz-ts package, and a summary job that fails if any requested build failed. `release-tagged.yml` and `release-nightly.yml` call it with the defaults (everything); `test-build.yml` passes `platform` / `sdk-version` / `configuration`.
+- **`.github/actions/setup-daz-sdk`** (composite): fetches or restores the SDK, verifies it, and installs Qt6 for SDK 6.
+
 ## DAZ Studio SDK
 
 The workflows use the DAZ Studio SDK from a private repository:
@@ -134,7 +139,7 @@ The workflows use the DAZ Studio SDK from a private repository:
 - **Windows:** `qt6-6.10.3-win64_msvc2022_64-qt5compat-v1`
 - **macOS:** `qt6-6.10.3-clang_64-qt5compat-v1`
 
-**Invalidating cache:** Increment the version suffix in the cache key (e.g., `v1` → `v2`) in the workflow file.
+**Invalidating cache:** Increment the version suffix in the cache key (e.g., `v1` → `v2`). SDK and Qt6 cache keys, the pinned SDK repo commit and the Qt6 version all live in `.github/actions/setup-daz-sdk/action.yml`, which `build-windows.yml` and `build-macos.yml` both use.
 
 ## Build Matrix
 

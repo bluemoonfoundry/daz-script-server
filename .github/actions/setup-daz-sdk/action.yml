@@ -1,0 +1,153 @@
+name: Set up DAZ Studio SDK
+description: >-
+  Fetch (or restore from cache) the DAZ Studio SDK for one platform and SDK
+  major version from the private SDK repo, verify its layout, and for SDK 6
+  install the matching Qt6 devkit. Used by build-windows.yml and
+  build-macos.yml, so the SDK ref, cache keys and Qt version live here only.
+
+inputs:
+  sdk-version:
+    description: "DAZ Studio SDK major version: '4' or '6'"
+    required: true
+  os:
+    description: "'windows' or 'macos'"
+    required: true
+  sdk-repo-token:
+    description: Token for bluemoonfoundry/daz-studio-sdks
+    required: true
+  sdk-repo-ref:
+    # Pinned commit of the private SDK repo (main as of 2026-11-14). Bump it
+    # deliberately when the SDKs change; it is part of the cache key, so a
+    # bump re-fetches.
+    description: Commit of bluemoonfoundry/daz-studio-sdks to use
+    required: false
+    default: ed1de6a59e6486c749aa900746150af13063ec2b
+
+outputs:
+  sdk-dir:
+    description: SDK folder, relative to the workspace
+    value: ${{ steps.paths.outputs.sdk-dir }}
+  binary-name:
+    description: File name of the built plugin (.dll / .dylib)
+    value: ${{ steps.paths.outputs.binary-name }}
+  qt6-dir:
+    description: Qt6_DIR for CMake (SDK 6 only, empty otherwise)
+    value: ${{ steps.paths.outputs.qt6-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve SDK paths
+      id: paths
+      shell: bash
+      env:
+        SDK_VERSION: ${{ inputs.sdk-version }}
+        TARGET_OS: ${{ inputs.os }}
+        WORKSPACE: ${{ github.workspace }}
+      run: |
+        # Qt6 devkit matching the Qt DAZ Studio 6 bundles (Qt6Core.dll version).
+        QT6_VERSION=6.10.3
+        case "$TARGET_OS-$SDK_VERSION" in
+          # daz-studio-6-sdk-* always holds the CURRENT DS6 SDK (6.26.2026.27900).
+          # Bump the -vN suffix whenever that folder is replaced, or CI keeps
+          # restoring the stale cached SDK and builds plugins Studio refuses.
+          windows-6) key=daz-sdk-6.26-windows-private-v2; sparse=daz-studio-6-sdk-win32
+                     bin=dsp_DazScriptServer.dll
+                     qt_arch=win64_msvc2022_64; qt_host=windows; qt_sub=msvc2022_64 ;;
+          windows-4) key=daz-sdk-4.5-windows-private-v1;  sparse=daz-studio-45-sdk-win32
+                     bin=DazScriptServer.dll ;;
+          macos-6)   key=daz-sdk-6.26-macos-private-v2;   sparse=daz-studio-6-sdk-macos
+                     bin=libdsp_DazScriptServer.dylib
+                     qt_arch=clang_64; qt_host=mac; qt_sub=macos ;;
+          macos-4)   key=daz-sdk-4.5-macos-private-v1;    sparse=daz-studio-45-sdk-macos
+                     bin=DazScriptServer.dylib ;;
+          *) echo "Unknown os/sdk-version: $TARGET_OS/$SDK_VERSION"; exit 1 ;;
+        esac
+        if [ "$SDK_VERSION" = "6" ]; then sdk_dir="Daz Studio 6 SDK"; else sdk_dir="DAZStudio4.5+ SDK"; fi
+        {
+          echo "cache-key=$key"
+          echo "sparse-path=$sparse"
+          echo "sdk-dir=$sdk_dir"
+          echo "binary-name=$bin"
+          if [ "$SDK_VERSION" = "6" ]; then
+            echo "qt6-version=$QT6_VERSION"
+            echo "qt6-arch=$qt_arch"
+            echo "qt6-host=$qt_host"
+            echo "qt6-cache-key=qt6-$QT6_VERSION-$qt_arch-qt5compat-v1"
+            echo "qt6-dir=$WORKSPACE/qt6/$QT6_VERSION/$qt_sub/lib/cmake/Qt6"
+          else
+            echo "qt6-dir="
+          fi
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Cache DAZ Studio SDK
+      id: cache-sdk
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/${{ steps.paths.outputs.sdk-dir }}
+        key: ${{ steps.paths.outputs.cache-key }}-${{ inputs.sdk-repo-ref }}
+
+    - name: Checkout DAZ Studio SDK repo
+      if: steps.cache-sdk.outputs.cache-hit != 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: bluemoonfoundry/daz-studio-sdks
+        ref: ${{ inputs.sdk-repo-ref }}
+        token: ${{ inputs.sdk-repo-token }}
+        persist-credentials: false
+        path: temp-sdk
+        sparse-checkout: |
+          ${{ steps.paths.outputs.sparse-path }}
+
+    - name: Move SDK to expected location
+      if: steps.cache-sdk.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SPARSE: ${{ steps.paths.outputs.sparse-path }}
+        SDK_DIR: ${{ steps.paths.outputs.sdk-dir }}
+      run: |
+        if [ ! -d "temp-sdk/$SPARSE" ]; then
+          echo "Error: $SPARSE not found in daz-studio-sdks."
+          exit 1
+        fi
+        mv "temp-sdk/$SPARSE" "$SDK_DIR"
+        rm -rf temp-sdk
+
+    - name: Verify SDK structure
+      shell: bash
+      env:
+        SDK_VERSION: ${{ inputs.sdk-version }}
+        TARGET_OS: ${{ inputs.os }}
+        SDK_DIR: ${{ steps.paths.outputs.sdk-dir }}
+      run: |
+        need() { [ -e "$SDK_DIR/$1" ] || { echo "Error: $SDK_DIR/$1 not found"; exit 1; }; }
+        need include
+        if [ "$SDK_VERSION" = "4" ]; then need lib; fi
+        if [ "$SDK_VERSION" = "6" ] && [ "$TARGET_OS" = "windows" ]; then need x64/lib/dzcore.lib; fi
+        echo "SDK structure verified"
+
+    - name: Cache Qt6
+      if: inputs.sdk-version == '6'
+      id: cache-qt6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/qt6
+        key: ${{ steps.paths.outputs.qt6-cache-key }}
+
+    - name: Install Qt6 (aqtinstall)
+      if: inputs.sdk-version == '6' && steps.cache-qt6.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        QT_HOST: ${{ steps.paths.outputs.qt6-host }}
+        QT_VERSION: ${{ steps.paths.outputs.qt6-version }}
+        QT_ARCH: ${{ steps.paths.outputs.qt6-arch }}
+        OUT_DIR: ${{ github.workspace }}/qt6
+      run: |
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          # The macOS runners' python3 is externally managed (PEP 668).
+          PY=python3; PIP_EXTRA=--break-system-packages
+        else
+          PY=python; PIP_EXTRA=
+        fi
+        "$PY" -m pip install $PIP_EXTRA aqtinstall==3.3.0
+        "$PY" -m aqt install-qt "$QT_HOST" desktop "$QT_VERSION" "$QT_ARCH" -m qt5compat --outputdir "$OUT_DIR"

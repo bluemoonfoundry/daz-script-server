@@ -4,6 +4,10 @@ This document provides a visual overview of how the GitHub Actions workflows are
 
 ## Workflow Hierarchy
 
+The three trigger workflows each call `build-all.yml` once; it calls the
+platform workflows below and adds a summary job. The platform workflows get
+the SDK and Qt6 from the `.github/actions/setup-daz-sdk` composite action.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      TRIGGER WORKFLOWS                           │

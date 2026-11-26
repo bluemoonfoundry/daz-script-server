@@ -13,75 +13,16 @@ permissions:
   contents: read
 
 jobs:
-  build-windows-ds4:
-    name: Build Windows Plugin (DS4)
-    uses: ./.github/workflows/build-windows.yml
-    with:
-      configuration: Release
-      sdk-version: '4'
+  build:
+    name: Build plugins, dazpy and daz-ts
+    uses: ./.github/workflows/build-all.yml
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-windows-ds6:
-    name: Build Windows Plugin (DS6)
-    uses: ./.github/workflows/build-windows.yml
-    with:
-      configuration: Release
-      sdk-version: '6'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-intel-ds4:
-    name: Build macOS Intel Plugin (DS4)
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: x86_64
-      configuration: Release
-      sdk-version: '4'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-arm-ds4:
-    name: Build macOS Apple Silicon Plugin (DS4)
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: arm64
-      configuration: Release
-      sdk-version: '4'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-ds6:
-    name: Build macOS Plugin (DS6)
-    # One x86_64 build serves Intel and Apple Silicon alike: the 6.26 macOS
-    # SDK's libdzcore.dylib is x86_64-only and DAZ Studio 6 runs under
-    # Rosetta 2 on Apple Silicon (see build-macos.yml).
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: x86_64
-      configuration: Release
-      sdk-version: '6'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-dazpy:
-    name: Build dazpy Wheel
-    uses: ./.github/workflows/build-dazpy.yml
-
-  build-daz-ts:
-    name: Build daz-ts Package
-    uses: ./.github/workflows/build-daz-ts.yml
 
   create-nightly-release:
     name: Create Nightly Release
     needs:
-      - build-windows-ds4
-      - build-windows-ds6
-      - build-macos-intel-ds4
-      - build-macos-arm-ds4
-      - build-macos-ds6
-      - build-dazpy
-      - build-daz-ts
+      - build
     runs-on: ubuntu-latest
     permissions:
       contents: write   # delete the previous nightly, create the new release

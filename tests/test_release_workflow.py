@@ -59,11 +59,31 @@ def _ancestors(jobs, name):
 
 
 def test_publish_pypi_waits_for_every_build_job():
+    # The builds live in build-all.yml (S2); release-tagged calls it as one
+    # `build` job with the defaults, which run every platform and SDK.
     jobs = _jobs()
-    builds = {n for n in jobs if n.startswith("build-")}
-    assert builds, "no build-* jobs found"
-    missing = builds - _ancestors(jobs, "publish-pypi")
-    assert not missing, f"publish-pypi can run before: {sorted(missing)}"
+    assert jobs["build"]["uses"] == "./.github/workflows/build-all.yml"
+    assert "with" not in jobs["build"], "release must build everything (no filters)"
+    assert "build" in _ancestors(jobs, "publish-pypi")
+
+    build_all = _load(WORKFLOWS / "build-all.yml")
+    trigger = build_all.get("on", build_all.get(True))  # PyYAML reads bare `on` as True
+    inputs = trigger["workflow_call"]["inputs"]
+    assert inputs["platform"]["default"] == "all"
+    assert inputs["sdk-version"]["default"] == "both"
+    builds = {n for n in build_all["jobs"] if n.startswith("build-")}
+    assert len(builds) == 7, sorted(builds)
+    # The summary fails the call when any requested build failed.
+    assert set(_needs(build_all["jobs"]["summary"])) == builds
+
+
+def test_release_workflows_share_build_all():
+    for name in ("release-tagged.yml", "release-nightly.yml", "test-build.yml"):
+        jobs = _load(WORKFLOWS / name)["jobs"]
+        uses = {j.get("uses") for j in jobs.values()}
+        assert "./.github/workflows/build-all.yml" in uses, name
+        assert not {u for u in uses if u and u.endswith(("build-windows.yml", "build-macos.yml"))}, \
+            f"{name} calls a platform build directly; go through build-all.yml"
 
 
 def test_publish_pypi_waits_for_version_check_and_release():
@@ -99,3 +119,21 @@ def test_write_scopes_only_on_publishing_jobs():
             writes = _write_scopes(job["permissions"]) if "permissions" in job else set()
             expected = JOB_WRITE_SCOPES.get((f.name, name), set())
             assert writes == expected, f"{f.name}:{name} writes {sorted(writes)}, expected {sorted(expected)}"
+
+
+def test_workflow_yaml_has_no_duplicate_keys():
+    # GitHub rejects a workflow with a repeated mapping key; PyYAML keeps the
+    # last one silently, so check explicitly.
+    class Strict(yaml.SafeLoader):
+        pass
+
+    def mapping(loader, node, deep=False):
+        keys = [loader.construct_object(k, deep=deep) for k, _ in node.value]
+        dups = {k for k in keys if keys.count(k) > 1}
+        assert not dups, f"duplicate keys {sorted(map(str, dups))} at line {node.start_mark.line + 1}"
+        return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+    Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+    actions = WORKFLOWS.parent / "actions"
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(actions.glob("*/action.yml")):
+        yaml.load(path.read_text(encoding="utf-8"), Loader=Strict)
