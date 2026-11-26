@@ -71,6 +71,29 @@ class TestMcpEnv(unittest.TestCase):
         self.assertFalse(smoke_live.is_checkout_dazpy(None))
 
 
+class TestSkipAnnotations(unittest.TestCase):
+    """S9: under GitHub Actions a skip (e.g. an unregistered engine) emits a
+    ::warning so a green live-smoke run still shows what it didn't cover."""
+
+    def _skip(self, gha):
+        smoke = smoke_live.Smoke.__new__(smoke_live.Smoke)
+        smoke.checks = []
+        smoke.args = smoke_live.parse_args([])
+        out = []
+        env = {"GITHUB_ACTIONS": "true"} if gha else {}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+            smoke.run("render", "filament.render", None, skip="filament not registered")
+        return out
+
+    def test_warning_under_actions(self):
+        out = self._skip(gha=True)
+        self.assertIn("::warning title=live smoke skip::render/filament.render: filament not registered", out)
+
+    def test_no_warning_locally(self):
+        self.assertFalse(any(l.startswith("::warning") for l in self._skip(gha=False)))
+
+
 class TestResultsIndex(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

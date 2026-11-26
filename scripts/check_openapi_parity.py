@@ -69,10 +69,11 @@ def load_companion_registry(path: Path = COMPANION_REGISTRY) -> dict[str, set[tu
     return registry
 
 
-# Routes companion plugins register at runtime, from companion_plugins.json.
-# --plugin-src checks an entry against the plugin's source; --live against a
-# running server.
-COMPANION_PLUGIN_ROUTES: dict[str, set[tuple[str, str]]] = load_companion_registry()
+# Routes companion plugins register at runtime come from companion_plugins.json,
+# loaded by main() (not at import, so a bad file can't break importing this
+# module) and passed to check()/check_live(). --plugin-src checks an entry
+# against the plugin's source; --live against a running server.
+Registry = dict[str, set[tuple[str, str]]]
 
 Route = tuple[str, str]  # (METHOD, normalized path)
 
@@ -273,13 +274,16 @@ def fmt(routes) -> str:
     return "\n".join(f"    {m} {p}" for m, p in sorted(routes, key=lambda r: (r[1], r[0])))
 
 
-def check(plugin_src: dict[str, Path]) -> tuple[list[str], dict[Route, dict], dict]:
+def check(plugin_src: dict[str, Path],
+          registry: Registry | None = None) -> tuple[list[str], dict[Route, dict], dict]:
+    if registry is None:
+        registry = load_companion_registry()
     ops = openapi_operations(OPENAPI.read_text(encoding="utf-8"))
     documented = set(ops)
     server, errors = server_routes(ROUTES_CPP.read_text(encoding="utf-8"))
 
     plugin_routes: set[Route] = set()
-    for name, routes in COMPANION_PLUGIN_ROUTES.items():
+    for name, routes in registry.items():
         declared = {(m, normalize(p)) for m, p in routes}
         plugin_routes |= declared
         if name in plugin_src:
@@ -347,7 +351,8 @@ def fetch_capabilities(base_url: str, token: str | None) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def check_live(caps: dict, ops: dict[Route, dict]) -> tuple[list[str], list[str]]:
+def check_live(caps: dict, ops: dict[Route, dict],
+               registry: Registry | None = None) -> tuple[list[str], list[str]]:
     """Compare a server's companion_plugins with companion_plugins.json and openapi.yaml.
 
     Returns (errors, notes). A route served by a registered plugin must be
@@ -362,8 +367,10 @@ def check_live(caps: dict, ops: dict[Route, dict]) -> tuple[list[str], list[str]
         return (["server's /capabilities has no companion_plugins "
                  "(server older than the discovery registry?)"], notes)
 
+    if registry is None:
+        registry = load_companion_registry()
     registry = {name: {(m, normalize(p)) for m, p in routes}
-                for name, routes in COMPANION_PLUGIN_ROUTES.items()}
+                for name, routes in registry.items()}
     seen: set[str] = set()
     for plugin in caps["companion_plugins"]:
         name = plugin.get("name")
@@ -402,18 +409,19 @@ def main(argv=None) -> int:
     ap.add_argument("--live", metavar="URL",
                     help="also check a running server's GET /capabilities companion_plugins")
     args = ap.parse_args(argv)
+    registry = load_companion_registry()
 
     plugin_src: dict[str, Path] = {}
     for item in args.plugin_src:
         name, _, d = item.partition("=")
-        if name not in COMPANION_PLUGIN_ROUTES or not d:
+        if name not in registry or not d:
             ap.error(f"--plugin-src {item!r}: expected one of "
-                     f"{sorted(COMPANION_PLUGIN_ROUTES)}=DIR")
+                     f"{sorted(registry)}=DIR")
         if not Path(d).is_dir():
             ap.error(f"--plugin-src {item!r}: {d} is not a directory")
         plugin_src[name] = Path(d)
 
-    errors, ops, sdks = check(plugin_src)
+    errors, ops, sdks = check(plugin_src, registry)
 
     # A failed --live fetch is reported with exit 2, but only after the static
     # errors and the SDK report, so it never hides drift found offline.
@@ -425,7 +433,7 @@ def main(argv=None) -> int:
             errors.append(f"--live {args.live}: could not read /capabilities: {exc}")
             live_failed = True
         else:
-            live_errors, notes = check_live(caps, ops)
+            live_errors, notes = check_live(caps, ops, registry)
             errors += live_errors
             for n in notes:
                 print(f"note: {n}", file=sys.stderr)
@@ -442,7 +450,7 @@ def main(argv=None) -> int:
             print(f"ERROR: {e}", file=sys.stderr)
         return 2 if live_failed else 1
     print(f"OpenAPI parity OK: {len(ops)} operations "
-          f"({len(COMPANION_PLUGIN_ROUTES)} companion plugin(s)); "
+          f"({len(registry)} companion plugin(s)); "
           f"SDKs checked: {', '.join(sdks)}", file=sys.stderr)
     return 0
 

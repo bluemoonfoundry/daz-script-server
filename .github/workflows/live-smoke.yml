@@ -12,7 +12,9 @@ on:
         description: "Comma list: api,async,render,mcp"
         default: "api,async,render"
       require_engines:
-        description: "Fail (not skip) when a requested engine isn't registered"
+        # Off by default: Filament isn't registered on Studio 6.26, so the
+        # default engine list would always fail. Skips still show as warnings.
+        description: "Fail (not skip) when a requested engine isn't registered (skips are annotated as warnings either way)"
         type: boolean
         default: false
 

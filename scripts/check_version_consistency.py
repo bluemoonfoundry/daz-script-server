@@ -25,19 +25,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def read(rel: str) -> str:
-    return (ROOT / rel).read_text(encoding="utf-8")
-
-
-def find(rel: str, pattern: str) -> str | None:
-    m = re.search(pattern, read(rel), re.MULTILINE)
-    return m.group(1) if m else None
-
-
-def main() -> int:
+def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tag", help="release tag to check, e.g. v2.10.1")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    def read(rel: str) -> str:
+        return (root / rel).read_text(encoding="utf-8")
+
+    def find(rel: str, pattern: str) -> str | None:
+        m = re.search(pattern, read(rel), re.MULTILINE)
+        return m.group(1) if m else None
 
     version = find("dazpy/__init__.py", r'^__version__\s*=\s*"([^"]+)"')
     if not version:

@@ -7,6 +7,7 @@ No running server needed (part of `python tests.py unit`).
 """
 
 import importlib.util
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,14 +69,14 @@ class TestParity(unittest.TestCase):
         self.cpp = (ROOT / "src" / "PaneRoutes.cpp").read_text(encoding="utf-8")
         self.yaml = (ROOT / "openapi.yaml").read_text(encoding="utf-8")
 
-    def _run(self, cpp=None, yaml=None, plugin_src=None):
+    def _run(self, cpp=None, yaml=None, plugin_src=None, registry=None):
         cpp_path = Path(self.tmp.name) / "routes.cpp"
         yaml_path = Path(self.tmp.name) / "openapi.yaml"
         cpp_path.write_text(cpp if cpp is not None else self.cpp, encoding="utf-8")
         yaml_path.write_text(yaml if yaml is not None else self.yaml, encoding="utf-8")
         with mock.patch.object(parity, "ROUTES_CPP", cpp_path), \
              mock.patch.object(parity, "OPENAPI", yaml_path):
-            errors, _, _ = parity.check(plugin_src or {})
+            errors, _, _ = parity.check(plugin_src or {}, registry)
         return "\n".join(errors)
 
     def test_real_tree_is_in_parity(self):
@@ -102,9 +103,9 @@ class TestParity(unittest.TestCase):
         self.assertIn("PUT /geometry/frames", out)
 
     def _run_demo(self, yaml=None, plugin_src=None):
-        with mock.patch.dict(parity.COMPANION_PLUGIN_ROUTES, {DEMO_PLUGIN: set(DEMO_ROUTES)}):
-            return self._run(yaml=yaml if yaml is not None else with_demo_paths(self.yaml),
-                             plugin_src=plugin_src)
+        registry = dict(parity.load_companion_registry(), **{DEMO_PLUGIN: set(DEMO_ROUTES)})
+        return self._run(yaml=yaml if yaml is not None else with_demo_paths(self.yaml),
+                         plugin_src=plugin_src, registry=registry)
 
     def test_declared_and_documented_plugin_passes(self):
         self.assertEqual(self._run_demo(), "")
@@ -224,10 +225,13 @@ class TestCompanionRegistry(unittest.TestCase):
         yaml_path.write_text(with_demo_paths((ROOT / "openapi.yaml").read_text(encoding="utf-8")),
                              encoding="utf-8")
         self.ops = parity.openapi_operations(yaml_path.read_text(encoding="utf-8"))
-        patcher = mock.patch.dict(parity.COMPANION_PLUGIN_ROUTES,
-                                  {DEMO_PLUGIN: set(DEMO_ROUTES)})
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.registry = {DEMO_PLUGIN: set(DEMO_ROUTES)}
+
+    def test_import_does_not_read_registry(self):
+        # S9 (yau7.9.9): a broken companion_plugins.json must not break import.
+        src = (ROOT / "scripts" / "check_openapi_parity.py").read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"^\S.*=\s*load_companion_registry\(", src, re.MULTILINE))
+        self.assertFalse(hasattr(parity, "COMPANION_PLUGIN_ROUTES"))
 
     def test_registry_file_loads(self):
         reg = parity.load_companion_registry()
@@ -260,36 +264,35 @@ class TestCompanionRegistry(unittest.TestCase):
         return {"name": name, "registered": registered, "version": version, "routes": routes}
 
     def test_matching_live_plugin_passes(self):
-        errors, notes = parity.check_live(self._caps(self._plugin()), self.ops)
+        errors, notes = parity.check_live(self._caps(self._plugin()), self.ops, self.registry)
         self.assertEqual(errors, [])
         self.assertEqual(notes, [])
 
     def test_undeclared_live_plugin_fails(self):
         live = self._plugin(name="mystery", routes=[])
-        errors, _ = parity.check_live(self._caps(self._plugin(), live), self.ops)
+        errors, _ = parity.check_live(self._caps(self._plugin(), live), self.ops, self.registry)
         self.assertTrue(any("'mystery'" in e and "not declared" in e for e in errors), errors)
 
     def test_live_route_drift_fails(self):
         live = self._plugin(routes=[{"method": "POST", "path": "/demo"}])
-        errors, _ = parity.check_live(self._caps(live), self.ops)
+        errors, _ = parity.check_live(self._caps(live), self.ops, self.registry)
         self.assertTrue(any("differ from companion_plugins.json" in e for e in errors), errors)
 
     def test_undocumented_live_route_fails(self):
-        with mock.patch.dict(parity.COMPANION_PLUGIN_ROUTES,
-                             {"x": {("GET", "/x/nope")}}):
-            live = self._plugin(name="x", routes=[{"method": "GET", "path": "/x/nope"}])
-            errors, _ = parity.check_live(self._caps(live), self.ops)
+        registry = dict(self.registry, x={("GET", "/x/nope")})
+        live = self._plugin(name="x", routes=[{"method": "GET", "path": "/x/nope"}])
+        errors, _ = parity.check_live(self._caps(live), self.ops, registry)
         self.assertTrue(any("missing from openapi.yaml" in e for e in errors), errors)
 
     def test_unattributed_declared_routes_are_a_note(self):
         live = self._plugin(name="DemoServer", registered=False, version=None)
-        errors, notes = parity.check_live(self._caps(live), self.ops)
+        errors, notes = parity.check_live(self._caps(live), self.ops, self.registry)
         self.assertEqual(errors, [])
         self.assertTrue(any("without a plugin name" in n for n in notes), notes)
         self.assertTrue(any("not loaded" in n for n in notes), notes)
 
     def test_old_server_without_registry_fails(self):
-        errors, _ = parity.check_live({"plugin_routes": []}, self.ops)
+        errors, _ = parity.check_live({"plugin_routes": []}, self.ops, self.registry)
         self.assertTrue(errors)
 
 

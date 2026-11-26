@@ -138,6 +138,10 @@ class Smoke:
             if entry["detail"] is not None:
                 line += f"  -- {_short(entry['detail'])}"
         print(line, flush=True)
+        if entry["status"] == "skip" and os.environ.get("GITHUB_ACTIONS") == "true":
+            # A skip (e.g. an engine that isn't registered) keeps the run green;
+            # annotate it so the workflow summary still shows the gap.
+            print(f"::warning title=live smoke skip::{stage}/{name}: {_short(skip)}", flush=True)
         return entry
 
     def _headers(self, token: str | None = None) -> dict:
