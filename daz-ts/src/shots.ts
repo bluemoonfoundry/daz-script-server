@@ -156,6 +156,30 @@ function decFloats(v: unknown, n: number, path: string): number[] {
   return v as number[];
 }
 
+/** `decFloats(v, 2)` typed as a pair. */
+function decNumberPair(v: unknown, path: string): readonly [number, number] {
+  const [a, b] = decFloats(v, 2, path);
+  return [a, b];
+}
+
+/** `decFloats(v, 3)` typed as a {@link Rotation}. */
+function decRotation(v: unknown, path: string): Rotation {
+  const [x, y, z] = decFloats(v, 3, path);
+  return [x, y, z];
+}
+
+/** A frozen copy of a {@link Rotation}. */
+function frozenRotation(rotation: Rotation): Rotation {
+  const copy: [number, number, number] = [rotation[0], rotation[1], rotation[2]];
+  return Object.freeze(copy);
+}
+
+/** A frozen copy of a two-element tuple that keeps its tuple type. */
+function frozenPair<T>(pair: readonly [T, T]): readonly [T, T] {
+  const copy: [T, T] = [pair[0], pair[1]];
+  return Object.freeze(copy);
+}
+
 function decArray(v: unknown, path: string): unknown[] {
   if (!Array.isArray(v)) throw new Error(`${path}: must be an array`);
   return v;
@@ -386,7 +410,7 @@ export class Placement {
     this.position = init.position;
     this.lookAt = init.lookAt ?? null;
     this.lookAtOffsetCm = init.lookAtOffsetCm ?? 0.0;
-    this.rotation = init.rotation ? (Object.freeze([...init.rotation]) as unknown as Rotation) : null;
+    this.rotation = init.rotation ? frozenRotation(init.rotation) : null;
     Object.freeze(this);
   }
 
@@ -402,7 +426,7 @@ export class Placement {
     const d = fields(data, path, "Placement", ["position", "look_at", "look_at_offset_cm", "rotation"], "placement");
     const position = decVec(required(d, "position", path, "Placement"), join(path, "position"));
     const lookAt = opt(d.look_at, (v) => decTarget(v, join(path, "look_at")));
-    const rotation = opt(d.rotation, (v) => decFloats(v, 3, join(path, "rotation")) as unknown as Rotation);
+    const rotation = opt(d.rotation, (v) => decRotation(v, join(path, "rotation")));
     return construct(path, () => new Placement({ position, lookAt, lookAtOffsetCm: d.look_at_offset_cm as number | undefined, rotation }));
   }
 }
@@ -439,7 +463,7 @@ export class CameraKeyframe {
     this.position = init.position;
     this.lookAt = init.lookAt ?? null;
     this.lookAtOffsetCm = init.lookAtOffsetCm ?? 0.0;
-    this.rotation = init.rotation ? (Object.freeze([...init.rotation]) as unknown as Rotation) : null;
+    this.rotation = init.rotation ? frozenRotation(init.rotation) : null;
     this.interpolation = init.interpolation ?? null;
     if (this.interpolation !== null) checkEnum(this.interpolation, KEY_INTERPOLATIONS, "interpolation");
     Object.freeze(this);
@@ -459,7 +483,7 @@ export class CameraKeyframe {
     const frame = required(d, "frame", path, "CameraKeyframe") as number;
     const position = decVec(required(d, "position", path, "CameraKeyframe"), join(path, "position"));
     const lookAt = opt(d.look_at, (v) => decTarget(v, join(path, "look_at")));
-    const rotation = opt(d.rotation, (v) => decFloats(v, 3, join(path, "rotation")) as unknown as Rotation);
+    const rotation = opt(d.rotation, (v) => decRotation(v, join(path, "rotation")));
     return construct(path, () =>
       new CameraKeyframe({
         frame,
@@ -764,7 +788,7 @@ export class RenderOutput {
   constructor(init: { path: string; engine?: RenderEngine | null; resolution?: readonly [number, number] | null; iraySamples?: number | null }) {
     this.path = init.path;
     this.engine = init.engine ?? null;
-    this.resolution = init.resolution ? (Object.freeze([Math.trunc(init.resolution[0]), Math.trunc(init.resolution[1])]) as unknown as [number, number]) : null;
+    this.resolution = init.resolution ? frozenPair([Math.trunc(init.resolution[0]), Math.trunc(init.resolution[1])]) : null;
     this.iraySamples = init.iraySamples ?? null;
     if (!this.path) throw new Error("path must be non-empty");
     if (this.engine !== null) checkEnum(this.engine, ["iray", "filament", "viewport"], "engine");
@@ -782,7 +806,7 @@ export class RenderOutput {
   static fromDict(data: unknown, path = ""): RenderOutput {
     const d = fields(data, path, "RenderOutput", ["path", "engine", "resolution", "iray_samples"]);
     const p = required(d, "path", path, "RenderOutput") as string;
-    const resolution = opt(d.resolution, (v) => decFloats(v, 2, join(path, "resolution")) as unknown as [number, number]);
+    const resolution = opt(d.resolution, (v) => decNumberPair(v, join(path, "resolution")));
     return construct(path, () =>
       new RenderOutput({ path: p, engine: d.engine as RenderEngine | null | undefined, resolution, iraySamples: d.iray_samples as number | null | undefined }),
     );
@@ -903,7 +927,7 @@ export class Shot {
     this.lens = init.lens ?? new Lens();
     this.movement = init.movement ?? null;
     this.focus = init.focus ?? null;
-    this.frameRange = init.frameRange ? (Object.freeze([init.frameRange[0], init.frameRange[1]]) as unknown as [number, number]) : null;
+    this.frameRange = init.frameRange ? frozenPair(init.frameRange) : null;
     this.aspect = init.aspect ?? null;
     this.blocking = Object.freeze([...(init.blocking ?? [])]);
     this.gaze = Object.freeze([...(init.gaze ?? [])]);
@@ -965,7 +989,10 @@ export class Shot {
     const lens = d.lens === undefined ? undefined : Lens.fromDict(d.lens, p("lens"));
     const movement = opt(d.movement, (v) => decMovement(v, p("movement")));
     const focus = opt(d.focus, (v) => FocusPull.fromDict(v, p("focus")));
-    const frameRange = opt(d.frame_range, (v) => decFloats(v, 2, p("frame_range")).map(Math.trunc) as unknown as [number, number]);
+    const frameRange = opt(d.frame_range, (v) => {
+      const [start, end] = decNumberPair(v, p("frame_range"));
+      return [Math.trunc(start), Math.trunc(end)] as const;
+    });
     const aspect = opt(d.aspect, (v) => AspectSettings.fromDict(v, p("aspect")));
     const blocking = d.blocking === undefined ? [] : decArray(d.blocking, p("blocking")).map((b, i) => BlockingBeat.fromDict(b, `${p("blocking")}[${i}]`));
     const gaze = d.gaze === undefined ? [] : decArray(d.gaze, p("gaze")).map((g, i) => GazeBeat.fromDict(g, `${p("gaze")}[${i}]`));
@@ -1121,14 +1148,15 @@ export class CoveragePlan {
   constructor(init: CoveragePlanInit) {
     this.id = init.id;
     this.subjects = Object.freeze([...(init.subjects ?? [])]);
-    this.axis = init.axis ? (Object.freeze([...init.axis]) as unknown as [string, string]) : null;
+    this.axis = init.axis ? frozenPair(init.axis) : null;
     this.sequences = Object.freeze([...(init.sequences ?? [])]);
     this.lighting = init.lighting ?? null;
     this.storyboard = init.storyboard ?? null;
     if (!this.id) throw new Error("id must be non-empty");
-    if (this.axis !== null) {
-      if (this.axis.length !== 2 || this.axis[0] === this.axis[1]) throw new Error("axis must name two different subjects");
-      const missing = this.axis.filter((a) => !this.subjects.includes(a));
+    if (init.axis) {
+      // init.axis, not this.axis: frozenPair drops extra entries an untyped caller passed.
+      if (init.axis.length !== 2 || init.axis[0] === init.axis[1]) throw new Error("axis must name two different subjects");
+      const missing = init.axis.filter((a) => !this.subjects.includes(a));
       if (missing.length) throw new Error(`axis names [${missing.map((m) => `'${m}'`).join(", ")}] which are not in subjects`);
     }
     const seqIds = this.sequences.map((s) => s.id);
@@ -1168,7 +1196,8 @@ export class CoveragePlan {
       new CoveragePlan({
         id: required(d, "id", path, "CoveragePlan") as string,
         subjects: d.subjects === undefined ? [] : (decArray(d.subjects, join(path, "subjects")) as string[]),
-        axis: opt(d.axis, (v) => decArray(v, join(path, "axis")) as unknown as [string, string]),
+        // Length and members are checked by the constructor (same messages as a direct call).
+        axis: opt(d.axis, (v) => decArray(v, join(path, "axis")) as unknown as readonly [string, string]),
         sequences,
         lighting: d.lighting as string | null | undefined,
         storyboard: opt(d.storyboard, (v) => Storyboard.fromDict(v, join(path, "storyboard"))),
@@ -1233,7 +1262,7 @@ export function shotFromRecipeCamera(key: string, camera: Record<string, unknown
     cam = new Placement({
       position: decVec(c.position, "position"),
       lookAt: opt(c.look_at, (v) => decTarget(v, "look_at")),
-      rotation: opt(c.rotation, (v) => decFloats(v, 3, "rotation") as unknown as Rotation),
+      rotation: opt(c.rotation, (v) => decRotation(v, "rotation")),
     });
   }
   let output: RenderOutput | null = null;
@@ -1242,7 +1271,7 @@ export function shotFromRecipeCamera(key: string, camera: Record<string, unknown
     output = new RenderOutput({
       path: shot.output as string,
       engine: (r.engine as RenderEngine | undefined) ?? null,
-      resolution: (r.resolution as [number, number] | undefined) ?? null,
+      resolution: opt(r.resolution, (v) => decNumberPair(v, "render.resolution")),
       iraySamples: (r.iray_samples as number | undefined) ?? null,
     });
   }
