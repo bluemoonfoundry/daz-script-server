@@ -78,6 +78,19 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(r.resolved["a"].path, "/P/Updo.duf")
         self.assertFalse(r.errors)
 
+    def test_file_content_relative_vs_absolute(self):
+        f = Finder(files=[cand("X:/Library/People/Genesis 9/Hair/Updo.duf"),
+                          cand("X:/Library/People/Genesis 9/Hair/Other.duf")])
+        for file in ("/People/Genesis 9/Hair/Updo.duf", r"\people\GENESIS 9\hair\updo.DUF"):
+            r = run([("a", AssetRef(sku="1", file=file))], f)
+            self.assertFalse(r.errors, file)
+            self.assertTrue(r.resolved["a"].path.endswith("Updo.duf"))
+
+    def test_file_partial_segment_does_not_match(self):
+        f = Finder(files=[cand("X:/Library/Hair/Updo.duf")])
+        r = run([("a", AssetRef(sku="1", file="pdo.duf"))], f)
+        self.assertEqual(r.errors[0].code, "asset_not_found")
+
     def test_sku_no_files(self):
         r = run([("a", AssetRef(sku="1"))], Finder())
         self.assertEqual(r.errors[0].code, "asset_not_found")

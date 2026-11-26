@@ -66,9 +66,10 @@ def _same(a: str | None, b: str | None) -> bool:
 
 
 def _file_matches(file: str, c: AssetCandidate) -> bool:
-    want = file.replace("\\", "/").casefold()
+    want = file.replace("\\", "/").casefold().lstrip("/")
     got = c.path.replace("\\", "/").casefold()
-    return got.lstrip("/") == want.lstrip("/") or os.path.basename(got) == want
+    return (got.lstrip("/") == want or got.endswith("/" + want)
+            or os.path.basename(got) == want)
 
 
 def _from_candidate(ref: AssetRef, c: AssetCandidate, path: str, finder: str) -> ResolvedAsset:
