@@ -75,9 +75,20 @@ class EntityRecord:
     # Names of the non-bone descendants the asset loaded with (Genesis 9's eyes,
     # mouth, lashes...): part of the entity, never the user's foreign children.
     native: tuple[str, ...] = ()
+    # Asset-ref provenance (spec section 9); omitted from JSON while at their defaults.
+    source: dict | None = None
+    group: str | None = None            # the record path when several nodes form one entity
+    primary: bool = True                # the node a group is keyed on
+    adopted_from_scene: bool = False
+    # One-shot log on actor records: {"entry", "op", "removed": [{"label","type","source_path"}]}
+    done: tuple[dict, ...] = ()
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
+        d = asdict(self)
+        for key, default in _RECORD_DEFAULTS.items():
+            if d[key] == default or (key == "done" and not d[key]):
+                del d[key]
+        return json.dumps(d, sort_keys=True)
 
     @classmethod
     def from_json(cls, s: str) -> EntityRecord:
@@ -85,7 +96,15 @@ class EntityRecord:
         return cls(recipe_id=d["recipe_id"], path=d["path"],
                    recipe_version=int(d["recipe_version"]),
                    desired=d.get("desired") or {}, observed=d.get("observed") or {},
-                   native=tuple(d.get("native") or ()))
+                   native=tuple(d.get("native") or ()),
+                   source=d.get("source") or None, group=d.get("group") or None,
+                   primary=bool(d.get("primary", True)),
+                   adopted_from_scene=bool(d.get("adopted_from_scene", False)),
+                   done=tuple(d.get("done") or ()))
+
+
+_RECORD_DEFAULTS: dict = {"source": None, "group": None, "primary": True,
+                          "adopted_from_scene": False, "done": ()}
 
 
 @dataclass(frozen=True)
@@ -128,6 +147,7 @@ class LiveEntity:
     foreign_children: tuple[str, ...]
     element_id: int | None = None
     label: str | None = None  # the node's current label (the user may have renamed it)
+    group_nodes: tuple[str, ...] = ()  # every node of a multi-node group, primary first
 
 
 @dataclass(frozen=True)
@@ -380,29 +400,34 @@ def read_live(client: DazClient, recipe_id: str) -> LiveState:
                            f"({scene_item_name(recipe_id)!r}) cannot be read ({e}); refusing to "
                            "plan without it, since accepted hand deletions would be lost") from e
 
-    entities: dict[str, LiveEntity] = {}
-    copies: dict[str, list[dict]] = {}
+    members: dict[str, list[tuple[dict, EntityRecord]]] = {}
     for n in payload.get("nodes") or []:
         rec = owned_by(n.get("record"), recipe_id)
         if rec is None:
             continue
-        kind = _kind_from_path(rec.path)
-        if kind is None:
+        if _kind_from_path(rec.path) is None:
             continue
-        if rec.path in entities:
-            copies.setdefault(rec.path, []).append(n)
-            continue
+        members.setdefault(rec.path, []).append((n, rec))
+
+    entities: dict[str, LiveEntity] = {}
+    duplicates: list[DuplicateRecord] = []
+    for path, found in members.items():
+        kind = _kind_from_path(path)
+        is_group = len(found) > 1 and all(r.group == path for _, r in found)
+        if is_group:  # primary first, otherwise scene order
+            found = sorted(found, key=lambda m: not m[1].primary)
+        n, rec = found[0]
         observed = observed_channels(client, n["name"], kind, n)
         foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id, rec.native))
-        entities[rec.path] = LiveEntity(
-            path=rec.path, node_name=n["name"], kind=kind, record=rec,
+        entities[path] = LiveEntity(
+            path=path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
-            label=n.get("label"))
-
-    duplicates = tuple(
-        DuplicateRecord(path, (entities[path].node_name, *(n["name"] for n in extra)),
-                        (entities[path].element_id, *(n.get("element_id") for n in extra)))
-        for path, extra in copies.items())
+            label=n.get("label"),
+            group_nodes=tuple(m["name"] for m, _ in found) if is_group else ())
+        if len(found) > 1 and not is_group:
+            duplicates.append(DuplicateRecord(
+                path, tuple(m["name"] for m, _ in found),
+                tuple(m.get("element_id") for m, _ in found)))
     env = payload.get("environment") if manifest and manifest.environment else None
     return LiveState(manifest=manifest, entities=entities, environment_observed=env,
-                     duplicates=duplicates)
+                     duplicates=tuple(duplicates))

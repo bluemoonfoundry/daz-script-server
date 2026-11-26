@@ -27,6 +27,19 @@ class RecordTests(unittest.TestCase):
                              "desired": {}, "observed": {}})
         self.assertEqual(EntityRecord.from_json(legacy).native, ())
 
+    def test_record_backward_compatible(self):
+        v1 = json.dumps({"recipe_id": "r1", "path": "props.a", "recipe_version": 1,
+                         "desired": {}, "observed": {}})
+        r = EntityRecord.from_json(v1)
+        self.assertEqual((r.source, r.group, r.primary, r.adopted_from_scene, r.done),
+                         (None, None, True, False, ()))
+        self.assertEqual(r.to_json(), EntityRecord("r1", "props.a", 1, {}, {}).to_json())
+        self.assertNotIn("group", r.to_json())
+        full = EntityRecord("r1", "actors.a.wearing.hair", 1, {}, {}, source={"path": "/h.duf"},
+                            group="actors.a.wearing.hair", primary=False, adopted_from_scene=True,
+                            done=({"entry": 0, "op": "remove", "removed": []},))
+        self.assertEqual(EntityRecord.from_json(full.to_json()), full)
+
     def test_manifest_json_round_trip(self):
         m = man("r1", ["a", "b"], rec("r1", "lighting.environment", {"environment": {"x": 1}}))
         self.assertEqual(Manifest.from_json(m.to_json()), m)
@@ -90,6 +103,27 @@ class ReadLiveTests(unittest.TestCase):
         ents = read_live(client, "r1").entities
         self.assertEqual(ents["actors.anna"].foreign_children, ())
         self.assertEqual(ents["props.hat"].foreign_children, ("Grand",))
+
+    def test_group_not_duplicate(self):
+        path = "actors.abby.wearing.hair"
+        g = lambda: EntityRecord("r1", path, 1, {}, {}, group=path)
+        state = read_live(fake_client([node("hair", g()), node("cap", g())]), "r1")
+        self.assertEqual(state.entities[path].group_nodes, ("hair", "cap"))
+        self.assertEqual(state.duplicates, ())
+
+    def test_group_primary_first(self):
+        path = "actors.abby.wearing.hair"
+        cap = EntityRecord("r1", path, 1, {}, {}, group=path, primary=False)
+        hair = EntityRecord("r1", path, 1, {}, {}, group=path)
+        state = read_live(fake_client([node("cap", cap), node("hair", hair)]), "r1")
+        self.assertEqual(state.entities[path].node_name, "hair")
+        self.assertEqual(state.entities[path].group_nodes, ("hair", "cap"))
+
+    def test_same_path_without_group_is_duplicate(self):
+        path = "props.ball"
+        state = read_live(fake_client([node("a", rec("r1", path)), node("b", rec("r1", path))]), "r1")
+        self.assertEqual(len(state.duplicates), 1)
+        self.assertEqual(state.entities[path].group_nodes, ())
 
     def test_duplicate_record_keys_on_first_node_and_is_reported(self):
         client = fake_client(nodes=[node("A", rec("r1", "actors.anna"), kind="actor", element_id=5),
