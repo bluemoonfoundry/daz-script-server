@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import json
 import os
 import time
 from contextlib import contextmanager
@@ -23,6 +22,7 @@ from .exceptions import (
 )
 from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
+from ._sse import aiter_sse_events
 from ._version import (
     VersionCheck,
     VersionTracker,
@@ -730,33 +730,6 @@ class AsyncDazClient:
         return resp.json()
 
 
-async def _aiter_sse_events(resp: "httpx.Response"):
+def _aiter_sse_events(resp: "httpx.Response"):
     """Yield ``(event_type, data_dict)`` pairs from a streaming httpx SSE response."""
-    event_type = "message"
-    data_lines: list[str] = []
-
-    async for line in resp.aiter_lines():
-        line = line.rstrip("\n")
-        if not line:
-            if data_lines:
-                data_str = "\n".join(data_lines)
-                try:
-                    yield event_type, json.loads(data_str)
-                except json.JSONDecodeError:
-                    yield event_type, {"_raw": data_str}
-            event_type = "message"
-            data_lines = []
-        elif line.startswith("event:"):
-            event_type = line[6:].strip()
-        elif line.startswith("data:"):
-            data_lines.append(line[5:].strip())
-
-    # A closed stream is also an event boundary. Servers normally terminate
-    # SSE events with a blank line, but do not silently drop a complete final
-    # event if the connection closes immediately after its data field.
-    if data_lines:
-        data_str = "\n".join(data_lines)
-        try:
-            yield event_type, json.loads(data_str)
-        except json.JSONDecodeError:
-            yield event_type, {"_raw": data_str}
+    return aiter_sse_events(resp.aiter_lines())

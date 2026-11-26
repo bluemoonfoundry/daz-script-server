@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ._client import DazClient
+from ._sse import iter_sse_events
 from .exceptions import RenderError, TimeoutError
 
 
@@ -99,24 +99,7 @@ def _base_to_dict(b: RenderBase) -> dict:
 
 def _parse_sse_events(response: Any):
     """Yield ``(event_type, data_dict)`` pairs from a streaming SSE response."""
-    event_type = "message"
-    data_lines: list[str] = []
-
-    for raw_line in response.iter_lines():
-        line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
-        if not line:
-            if data_lines:
-                data_str = "\n".join(data_lines)
-                try:
-                    yield event_type, json.loads(data_str)
-                except json.JSONDecodeError:
-                    yield event_type, {"_raw": data_str}
-            event_type = "message"
-            data_lines = []
-        elif line.startswith("event:"):
-            event_type = line[6:].strip()
-        elif line.startswith("data:"):
-            data_lines.append(line[5:].strip())
+    return iter_sse_events(response.iter_lines())
 
 
 def _wait_render_sse(

@@ -1,18 +1,18 @@
 """General scene-change event stream — SSE-based watcher for GET /scene/events.
 
 Mirrors the shape of the render-progress stream (``stream_render_progress`` /
-``_render_api._parse_sse_events``) but for the broader set of scene-change
+``dazpy._sse``) but for the broader set of scene-change
 notifications DAZ Studio emits: nodes/skeletons/lights/cameras added or
 removed, selection changes, time scrubs, scene load/save, and render start/end.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Iterator
 
 from ._client import DazClient
+from ._sse import iter_response_lines, iter_sse_events
 from .exceptions import ConnectionError, TimeoutError
 
 _VALID_CATEGORIES = {
@@ -30,31 +30,14 @@ class SceneEvent:
     data: dict
 
 
-def _iter_sse_lines(response: Any) -> Iterator[str]:
-    """Yield text lines from a streaming SSE response, decoded from UTF-8."""
-    buf = b""
-    for chunk in response.iter_content(chunk_size=None):
-        buf += chunk
-        while b"\n" in buf:
-            line, buf = buf.split(b"\n", 1)
-            yield line.decode("utf-8", errors="replace")
-
-
 def _parse_scene_events(response: Any) -> Iterator[SceneEvent]:
     """Parse ``GET /scene/events`` SSE frames into :class:`SceneEvent` objects.
 
-    Comment lines (keepalives, starting with ``:``) and malformed payloads
-    are silently skipped.
+    Keepalive comments are skipped by the shared parser; payloads that are
+    not a JSON object are dropped.
     """
-    for line in _iter_sse_lines(response):
-        if not line.startswith("data:"):
-            continue
-        payload = line[len("data:"):].strip()
-        if not payload:
-            continue
-        try:
-            raw = json.loads(payload)
-        except json.JSONDecodeError:
+    for _event_type, raw in iter_sse_events(iter_response_lines(response)):
+        if not isinstance(raw, dict) or "_raw" in raw:
             continue
         yield SceneEvent(type=raw.get("type", ""), ts=raw.get("ts", 0), data=raw.get("data", {}))
 
