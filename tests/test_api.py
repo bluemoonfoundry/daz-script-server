@@ -2013,8 +2013,8 @@ class TestPluginRoutes(unittest.TestCase):
         except requests.exceptions.RequestException:
             pass
 
-    def call(self, method, path, auth=True, **kwargs):
-        headers = auth_headers() if auth else {}
+    def call(self, method, path, auth=True, headers=None, **kwargs):
+        headers = {**(auth_headers() if auth else {}), **(headers or {})}
         return requests.request(method, f"{BASE_URL}{path}", headers=headers,
                                 timeout=10, **kwargs)
 
@@ -2038,8 +2038,7 @@ class TestPluginRoutes(unittest.TestCase):
     def test_post_without_params_gets_raw_body(self):
         raw = '{"hello": "world", "n": 3}'
         received = self.echo(self.call("POST", self.PREFIX, data=raw,
-                                       headers={**auth_headers(),
-                                                "Content-Type": "application/json"}))
+                                       headers={"Content-Type": "application/json"}))
         self.assertEqual(received, raw)
 
     def test_put_with_params_wraps_body(self):
