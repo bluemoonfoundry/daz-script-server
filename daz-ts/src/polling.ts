@@ -1,6 +1,7 @@
 import type { DazClient } from "./client.js";
 import type { ExecutionResult } from "./result.js";
 import { AsyncExecutionError, DazTimeoutError } from "./exceptions.js";
+import { sleep } from "./sleep.js";
 
 /** Options accepted by {@link executeLong}. */
 export interface ExecuteLongOptions {
@@ -8,10 +9,6 @@ export interface ExecuteLongOptions {
   timeoutMs?: number;
   /** Milliseconds to sleep between short polls when the server returns before the long-poll timeout. Default `500`. */
   pollIntervalMs?: number;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

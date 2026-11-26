@@ -19,6 +19,7 @@ import {
 import { buildOperationsScript } from "./batch.js";
 import type { ExecutionResult } from "./result.js";
 import { evaluateServerVersion, type VersionCheck } from "./version.js";
+import { sleep } from "./sleep.js";
 
 const TOKEN_FILE = path.join(os.homedir(), ".daz3d", "dazscriptserver_token.txt");
 const DEFAULT_HOST = "127.0.0.1";
@@ -159,10 +160,6 @@ async function mapResponse(resp: Response, script = ""): Promise<ExecutionResult
     error: "",
     durationMs: (data.duration_ms as number) ?? 0,
   };
-}
-
-function sleep(seconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
 /** Parse one SSE event block (lines already split on LF). */
@@ -511,7 +508,7 @@ export class DazClient {
         if (remainingMs <= 0) {
           throw e;
         }
-        await sleep(Math.min(backoff, remainingMs / 1000));
+        await sleep(Math.min(backoff * 1000, remainingMs));
         backoff = Math.min(backoff + 1.0, 5.0);
       }
     }
