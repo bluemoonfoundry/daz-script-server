@@ -62,7 +62,7 @@ SettingsValidationResult SettingsService::validate(const ServerSettings& s) cons
 
     // Ranges are shared with the settings pane spin boxes (ServerConfig.h).
     checkRange(vr, "port",                  s.port,                  ServerConfig::PORT_RANGE);
-    checkRange(vr, "timeout",               s.timeoutSec,            ServerConfig::TIMEOUT_SEC_RANGE);
+    checkRange(vr, "timeout",               s.queueTimeoutSec,       ServerConfig::QUEUE_TIMEOUT_SEC_RANGE);
     checkRange(vr, "maxConcurrentRequests", s.maxConcurrentRequests, ServerConfig::MAX_CONCURRENT_REQUESTS_RANGE);
     checkRange(vr, "maxBodySizeMB",         s.maxBodySizeMB,         ServerConfig::MAX_BODY_SIZE_MB_RANGE);
     checkRange(vr, "maxScriptLengthKB",     s.maxScriptLengthKB,     ServerConfig::MAX_SCRIPT_LENGTH_KB_RANGE);
@@ -166,7 +166,7 @@ ServerSettings SettingsService::readFrom(QSettings& qs) const
     ServerSettings s;
     s.host                  = qs.value("host",                  def.host).toString();
     s.port                  = qs.value("port",                  def.port).toInt();
-    s.timeoutSec            = qs.value("timeout",               def.timeoutSec).toInt();
+    s.queueTimeoutSec       = qs.value("timeout",               def.queueTimeoutSec).toInt();
     s.autoStart             = qs.value("autoStart",             def.autoStart).toBool();
     s.maxConcurrentRequests = qs.value("maxConcurrentRequests", def.maxConcurrentRequests).toInt();
     s.maxBodySizeMB         = qs.value("maxBodySizeMB",         def.maxBodySizeMB).toInt();
@@ -187,7 +187,7 @@ void SettingsService::writeTo(QSettings& qs, const ServerSettings& s) const
 {
     qs.setValue("host",                  s.host);
     qs.setValue("port",                  s.port);
-    qs.setValue("timeout",               s.timeoutSec);
+    qs.setValue("timeout",               s.queueTimeoutSec);
     qs.setValue("autoStart",             s.autoStart);
     qs.setValue("maxConcurrentRequests", s.maxConcurrentRequests);
     qs.setValue("maxBodySizeMB",         s.maxBodySizeMB);
@@ -210,7 +210,7 @@ ServerSettings SettingsService::clampToValid(const ServerSettings& s) const
 
     if (out.host.trimmed().isEmpty())           out.host                  = def.host;
     clampRange(out.port,                  ServerConfig::PORT_RANGE,                    def.port);
-    clampRange(out.timeoutSec,            ServerConfig::TIMEOUT_SEC_RANGE,             def.timeoutSec);
+    clampRange(out.queueTimeoutSec,       ServerConfig::QUEUE_TIMEOUT_SEC_RANGE,       def.queueTimeoutSec);
     clampRange(out.maxConcurrentRequests, ServerConfig::MAX_CONCURRENT_REQUESTS_RANGE, def.maxConcurrentRequests);
     clampRange(out.maxBodySizeMB,         ServerConfig::MAX_BODY_SIZE_MB_RANGE,        def.maxBodySizeMB);
     clampRange(out.maxScriptLengthKB,     ServerConfig::MAX_SCRIPT_LENGTH_KB_RANGE,    def.maxScriptLengthKB);

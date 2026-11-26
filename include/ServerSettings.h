@@ -7,7 +7,7 @@
 struct ServerSettings {
     QString host                  = "127.0.0.1";
     int     port                  = ServerConfig::DEFAULT_PORT;
-    int     timeoutSec            = ServerConfig::DEFAULT_TIMEOUT_SEC;
+    int     queueTimeoutSec       = ServerConfig::DEFAULT_QUEUE_TIMEOUT_SEC;  // main-thread wait for sync requests
     bool    autoStart             = false;
 
     int     maxConcurrentRequests = ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS;

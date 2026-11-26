@@ -884,7 +884,7 @@ All settings are persisted via QSettings and restored between DAZ Studio session
 |---------|---------|-------|-------------|
 | **Host** | `127.0.0.1` | - | IP address to bind to (`127.0.0.1` for localhost only, `0.0.0.0` for all interfaces) |
 | **Port** | `18811` | 1024-65535 | Port number |
-| **Timeout** | `30` seconds | 5-300 | Script execution timeout |
+| **Queue timeout** | `30` seconds | 5-300 | How long a synchronous request waits for the main thread before `503 STUDIO_BUSY`. Does not limit how long a script runs; the HTTP read timeout is fixed at 30 s |
 | **Auto-Start** | Disabled | - | Start server automatically when pane opens |
 
 ### 🔐 Authentication

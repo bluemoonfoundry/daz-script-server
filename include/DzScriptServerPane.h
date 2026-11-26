@@ -169,7 +169,7 @@ public:
 	bool        isMainThreadBusy() const;
 	// How long a worker waits for the main thread to start its call before
 	// answering 503 (the request timeout; fixed while the server runs).
-	int         mainThreadQueueTimeoutSec() const { return m_nTimeoutSec; }
+	int         mainThreadQueueTimeoutSec() const { return m_nQueueTimeoutSec; }
 	std::string mainThreadBusyMessage() const;
 
 	// Last capabilities document built on the main thread, with render engines
@@ -286,7 +286,7 @@ private:
 	QByteArray       m_aHostUtf8;
 	// Written on the main thread, read by HTTP workers (GET /health).
 	std::atomic<bool> m_bRunning;
-	int              m_nTimeoutSec;
+	int              m_nQueueTimeoutSec;
 	bool             m_bAutoStart;
 
 	// Configurable limits
@@ -404,7 +404,7 @@ private:
 	// UI widgets
 	QLineEdit*   m_pHostEdit;
 	QSpinBox*    m_pPortSpin;
-	QSpinBox*    m_pTimeoutSpin;
+	QSpinBox*    m_pQueueTimeoutSpin;
 	QPushButton* m_pStartBtn;
 	QPushButton* m_pStopBtn;
 	QLabel*      m_pStatusLabel;

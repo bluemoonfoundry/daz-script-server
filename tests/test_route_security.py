@@ -260,6 +260,12 @@ class TestRouteSecurity(unittest.TestCase):
         found = {(m, p): h for m, p, h in self.routes}
         self.assertIn("m_pReadChain->run(ctx)", found[("GET", "/capabilities")])
 
+    def test_read_timeout_is_fixed_not_the_queue_timeout(self):
+        # S5 (yau7.9.5): the user's queue timeout (up to 300 s) must not also
+        # become how long httplib waits on a slow client.
+        self.assertRegex(self.src, r"set_read_timeout\(\s*ServerConfig::HTTP_READ_TIMEOUT_SEC\s*,\s*0\s*\)")
+        self.assertNotRegex(self.src, r"set_read_timeout\([^)]*QueueTimeout")
+
     def test_httplib_payload_limit_set_from_config(self):
         self.assertRegex(
             self.src,

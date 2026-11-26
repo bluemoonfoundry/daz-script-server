@@ -21,8 +21,11 @@ struct IntRange {
 // ── User-configurable settings: defaults and allowed ranges ──────────────────
 constexpr int      DEFAULT_PORT                    = 18811;
 constexpr IntRange PORT_RANGE                      = { 1024, 65535 };
-constexpr int      DEFAULT_TIMEOUT_SEC             = 30;
-constexpr IntRange TIMEOUT_SEC_RANGE               = { 5, 300 };
+// How long a synchronous request (POST /execute, scripts/{id}/execute and the
+// other main-thread routes) waits for the main thread before 503 STUDIO_BUSY.
+// The UI's "Queue timeout"; QSettings key "timeout".
+constexpr int      DEFAULT_QUEUE_TIMEOUT_SEC       = 30;
+constexpr IntRange QUEUE_TIMEOUT_SEC_RANGE         = { 5, 300 };
 
 constexpr int      DEFAULT_MAX_CONCURRENT_REQUESTS = 10;
 constexpr IntRange MAX_CONCURRENT_REQUESTS_RANGE   = { 5, 50 };
@@ -82,6 +85,9 @@ constexpr int SSE_KEEPALIVE_INTERVAL_MS = 3000;
 constexpr int SSE_FRAME_POLL_MS = 500;              // Studio 6 render-progress frame polling
 // httplib's default, set explicitly so the SSE relationship above is visible.
 constexpr int HTTP_WRITE_TIMEOUT_SEC = 5;
+// How long httplib waits for a client to send request bytes. Fixed, not tied
+// to the queue timeout: raising that must not let slow clients hold workers.
+constexpr int HTTP_READ_TIMEOUT_SEC = 30;
 static_assert(SSE_KEEPALIVE_INTERVAL_MS < HTTP_WRITE_TIMEOUT_SEC * 1000,
               "SSE keepalive must go out before the write timeout expires");
 

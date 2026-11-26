@@ -44,11 +44,11 @@ void DzScriptServerPane::setupRoutes()
 	m_pHealthHandler.reset(new HealthHandler(this));
 	m_pMetricsHandler.reset(new MetricsHandler(this));
 	m_pCapabilitiesHandler.reset(new CapabilitiesHandler(this));
-	m_pExecuteHandler.reset(new ExecuteScriptHandler(this, m_nTimeoutSec));
+	m_pExecuteHandler.reset(new ExecuteScriptHandler(this, m_nQueueTimeoutSec));
 	m_pRegisterHandler.reset(new ScriptRegisterHandler(this));
 	m_pScriptListHandler.reset(new ScriptListHandler(this));
 	m_pScriptDeleteHandler.reset(new ScriptDeleteHandler(this));
-	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this, m_nTimeoutSec));
+	m_pScriptExecHandler.reset(new ScriptExecuteHandler(this, m_nQueueTimeoutSec));
 	// Snapshot the GUI-owned limit before httplib starts its worker threads.
 	// The corresponding control is disabled while the server is running.
 	m_pAsyncExecHandler.reset(new AsyncExecuteHandler(this, m_nMaxScriptLengthKB));

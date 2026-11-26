@@ -142,7 +142,7 @@ DzScriptServerPane::DzScriptServerPane()
 	, m_sHost("127.0.0.1")
 	, m_bRunning(false)
 	, m_bCapturingLog(false)
-	, m_nTimeoutSec(ServerSettings().timeoutSec)
+	, m_nQueueTimeoutSec(ServerSettings().queueTimeoutSec)
 	, m_nActiveRequests(0)
 	, m_bAutoStart(false)
 	, m_nMaxConcurrentRequests(ServerConfig::DEFAULT_MAX_CONCURRENT_REQUESTS)
@@ -242,7 +242,7 @@ void DzScriptServerPane::onStartClicked()
 {
 	m_nPort = m_pPortSpin->value();
 	m_sHost = m_pHostEdit->text();
-	m_nTimeoutSec = m_pTimeoutSpin->value();
+	m_nQueueTimeoutSec = m_pQueueTimeoutSpin->value();
 
 	// Capture advanced limit settings
 	m_nMaxConcurrentRequests = m_pMaxConcurrentSpin->value();
@@ -337,7 +337,7 @@ void DzScriptServerPane::startServer()
 	}
 
 	m_pServer = new httplib::Server();
-	m_pServer->set_read_timeout(m_nTimeoutSec, 0);
+	m_pServer->set_read_timeout(ServerConfig::HTTP_READ_TIMEOUT_SEC, 0);
 	// SSE connections are long-lived; the write timeout must exceed the
 	// keepalive / pop timeout (ServerConfig static_asserts it).
 	m_pServer->set_write_timeout(ServerConfig::HTTP_WRITE_TIMEOUT_SEC, 0);
@@ -476,11 +476,11 @@ void DzScriptServerPane::startServer()
 	refreshCapabilitiesSnapshot();
 
 	updateUI();
-	appendLog(QString("[%1] Server started on %2:%3 (timeout: %4s)")
+	appendLog(QString("[%1] Server started on %2:%3 (queue timeout: %4s)")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
 		.arg(m_sHost)
 		.arg(m_nPort)
-		.arg(m_nTimeoutSec));
+		.arg(m_nQueueTimeoutSec));
 
 	m_pCleanupTimer->start(ServerConfig::ASYNC_CLEANUP_INTERVAL_MIN * 60 * 1000);
 	pollProgressBusy();

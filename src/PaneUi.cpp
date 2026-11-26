@@ -28,11 +28,13 @@ void DzScriptServerPane::buildUi()
 	m_pPortSpin->setValue(m_nPort);
 	formLayout->addRow(tr("Port:"), m_pPortSpin);
 
-	m_pTimeoutSpin = new QSpinBox(this);
-	m_pTimeoutSpin->setRange(ServerConfig::TIMEOUT_SEC_RANGE.min, ServerConfig::TIMEOUT_SEC_RANGE.max);
-	m_pTimeoutSpin->setSuffix(tr(" sec"));
-	m_pTimeoutSpin->setValue(m_nTimeoutSec);
-	formLayout->addRow(tr("Timeout:"), m_pTimeoutSpin);
+	m_pQueueTimeoutSpin = new QSpinBox(this);
+	m_pQueueTimeoutSpin->setRange(ServerConfig::QUEUE_TIMEOUT_SEC_RANGE.min, ServerConfig::QUEUE_TIMEOUT_SEC_RANGE.max);
+	m_pQueueTimeoutSpin->setSuffix(tr(" sec"));
+	m_pQueueTimeoutSpin->setValue(m_nQueueTimeoutSec);
+	m_pQueueTimeoutSpin->setToolTip(tr("How long a synchronous request waits for DAZ Studio's main thread "
+		"before it is refused as busy (503). Async jobs are not affected."));
+	formLayout->addRow(tr("Queue timeout:"), m_pQueueTimeoutSpin);
 
 	// Authentication section
 	QGroupBox* authGroup = new QGroupBox(tr("Authentication"), this);
@@ -275,7 +277,7 @@ void DzScriptServerPane::updateUI()
 		m_pStopBtn->setEnabled(true);
 		m_pHostEdit->setEnabled(false);
 		m_pPortSpin->setEnabled(false);
-		m_pTimeoutSpin->setEnabled(false);
+		m_pQueueTimeoutSpin->setEnabled(false);
 		m_pAuthEnabledCheck->setEnabled(false);
 		m_pRegenTokenBtn->setEnabled(false);
 		m_pIpWhitelistCheck->setEnabled(false);
@@ -293,7 +295,7 @@ void DzScriptServerPane::updateUI()
 		m_pStopBtn->setEnabled(false);
 		m_pHostEdit->setEnabled(true);
 		m_pPortSpin->setEnabled(true);
-		m_pTimeoutSpin->setEnabled(true);
+		m_pQueueTimeoutSpin->setEnabled(true);
 		m_pAuthEnabledCheck->setEnabled(true);
 		m_pRegenTokenBtn->setEnabled(true);
 		m_pIpWhitelistCheck->setEnabled(true);
@@ -350,7 +352,7 @@ void DzScriptServerPane::applySettings(const ServerSettings& s)
 {
 	m_sHost                  = s.host;
 	m_nPort                  = s.port;
-	m_nTimeoutSec            = s.timeoutSec;
+	m_nQueueTimeoutSec       = s.queueTimeoutSec;
 	m_bAutoStart             = s.autoStart;
 	m_nMaxConcurrentRequests = s.maxConcurrentRequests;
 	m_nMaxBodySizeMB         = s.maxBodySizeMB;
@@ -375,7 +377,7 @@ void DzScriptServerPane::saveSettings()
 	ServerSettings s;
 	s.host                  = m_sHost;
 	s.port                  = m_nPort;
-	s.timeoutSec            = m_nTimeoutSec;
+	s.queueTimeoutSec       = m_nQueueTimeoutSec;
 	s.autoStart             = m_bAutoStart;
 	s.maxConcurrentRequests = m_nMaxConcurrentRequests;
 	s.maxBodySizeMB         = m_nMaxBodySizeMB;
