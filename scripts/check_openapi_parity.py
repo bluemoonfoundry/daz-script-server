@@ -4,6 +4,8 @@
 Fails (exit 1) when:
   * a route registered in ``setupRoutes()`` (src/DzScriptServerPane.cpp) has
     no matching path + method in openapi.yaml, or vice versa;
+  * a registration in ``setupRoutes()`` doesn't pass its path as a string
+    literal (so it can't be checked), or registers the same route twice;
   * a companion-plugin route (declared in ``companion_plugins.json``) is missing
     from openapi.yaml, or is documented without the ``CompanionPlugins`` tag;
   * openapi.yaml documents a ``CompanionPlugins`` operation that no known
@@ -18,6 +20,9 @@ declared in ``companion_plugins.json`` at the repo root. Pass
 check a plugin's entry against its own source, and ``--live URL`` to check the
 ``companion_plugins`` a running server reports in ``GET /capabilities``
 (token from ``DSS_API_TOKEN`` or ``~/.daz3d/dazscriptserver_token.txt``).
+
+Exit 2 when ``--live`` can't reach the server; static errors and the SDK
+report are still printed/written first.
 
 ``--sdk-report FILE`` writes a Markdown table of which documented operations
 each SDK calls (``-`` for stdout). Gaps in SDK coverage are reported, not
@@ -92,16 +97,44 @@ def normalize(path: str) -> str:
 
 # ─── Server side ─────────────────────────────────────────────────────────────
 
-SERVER_ROUTE_RE = re.compile(r'm_pServer->(Get|Post|Put|Delete|Patch)\s*\(\s*"([^"]+)"')
+# Every httplib registration call in setupRoutes(), through any pointer or
+# object (`m_pServer->Get(`, `srv->Post(`, `server.Delete(`). The path must
+# follow as a string literal; anything else (a variable, a helper's argument,
+# a loop) can't be read statically and fails the check instead of slipping by.
+SERVER_CALL_RE = re.compile(r'(?:->|\.)\s*(Get|Post|Put|Delete|Patch|Options)\s*\(')
+_PATH_LITERAL_RE = re.compile(r'\s*R?"([^"]+)"')
 
 
-def server_routes(src: str) -> set[Route]:
+def server_routes(src: str) -> tuple[set[Route], list[str]]:
+    """Return (routes, errors) for the registrations in setupRoutes()."""
     start = src.index("void DzScriptServerPane::setupRoutes()")
     end = src.index("void DzScriptServerPane::applyPluginRoutes()", start)
-    routes = set()
-    for m in SERVER_ROUTE_RE.finditer(src[start:end]):
-        routes.add((m.group(1).upper(), normalize(m.group(2))))
-    return routes
+    body = src[start:end]
+    first_line = src.count("\n", 0, start) + 1
+    routes: set[Route] = set()
+    unreadable: list[str] = []
+    dupes: set[Route] = set()
+    for m in SERVER_CALL_RE.finditer(body):
+        line = first_line + body.count("\n", 0, m.start())
+        lit = _PATH_LITERAL_RE.match(body, m.end())
+        if not lit:
+            arg = body[m.end():body.find("\n", m.end())].strip()
+            unreadable.append(f"    line {line}: {m.group(1)}({arg}")
+            continue
+        path = lit.group(1)
+        if path.startswith("(") and path.endswith(")"):
+            path = path[1:-1]  # raw string R"(...)"
+        key = (m.group(1).upper(), normalize(path))
+        if key in routes:
+            dupes.add(key)
+        routes.add(key)
+    errors = []
+    if unreadable:
+        errors.append("route registrations the parity check can't read in setupRoutes() "
+                      "(pass the path as a string literal):\n" + "\n".join(unreadable))
+    if dupes:
+        errors.append("routes registered more than once in setupRoutes():\n" + fmt(dupes))
+    return routes, errors
 
 
 # Matches the method literal followed closely by the path literal, the shape
@@ -165,19 +198,22 @@ def openapi_operations(text: str) -> dict[Route, dict]:
 
 # ─── SDKs ────────────────────────────────────────────────────────────────────
 
-_ROUTE_PREFIX = r"/(?:status|health|metrics|capabilities|execute|scripts|requests|artifacts|render|scene|geometry|export)\b"
+# Any absolute path literal. No hand-kept list of top-level segments: an SDK
+# call to a brand-new prefix must still be compared against the spec. (The
+# call shapes below are specific enough that this adds no false positives.)
+_ROUTE_PATH = r'/[^"`\s{$]'
 
 # dazpy: self._get("/x"), self._client._post(f"/x/{id}"), plus SSE streams
 # opened as f"{self._base}/x" (GET; dazpy has no other raw-URL calls).
 DAZPY_CALL_RE = re.compile(
-    r'\._(get|post|put|delete|patch)\(\s*f?"(' + _ROUTE_PREFIX + r'[^"]*)"')
-DAZPY_SSE_RE = re.compile(r'f"\{self\._base\}(' + _ROUTE_PREFIX + r'[^"]*)"')
+    r'\._(get|post|put|delete|patch)\(\s*f?"(' + _ROUTE_PATH + r'[^"]*)"')
+DAZPY_SSE_RE = re.compile(r'f"\{self\._base\}(' + _ROUTE_PATH + r'[^"]*)"')
 
 # daz-ts: this.get("/x"), this.delete_(`/x/${id}`), and raw fetches of
 # `${this.baseUrl}/x` whose method is the next `method: "X"` (default GET).
 TS_CALL_RE = re.compile(
-    r'\.(get|post|put|delete|patch)_?\(\s*["`](' + _ROUTE_PREFIX + r'[^"`]*)["`]')
-TS_SSE_RE = re.compile(r'`\$\{this\.baseUrl\}(' + _ROUTE_PREFIX + r'[^`]*)`')
+    r'\.(get|post|put|delete|patch)_?\(\s*["`](' + _ROUTE_PATH + r'[^"`]*)["`]')
+TS_SSE_RE = re.compile(r'`\$\{this\.baseUrl\}(' + _ROUTE_PATH + r'[^`]*)`')
 _FETCH_METHOD_RE = re.compile(r"""method:\s*["'](\w+)["']""")
 
 
@@ -240,10 +276,9 @@ def fmt(routes) -> str:
 
 
 def check(plugin_src: dict[str, Path]) -> tuple[list[str], dict[Route, dict], dict]:
-    errors: list[str] = []
     ops = openapi_operations(OPENAPI.read_text(encoding="utf-8"))
     documented = set(ops)
-    server = server_routes(PANE_CPP.read_text(encoding="utf-8"))
+    server, errors = server_routes(PANE_CPP.read_text(encoding="utf-8"))
 
     plugin_routes: set[Route] = set()
     for name, routes in COMPANION_PLUGIN_ROUTES.items():
@@ -382,16 +417,20 @@ def main(argv=None) -> int:
 
     errors, ops, sdks = check(plugin_src)
 
+    # A failed --live fetch is reported with exit 2, but only after the static
+    # errors and the SDK report, so it never hides drift found offline.
+    live_failed = False
     if args.live:
         try:
             caps = fetch_capabilities(args.live, _read_token())
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            print(f"ERROR: --live {args.live}: {exc}", file=sys.stderr)
-            return 2
-        live_errors, notes = check_live(caps, ops)
-        errors += live_errors
-        for n in notes:
-            print(f"note: {n}", file=sys.stderr)
+            errors.append(f"--live {args.live}: could not read /capabilities: {exc}")
+            live_failed = True
+        else:
+            live_errors, notes = check_live(caps, ops)
+            errors += live_errors
+            for n in notes:
+                print(f"note: {n}", file=sys.stderr)
 
     if args.sdk_report:
         report = sdk_report(ops, sdks)
@@ -403,7 +442,7 @@ def main(argv=None) -> int:
     if errors:
         for e in errors:
             print(f"ERROR: {e}", file=sys.stderr)
-        return 1
+        return 2 if live_failed else 1
     print(f"OpenAPI parity OK: {len(ops)} operations "
           f"({len(COMPANION_PLUGIN_ROUTES)} companion plugin(s)); "
           f"SDKs checked: {', '.join(sdks)}", file=sys.stderr)

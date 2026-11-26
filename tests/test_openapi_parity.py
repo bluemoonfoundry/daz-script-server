@@ -156,6 +156,63 @@ class TestParity(unittest.TestCase):
         self.assertEqual(report.count("\n| `"), len(ops))
         self.assertIn("dazpy:", report)
 
+    # ── W38 (yau7.7.5): registrations the literal regex can't read ──
+
+    def test_non_literal_route_registration_fails(self):
+        cpp = self.cpp.replace(
+            'm_pServer->Get("/capabilities"',
+            'm_pServer->Get(kNewPath, nullptr);\n\tm_pServer->Get("/capabilities"', 1)
+        out = self._run(cpp=cpp)
+        self.assertIn("route registrations the parity check can't read", out)
+        self.assertIn("kNewPath", out)
+
+    def test_registration_through_alias_pointer_fails(self):
+        cpp = self.cpp.replace(
+            'm_pServer->Get("/capabilities"',
+            'srv->Post("/aliased", nullptr);\n\tm_pServer->Get("/capabilities"', 1)
+        self.assertIn("POST /aliased", self._run(cpp=cpp))
+
+    def test_duplicate_route_registration_fails(self):
+        cpp = self.cpp.replace(
+            'm_pServer->Get("/capabilities"',
+            'm_pServer->Get("/capabilities", nullptr);\n\tm_pServer->Get("/capabilities"', 1)
+        out = self._run(cpp=cpp)
+        self.assertIn("registered more than once", out)
+        self.assertIn("GET /capabilities", out)
+
+    def test_sdk_call_with_unlisted_prefix_is_seen(self):
+        src = Path(self.tmp.name) / "sdk"
+        src.mkdir()
+        (src / "c.py").write_text('self._post("/brand-new/thing", {})\n'
+                                  'url = f"{self._base}/other/{rid}/events"\n', encoding="utf-8")
+        with mock.patch.object(parity, "ROOT", Path(self.tmp.name)):
+            calls = parity.sdk_calls(src, "*.py", parity.DAZPY_CALL_RE, parity.DAZPY_SSE_RE)
+        self.assertIn(("POST", "/brand-new/thing"), calls)
+        self.assertIn(("GET", "/other/{}/events"), calls)
+
+
+class TestMainLiveFailure(unittest.TestCase):
+    """W37 (yau7.7.4): a failed --live fetch must not hide static results."""
+
+    def test_static_errors_and_report_survive_live_failure(self):
+        import contextlib
+        import io
+        import urllib.error
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d) / "cov.md"
+            err = io.StringIO()
+            with mock.patch.object(parity, "check",
+                                   return_value=(["static drift here"], {}, {"dazpy": {}})), \
+                 mock.patch.object(parity, "fetch_capabilities",
+                                   side_effect=urllib.error.URLError("refused")), \
+                 contextlib.redirect_stderr(err):
+                rc = parity.main(["--live", "http://127.0.0.1:1",
+                                  "--sdk-report", str(report)])
+            self.assertEqual(rc, 2)
+            self.assertTrue(report.exists())
+            self.assertIn("static drift here", err.getvalue())
+            self.assertIn("--live", err.getvalue())
+
 
 
 class TestCompanionRegistry(unittest.TestCase):
