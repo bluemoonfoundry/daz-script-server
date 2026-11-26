@@ -1,4 +1,5 @@
 #include "ArtifactThumbnail.h"
+#include "ArtifactFile.h"
 
 #include <QtCore/qbuffer.h>
 #include <QtCore/qsize.h>
@@ -148,10 +149,8 @@ QStringList readableExtensions()
 
 bool extensionIn(const QString& path, const QStringList& exts)
 {
-    const int dot = path.lastIndexOf(QChar('.'));
-    const int sep = qMax(path.lastIndexOf(QChar('/')), path.lastIndexOf(QChar('\\')));
-    if (dot < 0 || dot < sep) return false;
-    return exts.contains(path.mid(dot + 1).toLower());
+    const QString ext = ArtifactFile::extensionOf(path);
+    return !ext.isEmpty() && exts.contains(ext);
 }
 
 // ─── Cache ───────────────────────────────────────────────────────────────────

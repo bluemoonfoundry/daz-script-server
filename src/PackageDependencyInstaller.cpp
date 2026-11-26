@@ -11,11 +11,7 @@
 PackageDependencyInstaller::PackageDependencyInstaller(QObject *parent) : QObject(parent) {}
 
 QString PackageDependencyInstaller::venvPythonPath() const {
-#ifdef Q_OS_WIN
-	return QDir(PackagePaths::packageVenvDir(m_packageId)).filePath("Scripts/python.exe");
-#else
-	return QDir(PackagePaths::packageVenvDir(m_packageId)).filePath("bin/python");
-#endif
+	return PackagePaths::packageVenvPythonPath(m_packageId);
 }
 
 QString PackageDependencyInstaller::statusFilePath() const {

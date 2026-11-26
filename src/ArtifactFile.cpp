@@ -169,12 +169,30 @@ bool seek(FILE* f, qint64 offset)
 #endif
 }
 
-const char* contentTypeFor(const QString& path)
+QString extensionOf(const QString& path)
 {
     const int dot = path.lastIndexOf(QChar('.'));
     const int sep = qMax(path.lastIndexOf(QChar('/')), path.lastIndexOf(QChar('\\')));
-    if (dot < 0 || dot < sep) return "application/octet-stream";
-    const QString ext = path.mid(dot + 1).toLower();
+    if (dot < 0 || dot < sep) return QString();
+    return path.mid(dot + 1).toLower();
+}
+
+// Sandboxed with no allow-scripts: an SVG/XML artifact opened directly can't
+// run script against the API origin, but inline styles still render.
+const char* const kScriptableCsp = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
+
+bool isScriptable(const QString& path)
+{
+    const QString ext = extensionOf(path);
+    return ext == QLatin1String("svg") || ext == QLatin1String("svgz")
+        || ext == QLatin1String("xml") || ext == QLatin1String("xhtml")
+        || ext == QLatin1String("html") || ext == QLatin1String("htm");
+}
+
+const char* contentTypeFor(const QString& path)
+{
+    const QString ext = extensionOf(path);
+    if (ext.isEmpty()) return "application/octet-stream";
 
     struct Entry { const char* ext; const char* type; };
     static const Entry kTypes[] = {
