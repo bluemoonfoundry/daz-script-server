@@ -5,6 +5,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qtextstream.h>
 #include <QtCore/qfileinfo.h>
+#include "QtCompat.h"
 
 #ifndef _WIN32
     #include <sys/stat.h>
@@ -61,9 +62,7 @@ bool AuthenticationService::loadOrGenerateToken(QStringList& outMessages)
 #endif
         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream in(&file);
-#if DAZ_SDK_MAJOR_VERSION < 6
-            in.setCodec("UTF-8"); // Qt6 QTextStream is UTF-8 by default; setCodec() was removed
-#endif
+            QtCompat::setUtf8(in);
             QString loaded = in.readLine().trimmed();
             file.close();
 
@@ -129,9 +128,7 @@ bool AuthenticationService::saveToken(QString& outMessage)
     }
 #endif
     QTextStream out(&file);
-#if DAZ_SDK_MAJOR_VERSION < 6
-    out.setCodec("UTF-8"); // Qt6 QTextStream is UTF-8 by default; setCodec() was removed
-#endif
+    QtCompat::setUtf8(out);
     out << m_sToken << "\n";
     file.close();
 

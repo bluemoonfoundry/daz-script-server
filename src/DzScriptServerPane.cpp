@@ -600,21 +600,11 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 	// RenderProgressBroker.h), so this print-marker is the only real progress
 	// source available; only intercept it while a render is actually running.
 	if (!m_sCurrentRenderId.isEmpty()) {
-#if DAZ_SDK_MAJOR_VERSION >= 6
-		static const QRegularExpression frameRx("^\\[DAZPY_FRAME\\] (\\d+)/(\\d+)$");
-		QRegularExpressionMatch frameMatch = frameRx.match(msg);
-		bool frameMatched = frameMatch.hasMatch();
-		QString frameCap1 = frameMatch.captured(1);
-		QString frameCap2 = frameMatch.captured(2);
-#else
-		static QRegExp frameRx("^\\[DAZPY_FRAME\\] (\\d+)/(\\d+)$");
-		bool frameMatched = frameRx.indexIn(msg) == 0;
-		QString frameCap1 = frameRx.cap(1);
-		QString frameCap2 = frameRx.cap(2);
-#endif
-		if (frameMatched) {
-			int frame = frameCap1.toInt();
-			int total = frameCap2.toInt();
+		static const QtCompat::WholeMatch frameRx("\\[DAZPY_FRAME\\] (\\d+)/(\\d+)");
+		QStringList frameCaps;
+		if (frameRx.match(msg, &frameCaps)) {
+			int frame = frameCaps.value(1).toInt();
+			int total = frameCaps.value(2).toInt();
 			if (total > 0) {
 				if (m_pRenderProgress)
 					m_pRenderProgress->notifyProgress(m_sCurrentRenderId, frame, total);

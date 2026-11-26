@@ -54,14 +54,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
-#if DAZ_SDK_MAJOR_VERSION >= 6
-// QRegExp was removed from Qt6 Core (Qt5Compat provides it under a
-// different include path); QRegularExpression is available unchanged
-// since Qt 5.0, so use it instead of pulling in the compat module.
-#include <QtCore/qregularexpression.h>
-#else
-#include <QtCore/qregexp.h>
-#endif
+#include "QtCompat.h"   // regex and other Qt4/Qt6 API differences
 #include <QtCore/qscopedpointer.h>
 #if DAZ_SDK_MAJOR_VERSION >= 6
 // QClipboard stays in QtGui; the rest moved to QtWidgets in Qt5/6.

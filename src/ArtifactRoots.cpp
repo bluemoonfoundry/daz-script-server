@@ -4,11 +4,7 @@
 #include <QtCore/qfileinfo.h>
 #include <vector>
 
-#if DAZ_SDK_MAJOR_VERSION >= 6
-#include <QtCore/qstandardpaths.h>
-#else
-#include <QtGui/qdesktopservices.h>
-#endif
+#include "QtCompat.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -36,17 +32,10 @@ QStringList ArtifactRoots::defaultRoots()
 {
     QStringList roots;
     roots << QDir::tempPath();
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    roots << QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-          << QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
-          << QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)
-          << QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
-#else
-    roots << QDesktopServices::storageLocation(QDesktopServices::DocumentsLocation)
-          << QDesktopServices::storageLocation(QDesktopServices::PicturesLocation)
-          << QDesktopServices::storageLocation(QDesktopServices::DesktopLocation)
-          << QDir::homePath() + "/Downloads";   // Qt 4 has no DownloadLocation
-#endif
+    roots << QtCompat::writableLocation(QtCompat::Documents)
+          << QtCompat::writableLocation(QtCompat::Pictures)
+          << QtCompat::writableLocation(QtCompat::Desktop)
+          << QtCompat::writableLocation(QtCompat::Downloads);
     QStringList out;
     const QString home = QDir::cleanPath(QDir::homePath());
     for (int i = 0; i < roots.size(); ++i) {
@@ -142,17 +131,7 @@ bool ArtifactRoots::isUnder(const QString& path, const QString& root)
 
 #ifdef _WIN32
 
-// Studio 4's Qt 4.8 was built with wchar_t as unsigned short, so its
-// QString::fromWCharArray(const wchar_t*) export doesn't link against our
-// native-wchar_t build; read the UTF-16 directly there.
-static QString fromWide(const wchar_t* s, int n)
-{
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    return QString::fromWCharArray(s, n);
-#else
-    return QString::fromUtf16(reinterpret_cast<const ushort*>(s), n);
-#endif
-}
+using QtCompat::fromWide;
 
 static QString finalPathOfHandle(HANDLE h)
 {

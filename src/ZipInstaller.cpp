@@ -9,12 +9,7 @@
 #include <QFileInfo>
 #include <QUuid>
 
-// QRegularExpression is Qt5+; Qt 4.8 (SDK4 build) only has the older QRegExp.
-#if DAZ_SDK_MAJOR_VERSION >= 6
-#include <QRegularExpression>
-#else
-#include <QRegExp>
-#endif
+#include "QtCompat.h"
 
 namespace {
 
@@ -77,11 +72,9 @@ bool isSafeRelativePath(const QString &entryName)
 	if (entryName.size() >= 2 && entryName.at(1) == ':')
 		return false;
 
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	const QStringList segments = entryName.split(QRegularExpression("[/\\\\]"), Qt::SkipEmptyParts);
-#else
-	const QStringList segments = entryName.split(QRegExp("[/\\\\]"), QString::SkipEmptyParts);
-#endif
+	QString normalized = entryName;
+	normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+	const QStringList segments = normalized.split(QLatin1Char('/'), QtCompat::SkipEmptyParts);
 	for (const QString &segment : segments) {
 		if (!isSafePathSegment(segment))
 			return false;
@@ -142,15 +135,8 @@ private:
 	mz_zip_archive *m_zip;
 };
 
-// QUuid::WithoutBraces is Qt5.11+; Qt 4.8's QUuid::toString() always
-// includes the surrounding braces, so strip them manually.
 QString newUuidNoBraces() {
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	return QUuid::createUuid().toString(QUuid::WithoutBraces);
-#else
-	const QString withBraces = QUuid::createUuid().toString();
-	return withBraces.mid(1, withBraces.length() - 2);
-#endif
+	return QtCompat::uuidWithoutBraces();
 }
 
 }  // namespace
@@ -308,14 +294,8 @@ ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath)
 	}
 
 	const QString packageId = manifest.value(QString::fromLatin1("id")).toString();
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	// \A...\z, not ^...$: PCRE's $ also matches before a trailing "\n".
-	static const QRegularExpression idPattern(QString::fromLatin1("\\A[A-Za-z0-9_-]+\\z"));
-	const bool idMatches = idPattern.match(packageId).hasMatch();
-#else
-	static const QRegExp idPattern(QString::fromLatin1("^[A-Za-z0-9_-]+$"));
-	const bool idMatches = idPattern.exactMatch(packageId);
-#endif
+	static const QtCompat::WholeMatch idPattern(QString::fromLatin1("[A-Za-z0-9_-]+"));
+	const bool idMatches = idPattern.matches(packageId);
 	if (packageId.isEmpty() || !idMatches) {
 		return failAndCleanStaging(QString::fromLatin1("manifest.json 'id' field must be a non-empty string matching [A-Za-z0-9_-]+"));
 	}

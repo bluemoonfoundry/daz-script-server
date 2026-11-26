@@ -3,12 +3,7 @@
 #include <QDir>
 #include <QFileInfo>
 
-// QRegularExpression is Qt5+; Qt 4.8 (SDK4 build) only has the older QRegExp.
-#if DAZ_SDK_MAJOR_VERSION >= 6
-#include <QRegularExpression>
-#else
-#include <QRegExp>
-#endif
+#include "QtCompat.h"
 
 namespace {
 
@@ -24,13 +19,9 @@ const char *kDependencyPattern =
 const int kMaxDependencyLength = 256;
 
 bool matchesDependencyPattern(const QString &dependency) {
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	static const QRegularExpression pattern(QString::fromLatin1(kDependencyPattern));
-	return pattern.match(dependency).hasMatch();
-#else
-	static const QRegExp pattern(QString::fromLatin1(kDependencyPattern));
-	return pattern.exactMatch(dependency);
-#endif
+	// Whole-string: a bare PCRE ^...$ would also accept a trailing "\n" on Studio 6.
+	static const QtCompat::WholeMatch pattern(QString::fromLatin1(kDependencyPattern));
+	return pattern.matches(dependency);
 }
 
 } // namespace

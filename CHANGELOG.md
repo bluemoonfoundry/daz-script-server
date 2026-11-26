@@ -153,6 +153,11 @@ All notable changes to DazScript Server are documented here.
   rollback restored the last entity's record onto the last node once per
   entity (a late-binding closure), leaving the others with the new, unapplied
   record. Each undo now binds its own node and record. Found by ruff B023.
+- **Studio 6: package dependencies with a trailing newline are rejected.**
+  The `.dzpkg` manifest's dependency check used a PCRE `^...$`, which also
+  matches before a final `"\n"`, so `"requests\n"` passed on Studio 6 (Studio 4
+  already rejected it). It now uses the same whole-string match as the other
+  validators.
 - **A render that writes no file now fails** (alaz). `POST /render` to an
   unwritable path (e.g. a folder on an unmapped drive) with the viewport
   engine reported `completed` and an SSE `complete` event with
