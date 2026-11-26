@@ -148,6 +148,13 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **`POST /render/batch` is all-or-nothing** (9qph). When the queue ran out
+  of room partway through a batch, the server returned a retryable 503 after
+  some variants were already queued, so an identical retry queued them
+  twice. Capacity for every variant is now checked and the variants are
+  enqueued under one lock: a full queue rejects the whole batch with 503
+  `SERVER_UNAVAILABLE` ("No variants queued: ...") and queues nothing, which
+  makes the retryable flag accurate.
 - **dazpy: every exception is importable from `dazpy` and `dazpy.aio`**
   (yau7.6.1). `DazError`, `AuthenticationError`, `ServerResponseError`,
   `StudioBusyError`, `ScriptRuntimeError`, `ScriptSyntaxError` and the rest
@@ -178,8 +185,9 @@ All notable changes to DazScript Server are documented here.
   retry now waits at least the server's `Retry-After` (it used to ignore it
   and back off from 1 s). Errors the server marks `retryable`
   (`RATE_LIMIT_EXCEEDED`, `SERVER_UNAVAILABLE`, `IDEMPOTENCY_KEY_IN_FLIGHT`)
-  are retried too, except on `render_batch_submit`, where a queue-full 503
-  can follow a partial accept. `ServerResponseError.retry_after` carries the
+  are retried too. `render_batch_submit` retries them only against plugin
+  2.17+, whose batches are all-or-nothing (see below); an older plugin could
+  have queued part of the batch. `ServerResponseError.retry_after` carries the
   header. `AsyncDazClient` gains `waiting_out_busy(max_wait)`, scoped to the
   current task, and its retry deadline uses `time.monotonic()` instead of the
   deprecated `asyncio.get_event_loop()`.

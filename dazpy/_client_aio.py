@@ -29,6 +29,8 @@ from ._version import (
     evaluate_server_version,
     server_instance_id_from_status,
     server_version_from_status,
+    ATOMIC_RENDER_BATCH_VERSION,
+    server_at_least,
 )
 from ._client import (
     _DEFAULT_HOST, _DEFAULT_PORT, _job_headers, _load_token, _raise_for_error, _map_response,
@@ -217,7 +219,7 @@ class AsyncDazClient:
             _BUSY_WAIT.reset(token)
 
     async def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *,
-                               retry_server_errors: bool = True):
+                               retry_server_errors: "bool | Callable[[], bool]" = True):
         """Await *fn* (a zero-arg async callable). See
         :meth:`dazpy.DazClient._with_busy_retry`."""
         if not retry_on_busy:
@@ -598,8 +600,10 @@ class AsyncDazClient:
             _raise_for_error(resp)
             return resp.json()
 
-        # See DazClient.render_batch_submit: no resubmit after a partial accept.
-        return await self._with_busy_retry(_do, retry_on_busy, max_wait, retry_server_errors=False)
+        # See DazClient.render_batch_submit: resubmit only on an atomic-batch plugin.
+        return await self._with_busy_retry(
+            _do, retry_on_busy, max_wait,
+            retry_server_errors=lambda: server_at_least(self.version_check, ATOMIC_RENDER_BATCH_VERSION))
 
     async def render_animation_submit(
         self,

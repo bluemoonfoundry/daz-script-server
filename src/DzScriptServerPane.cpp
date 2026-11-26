@@ -3105,22 +3105,26 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
         specs.append(vs);
     }
 
-    // ── Enqueue all variants ──────────────────────────────────────────────
+    // ── Enqueue all variants (all-or-nothing) ─────────────────────────────
+    // A full queue rejects the whole batch and enqueues none, so the
+    // retryable 503 below is safe to resubmit unchanged (9qph).
     QString batchId = MetricsCollector::generateAsyncId("bat");
-    QStringList requestIds;
+    QStringList scripts;
+    for (int vi = 0; vi < specs.size(); ++vi)
+        scripts.append(specs[vi].renderScript);
 
+    const QVector<AsyncRequestManager::SubmitResult> submitted =
+        m_pAsyncMgr->submitRenderBatch(scripts, "rnd", corr);
+    if (submitted.size() != specs.size() || !submitted[0].accepted) {
+        const QString err = submitted.isEmpty() ? QString("batch rejected") : submitted[0].error;
+        return HttpResult(503, stdToQBA(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE,
+            "No variants queued: " + JsonStd::qstrToStd(err))));
+    }
+
+    QStringList requestIds;
     for (int vi = 0; vi < specs.size(); ++vi) {
-        AsyncRequestManager::SubmitResult sr =
-            m_pAsyncMgr->submitRender(specs[vi].renderScript, "rnd", corr);
-        if (!sr.accepted) {
-            // Queue full mid-batch — return 503 with how many were accepted.
-            // Already-enqueued variants will still execute.
-            std::string msg = "Queue full after accepting " + std::to_string(requestIds.size())
-                + " of " + std::to_string(specs.size()) + " variants: " + JsonStd::qstrToStd(sr.error);
-            return HttpResult(503, stdToQBA(ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE, msg)));
-        }
-        m_pRenderProgress->setOutputPath(sr.id, specs[vi].outputPath);
-        requestIds.append(sr.id);
+        m_pRenderProgress->setOutputPath(submitted[vi].id, specs[vi].outputPath);
+        requestIds.append(submitted[vi].id);
     }
 
     // ── Build response ────────────────────────────────────────────────────

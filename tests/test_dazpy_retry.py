@@ -278,3 +278,64 @@ def test_sync_render_batch_still_retries_busy(clock):
     client._post = MagicMock(side_effect=[_busy(1.0), ok])
     assert client.render_batch_submit([{"output_path": "a.png"}], retry_on_busy=True)["batch_id"] == "b"
     assert clock.sleeps == [1.0]
+
+
+# 9qph: from plugin 2.17 a rejected batch enqueued nothing, so its retryable
+# 503 is resubmitted; older plugins may have partially accepted it.
+
+def _version(v):
+    from dazpy._version import VersionCheck
+    return VersionCheck(server_url="http://127.0.0.1:18811", server_version=v,
+                        min_server_version="2.12", client_version="2.17.0",
+                        server_instance_id="i", compatible=True, message=None)
+
+
+def _queue_full():
+    return ServerResponseError("No variants queued: Queue full", status_code=503,
+                               error_code="SERVER_UNAVAILABLE", retryable=True, retry_after=0.0)
+
+
+@pytest.mark.parametrize("server_version,expected_posts", [("2.16.0", 1), ("2.17.0", 2), ("3.0.0", 2)])
+def test_sync_render_batch_retry_depends_on_plugin_version(clock, server_version, expected_posts):
+    from unittest.mock import PropertyMock
+    client = DazClient(check_version=False)
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"batch_id": "b", "request_ids": ["r"], "total": 1}
+    client._post = MagicMock(side_effect=[_queue_full(), ok])
+    with patch.object(DazClient, "version_check", new_callable=PropertyMock,
+                      return_value=_version(server_version)):
+        if expected_posts == 1:
+            with pytest.raises(ServerResponseError):
+                client.render_batch_submit([{"output_path": "a.png"}], retry_on_busy=True)
+        else:
+            assert client.render_batch_submit([{"output_path": "a.png"}], retry_on_busy=True)["batch_id"] == "b"
+    assert client._post.call_count == expected_posts
+
+
+@pytest.mark.parametrize("server_version,expected_posts", [("2.16.0", 1), ("2.17.0", 2)])
+def test_async_render_batch_retry_depends_on_plugin_version(clock, server_version, expected_posts):
+    from unittest.mock import PropertyMock
+    client = AsyncDazClient(check_version=False)
+    calls = {"n": 0}
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"batch_id": "b", "request_ids": ["r"], "total": 1}
+
+    async def post(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _queue_full()
+        return ok
+
+    async def run():
+        async with client:
+            client._post = post
+            if expected_posts == 1:
+                with pytest.raises(ServerResponseError):
+                    await client.render_batch_submit([{"output_path": "a.png"}], retry_on_busy=True)
+            else:
+                await client.render_batch_submit([{"output_path": "a.png"}], retry_on_busy=True)
+
+    with patch.object(AsyncDazClient, "version_check", new_callable=PropertyMock,
+                      return_value=_version(server_version)):
+        asyncio.run(run())
+    assert calls["n"] == expected_posts

@@ -836,6 +836,11 @@ paths:
       description: |
         Each variant can override morphs and output path. Renders execute
         sequentially on DAZ Studio's main thread.
+
+        All-or-nothing: if the queue lacks room for every variant, the
+        request fails with 503 `SERVER_UNAVAILABLE` and no variant is queued,
+        so an identical retry is safe. (Before 2.17 the server could queue
+        some variants and then return 503.)
       operationId: submitRenderBatch
       security:
         - apiToken: []
@@ -881,6 +886,8 @@ paths:
           $ref: '#/components/responses/IdempotencyKeyReused'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /render/animation:
     post:

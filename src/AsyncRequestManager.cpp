@@ -170,6 +170,61 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
     return r;
 }
 
+QVector<AsyncRequestManager::SubmitResult> AsyncRequestManager::submitRenderBatch(
+    const QStringList& scriptTexts, const QString& idPrefix, const QString& correlationId)
+{
+    QVector<SubmitResult> results;
+    const int n = scriptTexts.size();
+    {
+        QMutexLocker locker(&m_mutex);
+
+        // Check room for the whole batch before enqueueing any of it.
+        if (m_queue.size() + n > m_maxQueueDepth) {
+            SubmitResult r;
+            r.accepted    = false;
+            r.submittedAt = 0;
+            r.error = QString("Queue full: %1 requests pending, batch of %2 needs %2 free slots (max %3)")
+                      .arg(m_queue.size()).arg(n).arg(m_maxQueueDepth);
+            results.append(r);
+            return results;
+        }
+        if (m_requests.size() + n > m_maxTrackedRequests) {
+            SubmitResult r;
+            r.accepted    = false;
+            r.submittedAt = 0;
+            r.error = QString("Too many tracked requests: %1, batch of %2 (max %3)")
+                      .arg(m_requests.size()).arg(n).arg(m_maxTrackedRequests);
+            results.append(r);
+            return results;
+        }
+
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        results.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            AsyncRequest req;
+            req.id               = MetricsCollector::generateAsyncId(idPrefix);
+            req.requestType      = REQUEST_TYPE_RENDER;
+            req.correlationId    = correlationId;
+            req.serverInstanceId = m_serverInstanceId;
+            req.scriptText       = scriptTexts[i];
+            req.submittedAt      = now;
+
+            m_requests.insert(req.id, req);
+            m_queue.enqueue(req.id);
+
+            SubmitResult r;
+            r.accepted    = true;
+            r.id          = req.id;
+            r.submittedAt = now;
+            results.append(r);
+        }
+    }
+
+    QMetaObject::invokeMethod(m_notifyTarget, "processNextAsyncRequest",
+                              Qt::QueuedConnection);
+    return results;
+}
+
 void AsyncRequestManager::appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry)
 {
     req.logTail.append(logEntry);

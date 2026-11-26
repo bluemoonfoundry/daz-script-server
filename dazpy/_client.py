@@ -29,6 +29,8 @@ from ._version import (
     evaluate_server_version,
     server_instance_id_from_status,
     server_version_from_status,
+    ATOMIC_RENDER_BATCH_VERSION,
+    server_at_least,
 )
 
 
@@ -68,14 +70,21 @@ def _parse_retry_after(resp: _HTTPResponse, default: float = 2.0) -> float:
 _MAX_BACKOFF = 5.0
 
 
-def _retry_delay(exc: BaseException, backoff: float, retry_server_errors: bool = True) -> float | None:
+def _retry_delay(exc: BaseException, backoff: float,
+                 retry_server_errors: "bool | Callable[[], bool]" = True) -> float | None:
     """Seconds to wait before retrying after *exc*, or ``None`` if it is not
     retryable.
 
     Busy errors and any error the server marks ``retryable`` are retried,
     waiting at least the server's ``Retry-After`` and at least *backoff*.
     """
-    if isinstance(exc, DazBusyError) or (retry_server_errors and getattr(exc, "retryable", False) is True):
+    if isinstance(exc, DazBusyError):
+        return max(float(exc.retry_after or 0.0), backoff)
+    if getattr(exc, "retryable", False) is not True:
+        return None
+    if callable(retry_server_errors):
+        retry_server_errors = retry_server_errors()
+    if retry_server_errors:
         return max(float(getattr(exc, "retry_after", 0.0) or 0.0), backoff)
     return None
 
@@ -391,14 +400,16 @@ class DazClient:
         finally:
             local.max_wait = prev
 
-    def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *, retry_server_errors: bool = True):
+    def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *,
+                         retry_server_errors: "bool | Callable[[], bool]" = True):
         """Run *fn* (a zero-arg callable), retrying busy and server-marked
         ``retryable`` errors while *retry_on_busy* is true (or inside
         :meth:`waiting_out_busy`), up to *max_wait* seconds total. Each wait is
         at least the server's ``Retry-After``.
 
-        *retry_server_errors* False limits retries to busy errors, for routes
-        where a ``retryable`` server error can follow a partial success.
+        *retry_server_errors* False (or a callable returning False, evaluated
+        at each failure) limits retries to busy errors, for routes where a
+        ``retryable`` server error can follow a partial success.
         """
         if not retry_on_busy:
             waiting = getattr(self.__dict__.get("_busy_wait"), "max_wait", None)
@@ -1086,7 +1097,8 @@ class DazClient:
                 or another error marked ``retryable`` (rate limited, queue
                 full), waiting at least its ``Retry-After``, instead of
                 raising immediately. Other ``retryable`` errors are
-                not retried here: a queue-full 503 can follow a partial accept.
+                retried only on plugin 2.17+, where a rejected batch queued
+                nothing; older plugins could partially accept it.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
 
@@ -1111,9 +1123,11 @@ class DazClient:
             _raise_for_error(resp)
             return resp.json()
 
-        # A queue-full 503 here can follow a partial accept (some variants
-        # already queued), so an identical resubmit would duplicate them.
-        return self._with_busy_retry(_do, retry_on_busy, max_wait, retry_server_errors=False)
+        # Before plugin 2.17 a queue-full 503 here could follow a partial
+        # accept, and resubmitting would duplicate the queued variants.
+        return self._with_busy_retry(
+            _do, retry_on_busy, max_wait,
+            retry_server_errors=lambda: server_at_least(self.version_check, ATOMIC_RENDER_BATCH_VERSION))
 
     def render_animation_submit(
         self,

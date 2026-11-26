@@ -7,6 +7,7 @@
 #include <QtCore/qpair.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qstringlist.h>
+#include <QtCore/qvector.h>
 #include <QtCore/qbytearray.h>
 #include <string>
 #include <functional>
@@ -81,6 +82,16 @@ public:
     SubmitResult        submitRender(const QString& scriptText, const QString& idPrefix,
                                      const QString& correlationId,
                                      const QString& frameReportFile = QString());
+
+    // Enqueue several render jobs all-or-nothing: capacity for every script
+    // is checked and they are enqueued under one lock, so a full queue
+    // rejects the whole batch and enqueues none (9qph). An identical retry
+    // of a rejected batch is therefore safe. On success the returned vector
+    // has one accepted result per script, in order; on failure it holds a
+    // single rejected result carrying the error.
+    QVector<SubmitResult> submitRenderBatch(const QStringList& scriptTexts,
+                                            const QString& idPrefix,
+                                            const QString& correlationId);
 
     // All five methods below are safe to call from HTTP threads. Studio 6 may
     // ingest report JSON here because QJsonDocument is reentrant. Studio 4
