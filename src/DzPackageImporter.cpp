@@ -236,8 +236,12 @@ QString DzPackageImporter::writeDspRunner(QString &errorMessage) const {
 		errorMessage = QString::fromLatin1("Could not write %1").arg(outPath);
 		return QString();
 	}
-	out.write(contents);
+	const bool written = out.write(contents) == contents.size() && out.flush();
 	out.close();
+	if (!written || out.error() != QFile::NoError) {
+		errorMessage = QString::fromLatin1("Could not write %1: %2").arg(outPath, out.errorString());
+		return QString();
+	}
 
 	return outPath;
 }
@@ -253,8 +257,11 @@ QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, cons
 		errorMessage = QString::fromLatin1("Could not create a temp file for package inputs");
 		return QVariantMap();
 	}
-	inputsFile.write(JsonStd::variantToJsonBytes(inputs));
-	inputsFile.flush();
+	const QByteArray inputsBytes = JsonStd::variantToJsonBytes(inputs);
+	if (inputsFile.write(inputsBytes) != inputsBytes.size() || !inputsFile.flush()) {
+		errorMessage = QString::fromLatin1("Could not write package inputs: %1").arg(inputsFile.errorString());
+		return QVariantMap();
+	}
 	const QString inputsPath = inputsFile.fileName();
 
 	QProcess process;

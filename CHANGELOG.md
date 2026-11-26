@@ -148,6 +148,15 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **Package Runner: `.dzpkg` extraction accepted Windows device names and
+  alternate data streams** (yau7.4.4). An archive entry such as `CON`,
+  `nul.txt`, `sub/COM1.json` or `foo:bar` passed the path check. Each path
+  segment is now rejected if it is a reserved device name (with or without
+  an extension), contains `:` or another character Windows forbids in file
+  names, or ends in a dot or space. A failed write (for example on a full
+  disk) is now reported as an error when extracting an entry or writing
+  `dsp_runner.py`, the package inputs file or the dependency status cache,
+  where before it could leave a truncated file and report success.
 - **Package Runner: a hung package froze DAZ Studio** (yau7.4.3). The
   importer waited for the package process with no limit, on the main thread
   that also serves the HTTP API. The process is now killed after the

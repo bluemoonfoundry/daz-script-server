@@ -18,6 +18,51 @@
 
 namespace {
 
+// Windows device names are reserved in every directory and with any
+// extension: "CON", "nul.txt" and "Com1.json" all open the device, not a
+// file. Matched case-insensitively against the part before the first dot.
+bool isWindowsReservedName(const QString &segment)
+{
+	QString base = segment.section(QLatin1Char('.'), 0, 0).toUpper();
+	while (base.endsWith(QLatin1Char(' ')))
+		base.chop(1);  // "NUL .txt" is still NUL
+
+	static const char *const fixedNames[] = { "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$" };
+	for (const char *name : fixedNames) {
+		if (base == QLatin1String(name))
+			return true;
+	}
+	// COM0-9 / LPT0-9, plus the superscript digits Windows also maps to ports.
+	if (base.size() == 4 && (base.startsWith(QLatin1String("COM")) || base.startsWith(QLatin1String("LPT")))) {
+		const QChar d = base.at(3);
+		if ((d >= QLatin1Char('0') && d <= QLatin1Char('9'))
+			|| d == QChar(0x00B9) || d == QChar(0x00B2) || d == QChar(0x00B3))
+			return true;
+	}
+	return false;
+}
+
+// One path segment of a zip entry name (daz-script-server-yau7.4.4).
+bool isSafePathSegment(const QString &segment)
+{
+	if (segment == QLatin1String("."))
+		return true;  // "./manifest.json" is harmless
+	if (segment == QLatin1String(".."))
+		return false;
+	// Win32 strips trailing dots and spaces, so ".. " opens "..", and
+	// "a." and "a" are the same file.
+	if (segment.endsWith(QLatin1Char('.')) || segment.endsWith(QLatin1Char(' ')))
+		return false;
+	for (const QChar c : segment) {
+		// ':' names an NTFS alternate data stream ("foo:bar") or a drive;
+		// the rest are invalid in Windows file names.
+		if (c.unicode() < 0x20 || c == QLatin1Char(':') || c == QLatin1Char('<') || c == QLatin1Char('>')
+			|| c == QLatin1Char('"') || c == QLatin1Char('|') || c == QLatin1Char('?') || c == QLatin1Char('*'))
+			return false;
+	}
+	return !isWindowsReservedName(segment);
+}
+
 // Zip entries always use forward slashes per the zip spec, but a malicious
 // entry could smuggle a backslash to escape on Windows -- treat both as path
 // separators when validating.
@@ -38,7 +83,7 @@ bool isSafeRelativePath(const QString &entryName)
 	const QStringList segments = entryName.split(QRegExp("[/\\\\]"), QString::SkipEmptyParts);
 #endif
 	for (const QString &segment : segments) {
-		if (segment == QString::fromLatin1(".."))
+		if (!isSafePathSegment(segment))
 			return false;
 	}
 	return true;
@@ -229,6 +274,9 @@ ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath)
 		ctx.totalLimit = m_limits.maxTotalUncompressedBytes;
 
 		const mz_bool extractOk = mz_zip_reader_extract_to_callback(&zip, i, liveExtractWriteCallback, &ctx, 0);
+		// close() returns void; a flush failure (e.g. full disk) only shows
+		// up in flush()'s result and error().
+		const bool flushed = destFile.flush();
 		destFile.close();
 
 		if (!extractOk) {
@@ -236,6 +284,10 @@ ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath)
 				return failAndCleanStaging(QString::fromLatin1("Archive exceeded size limits during extraction (zip bomb defense): %1").arg(entryName));
 			}
 			return failAndCleanStaging(QString::fromLatin1("Failed to extract archive entry: %1").arg(entryName));
+		}
+		if (!flushed || destFile.error() != QFile::NoError) {
+			return failAndCleanStaging(QString::fromLatin1("Could not finish writing extracted entry %1: %2")
+				.arg(entryName, destFile.errorString()));
 		}
 	}
 
