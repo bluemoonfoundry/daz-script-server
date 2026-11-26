@@ -80,13 +80,14 @@ class EntityRecord:
     group: str | None = None            # the record path when several nodes form one entity
     primary: bool = True                # the node a group is keyed on
     adopted_from_scene: bool = False
+    members: tuple[str, ...] = ()       # every node name of the group as created, primary first
     # One-shot log on actor records: {"entry", "op", "removed": [{"label","type","source_path"}]}
     done: tuple[dict, ...] = ()
 
     def to_json(self) -> str:
         d = asdict(self)
         for key, default in _RECORD_DEFAULTS.items():
-            if d[key] == default or (key == "done" and not d[key]):
+            if d[key] == default or (key in ("done", "members") and not d[key]):
                 del d[key]
         return json.dumps(d, sort_keys=True)
 
@@ -100,11 +101,12 @@ class EntityRecord:
                    source=d.get("source") or None, group=d.get("group") or None,
                    primary=bool(d.get("primary", True)),
                    adopted_from_scene=bool(d.get("adopted_from_scene", False)),
+                   members=tuple(d.get("members") or ()),
                    done=tuple(d.get("done") or ()))
 
 
 _RECORD_DEFAULTS: dict = {"source": None, "group": None, "primary": True,
-                          "adopted_from_scene": False, "done": ()}
+                          "adopted_from_scene": False, "members": (), "done": ()}
 
 
 @dataclass(frozen=True)
@@ -147,7 +149,8 @@ class LiveEntity:
     foreign_children: tuple[str, ...]
     element_id: int | None = None
     label: str | None = None  # the node's current label (the user may have renamed it)
-    group_nodes: tuple[str, ...] = ()  # every node of a multi-node group, primary first
+    group_nodes: tuple[str, ...] = ()  # surviving nodes of a group, primary first
+    missing_members: tuple[str, ...] = ()  # recorded group members no longer in the scene
 
 
 @dataclass(frozen=True)
@@ -413,17 +416,20 @@ def read_live(client: DazClient, recipe_id: str) -> LiveState:
     duplicates: list[DuplicateRecord] = []
     for path, found in members.items():
         kind = _kind_from_path(path)
-        is_group = len(found) > 1 and all(r.group == path for _, r in found)
+        is_group = all(r.group == path for _, r in found)
         if is_group:  # primary first, otherwise scene order
             found = sorted(found, key=lambda m: not m[1].primary)
         n, rec = found[0]
+        live_names = tuple(m["name"] for m, _ in found)
         observed = observed_channels(client, n["name"], kind, n)
         foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id, rec.native))
         entities[path] = LiveEntity(
             path=path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
             label=n.get("label"),
-            group_nodes=tuple(m["name"] for m, _ in found) if is_group else ())
+            group_nodes=live_names if is_group else (),
+            missing_members=(tuple(x for x in rec.members if x not in live_names)
+                             if is_group else ()))
         if len(found) > 1 and not is_group:
             duplicates.append(DuplicateRecord(
                 path, tuple(m["name"] for m, _ in found),

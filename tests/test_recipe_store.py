@@ -35,6 +35,7 @@ class RecordTests(unittest.TestCase):
                          (None, None, True, False, ()))
         self.assertEqual(r.to_json(), EntityRecord("r1", "props.a", 1, {}, {}).to_json())
         self.assertNotIn("group", r.to_json())
+        self.assertNotIn("members", r.to_json())
         full = EntityRecord("r1", "actors.a.wearing.hair", 1, {}, {}, source={"path": "/h.duf"},
                             group="actors.a.wearing.hair", primary=False, adopted_from_scene=True,
                             done=({"entry": 0, "op": "remove", "removed": []},))
@@ -110,6 +111,20 @@ class ReadLiveTests(unittest.TestCase):
         state = read_live(fake_client([node("hair", g()), node("cap", g())]), "r1")
         self.assertEqual(state.entities[path].group_nodes, ("hair", "cap"))
         self.assertEqual(state.duplicates, ())
+
+    def test_group_members_missing(self):
+        path = "actors.abby.wearing.hair"
+        mk = lambda primary: EntityRecord("r1", path, 1, {}, {}, group=path, primary=primary,
+                                          members=("hair", "cap"))
+        full = read_live(fake_client([node("hair", mk(True)), node("cap", mk(False))]), "r1")
+        self.assertEqual(full.entities[path].missing_members, ())
+        one = read_live(fake_client([node("hair", mk(True))]), "r1").entities[path]
+        self.assertEqual((one.group_nodes, one.missing_members), (("hair",), ("cap",)))
+        only = read_live(fake_client([node("cap", mk(False))]), "r1")
+        self.assertEqual(len(only.entities), 1)
+        self.assertEqual(only.entities[path].node_name, "cap")
+        self.assertEqual(only.entities[path].missing_members, ("hair",))
+        self.assertEqual(only.duplicates, ())
 
     def test_group_primary_first(self):
         path = "actors.abby.wearing.hair"

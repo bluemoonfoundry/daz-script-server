@@ -50,6 +50,7 @@ class FittedTests(unittest.TestCase):
         s = figures_script(["Abby"], ["G9"])
         self.assertIn("getLabel() === label", s)
         self.assertIn('"Abby"', s)
+        self.assertIn('!node.inherits("DzFigure") || _follow(node)', s)
         for bad in ("loadScene", "selectNode", "setSelectedNode", "mergeFile", "openFile"):
             self.assertNotIn(bad, s)
 

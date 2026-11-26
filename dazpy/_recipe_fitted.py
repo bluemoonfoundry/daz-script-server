@@ -91,7 +91,7 @@ function _add(n) {{
 }}
 for (var _i = 0; _i < _all.length; _i++) {{
     var node = _all[_i];
-    if (!node.inherits("DzFigure")) continue;
+    if (!node.inherits("DzFigure") || _follow(node)) continue;  // followers are items
     for (var _j = 0; _j < _labels.length; _j++) {{
         var label = _labels[_j];
         if (node.getLabel() === label) _add(node);
