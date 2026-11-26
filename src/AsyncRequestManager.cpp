@@ -837,18 +837,6 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
     return s;
 }
 
-int AsyncRequestManager::getQueueDepth() const
-{
-    QMutexLocker locker(&m_mutex);
-    return m_queue.size();
-}
-
-int AsyncRequestManager::getTotalTracked() const
-{
-    QMutexLocker locker(&m_mutex);
-    return m_requests.size();
-}
-
 // ─── Main-thread API ──────────────────────────────────────────────────────────
 
 bool AsyncRequestManager::dequeueNext(QString& outId, QString& outScript,

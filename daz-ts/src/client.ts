@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import {
   ArtifactError,
   AuthenticationError,
@@ -132,7 +133,6 @@ async function throwArtifactError(resp: Response): Promise<void> {
 /** Base name safe to join under a download directory (no separators, no `..`). */
 export function safeArtifactFilename(name: string): string {
   const base = name.replace(/\\/g, "/").split("/").pop() ?? "";
-  // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[:*?"<>|\x00-\x1f]/g, "_");
   return cleaned.replace(/[. ]/g, "") === "" ? "artifact" : cleaned;
 }
@@ -1014,8 +1014,10 @@ export class DazClient {
     if (!resp.body) {
       await fs.promises.writeFile(dest, Buffer.alloc(0));
     } else {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await pipeline(Readable.fromWeb(resp.body as any), fs.createWriteStream(dest));
+      // fetch's DOM ReadableStream type and node:stream/web's are the same
+      // object at runtime but distinct in the type libs.
+      const body = resp.body as unknown as NodeWebReadableStream;
+      await pipeline(Readable.fromWeb(body), fs.createWriteStream(dest));
     }
     return dest;
   }

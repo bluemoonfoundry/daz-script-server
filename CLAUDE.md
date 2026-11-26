@@ -23,7 +23,9 @@ Requires DAZ Studio 4.5+ SDK (or the current Daz Studio 6 SDK — 6.26.2026.2790
 ./build.sh build --sdk-version 6 --clean
 ```
 
-Set `DAZ_STUDIO_EXE_DIR` in `.env` for automatic installation. Default: `C:\Program Files (x86)\DAZ\Studio4\plugins\`
+Set `DAZ_STUDIO_EXE_DIR` (Studio 4) or `DAZ_STUDIO_EXE_DIR_V6` (Studio 6, used with
+`--sdk-version 6`) in `.env` to the DAZ Studio executable folder; `install` fails
+without it. `CMAKE` in `.env` picks a cmake that isn't on PATH.
 
 ### DAZ Studio 6 (Qt6) builds
 

@@ -17,10 +17,12 @@ ValidationResult RequestValidator::validateExecuteFields(
             "Request must include either 'script' (inline code) or 'scriptFile' (absolute path)");
 
     if (!scriptText.isEmpty()) {
-        int maxBytes = maxScriptLengthKB * 1024;
-        if (scriptText.length() > maxBytes) {
+        const int maxBytes = maxScriptLengthKB * 1024;
+        // The limit is in bytes: length() counts UTF-16 units, so measure UTF-8.
+        const int scriptBytes = scriptText.toUtf8().size();
+        if (scriptBytes > maxBytes) {
             std::string detail =
-                "Script is "    + std::to_string(scriptText.length()) +
+                "Script is "    + std::to_string(scriptBytes) +
                 " bytes; maximum is " + std::to_string(maxScriptLengthKB) +
                 " KB (" + std::to_string(maxBytes) + " bytes)";
             return ValidationResult::fail(ErrorCode::SCRIPT_TOO_LARGE, detail);
@@ -48,7 +50,8 @@ ValidationResult RequestValidator::validateScriptName(const QString& name)
         return ValidationResult::fail(ErrorCode::MISSING_FIELD, "Field 'name' is required");
 
 #if DAZ_SDK_MAJOR_VERSION >= 6
-    static const QRegularExpression valid("^[A-Za-z0-9_-]{1,64}$");
+    // \A...\z, not ^...$: PCRE's $ also matches before a trailing "\n".
+    static const QRegularExpression valid("\\A[A-Za-z0-9_-]{1,64}\\z");
     bool matches = valid.match(name).hasMatch();
 #else
     QRegExp valid("^[A-Za-z0-9_-]{1,64}$");

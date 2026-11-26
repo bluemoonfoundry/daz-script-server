@@ -50,7 +50,6 @@ public:
     void    complete(const QByteArray& scopedKey, int status, const QByteArray& body);
 
     void clear();
-    int  size() const;
     int  ttlSeconds() const { return (int)(m_ttlMs / 1000); }
 
     // Test/config hooks; not guarded (set before the server starts).

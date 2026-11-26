@@ -40,7 +40,6 @@ public:
     int     getFailedRequests()     const;
     int     getAuthFailures()       const;
     qint64  getUptimeSeconds()      const;
-    QDateTime getStartTime()        const;
 
 private:
     int       m_nTotal;

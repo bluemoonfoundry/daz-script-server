@@ -75,28 +75,27 @@ static void decode(Job* job)
         return;
     }
 
+    // The pixel cap can only be enforced before decoding, so an image whose
+    // handler can't report its size up front is refused rather than decoded
+    // in full on the main thread.
     const QSize srcSize = reader.size();
-    if (srcSize.isValid()) {
-        if ((qint64)srcSize.width() * (qint64)srcSize.height() > kMaxSourcePixels) {
-            job->error = QString("image is %1x%2; thumbnails are limited to %3 megapixels")
-                .arg(srcSize.width()).arg(srcSize.height()).arg(kMaxSourcePixels / 1000000);
-            return;
-        }
-        // JPEG decodes straight to the smaller size; other formats are read
-        // in full and scaled by QImageReader.
-        reader.setScaledSize(fitWithin(srcSize, job->maxPx));
+    if (!srcSize.isValid()) {
+        job->error = QString("image size unknown before decoding; thumbnails need a format that reports it");
+        return;
     }
+    if ((qint64)srcSize.width() * (qint64)srcSize.height() > kMaxSourcePixels) {
+        job->error = QString("image is %1x%2; thumbnails are limited to %3 megapixels")
+            .arg(srcSize.width()).arg(srcSize.height()).arg(kMaxSourcePixels / 1000000);
+        return;
+    }
+    // JPEG decodes straight to the smaller size; other formats are read
+    // in full and scaled by QImageReader.
+    reader.setScaledSize(fitWithin(srcSize, job->maxPx));
 
     QImage img = reader.read();
     if (img.isNull()) {
         job->error = QString("decode failed: ") + reader.errorString();
         return;
-    }
-    if (!srcSize.isValid()) {
-        // Handler couldn't report the size up front: scale after reading.
-        const QSize target = fitWithin(img.size(), job->maxPx);
-        if (target != img.size())
-            img = img.scaled(target, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
 
     QBuffer out(&job->image);

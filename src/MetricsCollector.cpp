@@ -128,12 +128,6 @@ qint64 MetricsCollector::getUptimeSeconds() const
     return m_startTime.secsTo(QDateTime::currentDateTime());
 }
 
-QDateTime MetricsCollector::getStartTime() const
-{
-    QMutexLocker lock(&m_mutex);
-    return m_startTime;
-}
-
 std::string MetricsCollector::toJson(int activeRequests) const
 {
 	// Build with std::string only — called from httplib worker threads where Qt string ops are unsafe.

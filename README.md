@@ -851,7 +851,7 @@ Copy the built plugin to DAZ Studio's plugins folder:
 - **Windows:** `C:\Program Files\DAZ 3D\DAZStudio4\plugins\`
 - **macOS:** `/Applications/DAZ 3D/DAZStudio4/plugins/`
 
-**Or build and install in one step** (set `DAZ_STUDIO_EXE_DIR` in `.env` first):
+**Or build and install in one step** (set `DAZ_STUDIO_EXE_DIR` in `.env` first, or `DAZ_STUDIO_EXE_DIR_V6` for `--sdk-version 6`; `install` stops with an error if it is unset):
 ```bash
 ./build.sh install
 

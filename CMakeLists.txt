@@ -65,12 +65,10 @@ elseif(APPLE)
 	endif()
 	set(CMAKE_MACOSX_RPATH TRUE)
 	set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-	if(DAZ_SDK_VERSION STREQUAL "4")
-		# SDK4's Qt4 headers need c++11; Qt6 (SDK6) needs CMAKE_CXX_STANDARD 17 above.
-		set(CMAKE_CXX_FLAGS "-std=c++11 -stdlib=libc++ ${CMAKE_CXX_FLAGS}")
-	else()
-		set(CMAKE_CXX_FLAGS "-stdlib=libc++ ${CMAKE_CXX_FLAGS}")
-	endif()
+	# Both SDKs build as C++17 (CMAKE_CXX_STANDARD above). A -std=c++11 here
+	# for SDK4 never took effect: CMake puts its own -std flag after
+	# CMAKE_CXX_FLAGS, and the last one wins.
+	set(CMAKE_CXX_FLAGS "-stdlib=libc++ ${CMAKE_CXX_FLAGS}")
 else()
 	message(FATAL_ERROR "Unsupported platform")
 endif(WIN32)

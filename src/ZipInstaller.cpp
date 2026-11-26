@@ -309,7 +309,8 @@ ZipInstaller::StageResult ZipInstaller::extractToStaging(const QString &zipPath)
 
 	const QString packageId = manifest.value(QString::fromLatin1("id")).toString();
 #if DAZ_SDK_MAJOR_VERSION >= 6
-	static const QRegularExpression idPattern(QString::fromLatin1("^[A-Za-z0-9_-]+$"));
+	// \A...\z, not ^...$: PCRE's $ also matches before a trailing "\n".
+	static const QRegularExpression idPattern(QString::fromLatin1("\\A[A-Za-z0-9_-]+\\z"));
 	const bool idMatches = idPattern.match(packageId).hasMatch();
 #else
 	static const QRegExp idPattern(QString::fromLatin1("^[A-Za-z0-9_-]+$"));

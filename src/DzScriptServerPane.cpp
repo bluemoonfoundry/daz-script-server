@@ -1568,7 +1568,8 @@ void DzScriptServerPane::setupRoutes()
 	//
 	// Streams DAZ scene-change notifications as Server-Sent Events.  The
 	// connection is kept open indefinitely; a ":keepalive" comment is sent
-	// every 15 seconds so clients can detect disconnects.
+	// every SSE_KEEPALIVE_INTERVAL_MS (ServerConfig) so clients can detect
+	// disconnects.
 	//
 	// Each event frame:   data: {"type":"...","ts":<ms>,"data":{...}}\n\n
 	// Keepalive frame:    :keepalive\n\n

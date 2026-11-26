@@ -74,8 +74,6 @@ def load_companion_registry(path: Path = COMPANION_REGISTRY) -> dict[str, set[tu
 # running server.
 COMPANION_PLUGIN_ROUTES: dict[str, set[tuple[str, str]]] = load_companion_registry()
 
-HTTP_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
-
 Route = tuple[str, str]  # (METHOD, normalized path)
 
 

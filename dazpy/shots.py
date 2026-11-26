@@ -111,10 +111,6 @@ def _vec(v: Any, path: str) -> Vec3:
     raise ValueError(f"{path}: must be [x, y, z]")
 
 
-def _opt_vec(v: Any, path: str) -> Optional[Vec3]:
-    return None if v is None else _vec(v, path)
-
-
 def _target(v: Any, path: str) -> Any:
     if isinstance(v, str):
         if not v:

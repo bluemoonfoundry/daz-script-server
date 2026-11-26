@@ -44,9 +44,7 @@ public:
     // Stored as QObject* to avoid the DAZ header dependency here.
     explicit AsyncRequestManager(QObject* notifyTarget);
 
-    // Config — call before starting server; not guarded (write-once at init).
-    void setMaxQueueDepth(int n)      { m_maxQueueDepth = n; }
-    void setMaxTrackedRequests(int n) { m_maxTrackedRequests = n; }
+    // Limits (fixed at the DEFAULT_* values above).
     int  maxQueueDepth() const        { return m_maxQueueDepth; }
     int  maxTrackedRequests() const   { return m_maxTrackedRequests; }
 
@@ -123,10 +121,6 @@ public:
     // Copy of the job's manifest entries and status; false if the job is unknown.
     bool artifactManifest(const std::string& requestId, QVariantList& outEntries,
                           QString& outStatus);
-
-    // Live counters — acquire mutex.
-    int getQueueDepth()   const;
-    int getTotalTracked() const;
 
     // ── Main-thread API ────────────────────────────────────────────────────
 
@@ -297,6 +291,6 @@ private:
     QString                     m_serverInstanceId;
     mutable QMutex              m_mutex;
 
-    int m_maxQueueDepth;
-    int m_maxTrackedRequests;
+    const int m_maxQueueDepth;
+    const int m_maxTrackedRequests;
 };

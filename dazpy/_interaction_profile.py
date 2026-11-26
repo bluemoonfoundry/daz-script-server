@@ -174,11 +174,6 @@ def _side_from_name(name: str) -> ChainSide:
     return "unknown"
 
 
-def _match_tokens(name: str, tokens: tuple[str, ...]) -> bool:
-    lowered = _normalize_name(name)
-    return all(token in lowered for token in tokens)
-
-
 def _match_any(name: str, tokens: tuple[str, ...]) -> bool:
     lowered = _normalize_name(name)
     return any(token in lowered for token in tokens)
