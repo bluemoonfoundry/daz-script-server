@@ -33,15 +33,24 @@
 // (SDK4 build) has no PMF/lambda connect() overload -- only the string-based
 // SIGNAL()/SLOT() form -- so real slots are used here rather than lambdas,
 // same as every other Qt4/Qt6-dual-build class in this plugin.
+//
+// Each waiter records that its signal arrived, and callers skip loop.exec()
+// when it already has: QEventLoop::exec() clears the exit flag on entry, so a
+// quit() delivered before exec() is lost and exec() never returns. That
+// happens when the signal is emitted inside the starting call -- run() on an
+// already-resolved package (re-import), or ensureReady() failing to create
+// the base dir (daz-script-server-yau7.4.2).
 class ToolchainWaiter : public QObject {
 	Q_OBJECT
 public:
 	bool ok = false;
+	bool done = false;
 	QString errorMessage;
 public slots:
-	void onReady() { ok = true; }
+	void onReady() { ok = true; done = true; }
 	void onStepFailed(const QString &step, const QString &message) {
 		errorMessage = QString::fromLatin1("%1: %2").arg(step).arg(message);
+		done = true;
 	}
 };
 
@@ -49,11 +58,13 @@ class DependencyWaiter : public QObject {
 	Q_OBJECT
 public:
 	bool ok = false;
+	bool done = false;
 	QString errorMessage;
 public slots:
 	void onFinished(const QString & /*packageId*/, bool success, const QString &message) {
 		ok = success;
 		errorMessage = message;
+		done = true;
 	}
 };
 
@@ -156,7 +167,9 @@ bool DzPackageImporter::ensureToolchainReady(QString &errorMessage) const {
 	connect(&bootstrapper, SIGNAL(stepFailed(QString, QString)), &loop, SLOT(quit()));
 
 	bootstrapper.ensureReady();
-	loop.exec();
+	if (!waiter.done) {
+		loop.exec();
+	}
 
 	errorMessage = waiter.errorMessage;
 	return waiter.ok;
@@ -172,7 +185,9 @@ bool DzPackageImporter::ensureDependencies(const QString &packageId, const QStri
 	connect(&installer, SIGNAL(finished(QString, bool, QString)), &loop, SLOT(quit()));
 
 	installer.run(packageId, packageDir, dependencies);
-	loop.exec();
+	if (!waiter.done) {
+		loop.exec();
+	}
 
 	errorMessage = waiter.errorMessage;
 	return waiter.ok;
@@ -245,7 +260,9 @@ QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, cons
 		errorMessage = QString::fromLatin1("Could not launch the package's Python interpreter");
 		return QVariantMap();
 	}
-	loop.exec();
+	if (!waiter.finished) {
+		loop.exec();
+	}
 	if (!waiter.finished) {
 		errorMessage = QString::fromLatin1("Package process did not exit cleanly");
 		return QVariantMap();
