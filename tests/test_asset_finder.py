@@ -39,8 +39,10 @@ class _H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n))
-        assert req == {"prompt": "ponytail", "limit": 5}, req
-        self._send({"total_hits": 1, "limit": 5, "offset": 0, "results": [
+        assert req["prompt"] == "ponytail" and req["limit"] in (5, 15), req
+        self._send({"total_hits": 2, "limit": 5, "offset": 0, "results": [
+            {"id": "999", "distance": 0.1, "relevance_score": 0.95,
+             "metadata": {"sku": "999", "name": "Broken"}},
             {"id": "123", "distance": 0.1, "relevance_score": 0.9,
              "metadata": {"sku": "123", "name": "Ponytail"}}]})
 
@@ -81,6 +83,13 @@ class StudioFinderTests(unittest.TestCase):
                                               "123", None, "Follower/Hair")])
         self.assertIn("searchForAssets", c.scripts[0])
 
+    def test_studio_type_filter_in_python(self):
+        c = _client({"cms": True, "assets": [
+            {"path": "/a.duf", "type": "Follower/Hair"}, {"path": "/b.duf", "type": "Follower/Clothing"}]})
+        f = StudioFinder(c)
+        self.assertEqual([a.path for a in f.search("x", type="hair")], ["/a.duf"])
+        self.assertEqual([a.path for a in f.search("x", type="Follower")], ["/a.duf", "/b.duf"])
+
     def test_studio_cms_off_raises(self):
         with self.assertRaises(FinderUnavailable) as cm:
             StudioFinder(_client({"cms": False})).search("x", type=None)
@@ -99,6 +108,18 @@ class ContentBrowserTests(unittest.TestCase):
         self.assertEqual((out[0].path, out[0].sku, out[0].product, out[0].score),
                          ("/People/G9/Hair/x.duf", "123", "Ponytail", 0.9))
         self.assertEqual(set(AUTH), {"Bearer t"})
+
+    def test_search_friendly_and_prefix_type(self):
+        f = ContentBrowserFinder(self.url, "t")
+        for t in ("hair", "Follower", "Follower/Hair"):
+            out = f.search("ponytail", type=t, limit=5)
+            self.assertEqual([c.path for c in out], ["/People/G9/Hair/x.duf"], t)
+        self.assertEqual(f.search("ponytail", type="clothing", limit=5), [])
+
+    def test_search_skips_failed_product(self):
+        # sku 999 answers 404; the 123 hit still comes back
+        out = ContentBrowserFinder(self.url).search("ponytail", type=None, limit=5)
+        self.assertEqual({c.sku for c in out}, {"123"})
 
     def test_content_browser_product_files(self):
         f = ContentBrowserFinder(self.url, "t")

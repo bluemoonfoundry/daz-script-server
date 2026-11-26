@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -11,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ._content_types import type_matches
 from ._recipe_issue import RecipeIssue
 from ._script_builder import ScriptBuilder
 from .exceptions import DazError
@@ -102,7 +104,12 @@ class StudioFinder:
                 for a in value.get("assets") or [] if isinstance(a, dict)]
 
     def search(self, phrase: str, *, type: str | None, limit: int = 10) -> list[AssetCandidate]:
-        return self._run(_studio_script("search", phrase, type, limit, None, None))
+        # The type filter runs here (friendly names and prefixes), not in the script.
+        found = self._run(_studio_script("search", phrase, None, limit * 5 if type else limit,
+                                         None, None))
+        if type:
+            found = [c for c in found if type_matches(type, c.type)]
+        return found[:limit]
 
     def product_files(self, *, sku: str | None = None,
                       product: str | None = None) -> list[AssetCandidate]:
@@ -129,9 +136,12 @@ class ContentBrowserFinder:
                                      method="POST" if body is not None else "GET")
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, OSError, ValueError) as e:
+                data = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             raise FinderUnavailable(f"content browser at {self._url} unavailable: {e}") from e
+        if not isinstance(data, dict):
+            raise FinderUnavailable(f"content browser at {self._url} returned unexpected JSON")
+        return data
 
     def product_files(self, *, sku: str | None = None,
                       product: str | None = None) -> list[AssetCandidate]:
@@ -157,16 +167,21 @@ class ContentBrowserFinder:
                               type=_opt(f.get("content_type")), score=score)
 
     def search(self, phrase: str, *, type: str | None, limit: int = 10) -> list[AssetCandidate]:
-        data = self._request("/api/v1/query", {"prompt": phrase, "limit": limit})
+        data = self._request("/api/v1/query", {"prompt": phrase,
+                                                   "limit": min(limit * 3, 100) if type else limit})
         out: list[AssetCandidate] = []
         for hit in data.get("results") or []:
             meta = hit.get("metadata") or {}
             sku = meta.get("sku") or hit.get("id")
             if not sku:
                 continue
-            files = self._request(f"/api/v1/products/{urllib.parse.quote(str(sku), safe='')}/assets")
+            try:
+                files = self._request(
+                    f"/api/v1/products/{urllib.parse.quote(str(sku), safe='')}/assets")
+            except FinderUnavailable:
+                continue  # one bad product must not discard the other hits
             for f in files.get("files") or []:
-                if type and f.get("content_type") != type:
+                if type and not type_matches(type, f.get("content_type")):
                     continue
                 out.append(self._file(f, str(sku), meta.get("name"),
                                       float(hit.get("relevance_score") or 0.0)))
