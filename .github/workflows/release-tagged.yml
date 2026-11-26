@@ -83,8 +83,12 @@ jobs:
     uses: ./.github/workflows/build-daz-ts.yml
 
   publish-pypi:
+    # PyPI uploads are irreversible, so publish only after every platform
+    # build has passed and the GitHub release exists (create-release needs all
+    # build jobs). A failed build then leaves PyPI untouched; a failed publish
+    # leaves a GitHub release that a re-run of this job completes.
     name: Publish dazpy to PyPI
-    needs: [check-version, build-dazpy]
+    needs: [create-release]
     runs-on: ubuntu-latest
 
     steps:
@@ -110,7 +114,6 @@ jobs:
       - build-macos-ds6
       - build-dazpy
       - build-daz-ts
-      - publish-pypi
     runs-on: ubuntu-latest
 
     steps:

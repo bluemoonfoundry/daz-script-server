@@ -51,6 +51,7 @@ These workflows are designed to be called by other workflows and handle the actu
   1. Runs 5 plugin build jobs in parallel (DS4: Windows, macOS Intel, macOS ARM; DS6: Windows, macOS x86_64)
   2. Generates commit summary since last tagged release
   3. Creates GitHub release with all artifacts
+  4. Publishes dazpy to PyPI — last, and only once every build passed and the release exists (PyPI uploads are irreversible)
 - **Artifacts included:**
   - DS4 Windows DLL (`DazScriptServer-ds4-windows.dll`)
   - DS4 macOS Intel dylib (`DazScriptServer-ds4-macos-Intel.dylib`)
