@@ -289,17 +289,22 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 		return DZ_FILE_FORMAT_ERROR;
 	}
 
+	// Ask for inputs before commit(): commit() replaces any existing install of
+	// this package id, so a Cancel after it would leave the old version
+	// overwritten by a package the user chose not to run. Cancelling here only
+	// discards the staging dir.
+	bool cancelled = false;
+	QVariantMap inputs = collectInputs(manifest, cancelled);
+	if (cancelled) {
+		PortableFs::removeRecursively(stage.stagingDir);
+		return DZ_USER_CANCELLED_OPERATION;
+	}
+
 	ZipInstaller::CommitResult commitResult = installer.commit(stage.packageId, stage.stagingDir);
 	if (!commitResult.success) {
 		PortableFs::removeRecursively(stage.stagingDir);
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"), commitResult.errorMessage);
 		return DZ_OPERATION_FAILED_ERROR;
-	}
-
-	bool cancelled = false;
-	QVariantMap inputs = collectInputs(manifest, cancelled);
-	if (cancelled) {
-		return DZ_USER_CANCELLED_OPERATION;
 	}
 
 	QProgressDialog progress(QString::fromLatin1("Preparing %1...").arg(manifest.value("displayName").toString()),

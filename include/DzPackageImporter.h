@@ -14,11 +14,12 @@
 // read() flow:
 //   1. ZipInstaller::extractToStaging() the .dzpkg into a staging dir.
 //   2. Parse and validate manifest.json (schemaVersion/id/entryPoint required).
-//   3. ZipInstaller::commit() into PackagePaths::packagesDir() (overwrite-by-id
-//      -- opening a newer version of an already-opened package replaces it).
-//   4. If manifest "interactive": show DzPackageInputsDialog; Cancel aborts
-//      read() cleanly (DZ_USER_CANCELLED_OPERATION, not an error). Otherwise
+//   3. If manifest "interactive": show DzPackageInputsDialog; Cancel discards
+//      the staging dir and aborts read() cleanly (DZ_USER_CANCELLED_OPERATION,
+//      not an error), leaving any existing install untouched. Otherwise
 //      inputs = {}.
+//   4. ZipInstaller::commit() into PackagePaths::packagesDir() (overwrite-by-id
+//      -- opening a newer version of an already-opened package replaces it).
 //   5. PythonToolchainBootstrapper::ensureReady() (uv + Python 3.11 present).
 //   6. PackageDependencyInstaller::run() -- lazy/cached per-package venv.
 //   7. Spawn dsp_runner (written out from a Qt resource) against the venv's
