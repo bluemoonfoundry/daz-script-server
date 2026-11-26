@@ -34,6 +34,10 @@ namespace SceneEventFilter {
         Render    = 0x80,
         All       = 0xFF
     };
+
+    // GET /scene/events ?filter= value (comma-separated category names) to a
+    // bitmask. Empty, or only unknown names, means All.
+    int parse(const std::string& csv);
 }
 
 // ─── Main-thread busy state ────────────────────────────────────────────────

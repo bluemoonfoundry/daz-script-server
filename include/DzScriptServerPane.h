@@ -241,10 +241,15 @@ private:
 	// identity stamp (server_instance_id, correlation_id, scene_revision).
 	void   runJobRoute(const httplib::Request& req, httplib::Response& res,
 	                   IRequestHandler* handler, bool idempotent);
+	// Sync job routes: take a concurrent-request slot (429 when none is free),
+	// then runJobRoute() without idempotency.
+	void   runSyncJobRoute(const httplib::Request& req, httplib::Response& res,
+	                       IRequestHandler* handler);
 	void   applyPluginRoutes();
 	// HTTP worker: GET /artifacts/:job_id/:artifact_id?thumbnail=<px>[&format=].
 	// Decoding happens on the main thread via handleThumbnailJob().
 	void   serveArtifactThumbnail(const httplib::Request& req, httplib::Response& res);
+	void   buildUi();   // constructor only (PaneUi.cpp)
 	void   updateUI();
 	DzScript* ensurePersistentScript();
 	void      endProgressOfCancelledRender(const QString& requestId);

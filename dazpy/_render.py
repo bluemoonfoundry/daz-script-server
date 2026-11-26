@@ -21,7 +21,7 @@ from .exceptions import RenderError
 # Confirmed against a live DAZ Studio instance; property names match the
 # labels shown in the Render Settings pane's Advanced tab.
 
-# Mirrors the engineMap in DzScriptServerPane.cpp's render script builder --
+# Mirrors the engineMap in src/RenderScriptBuilder.cpp's render script builder --
 # keep in sync. 3Delight is no longer supported by DAZ Studio and excluded.
 _ENGINE_CLASS_TO_NAME = {
     "DzIrayRenderer": "iray",

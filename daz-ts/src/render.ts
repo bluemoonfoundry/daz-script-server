@@ -20,7 +20,7 @@ import { ScriptBuilder } from "./scriptBuilder.js";
 const RENDER_MGR = "App.getRenderMgr()";
 
 /**
- * Mirrors the engineMap in DzScriptServerPane.cpp's render script builder --
+ * Mirrors the engineMap in src/RenderScriptBuilder.cpp's render script builder --
  * keep in sync. 3Delight is no longer supported by DAZ Studio and excluded.
  */
 const ENGINE_CLASS_TO_NAME: Record<string, string> = {

@@ -98,7 +98,8 @@ Key classes:
 
 | Class | File | Responsibility |
 |-------|------|---------------|
-| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` | GUI + server lifecycle + request dispatch |
+| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` (+ `PaneUi`, `HttpJobRoute`, `PaneRoutes`, `PluginRouteBridge`, `ScriptJobs`, `RenderJobs`) | GUI + server lifecycle + request dispatch; file map at the top of `DzScriptServerPane.cpp` |
+| `RenderScriptBuilder` | `src/RenderScriptBuilder.cpp` | DazScript generated for render jobs |
 | `AuthenticationService` | `src/AuthenticationService.cpp` | Token generation, storage, validation |
 | `RateLimiterService` | `src/RateLimiterService.cpp` | Per-IP sliding-window rate limiting |
 | `IPWhitelistService` | `src/IPWhitelistService.cpp` | IP access control |

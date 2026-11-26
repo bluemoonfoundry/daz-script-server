@@ -65,15 +65,15 @@ class TestParity(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.cpp = (ROOT / "src" / "DzScriptServerPane.cpp").read_text(encoding="utf-8")
+        self.cpp = (ROOT / "src" / "PaneRoutes.cpp").read_text(encoding="utf-8")
         self.yaml = (ROOT / "openapi.yaml").read_text(encoding="utf-8")
 
     def _run(self, cpp=None, yaml=None, plugin_src=None):
-        cpp_path = Path(self.tmp.name) / "pane.cpp"
+        cpp_path = Path(self.tmp.name) / "routes.cpp"
         yaml_path = Path(self.tmp.name) / "openapi.yaml"
         cpp_path.write_text(cpp if cpp is not None else self.cpp, encoding="utf-8")
         yaml_path.write_text(yaml if yaml is not None else self.yaml, encoding="utf-8")
-        with mock.patch.object(parity, "PANE_CPP", cpp_path), \
+        with mock.patch.object(parity, "ROUTES_CPP", cpp_path), \
              mock.patch.object(parity, "OPENAPI", yaml_path):
             errors, _, _ = parity.check(plugin_src or {})
         return "\n".join(errors)

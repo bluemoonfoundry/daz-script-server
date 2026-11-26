@@ -9881,7 +9881,7 @@ class TestObservationThreadingContract(unittest.TestCase):
         self.assertIn("req.status     = REQUEST_FAILED;", branch)
         self.assertIn("outRenderError = req.error;", branch)
 
-        pane = (Path(__file__).resolve().parents[1] / "src" / "DzScriptServerPane.cpp").read_text(
+        pane = (Path(__file__).resolve().parents[1] / "src" / "ScriptJobs.cpp").read_text(
             encoding="utf-8")
         start = pane.index("void DzScriptServerPane::processNextAsyncRequest()")
         process = pane[start:pane.index("// Drain the queue", start)]
@@ -9897,7 +9897,7 @@ class TestObservationThreadingContract(unittest.TestCase):
         # 7qv4: the stream ends with sink.done() once the queue is closed and
         # drained; returning false aborted the connection, and ending right
         # after a write could drop a terminal event still queued.
-        pane = (Path(__file__).resolve().parents[1] / "src" / "DzScriptServerPane.cpp").read_text(
+        pane = (Path(__file__).resolve().parents[1] / "src" / "PaneRoutes.cpp").read_text(
             encoding="utf-8")
         start = pane.index("// GET /render/:id/progress")
         provider = pane[start:pane.index("applyPluginRoutes();", start)]

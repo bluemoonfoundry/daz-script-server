@@ -89,7 +89,8 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 
 | Class | Location | Purpose |
 |---|---|---|
-| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` | Main pane: GUI + server + request handling |
+| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` + `Pane*.cpp`, `HttpJobRoute.cpp`, `PluginRouteBridge.cpp`, `ScriptJobs.cpp`, `RenderJobs.cpp` | Main pane: GUI + server + request handling (file map at the top of `DzScriptServerPane.cpp`; route table in `PaneRoutes.cpp`) |
+| `RenderScriptBuilder` | `src/RenderScriptBuilder.cpp` | DazScript generated for render jobs |
 | `ServerListenThread` | `src/DzScriptServerPane.cpp` | QThread wrapper for httplib |
 | `SecureRandom` | `src/SecureRandom.cpp` | Crypto-secure RNG (OS APIs) |
 | `JsonBuilder` | `src/JsonBuilder.cpp` | Type-safe JSON with auto-escaping |

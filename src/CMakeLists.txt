@@ -7,6 +7,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../i
 add_library(DazScriptServer SHARED
 	pluginmain.cpp
 	DzScriptServerPane.cpp
+	# DzScriptServerPane members split by concern (W21); see the top of
+	# DzScriptServerPane.cpp for the map.
+	PaneUi.cpp
+	HttpJobRoute.cpp
+	PaneRoutes.cpp
+	PluginRouteBridge.cpp
+	ScriptJobs.cpp
+	RenderJobs.cpp
+	RenderScriptBuilder.cpp
 	RenderProgressBroker.cpp
 	AsyncRequestManager.cpp
 	AuthenticationService.cpp
@@ -45,6 +54,8 @@ add_library(DazScriptServer SHARED
 	GeometryExport.cpp
 	package_runner.qrc
 	httplib.h
+	PaneInternal.h
+	RenderScriptBuilder.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
 	../include/AuthenticationService.h

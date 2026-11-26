@@ -2,7 +2,7 @@
 """Check that openapi.yaml describes exactly the routes the server serves.
 
 Fails (exit 1) when:
-  * a route registered in ``setupRoutes()`` (src/DzScriptServerPane.cpp) has
+  * a route registered in ``setupRoutes()`` (src/PaneRoutes.cpp) has
     no matching path + method in openapi.yaml, or vice versa;
   * a registration in ``setupRoutes()`` doesn't pass its path as a string
     literal (so it can't be checked), or registers the same route twice;
@@ -47,7 +47,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PANE_CPP = ROOT / "src" / "DzScriptServerPane.cpp"
+ROUTES_CPP = ROOT / "src" / "PaneRoutes.cpp"
 OPENAPI = ROOT / "openapi.yaml"
 DAZPY_DIR = ROOT / "dazpy"
 DAZ_TS_DIR = ROOT / "daz-ts" / "src"
@@ -106,7 +106,7 @@ _PATH_LITERAL_RE = re.compile(r'\s*R?"([^"]+)"')
 def server_routes(src: str) -> tuple[set[Route], list[str]]:
     """Return (routes, errors) for the registrations in setupRoutes()."""
     start = src.index("void DzScriptServerPane::setupRoutes()")
-    end = src.index("void DzScriptServerPane::applyPluginRoutes()", start)
+    end = src.index("\n}\n", start)  # the definition's closing brace at column 0
     body = src[start:end]
     first_line = src.count("\n", 0, start) + 1
     routes: set[Route] = set()
@@ -276,7 +276,7 @@ def fmt(routes) -> str:
 def check(plugin_src: dict[str, Path]) -> tuple[list[str], dict[Route, dict], dict]:
     ops = openapi_operations(OPENAPI.read_text(encoding="utf-8"))
     documented = set(ops)
-    server, errors = server_routes(PANE_CPP.read_text(encoding="utf-8"))
+    server, errors = server_routes(ROUTES_CPP.read_text(encoding="utf-8"))
 
     plugin_routes: set[Route] = set()
     for name, routes in COMPANION_PLUGIN_ROUTES.items():
