@@ -5,9 +5,10 @@ on:
     tags:
       - 'v*.*.*'
 
+# Read-only by default, so the build jobs (reusable workflows) get no write
+# scopes. Only the two publishing jobs below are granted more.
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   build-windows-ds4:
@@ -90,6 +91,9 @@ jobs:
     name: Publish dazpy to PyPI
     needs: [create-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for PyPI trusted publishing
 
     steps:
       - name: Download dazpy dist artifact
@@ -115,6 +119,8 @@ jobs:
       - build-dazpy
       - build-daz-ts
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release and upload assets
 
     steps:
       - name: Checkout repository

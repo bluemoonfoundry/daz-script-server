@@ -33,6 +33,10 @@ on:
           - Debug
         default: 'Release'
 
+# Read-only by default.
+permissions:
+  contents: read
+
 jobs:
   build-windows-ds4:
     name: Build Windows Plugin (DS4)

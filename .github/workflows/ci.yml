@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master, main]
 
+# Read-only by default.
+permissions:
+  contents: read
+
 jobs:
   version-consistency:
     name: Release version consistency

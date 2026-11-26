@@ -3,6 +3,11 @@ name: Build daz-ts Package
 on:
   workflow_call:
 
+# Read-only. A reusable workflow can't exceed this even when its caller
+# (release-tagged/release-nightly) grants a job more.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

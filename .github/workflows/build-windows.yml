@@ -22,6 +22,11 @@ on:
         description: 'Name of the uploaded artifact'
         value: ${{ jobs.build.outputs.artifact-name }}
 
+# Read-only. A reusable workflow can't exceed this even when its caller
+# (release-tagged/release-nightly) grants a job more.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-2022

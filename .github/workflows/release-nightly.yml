@@ -7,8 +7,10 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+# Read-only by default, so the build jobs (reusable workflows) get no write
+# scopes. Only create-nightly-release is granted more.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-windows-ds4:
@@ -81,6 +83,8 @@ jobs:
       - build-dazpy
       - build-daz-ts
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # delete the previous nightly, create the new release
 
     steps:
       - name: Checkout repository
