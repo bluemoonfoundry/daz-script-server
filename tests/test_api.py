@@ -976,6 +976,39 @@ class TestArtifacts(unittest.TestCase):
         with open(out, "rb") as f:
             self.assertEqual(dl.content, f.read())
 
+    @unittest.skipUnless(os.environ.get("DSS_LIVE_RENDER"),
+                         "set DSS_LIVE_RENDER=1 to run a real viewport render")
+    @unittest.skipUnless(sys.platform == "win32", "needs an unmapped drive letter")
+    def test_render_that_writes_no_file_fails(self):
+        # alaz: a render to an unwritable path (unmapped drive) used to report
+        # "completed" with file_size_bytes 0. It must fail instead.
+        drive = next((c for c in "RQPONMLKJIHGFEDCBA" if not os.path.exists(f"{c}:/")), None)
+        if drive is None:
+            self.skipTest("no unmapped drive letter")
+        out = f"{drive}:/dss_no_such_dir_alaz/x.png"
+        r = requests.post(f"{BASE_URL}/render", headers=auth_headers(), json={
+            "output_path": out, "engine": "viewport", "width": 64, "height": 64,
+        }, timeout=10)
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["request_id"]
+        body = get_result(rid, wait=True, timeout=120).json()
+        self.assertEqual(body.get("status"), "failed", body)
+        self.assertEqual(body.get("error_code"), "SCRIPT_ERROR", body)
+        self.assertIn("no file", body.get("error", ""), body)
+        self.assertEqual(body["observation"]["output_manifest"]["count"], 0, body)
+        # The progress stream keeps its terminal event for late subscribers.
+        sse = requests.get(f"{BASE_URL}/render/{rid}/progress", headers=auth_headers(),
+                           stream=True, timeout=10)
+        terminal = None
+        try:
+            for line in sse.iter_lines(decode_unicode=True):
+                if line in ("event: error", "event: complete"):
+                    terminal = line
+                    break
+        finally:
+            sse.close()
+        self.assertEqual(terminal, "event: error")
+
 
 class TestArtifactRoots(unittest.TestCase):
     """Artifact trust boundary (x7ul.33): GET /artifacts serves a declared

@@ -2348,6 +2348,17 @@ static const char* unbindRenderFinishedJs =
     "    if (_finishedBound && _finishedSig && typeof _finishedSig.disconnect === \"function\")\n"
     "      _finishedSig.disconnect(_onRenderFinished);\n";
 
+// Throws unless a render left a non-empty file at path. renderFinished(true)
+// also fires for a render that wrote nothing (alaz: viewport engine, path on
+// an unmapped drive), which used to report "completed" with 0 bytes.
+static const char* requireRenderOutputJs =
+    "  function _requireRenderOutput(path) {\n"
+    "    var fi = new DzFileInfo(path);\n"
+    "    if (!fi.exists() || !(fi.size() > 0))\n"
+    "      throw new Error(\"Render finished but wrote no file to \" + path"
+    " + \" (is the folder writable?)\");\n"
+    "  }\n";
+
 // Reads an optional "iray_samples" field from a request object. Absent → keeps
 // *out (the caller's default); 0 means "use the scene's Iray setting". Rejects
 // non-integers and negatives so a typo can't silently become "scene default".
@@ -2610,7 +2621,12 @@ static QString buildRenderScript(
         "      _maxSamplesProp.setValue(_prevMaxSamples);\n"
         "      irayReadback.restored = Number(_maxSamplesProp.getValue()) === _prevMaxSamples;\n"
         "    }\n"
-        "  }\n"
+        "  }\n";
+    // renderFinished(true) also fires for a render that couldn't write its
+    // file (alaz: unmapped drive, viewport engine), so check the output.
+    script += requireRenderOutputJs;
+    script +=
+        "  if (renderSucceeded === true) _requireRenderOutput(outputPath);\n"
         "  return {success: renderSucceeded === true, output_path: outputPath, engine: engineReadback,"
         " iray_samples: irayReadback};\n"
         "})();\n";
@@ -2749,6 +2765,7 @@ static QString buildAnimationRenderScript(
         "  var allSucceeded = true;\n"
         "  var frameSucceeded = null;\n"
         "  function _onRenderFinished(succeeded) { frameSucceeded = succeeded; }\n";
+    script += requireRenderOutputJs;
     script += bindRenderFinishedJs("renderMgr");
     script +=
         "  try {\n"
@@ -2761,13 +2778,15 @@ static QString buildAnimationRenderScript(
         "      print(\"[DAZPY_FRAME] \" + (f - startFrame + 1) + \"/\" + (endFrame - startFrame + 1));\n"
         "      renderMgr.doRender(opts);\n"
         "      if (_finishedBound && frameSucceeded !== true) allSucceeded = false;\n"
+        "      if (allSucceeded) _requireRenderOutput(framePath);\n"
         "      outputPaths.push(framePath);\n"
         "    }\n"
         "  } finally {\n";
     script += unbindRenderFinishedJs;
+    // Restore the playhead here too when a frame throws (e.g. wrote no file).
     script +=
-        "  }\n"
-        "  Scene.setFrame(originalFrame);\n\n";
+        "    Scene.setFrame(originalFrame);\n"
+        "  }\n\n";
 
     script +=
         "  return {success: allSucceeded, frame_count: outputPaths.length, output_paths: outputPaths, engine: engineReadback};\n"

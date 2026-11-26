@@ -148,6 +148,16 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **A render that writes no file now fails** (alaz). `POST /render` to an
+  unwritable path (e.g. a folder on an unmapped drive) with the viewport
+  engine reported `completed` and an SSE `complete` event with
+  `file_size_bytes: 0`, because Studio's `renderFinished` signal said the
+  render succeeded. The render script now checks for a non-empty output file
+  after a successful render, so the job fails with `SCRIPT_ERROR`
+  ("Render finished but wrote no file to ...") and the progress stream sends
+  an `error` event. `POST /render/animation` checks each frame the same way
+  and now restores the playhead even when a frame fails. Live-verified on
+  Studio 4.24 and 6.26.
 - **Imported and saved settings use the pane's ranges** (yau7.5.2).
   `SettingsService` validated and clamped some settings against wider
   ranges than the settings pane allowed (timeout 1-300 s, concurrent
