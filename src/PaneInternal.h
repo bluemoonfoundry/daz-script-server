@@ -127,11 +127,6 @@ ScriptRunResult runDazScript(DzScript* script, const QVariantMap& argsMap,
 
 // ─── Route helpers ─────────────────────────────────────────────────────────────
 
-inline QByteArray stdToQBA(const std::string& s)
-{
-    return QByteArray(s.c_str(), static_cast<int>(s.size()));
-}
-
 // httplib request -> HttpContext, and HttpContext -> httplib response
 // (HttpJobRoute.cpp).
 HttpContext toContext(const httplib::Request& req);

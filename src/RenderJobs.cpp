@@ -368,7 +368,7 @@ HttpResult DzScriptServerPane::handleAsyncRenderBatchEnqueue(const QByteArray& j
         .arg(batchId)
         .arg(requestIds.size()));
 
-    return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+    return HttpResult(200, stdToQBA(resp));
 }
 
 HttpResult DzScriptServerPane::handleAsyncRenderAnimationEnqueue(const QByteArray& jsonBody,

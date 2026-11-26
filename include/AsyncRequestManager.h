@@ -286,6 +286,11 @@ private:
     void declareRenderOutputsLocked(AsyncRequest& req, const QVariant& result);
     void appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry);
     std::string observationJson(const AsyncRequest& req) const;
+    // m_mutex held: room for n more queued/tracked jobs? Fills *error if not.
+    bool hasCapacityLocked(int n, QString* error) const;
+    // Takes m_mutex: checks capacity, stamps id/server instance/submit time,
+    // queues req and wakes the main thread. submit() and submitRender().
+    SubmitResult enqueue(AsyncRequest req, const QString& idPrefix);
 
     QObject* m_notifyTarget; // DzScriptServerPane*
 

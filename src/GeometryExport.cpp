@@ -27,7 +27,7 @@ namespace {
 HttpResult jsonError(ErrorCode code, const QString& detail)
 {
 	const std::string body = ErrorResponse::build(code, detail.toUtf8().constData());
-	return HttpResult(ErrorResponse::httpStatus(code), QByteArray(body.c_str(), (int)body.size()));
+	return HttpResult(ErrorResponse::httpStatus(code), stdToQBA(body));
 }
 
 DzSkeleton* findFigure(const QString& nameOrLabel)

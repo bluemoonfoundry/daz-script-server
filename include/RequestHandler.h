@@ -52,6 +52,10 @@ struct HttpContext {
         responseStatus = status;
         responseBody   = body;
     }
+    void respond(int status, const QByteArray& body) {
+        responseStatus = status;
+        responseBody.assign(body.constData(), static_cast<size_t>(body.size()));
+    }
     void setHeader(const std::string& name, const std::string& value) {
         responseHeaders[name] = value;
     }

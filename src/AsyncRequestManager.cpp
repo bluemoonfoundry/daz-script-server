@@ -66,35 +66,54 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
         report.close();
     }
 
+    AsyncRequest req;
+    req.correlationId = correlationId;
+    req.scriptText    = scriptText;
+    req.scriptFile    = scriptFile;
+    req.reportFile    = reportFile;
+    req.args          = args;
+    if (!reportFile.isEmpty()) {
+        req.args.insert("__dssReportFile", reportFile);
+        req.progressSource = PROGRESS_REPORT;
+    }
+    return enqueue(req, idPrefix);
+}
+
+bool AsyncRequestManager::hasCapacityLocked(int n, QString* error) const
+{
+    const bool batch = n > 1;
+    if (m_queue.size() + n > m_maxQueueDepth) {
+        *error = batch
+            ? QString("Queue full: %1 requests pending, batch of %2 needs %2 free slots (max %3)")
+                  .arg(m_queue.size()).arg(n).arg(m_maxQueueDepth)
+            : QString("Queue full: %1 requests pending (max %2)")
+                  .arg(m_queue.size()).arg(m_maxQueueDepth);
+        return false;
+    }
+    if (m_requests.size() + n > m_maxTrackedRequests) {
+        *error = batch
+            ? QString("Too many tracked requests: %1, batch of %2 (max %3)")
+                  .arg(m_requests.size()).arg(n).arg(m_maxTrackedRequests)
+            : QString("Too many tracked requests: %1 (max %2)")
+                  .arg(m_requests.size()).arg(m_maxTrackedRequests);
+        return false;
+    }
+    return true;
+}
+
+AsyncRequestManager::SubmitResult AsyncRequestManager::enqueue(AsyncRequest req,
+                                                               const QString& idPrefix)
+{
+    SubmitResult r;
+    r.accepted    = false;
+    r.submittedAt = 0;
     {
         QMutexLocker locker(&m_mutex);
+        if (!hasCapacityLocked(1, &r.error)) return r;
 
-        // Enforce resource bounds before accepting the request.
-        if (m_queue.size() >= m_maxQueueDepth) {
-            r.error = QString("Queue full: %1 requests pending (max %2)")
-                      .arg(m_queue.size()).arg(m_maxQueueDepth);
-            return r;
-        }
-        if (m_requests.size() >= m_maxTrackedRequests) {
-            r.error = QString("Too many tracked requests: %1 (max %2)")
-                      .arg(m_requests.size()).arg(m_maxTrackedRequests);
-            return r;
-        }
-
-        AsyncRequest req;
-        req.id          = MetricsCollector::generateAsyncId(idPrefix);
-        req.correlationId    = correlationId;
+        req.id               = MetricsCollector::generateAsyncId(idPrefix);
         req.serverInstanceId = m_serverInstanceId;
-        req.scriptText  = scriptText;
-        req.scriptFile  = scriptFile;
-        req.reportFile  = reportFile;
-        req.args        = args;
-        if (!reportFile.isEmpty()) {
-            req.args.insert("__dssReportFile", reportFile);
-            req.progressSource = PROGRESS_REPORT;
-        }
-        req.submittedAt = QDateTime::currentMSecsSinceEpoch();
-
+        req.submittedAt      = QDateTime::currentMSecsSinceEpoch();
         m_requests.insert(req.id, req);
         m_queue.enqueue(req.id);
 
@@ -113,10 +132,6 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
     const QString& scriptText, const QString& idPrefix, const QString& correlationId,
     const QString& frameReportFile)
 {
-    SubmitResult r;
-    r.accepted    = false;
-    r.submittedAt = 0;
-
     // Start the frame report empty so the job never sees another run's
     // events. If it can't be created the render still runs; Studio 4's
     // print marker still reports frames, Studio 6 just reports none. Done
@@ -128,46 +143,18 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
         report.close();
     }
 
-    {
-        QMutexLocker locker(&m_mutex);
-
-        if (m_queue.size() >= m_maxQueueDepth) {
-            r.error = QString("Queue full: %1 requests pending (max %2)")
-                      .arg(m_queue.size()).arg(m_maxQueueDepth);
-            return r;
+    AsyncRequest req;
+    req.requestType = REQUEST_TYPE_RENDER;
+    if (!frameReportFile.isEmpty()) {
+        req.progressSource = PROGRESS_FRAMES;
+        if (frameReportReady) {
+            req.reportFile     = frameReportFile;
+            req.ownsReportFile = true;
         }
-        if (m_requests.size() >= m_maxTrackedRequests) {
-            r.error = QString("Too many tracked requests: %1 (max %2)")
-                      .arg(m_requests.size()).arg(m_maxTrackedRequests);
-            return r;
-        }
-
-        AsyncRequest req;
-        req.id          = MetricsCollector::generateAsyncId(idPrefix);
-        req.requestType = REQUEST_TYPE_RENDER;
-        if (!frameReportFile.isEmpty()) {
-            req.progressSource = PROGRESS_FRAMES;
-            if (frameReportReady) {
-                req.reportFile     = frameReportFile;
-                req.ownsReportFile = true;
-            }
-        }
-        req.correlationId    = correlationId;
-        req.serverInstanceId = m_serverInstanceId;
-        req.scriptText  = scriptText;
-        req.submittedAt = QDateTime::currentMSecsSinceEpoch();
-
-        m_requests.insert(req.id, req);
-        m_queue.enqueue(req.id);
-
-        r.accepted    = true;
-        r.id          = req.id;
-        r.submittedAt = req.submittedAt;
     }
-
-    QMetaObject::invokeMethod(m_notifyTarget, "processNextAsyncRequest",
-                              Qt::QueuedConnection);
-    return r;
+    req.correlationId = correlationId;
+    req.scriptText    = scriptText;
+    return enqueue(req, idPrefix);
 }
 
 QVector<AsyncRequestManager::SubmitResult> AsyncRequestManager::submitRenderBatch(
@@ -179,22 +166,11 @@ QVector<AsyncRequestManager::SubmitResult> AsyncRequestManager::submitRenderBatc
         QMutexLocker locker(&m_mutex);
 
         // Check room for the whole batch before enqueueing any of it.
-        if (m_queue.size() + n > m_maxQueueDepth) {
-            SubmitResult r;
-            r.accepted    = false;
-            r.submittedAt = 0;
-            r.error = QString("Queue full: %1 requests pending, batch of %2 needs %2 free slots (max %3)")
-                      .arg(m_queue.size()).arg(n).arg(m_maxQueueDepth);
-            results.append(r);
-            return results;
-        }
-        if (m_requests.size() + n > m_maxTrackedRequests) {
-            SubmitResult r;
-            r.accepted    = false;
-            r.submittedAt = 0;
-            r.error = QString("Too many tracked requests: %1, batch of %2 (max %3)")
-                      .arg(m_requests.size()).arg(n).arg(m_maxTrackedRequests);
-            results.append(r);
+        SubmitResult rejected;
+        rejected.accepted    = false;
+        rejected.submittedAt = 0;
+        if (!hasCapacityLocked(n, &rejected.error)) {
+            results.append(rejected);
             return results;
         }
 

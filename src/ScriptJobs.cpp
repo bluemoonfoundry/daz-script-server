@@ -16,9 +16,7 @@ std::pair<int, std::string> DzScriptServerPane::deleteRegistryScriptJson(
 		return {404, ErrorResponse::build(ErrorCode::SCRIPT_NOT_FOUND, id)};
 	}
 
-	std::string logLine = "[" + JsonStd::currentTime() + "] [" + clientIP + "] [REGISTRY] Deleted script: " + id;
-	QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
-	    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+	postLog("[" + clientIP + "] [REGISTRY] Deleted script: " + id);
 
 	QVariantMap body;
 	body.insert("success", true);
@@ -47,9 +45,7 @@ QString DzScriptServerPane::enqueueAsyncRequest(const QString& scriptText,
 	outSubmittedAt = r.submittedAt;
 	outError       = r.error;
 	if (!r.accepted) {
-		std::string msg = "[WARN] Async queue rejected: " + JsonStd::qstrToStd(r.error);
-		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
-		    Q_ARG(QByteArray, QByteArray(msg.c_str(), (int)msg.size())));
+		postLog("[WARN] Async queue rejected: " + JsonStd::qstrToStd(r.error));
 	}
 	return r.id;
 }
@@ -84,9 +80,7 @@ std::pair<int, std::string> DzScriptServerPane::cancelAsyncRequestJson(const std
 	if (cancelledQueuedRender)
 		endProgressOfCancelledRender(QString::fromStdString(requestId));
 	if (result.first == 200) {
-		std::string logLine = "[" + JsonStd::currentTime() + "] [ASYNC CANCEL] " + requestId;
-		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
-		    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+		postLog("[ASYNC CANCEL] " + requestId);
 	}
 	return result;
 }
@@ -99,9 +93,7 @@ std::pair<int, std::string> DzScriptServerPane::cancelRenderRequestJson(const st
 	if (cancelledQueuedRender)
 		endProgressOfCancelledRender(QString::fromStdString(requestId));
 	if (result.first == 200) {
-		std::string logLine = "[" + JsonStd::currentTime() + "] [RENDER CANCEL] " + requestId;
-		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
-		    Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+		postLog("[RENDER CANCEL] " + requestId);
 	}
 	return result;
 }
@@ -122,7 +114,7 @@ DzScriptServerPane::CapturedScriptRun DzScriptServerPane::runCapturedScript(
 	struct CaptureScope {
 		DzScriptServerPane* pane;
 		explicit CaptureScope(DzScriptServerPane* p) : pane(p) {
-			pane->m_aCapturedLogLines.clear();
+			pane->m_capturedLogLines.clear();
 			pane->m_bCapturingLog = true;
 			connect(dzApp, DSS_DEBUG_SIGNAL, pane, SLOT(onMessagePosted(const QString&)),
 			        Qt::DirectConnection);
@@ -164,7 +156,7 @@ DzScriptServerPane::CapturedScriptRun DzScriptServerPane::runCapturedScript(
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	run.output = r.output;               // SDK6: evaluate() bypasses the debugMsg signal
 #else
-	run.output = m_aCapturedLogLines;
+	run.output = m_capturedLogLines;
 #endif
 	return run;
 }
@@ -346,7 +338,7 @@ HttpResult buildQueuedResponse(const QString& requestId, qint64 submittedAt)
 	resp += "\",\"status\":\"queued\",\"submitted_at\":\"";
 	resp += JsonStd::msecToIso((long long)submittedAt);
 	resp += "\"}";
-	return HttpResult(200, QByteArray(resp.c_str(), (int)resp.size()));
+	return HttpResult(200, stdToQBA(resp));
 }
 
 HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
@@ -383,12 +375,10 @@ HttpResult DzScriptServerPane::handleAsyncExecuteEnqueue(
 			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
 
 	if (bothProvided) {
-		std::string logLine = "[" + JsonStd::currentTime() + "] [" +
-			std::string(clientIP.constData(), clientIP.size()) + "] [WARN] [" +
+		postLog("[" +
+			qbaToStd(clientIP) + "] [WARN] [" +
 			JsonStd::qstrToStd(requestId) +
-			"] Both scriptFile and script provided; using scriptFile";
-		QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
-			Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+			"] Both scriptFile and script provided; using scriptFile");
 	}
 
 	return buildQueuedResponse(requestId, submittedAt);
@@ -425,11 +415,8 @@ HttpResult DzScriptServerPane::handleAsyncScriptEnqueue(
 		return HttpResult(503, stdToQBA(ErrorResponse::build(
 			ErrorCode::SERVER_UNAVAILABLE, JsonStd::qstrToStd(enqueueError))));
 
-	std::string logLine = "[" + JsonStd::currentTime() +
-		"] [ASYNC QUEUED] script:" + JsonStd::qstrToStd(scriptId) +
-		" -> " + JsonStd::qstrToStd(requestId);
-	QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
-		Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+	postLog("[ASYNC QUEUED] script:" + JsonStd::qstrToStd(scriptId) +
+		" -> " + JsonStd::qstrToStd(requestId));
 
 	return buildQueuedResponse(requestId, submittedAt);
 }

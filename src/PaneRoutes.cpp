@@ -411,7 +411,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 		const QByteArray decodable = m_thumbnailExtensions.join(", ").toUtf8();
 		respondError(res, ErrorCode::THUMBNAIL_UNSUPPORTED,
 			"no image decoder for this file type (decodable: "
-			+ std::string(decodable.constData(), decodable.size()) + ")");
+			+ qbaToStd(decodable) + ")");
 		return;
 	}
 	if (size > kMaxSourceBytes) {
@@ -489,7 +489,7 @@ void DzScriptServerPane::serveArtifactThumbnail(const httplib::Request& req, htt
 	const QByteArray error = job->error.toUtf8();
 	release(job);
 	if (!ok) {
-		respondError(res, ErrorCode::THUMBNAIL_UNSUPPORTED, std::string(error.constData(), error.size()));
+		respondError(res, ErrorCode::THUMBNAIL_UNSUPPORTED, qbaToStd(error));
 		return;
 	}
 	m_thumbnailCache.put(cacheKey, image);

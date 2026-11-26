@@ -97,7 +97,7 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 	// ── X-Correlation-Id: client-supplied, or generated so every job has one.
 	const std::string corrHeader = ctx.getHeader("x-correlation-id");
 	if (!corrHeader.empty()) {
-		if (!IdempotencyCache::isValidKey(QByteArray(corrHeader.c_str(), (int)corrHeader.size()))) {
+		if (!IdempotencyCache::isValidKey(stdToQBA(corrHeader))) {
 			ctx.respond(400, ErrorResponse::build(ErrorCode::INVALID_FIELD,
 				"X-Correlation-Id must be 1-255 printable ASCII characters without spaces"));
 			applyContext(ctx, res);
@@ -135,10 +135,10 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 			return;
 		}
 		scoped = IdempotencyCache::scopedKey(
-			QByteArray(req.method.c_str(), (int)req.method.size()),
-			QByteArray(req.path.c_str(), (int)req.path.size()), key);
+			stdToQBA(req.method),
+			stdToQBA(req.path), key);
 		const QByteArray fp = IdempotencyCache::fingerprint(
-			scoped, QByteArray(ctx.body.c_str(), (int)ctx.body.size()));
+			scoped, stdToQBA(ctx.body));
 
 		int        replayStatus = 0;
 		QByteArray replayBody;
@@ -149,7 +149,7 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 			// generated header ID so it can't contradict the body (the
 			// post-routing hook still echoes a client-supplied value).
 			ctx.respond(replayStatus, stampJsonObject(
-				std::string(replayBody.constData(), replayBody.size()),
+				qbaToStd(replayBody),
 				",\"idempotent_replay\":true"));
 			ctx.setHeader("Idempotent-Replayed", "true");
 			ctx.responseHeaders.erase("X-Correlation-Id");
@@ -179,7 +179,7 @@ void DzScriptServerPane::runJobRoute(const httplib::Request& req, httplib::Respo
 
 	if (!scoped.isEmpty()) {
 		m_idempotency.complete(scoped, ctx.responseStatus,
-			QByteArray(ctx.responseBody.c_str(), (int)ctx.responseBody.size()));
+			stdToQBA(ctx.responseBody));
 		guard.done = true;
 	}
 

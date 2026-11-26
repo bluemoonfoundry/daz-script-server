@@ -1,5 +1,6 @@
 #include "MainThreadCall.h"
 #include "ErrorResponse.h"
+#include "JsonStd.h"
 #include "ServerConfig.h"
 #include <exception>
 #include <QtCore/qelapsedtimer.h>
@@ -73,11 +74,11 @@ void runOnMainThread(DzScriptServerPane* pane, Call* call)
         } catch (const std::exception& e) {
             const std::string body = ErrorResponse::build(ErrorCode::INTERNAL_ERROR,
                 std::string("main-thread handler threw: ") + e.what());
-            call->result = HttpResult(500, QByteArray(body.c_str(), (int)body.size()));
+            call->result = HttpResult(500, stdToQBA(body));
         } catch (...) {
             const std::string body = ErrorResponse::build(ErrorCode::INTERNAL_ERROR,
                 "main-thread handler threw an unknown exception");
-            call->result = HttpResult(500, QByteArray(body.c_str(), (int)body.size()));
+            call->result = HttpResult(500, stdToQBA(body));
         }
         // Always wake the worker: it is blocked in done.acquire() once Running.
         call->done.release();

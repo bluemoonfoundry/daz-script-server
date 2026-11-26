@@ -123,7 +123,7 @@ void DzScriptServerPane::applyPluginRoutes()
 				body = "{\"_pathParams\":" + paramsJson + ",\"_body\":" +
 				       (rawBody.isEmpty() ? QByteArray("null") : rawBody) + "}";
 			} else {
-				body = QByteArray(req.body.c_str(), (int)req.body.size());
+				body = stdToQBA(req.body);
 			}
 
 			QByteArray ip(req.remote_addr.c_str(), (int)req.remote_addr.size());

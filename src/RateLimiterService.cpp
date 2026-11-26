@@ -3,6 +3,20 @@
 
 #include <ctime>
 
+namespace {
+// Drop timestamps older than the window start.
+void pruneBefore(QList<qint64>& timestamps, qint64 windowStart)
+{
+    QList<qint64>::iterator it = timestamps.begin();
+    while (it != timestamps.end()) {
+        if (*it < windowStart)
+            it = timestamps.erase(it);
+        else
+            ++it;
+    }
+}
+} // namespace
+
 RateLimiterService::RateLimiterService(int maxRequests, int windowSec)
     : m_bEnabled(false)
     , m_nMax(maxRequests)
@@ -29,14 +43,7 @@ bool RateLimiterService::checkRequest(const std::string& clientIP)
 
     RateLimitInfo& info = m_ipMap[key];
 
-    // Remove timestamps outside the window
-    QList<qint64>::iterator it = info.timestamps.begin();
-    while (it != info.timestamps.end()) {
-        if (*it < windowStart)
-            it = info.timestamps.erase(it);
-        else
-            ++it;
-    }
+    pruneBefore(info.timestamps, windowStart);
 
     if (info.timestamps.size() >= m_nMax)
         return false;
@@ -70,14 +77,7 @@ void RateLimiterService::cleanupStale()
     QMap<QByteArray, RateLimitInfo>::iterator it = m_ipMap.begin();
     while (it != m_ipMap.end()) {
         RateLimitInfo& info = it.value();
-
-        QList<qint64>::iterator tsIt = info.timestamps.begin();
-        while (tsIt != info.timestamps.end()) {
-            if (*tsIt < windowStart)
-                tsIt = info.timestamps.erase(tsIt);
-            else
-                ++tsIt;
-        }
+        pruneBefore(info.timestamps, windowStart);
 
         if (info.timestamps.isEmpty())
             it = m_ipMap.erase(it);

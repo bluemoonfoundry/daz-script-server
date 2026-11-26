@@ -61,6 +61,7 @@ namespace httplib { class Server; struct Request; struct Response; }
 
 class DzScript;
 class GeometryFramesHandler;  // fork: GeometryExport.h
+class ServerListenThread;     // DzScriptServerPane.cpp
 
 class DzScriptServerPane : public DzPane {
 	Q_OBJECT
@@ -157,6 +158,11 @@ public slots:
 	// Worker-thread-safe: accepts log data as QByteArray (whose ~QByteArray calls qFree,
 	// not ::free, so it is safe to construct/destroy on httplib worker threads).
 	void appendLogBytes(const QByteArray& data);
+public:
+	// ANY THREAD. Queues "[HH:mm:ss] <line>" for the log pane (appendLogBytes on
+	// the main thread). Builds only std::string/QByteArray, so worker-safe.
+	void postLog(const std::string& line);
+protected:
 	void updateActiveRequestsLabel();
 	void updateEventClientsLabel();
 
@@ -280,10 +286,10 @@ private:
 
 	// Server state
 	httplib::Server* m_pServer;
-	QThread*         m_pServerThread;   // actually a ServerListenThread*
+	ServerListenThread* m_pServerThread;   // defined in DzScriptServerPane.cpp (keeps httplib out)
 	int              m_nPort;
 	QString          m_sHost;
-	QByteArray       m_aHostUtf8;
+	QByteArray       m_hostUtf8;
 	// Written on the main thread, read by HTTP workers (GET /health).
 	std::atomic<bool> m_bRunning;
 	int              m_nQueueTimeoutSec;
@@ -296,7 +302,7 @@ private:
 	int              m_nStaleJobTimeoutMin;   // main thread only; applied live
 
 	// Log capture during script execution
-	QStringList m_aCapturedLogLines;
+	QStringList m_capturedLogLines;
 	bool        m_bCapturingLog;
 
 	// Non-empty only while processNextAsyncRequest() is running a render

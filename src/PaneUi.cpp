@@ -335,6 +335,13 @@ void DzScriptServerPane::appendLogBytes(const QByteArray& data)
     appendLog(QString::fromUtf8(data.constData(), data.size()));
 }
 
+void DzScriptServerPane::postLog(const std::string& line)
+{
+    const std::string stamped = "[" + JsonStd::currentTime() + "] " + line;
+    QMetaObject::invokeMethod(this, "appendLogBytes", Qt::QueuedConnection,
+        Q_ARG(QByteArray, stdToQBA(stamped)));
+}
+
 void DzScriptServerPane::loadSettings()
 {
 	QStringList msgs;

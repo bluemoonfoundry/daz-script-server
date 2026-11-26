@@ -403,7 +403,7 @@ void DzScriptServerPane::startServer()
 			res.set_header("X-Server-Instance-Id", instanceIdHeader);
 			if (!res.has_header("X-Correlation-Id")) {
 				const std::string corr = req.get_header_value("X-Correlation-Id");
-				if (IdempotencyCache::isValidKey(QByteArray(corr.c_str(), (int)corr.size())))
+				if (IdempotencyCache::isValidKey(stdToQBA(corr)))
 					res.set_header("X-Correlation-Id", corr);
 			}
 		});
@@ -431,10 +431,10 @@ void DzScriptServerPane::startServer()
 
 	setupRoutes();
 
-	m_aHostUtf8 = m_sHost.toUtf8();
+	m_hostUtf8 = m_sHost.toUtf8();
 	m_pServerThread = new ServerListenThread(
 		m_pServer,
-		std::string(m_aHostUtf8.constData()),
+		std::string(m_hostUtf8.constData()),
 		m_nPort,
 		this);
 
@@ -584,11 +584,11 @@ void DzScriptServerPane::onMessagePosted(const QString& msg)
 		return;
 
 	// Limit captured output to prevent memory exhaustion from excessive print() calls
-	if (m_aCapturedLogLines.size() < ServerConfig::MAX_CAPTURED_LINES) {
-		m_aCapturedLogLines.append(msg);
-	} else if (m_aCapturedLogLines.size() == ServerConfig::MAX_CAPTURED_LINES) {
+	if (m_capturedLogLines.size() < ServerConfig::MAX_CAPTURED_LINES) {
+		m_capturedLogLines.append(msg);
+	} else if (m_capturedLogLines.size() == ServerConfig::MAX_CAPTURED_LINES) {
 		// Add a warning message once when limit is reached
-		m_aCapturedLogLines.append(
+		m_capturedLogLines.append(
 			QString("[WARNING] Output truncated: maximum %1 lines captured")
 				.arg(ServerConfig::MAX_CAPTURED_LINES));
 	}
