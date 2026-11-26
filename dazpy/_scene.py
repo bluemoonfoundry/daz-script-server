@@ -806,7 +806,7 @@ class DazScene:
         place = ""
         if position is not None:
             x, y, z = (float(v) for v in position)
-            place = f"g.setWSPos(new DzVec3({x}, {y}, {z}));"
+            place = f"g.setWSPos(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         script = ScriptBuilder.iife(f"""
             var g = new DzGroupNode();
             g.setName({name_js});
@@ -1396,7 +1396,7 @@ class DazScene:
             elif isinstance(value, int):
                 settings_calls.append(f"settings.setIntValue({js_key}, {value});")
             elif isinstance(value, float):
-                settings_calls.append(f"settings.setFloatValue({js_key}, {value});")
+                settings_calls.append(f"settings.setFloatValue({js_key}, {ScriptBuilder.js_num(value)});")
             else:
                 settings_calls.append(f"settings.setStringValue({js_key}, {json.dumps(str(value))});")
 

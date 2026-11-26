@@ -157,6 +157,14 @@ All notable changes to DazScript Server are documented here.
 - **dazpy: `except TimeoutError:` / `except ConnectionError:` now catch SDK
   errors** (yau7.6.2). `dazpy.TimeoutError` and `dazpy.ConnectionError`
   subclass the builtins as well as `DazError`; messages are unchanged.
+- **dazpy and daz-ts: NaN/infinity no longer produce invalid or garbage
+  DazScript** (yau7.6.5). A non-finite number passed to a numeric setter
+  (position, rotation, scale, morph value, focal length, gamma, keyframe
+  value, ...) used to reach Studio as `nan` (a ReferenceError) or as
+  `NaN`/`Infinity`, written into the scene. It now raises `ValueError`
+  (dazpy) or `RangeError` (daz-ts) before any request is sent, via the new
+  `ScriptBuilder.js_num` / `ScriptBuilder.jsNum` helpers, which
+  `serialize_arg` / `serializeArg` also use (nested values too).
 - **Package Runner: first-run uv install piped an unpinned script into a
   shell** (yau7.4.6). The toolchain bootstrap ran astral's install script
   (`irm … | iex` on Windows, `curl … | sh` on macOS) with no version pin or

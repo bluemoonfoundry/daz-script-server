@@ -1,4 +1,5 @@
 import json
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,14 +16,29 @@ class ScriptBuilder:
         return f"(function(){{\n{body}\n}})()"
 
     @staticmethod
+    def js_num(value: object) -> str:
+        """A finite number as a DazScript literal.
+
+        Use this for every number interpolated into a script. ``str(nan)`` is
+        ``nan``, which DazScript reads as an undefined identifier, and
+        ``NaN``/``Infinity`` would write garbage into the scene, so non-finite
+        values raise ``ValueError`` before any request is sent.
+        """
+        number = float(value)  # type: ignore[arg-type]
+        if not math.isfinite(number):
+            raise ValueError(f"expected a finite number, got {value!r}")
+        return repr(number)
+
+    @staticmethod
     def serialize_arg(value: object) -> str:
         if isinstance(value, bool):
             return "true" if value else "false"
-        if isinstance(value, (int, float)):
+        if isinstance(value, int):
             return str(value)
-        if isinstance(value, str):
-            return json.dumps(value)
-        return json.dumps(value)
+        if isinstance(value, float):
+            return ScriptBuilder.js_num(value)
+        # allow_nan=False: NaN/Infinity inside a list or dict raise ValueError.
+        return json.dumps(value, allow_nan=False)
 
     @staticmethod
     def find_node_expr(identifier: "NodeIdentifier") -> str:

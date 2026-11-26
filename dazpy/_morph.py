@@ -22,7 +22,7 @@ class DazMorph(DazModifier):
     @value.setter
     def value(self, v: float) -> None:
         script = ScriptBuilder.iife(
-            f"var m = {self._locator}; if (m) m.getValueChannel().setValue({float(v)});"
+            f"var m = {self._locator}; if (m) m.getValueChannel().setValue({ScriptBuilder.js_num(v)});"
         )
         self._client.execute(script)
 

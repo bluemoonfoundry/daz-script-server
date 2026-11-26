@@ -763,7 +763,7 @@ class DazRenderSettings:
             var mgr = {self._render_mgr()};
             if (!mgr) return;
             var opts = mgr.getRenderOptions();
-            opts.gamma = {float(value)};
+            opts.gamma = {ScriptBuilder.js_num(value)};
             opts.applyChanges();
         """)
         self._client.execute(script)

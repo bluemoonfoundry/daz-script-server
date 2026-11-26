@@ -23,6 +23,23 @@ describe("ScriptBuilder", () => {
     expect(ScriptBuilder.serializeArg(3.14)).toBe("3.14");
   });
 
+  it("jsNum formats finite numbers and rejects NaN/Infinity (yau7.6.5)", () => {
+    expect(ScriptBuilder.jsNum(0)).toBe("0");
+    expect(ScriptBuilder.jsNum(-2.5)).toBe("-2.5");
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(() => ScriptBuilder.jsNum(bad)).toThrow(RangeError);
+    }
+  });
+
+  it("serializeArg rejects non-finite numbers, bare or nested (yau7.6.5)", () => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(() => ScriptBuilder.serializeArg(bad)).toThrow(RangeError);
+      expect(() => ScriptBuilder.serializeArg([1, bad])).toThrow(RangeError);
+      expect(() => ScriptBuilder.serializeArg({ a: { b: bad } })).toThrow(RangeError);
+    }
+    expect(ScriptBuilder.serializeArg([1, 2.5])).toBe("[1,2.5]");
+  });
+
   it("serializeArg formats strings as JSON-quoted literals", () => {
     expect(ScriptBuilder.serializeArg("hi")).toBe('"hi"');
   });

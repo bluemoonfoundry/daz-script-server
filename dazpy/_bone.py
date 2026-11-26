@@ -63,9 +63,9 @@ class DazBone(DazNode):
             z: Rotation around the local Z axis.
         """
         self._client.execute(self._nb(
-            f"_node.getXRotControl().setValue({float(x)}); "
-            f"_node.getYRotControl().setValue({float(y)}); "
-            f"_node.getZRotControl().setValue({float(z)});"
+            f"_node.getXRotControl().setValue({ScriptBuilder.js_num(x)}); "
+            f"_node.getYRotControl().setValue({ScriptBuilder.js_num(y)}); "
+            f"_node.getZRotControl().setValue({ScriptBuilder.js_num(z)});"
         ))
 
     @property

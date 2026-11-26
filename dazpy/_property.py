@@ -142,7 +142,7 @@ class DazProperty(DazElement):
         """
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.setDoubleValue) p.setDoubleValue({time}, {float(value)});
+            if (p && p.setDoubleValue) p.setDoubleValue({ScriptBuilder.serialize_arg(time)}, {ScriptBuilder.js_num(value)});
         """)
         self._client.execute(script)
 
@@ -191,7 +191,7 @@ class DazProperty(DazElement):
         """
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange({time}, {time}));
+            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange({ScriptBuilder.serialize_arg(time)}, {ScriptBuilder.serialize_arg(time)}));
         """)
         self._client.execute(script)
 
@@ -222,7 +222,7 @@ class DazProperty(DazElement):
             var p = {self._locator};
             if (!p || !p.setDoubleValue) return null;
             var _tm = {int(frame)} * Scene.getTimeStep();
-            p.setDoubleValue(_tm, {float(value)!r});
+            p.setDoubleValue(_tm, {ScriptBuilder.js_num(value)});
             return p.getDoubleValue(_tm);
         """)
         return self._client.execute(script).value

@@ -136,7 +136,7 @@ class DazMaterial(DazElement):
     @opacity.setter
     def opacity(self, value: float) -> None:
         script = ScriptBuilder.iife(
-            f"var m = {self._locator}; if (m) m.setBaseOpacity({float(value)});"
+            f"var m = {self._locator}; if (m) m.setBaseOpacity({ScriptBuilder.js_num(value)});"
         )
         self._client.execute(script)
 
@@ -168,7 +168,7 @@ class DazMaterial(DazElement):
     @smoothing_angle.setter
     def smoothing_angle(self, value: float) -> None:
         script = ScriptBuilder.iife(
-            f"var m = {self._locator}; if (m) m.setSmoothingAngle({float(value)});"
+            f"var m = {self._locator}; if (m) m.setSmoothingAngle({ScriptBuilder.js_num(value)});"
         )
         self._client.execute(script)
 

@@ -343,7 +343,7 @@ class DazNode(DazElement):
         """
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
-            f"_node.setWSPos(new DzVec3({x}, {y}, {z}));"
+            f"_node.setWSPos(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         )
         self._client.execute(script)
 
@@ -393,7 +393,7 @@ class DazNode(DazElement):
         """
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
-            f"_node.getXScaleControl().setValue({x}); _node.getYScaleControl().setValue({y}); _node.getZScaleControl().setValue({z});"
+            f"_node.getXScaleControl().setValue({ScriptBuilder.js_num(x)}); _node.getYScaleControl().setValue({ScriptBuilder.js_num(y)}); _node.getZScaleControl().setValue({ScriptBuilder.js_num(z)});"
         )
         self._client.execute(script)
 
@@ -417,20 +417,20 @@ class DazNode(DazElement):
         lines = []
         if position is not None:
             x, y, z = position
-            lines.append(f"_node.setLocalPos(new DzVec3({x}, {y}, {z}));")
+            lines.append(f"_node.setLocalPos(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));")
         if rotation is not None:
             x, y, z = rotation
             lines.append(
-                f"_node.getXRotControl().setValue({x}); "
-                f"_node.getYRotControl().setValue({y}); "
-                f"_node.getZRotControl().setValue({z});"
+                f"_node.getXRotControl().setValue({ScriptBuilder.js_num(x)}); "
+                f"_node.getYRotControl().setValue({ScriptBuilder.js_num(y)}); "
+                f"_node.getZRotControl().setValue({ScriptBuilder.js_num(z)});"
             )
         if scale is not None:
             x, y, z = scale
             lines.append(
-                f"_node.getXScaleControl().setValue({x}); "
-                f"_node.getYScaleControl().setValue({y}); "
-                f"_node.getZScaleControl().setValue({z});"
+                f"_node.getXScaleControl().setValue({ScriptBuilder.js_num(x)}); "
+                f"_node.getYScaleControl().setValue({ScriptBuilder.js_num(y)}); "
+                f"_node.getZScaleControl().setValue({ScriptBuilder.js_num(z)});"
             )
         if not lines:
             return
@@ -1015,7 +1015,7 @@ class DazNode(DazElement):
             if (!_hit) return {{status: "missing"}};
             if (!_hit.inherits("DzNumericProperty")) return {{status: "not_numeric", label: _hit.getLabel()}};
             if (_unlock && typeof _hit.lock === "function" && _hit.isLocked && _hit.isLocked()) _hit.lock(false);
-            _hit.setValue({float(value)!r});
+            _hit.setValue({ScriptBuilder.js_num(value)});
             return {{status: "ok", label: _hit.getLabel(),
                      name: _owner ? _owner.getName() : _hit.getName(), value: _hit.getValue()}};
         """)
@@ -1473,7 +1473,7 @@ class DazNode(DazElement):
         """
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
-            f"_node.getXRotControl().setValue({x}); _node.getYRotControl().setValue({y}); _node.getZRotControl().setValue({z});"
+            f"_node.getXRotControl().setValue({ScriptBuilder.js_num(x)}); _node.getYRotControl().setValue({ScriptBuilder.js_num(y)}); _node.getZRotControl().setValue({ScriptBuilder.js_num(z)});"
         )
         self._client.execute(script)
 
@@ -1498,7 +1498,7 @@ class DazNode(DazElement):
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
-            f"_node.setWSPos(_tm, new DzVec3({x}, {y}, {z}));"
+            f"_node.setWSPos(_tm, new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         )
         self._client.execute(script)
 
@@ -1519,9 +1519,9 @@ class DazNode(DazElement):
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
-            f"_node.getXRotControl().setDoubleValue(_tm, {x}); "
-            f"_node.getYRotControl().setDoubleValue(_tm, {y}); "
-            f"_node.getZRotControl().setDoubleValue(_tm, {z});"
+            f"_node.getXRotControl().setDoubleValue(_tm, {ScriptBuilder.js_num(x)}); "
+            f"_node.getYRotControl().setDoubleValue(_tm, {ScriptBuilder.js_num(y)}); "
+            f"_node.getZRotControl().setDoubleValue(_tm, {ScriptBuilder.js_num(z)});"
         )
         self._client.execute(script)
 
@@ -1640,7 +1640,7 @@ class DazNode(DazElement):
         """
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
-            f"_node.setLocalPos(new DzVec3({x}, {y}, {z}));"
+            f"_node.setLocalPos(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         )
         self._client.execute(script)
 
@@ -1684,7 +1684,7 @@ class DazNode(DazElement):
         """
         script = ScriptBuilder.node_body_from_locator(
             self._locator,
-            f"_node.getXRotControl().setValue({x}); _node.getYRotControl().setValue({y}); _node.getZRotControl().setValue({z});"
+            f"_node.getXRotControl().setValue({ScriptBuilder.js_num(x)}); _node.getYRotControl().setValue({ScriptBuilder.js_num(y)}); _node.getZRotControl().setValue({ScriptBuilder.js_num(z)});"
         )
         self._client.execute(script)
 
@@ -1971,7 +1971,7 @@ class DazNode(DazElement):
             if (!n) return {{status: "no_vertex_count"}};
             var over = {payload}, wm = new DzWeightMap(), applied = 0;
             wm.setNumWeights(n);
-            for (var i = 0; i < n; i++) wm.setFloatWeight(i, {float(default)!r});
+            for (var i = 0; i < n; i++) wm.setFloatWeight(i, {ScriptBuilder.js_num(default)});
             for (var k in over) {{
                 var idx = parseInt(k, 10);
                 if (idx >= 0 && idx < n) {{ wm.setFloatWeight(idx, over[k]); applied++; }}
@@ -2000,7 +2000,7 @@ class DazNode(DazElement):
             }}
             if (!p) return {{status: "no_property", available: names}};
             var old = p.getValue();
-            p.setValue({float(value)!r});
+            p.setValue({ScriptBuilder.js_num(value)});
             return {{status: "ok", modifier: _m.className(), property: p.getName(),
                      old: old, new: p.getValue()}};
         """)
@@ -2047,7 +2047,7 @@ class DazNode(DazElement):
                 return {{status: "no_property", available: names}};
             }}
             var old = p.getValue();
-            p.setValue({float(value)!r});
+            p.setValue({ScriptBuilder.js_num(value)});
             return {{status: "ok", material: r.material, property: p.getName(), old: old, new: p.getValue()}};
         """, provider=True)
         if raw["status"] == "no_property":

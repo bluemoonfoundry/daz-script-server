@@ -417,7 +417,7 @@ class DazSkeleton(DazNode):
         tx, ty, tz = (float(v) for v in point)
         script = self._skeleton_body(f"""
             var _chain = {json.dumps(pairs)};
-            var _target = new DzVec3({tx!r}, {ty!r}, {tz!r});
+            var _target = new DzVec3({ScriptBuilder.js_num(tx)}, {ScriptBuilder.js_num(ty)}, {ScriptBuilder.js_num(tz)});
             var _byName = {{}}, _bones = _node.getAllBones();
             for (var i = 0; i < _bones.length; i++) _byName[_bones[i].getName()] = _bones[i];
             var _deg = 180 / Math.PI, _applied = [], _missing = [];
