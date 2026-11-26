@@ -56,5 +56,43 @@ class PackageImporterWaitTest(unittest.TestCase):
         self.assertIn("done = true;", failed[:failed.index("}") + 1])
 
 
+class PackageTimeoutTest(unittest.TestCase):
+    """Guard (daz-script-server-yau7.4.3): the wait on the package process is
+    bounded by a single-shot QTimer, and a timeout kills the process."""
+
+    def setUp(self):
+        with open(IMPORTER_CPP, encoding="utf-8") as f:
+            self.src = f.read()
+        start = self.src.index("QVariantMap DzPackageImporter::runPackage(")
+        self.body = self.src[start:self.src.index("\n}\n", start)]
+
+    def test_timer_bounds_the_process_wait(self):
+        body = self.body
+        self.assertIn("setSingleShot(true)", body)
+        self.assertRegex(body, r"SIGNAL\(timeout\(\)\),\s*&loop,\s*SLOT\(quit\(\)\)")
+        self.assertRegex(body, r"SIGNAL\(timeout\(\)\),\s*&waiter,\s*SLOT\(onTimeout\(\)\)")
+        start = body.index("timeout.start(timeoutSeconds * 1000)")
+        self.assertLess(start, body.index("loop.exec()"),
+                        "the timer must be running before the loop blocks")
+
+    def test_timeout_kills_the_process(self):
+        branch = self.body[self.body.index("if (waiter.timedOut"):]
+        branch = branch[:branch.index("return QVariantMap();")]
+        self.assertIn("process.kill();", branch)
+
+    def test_timeout_is_read_from_the_manifest(self):
+        start = self.src.index("bool readManifest(")
+        manifest_fn = self.src[start:self.src.index("\n}\n", start)]
+        self.assertIn('readTimeoutSeconds(manifest.value("timeoutSeconds")', manifest_fn,
+                      "timeoutSeconds must be validated before commit()")
+        self.assertIn("timeoutSeconds,", self.src[self.src.index("runPackage(venvPython"):])
+
+    def test_waiter_records_timeout(self):
+        start = self.src.index("class ProcessWaiter ")
+        body = self.src[start:self.src.index("};", start)]
+        self.assertIn("bool timedOut = false;", body)
+        self.assertIn("void onTimeout() { timedOut = true; }", body)
+
+
 if __name__ == "__main__":
     unittest.main()

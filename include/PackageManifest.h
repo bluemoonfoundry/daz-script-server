@@ -26,4 +26,15 @@ bool readDependencies(const QVariant &value, QStringList &dependencies, QString 
 // (symlinks resolved) must stay under packageDir's canonical path.
 bool validateEntryPoint(const QString &packageDir, const QString &entryPoint, QString &errorMessage);
 
+// How long the package's run() may take before the importer kills it
+// (daz-script-server-yau7.4.3). The importer waits on Studio's main thread,
+// which also serves this plugin's HTTP API, so an unbounded wait on a hung
+// package froze both.
+const int kDefaultTimeoutSeconds = 1800;
+const int kMaxTimeoutSeconds = 86400;
+
+// Reads manifest["timeoutSeconds"]: absent means kDefaultTimeoutSeconds;
+// otherwise it must be a whole number from 1 to kMaxTimeoutSeconds.
+bool readTimeoutSeconds(const QVariant &value, int &seconds, QString &errorMessage);
+
 } // namespace PackageManifest

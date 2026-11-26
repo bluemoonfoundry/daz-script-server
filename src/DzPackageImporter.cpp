@@ -26,6 +26,7 @@
 #include <QFile>
 #include <QProcess>
 #include <QTemporaryFile>
+#include <QTimer>
 
 // Small QObject helpers to bridge PythonToolchainBootstrapper's and
 // PackageDependencyInstaller's async QProcess-driven signals back into
@@ -78,12 +79,17 @@ public slots:
 // from within DzPackageImporter::read() until now). A local QEventLoop
 // driven by QProcess::finished(), same pattern as ToolchainWaiter/
 // DependencyWaiter above, keeps the event loop alive while waiting.
+//
+// A single-shot QTimer bounds that wait (daz-script-server-yau7.4.3): a hung
+// package would otherwise block read() forever, and with it the HTTP API.
 class ProcessWaiter : public QObject {
 	Q_OBJECT
 public:
 	bool finished = false;
+	bool timedOut = false;
 public slots:
 	void onFinished(int /*exitCode*/, QProcess::ExitStatus /*status*/) { finished = true; }
+	void onTimeout() { timedOut = true; }
 };
 
 #include "DzPackageImporter.moc"
@@ -116,8 +122,10 @@ bool readManifest(const QString &stagingDir, QVariantMap &manifest, QString &err
 	// subprocess: reject option-like requirements and paths that leave the
 	// package (yau7.4.5). Checked on the staged copy, before commit().
 	QStringList dependencies;
+	int timeoutSeconds = 0;
 	if (!PackageManifest::readDependencies(manifest.value("dependencies"), dependencies, errorMessage) ||
-		!PackageManifest::validateEntryPoint(stagingDir, manifest.value("entryPoint").toString(), errorMessage)) {
+		!PackageManifest::validateEntryPoint(stagingDir, manifest.value("entryPoint").toString(), errorMessage) ||
+		!PackageManifest::readTimeoutSeconds(manifest.value("timeoutSeconds"), timeoutSeconds, errorMessage)) {
 		return false;
 	}
 
@@ -235,7 +243,7 @@ QString DzPackageImporter::writeDspRunner(QString &errorMessage) const {
 }
 
 QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, const QString &dspRunnerPath,
-	const QString &entryPointPath, const QVariantMap &inputs,
+	const QString &entryPointPath, const QVariantMap &inputs, int timeoutSeconds,
 	bool &success, QString &errorMessage) const {
 	success = false;
 
@@ -254,14 +262,29 @@ QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, cons
 	QEventLoop loop;
 	connect(&process, SIGNAL(finished(int, QProcess::ExitStatus)), &waiter, SLOT(onFinished(int, QProcess::ExitStatus)));
 	connect(&process, SIGNAL(finished(int, QProcess::ExitStatus)), &loop, SLOT(quit()));
+	QTimer timeout;
+	timeout.setSingleShot(true);
+	connect(&timeout, SIGNAL(timeout()), &waiter, SLOT(onTimeout()));
+	connect(&timeout, SIGNAL(timeout()), &loop, SLOT(quit()));
 
 	process.start(packageVenvPython, QStringList() << dspRunnerPath << entryPointPath << inputsPath);
 	if (!process.waitForStarted(10000)) {
 		errorMessage = QString::fromLatin1("Could not launch the package's Python interpreter");
 		return QVariantMap();
 	}
+	timeout.start(timeoutSeconds * 1000);
 	if (!waiter.finished) {
 		loop.exec();
+	}
+	timeout.stop();
+	if (waiter.timedOut && !waiter.finished) {
+		// kill() is asynchronous; reap briefly so ~QProcess doesn't block
+		// on a process that ignores the signal.
+		process.kill();
+		process.waitForFinished(5000);
+		errorMessage = QString::fromLatin1("Package did not finish within %1 seconds and was stopped "
+			"(raise \"timeoutSeconds\" in manifest.json if it needs longer)").arg(timeoutSeconds);
+		return QVariantMap();
 	}
 	if (!waiter.finished) {
 		errorMessage = QString::fromLatin1("Package process did not exit cleanly");
@@ -367,8 +390,12 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 
 	progress.close();
 
+	int timeoutSeconds = PackageManifest::kDefaultTimeoutSeconds;
+	PackageManifest::readTimeoutSeconds(manifest.value("timeoutSeconds"), timeoutSeconds, errorMessage); // validated in readManifest()
+
 	bool ranOk = false;
-	QVariantMap envelope = runPackage(venvPython, dspRunnerPath, entryPointPath, inputs, ranOk, errorMessage);
+	QVariantMap envelope = runPackage(venvPython, dspRunnerPath, entryPointPath, inputs, timeoutSeconds,
+		ranOk, errorMessage);
 	if (!ranOk) {
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"), errorMessage);
 		return DZ_OPERATION_FAILED_ERROR;

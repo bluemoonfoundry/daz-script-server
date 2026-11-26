@@ -148,6 +148,11 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **Package Runner: a hung package froze DAZ Studio** (yau7.4.3). The
+  importer waited for the package process with no limit, on the main thread
+  that also serves the HTTP API. The process is now killed after the
+  manifest's optional `timeoutSeconds` (default 1800, at most 86400) and the
+  import reports an error.
 - **Package Runner: manifest `dependencies` and `entryPoint` were not
   validated** (yau7.4.5). A dependency starting with `-` reached
   `uv pip install` as an option (for example `--index-url` pointing at

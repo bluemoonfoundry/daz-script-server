@@ -24,6 +24,9 @@ for a complete, working reference implementation (also packaged as
                                    // paths and environment markers are rejected.
                                    // `dazpy` is ALWAYS implicit -- never declare it here.
 
+  "timeoutSeconds": 1800,         // optional, defaults to 1800. Whole number, 1-86400. If run() hasn't returned
+                                   // by then, the package process is killed and the import reports an error.
+
   "inputs": [                     // required if interactive is true; ignored otherwise.
     {
       "name": "targetCount",      // required. Must be a valid Python identifier -- becomes a key in the inputs dict.

@@ -81,6 +81,6 @@ private:
 	// envelope (distinct from the envelope's own "success": false, which is
 	// a normal package-reported failure, not a plumbing failure).
 	QVariantMap runPackage(const QString &packageVenvPython, const QString &dspRunnerPath,
-		const QString &entryPointPath, const QVariantMap &inputs,
+		const QString &entryPointPath, const QVariantMap &inputs, int timeoutSeconds,
 		bool &success, QString &errorMessage) const;
 };

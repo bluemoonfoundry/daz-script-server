@@ -110,4 +110,24 @@ bool validateEntryPoint(const QString &packageDir, const QString &entryPoint, QS
 	return true;
 }
 
+bool readTimeoutSeconds(const QVariant &value, int &seconds, QString &errorMessage) {
+	seconds = kDefaultTimeoutSeconds;
+	if (!value.isValid() || value.isNull()) {
+		return true;
+	}
+	const QVariant::Type type = value.type();
+	const bool numeric = type == QVariant::Int || type == QVariant::UInt ||
+		type == QVariant::LongLong || type == QVariant::ULongLong || type == QVariant::Double;
+	const double number = value.toDouble();
+	// Range first: casting an out-of-range double to int is undefined.
+	if (!numeric || !(number >= 1 && number <= kMaxTimeoutSeconds) ||
+		number != static_cast<double>(static_cast<int>(number))) {
+		errorMessage = QString::fromLatin1(
+			"manifest.json \"timeoutSeconds\" must be a whole number from 1 to %1").arg(kMaxTimeoutSeconds);
+		return false;
+	}
+	seconds = static_cast<int>(number);
+	return true;
+}
+
 } // namespace PackageManifest
