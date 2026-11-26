@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bluemoonfoundry.github.io/schemas/asset-ref.v1.schema.json",
+  "title": "Asset reference v1",
+  "description": "A reference to a Daz content file: a plain path string, or an object naming it by path, SKU, product or search phrase.",
+  "oneOf": [
+    {
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {"required": ["path"]},
+        {"required": ["product"]},
+        {"required": ["sku"]},
+        {"required": ["find"]}
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "product": {"type": "string", "minLength": 1},
+        "sku": {"type": "string", "minLength": 1},
+        "find": {"type": "string", "minLength": 1},
+        "file": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "minLength": 1},
+        "resolved": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "sku": {"type": "string", "minLength": 1},
+            "product": {"type": "string", "minLength": 1},
+            "asset_id": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  ]
+}
