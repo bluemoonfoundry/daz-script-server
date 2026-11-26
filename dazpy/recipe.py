@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 __all__ = ["ObserveReport", "ShotRender", "apply", "check", "observe", "plan", "recipe_schema",
            "render", "validate"]
 
-_SCHEMA_VERSIONS = (1,)
+_SCHEMA_VERSIONS = (1, 2)
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,8 @@ def _as_dict(recipe: SceneRecipe | dict) -> dict:
 
 def _file_refs(recipe: SceneRecipe) -> list[tuple[str, str]]:
     """``(recipe path, file)`` for every file the recipe makes Studio open."""
-    refs = [(f"assets.{k}.path", a.path) for k, a in recipe.assets.items()]
+    refs = [(f"assets.{k}.path", a.ref.path) for k, a in recipe.assets.items()
+            if a.ref.path is not None]
     refs += [(f"actors.{k}.pose", a.pose) for k, a in recipe.actors.items() if a.pose]
     if recipe.environment is not None:
         refs.append(("lighting.environment.image_path", recipe.environment.image_path))

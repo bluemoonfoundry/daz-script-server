@@ -380,10 +380,11 @@ class TestSerialisation(FacadeCase):
         self.assertIsInstance(d["steps"], list)
         self.assertIsInstance(d["steps"][0]["channels"], dict)
 
-    def test_recipe_schema_returns_v1(self):
+    def test_recipe_schema_returns_v1_by_default_and_v2(self):
         self.assertEqual(recipe_schema()["properties"]["recipe_version"]["const"], 1)
+        self.assertEqual(recipe_schema(2)["properties"]["recipe_version"]["const"], 2)
         with self.assertRaises(ValueError):
-            recipe_schema(2)
+            recipe_schema(3)
 
     def test_package_exports(self):
         for name in ("SceneRecipe", "RecipeIssue", "ValidationReport", "RecipePlan", "Conflict",

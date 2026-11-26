@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Mapping
 
-from ._recipe_validate import RecipeIssue, _closest, _join
+from ._recipe_issue import RecipeIssue, _closest, _join
 
 _FIELDS = ("path", "product", "sku", "find", "file", "type", "resolved")
 _SELECTORS = ("path", "product", "sku", "find")

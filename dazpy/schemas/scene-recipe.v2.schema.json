@@ -1,0 +1,754 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BlueMoonFoundry/daz-script-server/schemas/scene-recipe.v2.schema.json",
+  "title": "Scene recipe v2",
+  "description": "Declarative DAZ Studio scene description. Units: centimetres, Y-up, degrees.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "recipe_version",
+    "id"
+  ],
+  "properties": {
+    "recipe_version": {
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assets": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "actors": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/actor"
+      }
+    },
+    "props": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/prop"
+      }
+    },
+    "lighting": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rigs": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/rig"
+          }
+        },
+        "lights": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/light"
+          }
+        },
+        "environment": {
+          "$ref": "#/$defs/environment"
+        }
+      }
+    },
+    "cameras": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/camera"
+      }
+    },
+    "shots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/shot"
+      }
+    },
+    "render": {
+      "$ref": "#/$defs/render"
+    },
+    "checks": {
+      "not": {},
+      "description": "reserved; not supported in recipe_version 2"
+    }
+  },
+  "$defs": {
+    "key": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "vec3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "color": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "asset": {
+      "$ref": "#/$defs/assetRef"
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "facing",
+          "rotation"
+        ]
+      },
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/assetRef",
+          "description": "a key into top-level assets, else an asset reference (a string is a path)"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3"
+        },
+        "facing": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/key"
+            },
+            {
+              "$ref": "#/$defs/vec3"
+            }
+          ]
+        },
+        "pose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blocking": {
+          "not": {},
+          "description": "reserved; not supported in recipe_version 2"
+        },
+        "interaction": {
+          "not": {},
+          "description": "reserved; not supported in recipe_version 2"
+        },
+        "node": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Scene-pane label of a figure to take over if present"
+        },
+        "presets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/assetRef"
+          }
+        },
+        "wearing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/wearingEntry"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "asset"
+          ]
+        },
+        {
+          "required": [
+            "node"
+          ]
+        }
+      ]
+    },
+    "prop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset"
+      ],
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/assetRef",
+          "description": "a key into top-level assets, else an asset reference (a string is a path)"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3"
+        }
+      }
+    },
+    "rig_override": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "azimuth_deg": {
+          "type": "number"
+        },
+        "elevation_deg": {
+          "type": "number"
+        },
+        "distance": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        }
+      }
+    },
+    "rig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "target"
+      ],
+      "properties": {
+        "type": {
+          "const": "three_point"
+        },
+        "target": {
+          "$ref": "#/$defs/key"
+        },
+        "light_type": {
+          "enum": [
+            "spot",
+            "point",
+            "distant"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/rig_override"
+        },
+        "fill": {
+          "$ref": "#/$defs/rig_override"
+        },
+        "rim": {
+          "$ref": "#/$defs/rig_override"
+        }
+      }
+    },
+    "light": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "position"
+      ],
+      "not": {
+        "required": [
+          "look_at",
+          "rotation"
+        ]
+      },
+      "properties": {
+        "type": {
+          "enum": [
+            "spot",
+            "point",
+            "distant"
+          ]
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "look_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/key"
+            },
+            {
+              "$ref": "#/$defs/vec3"
+            }
+          ]
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3"
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "image_path"
+      ],
+      "properties": {
+        "type": {
+          "const": "hdri"
+        },
+        "image_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rotation_deg": {
+          "type": "number"
+        },
+        "mode": {
+          "enum": [
+            "dome_only",
+            "dome_and_scene",
+            "scene_only"
+          ]
+        },
+        "draw_dome": {
+          "type": "boolean"
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frame": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/key"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/key"
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "shot_type": {
+          "enum": [
+            "extreme_wide",
+            "wide",
+            "full_body",
+            "medium_wide",
+            "medium",
+            "medium_close_up",
+            "close_up",
+            "extreme_close_up"
+          ],
+          "description": "Shot size; each fits a height of subject to the frame (see dazpy.shots.SHOT_SIZES)"
+        },
+        "azimuth_deg": {
+          "type": "number"
+        },
+        "elevation_deg": {
+          "type": "number"
+        },
+        "angle": {
+          "enum": [
+            "eye_level",
+            "high",
+            "low",
+            "birds_eye",
+            "worms_eye"
+          ],
+          "description": "Named camera elevation (0, 30, -20, 80, -45 degrees); mutually exclusive with elevation_deg"
+        },
+        "composition": {
+          "enum": [
+            "center",
+            "left_third",
+            "right_third"
+          ],
+          "description": "Place the subject on a vertical third by turning the camera"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "look_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/key"
+            },
+            {
+              "$ref": "#/$defs/vec3"
+            }
+          ]
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3"
+        },
+        "focal_length": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "depth_of_field": {
+          "type": "boolean"
+        },
+        "focal_distance": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "description": "framing",
+          "required": [
+            "frame"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "position"
+                ]
+              },
+              {
+                "required": [
+                  "look_at"
+                ]
+              },
+              {
+                "required": [
+                  "rotation"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "description": "explicit",
+          "required": [
+            "position"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "look_at"
+              ]
+            },
+            {
+              "required": [
+                "rotation"
+              ]
+            }
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "frame"
+                ]
+              },
+              {
+                "required": [
+                  "shot_type"
+                ]
+              },
+              {
+                "required": [
+                  "azimuth_deg"
+                ]
+              },
+              {
+                "required": [
+                  "elevation_deg"
+                ]
+              },
+              {
+                "required": [
+                  "angle"
+                ]
+              },
+              {
+                "required": [
+                  "composition"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "angle",
+              "elevation_deg"
+            ]
+          }
+        }
+      ]
+    },
+    "render": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "enum": [
+            "iray",
+            "filament",
+            "viewport"
+          ]
+        },
+        "resolution": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "iray_samples": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "shot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "camera",
+        "output"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/key"
+        },
+        "camera": {
+          "$ref": "#/$defs/key"
+        },
+        "output": {
+          "type": "string",
+          "minLength": 1
+        },
+        "render": {
+          "$ref": "#/$defs/render"
+        },
+        "allow_crop": {
+          "type": "boolean",
+          "description": "the shot crops figures on purpose: scene checks skip the out-of-frame warnings"
+        },
+        "movement": {
+          "not": {},
+          "description": "reserved; not supported in recipe_version 2"
+        }
+      }
+    },
+    "assetRef": {
+      "description": "A reference to a Daz content file: a plain path string, or an object naming it by path, SKU, product or search phrase.",
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "product"
+              ]
+            },
+            {
+              "required": [
+                "sku"
+              ]
+            },
+            {
+              "required": [
+                "find"
+              ]
+            }
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "product": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sku": {
+              "type": "string",
+              "minLength": 1
+            },
+            "find": {
+              "type": "string",
+              "minLength": 1
+            },
+            "file": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "resolved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sku": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "product": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "asset_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "selector": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1,
+              "description": "friendly content type (hair, top, bottom, dress, outerwear, shoes, hat, accessory, wardrobe) or a raw Daz type prefix such as Follower/Wardrobe/Belt"
+            }
+          }
+        }
+      ]
+    },
+    "wearingEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "add",
+            "key"
+          ],
+          "properties": {
+            "add": {
+              "$ref": "#/$defs/assetRef"
+            },
+            "key": {
+              "$ref": "#/$defs/key"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "replace",
+            "with",
+            "key"
+          ],
+          "properties": {
+            "replace": {
+              "$ref": "#/$defs/selector"
+            },
+            "with": {
+              "$ref": "#/$defs/assetRef"
+            },
+            "key": {
+              "$ref": "#/$defs/key"
+            },
+            "if_missing": {
+              "enum": [
+                "add",
+                "error"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "remove"
+          ],
+          "properties": {
+            "remove": {
+              "$ref": "#/$defs/selector"
+            },
+            "if_missing": {
+              "enum": [
+                "ignore",
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
