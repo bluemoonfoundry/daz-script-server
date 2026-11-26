@@ -803,7 +803,7 @@ class TestAsyncScriptRegistryAndGeometry:
         assert mock_http.post.call_args.args[0] == "http://127.0.0.1:18811/geometry/frames"
         assert mock_http.post.call_args.kwargs["json"] == {
             "frames": [7], "bones": ["head"], "sceneUpdate": False}
-        assert "timeout" not in mock_http.post.call_args.kwargs
+        assert mock_http.post.call_args.kwargs["timeout"] == 30.0  # the client default
         assert gf.frame(7) == [(1.0, 2.0, 3.0)]
         assert gf.bone("head") == [(4.0, 5.0, 6.0)]
 
