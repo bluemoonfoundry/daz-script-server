@@ -568,7 +568,8 @@ class DazSceneOps:
 
     def _set_transform(self, ident: NodeIdentifier, kind: EntityKind, t: dict) -> None:
         node = DazCamera(self._client, ident) if kind == "camera" else DazNode(self._client, ident)
-        node.set_position(*t["position"])
+        if "position" in t:
+            node.set_position(*t["position"])
         if isinstance(node, DazCamera) and t.get("aim") is not None:
             node.aim_at(*t["aim"])
         elif t.get("rotation") is not None:

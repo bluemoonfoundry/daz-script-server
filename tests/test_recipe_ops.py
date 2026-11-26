@@ -22,6 +22,15 @@ def _ops(results):
     return DazSceneOps(SimpleNamespace(_client=client)), client
 
 
+class TestSetTransformWithoutPosition(unittest.TestCase):
+    def test_no_position_key_does_not_move_the_node(self):
+        ops, _ = _ops([])
+        with mock.patch("dazpy._recipe_ops.DazNode") as node_cls:
+            ops._set_transform(mock.Mock(), "actor", {"rotation": (0.0, 30.0, 0.0)})
+        node_cls.return_value.set_position.assert_not_called()
+        node_cls.return_value.set_rotation.assert_called_once_with(0.0, 30.0, 0.0)
+
+
 class TestPoseKeepsNodeTransform(unittest.TestCase):
     """5d6f.30 item 5: a pose preset can carry a root transform; the pose
     channel must not move the figure node (the transform channel owns it)."""

@@ -217,6 +217,14 @@ class DesiredV2Tests(unittest.TestCase):
         d = compute_desired(v2_recipe({"node": "Abby", "position": [5, 0, 0]}), RESOLVED)
         self.assertEqual(d["actors.abby"].channels["transform"]["position"], (5.0, 0.0, 0.0))
 
+    def test_taken_over_rotation_only_has_no_position(self):
+        d = compute_desired(v2_recipe({"node": "Abby", "rotation": [0, 30, 0]}), RESOLVED)
+        self.assertEqual(d["actors.abby"].channels["transform"], {"rotation": (0.0, 30.0, 0.0)})
+
+    def test_taken_over_facing_without_position_raises(self):
+        with self.assertRaisesRegex(ValueError, "actors.abby.*explicit position"):
+            compute_desired(v2_recipe({"node": "Abby", "facing": [0, 0, 100]}), RESOLVED)
+
     def test_created_actor_default_position(self):
         d = compute_desired(v2_recipe(), RESOLVED)
         self.assertEqual(d["actors.abby"].channels["transform"]["position"], (0.0, 0.0, 0.0))

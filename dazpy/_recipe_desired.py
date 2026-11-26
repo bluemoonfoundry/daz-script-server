@@ -124,10 +124,19 @@ def _actor_entities(recipe: SceneRecipe, name: str,
         create["take_over"] = a.node
         create["label"] = a.node
     channels: dict = {}
-    if a.node is None or any(v is not None for v in (a.position, a.rotation, a.facing)):
+    if a.node is None:
         pos = _spec_position(a)
         channels["transform"] = {"position": _t((pos.x, pos.y, pos.z)),
                                  "rotation": _actor_rotation(recipe, name)}
+    elif any(v is not None for v in (a.position, a.rotation, a.facing)):
+        # A taken-over actor is moved only where the recipe says so: no implicit origin.
+        if a.position is None and a.facing is not None:
+            raise ValueError(f"actors.{name}: facing needs an explicit position on a "
+                             "taken-over actor")
+        t = {"rotation": _actor_rotation(recipe, name)}
+        if a.position is not None:
+            t = {"position": _t(a.position), **t}
+        channels["transform"] = t
     channels["pose"] = {"pose_path": a.pose}
     if a.presets:
         channels["presets"] = {"paths": [
@@ -211,13 +220,12 @@ def compute_desired(recipe: SceneRecipe,
     for name in recipe.actors:
         for e in _actor_entities(recipe, name, resolved):
             add(e)
-    for name in recipe.props:
+    for name, p in recipe.props.items():
         add(DesiredEntity(
             f"props.{name}", "prop", f"{recipe.id}:{name}",
             {"asset_path": _path_for(prop_ref(recipe, name), f"props.{name}.asset", resolved)},
-            {"transform": {"position": _t(recipe.props[name].position),
-                           "rotation": _t(recipe.props[name].rotation)
-                           if recipe.props[name].rotation is not None else (0.0, 0.0, 0.0)}}))
+            {"transform": {"position": _t(p.position),
+                           "rotation": _t(p.rotation) if p.rotation is not None else (0.0, 0.0, 0.0)}}))
     for name, cam in recipe.cameras.items():
         add(_camera(recipe, name, cam))
     for name, light in recipe.lights.items():
