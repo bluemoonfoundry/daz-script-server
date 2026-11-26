@@ -383,3 +383,4 @@
 {"id":"int-14dfbf4b","kind":"field_change","created_at":"2026-11-26T05:00:02.9657017Z","actor":"G.Hirpara","issue_id":"daz-script-server-yau7.6.4","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-96383ecb","kind":"field_change","created_at":"2026-11-26T05:04:44.0208112Z","actor":"G.Hirpara","issue_id":"daz-script-server-yau7.6.3","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-902e1b60","kind":"field_change","created_at":"2026-11-26T05:10:32.4557876Z","actor":"G.Hirpara","issue_id":"daz-script-server-9qph","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-76f1792a","kind":"field_change","created_at":"2026-11-26T05:17:05.695035Z","actor":"G.Hirpara","issue_id":"daz-script-server-yau7.6.10","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
