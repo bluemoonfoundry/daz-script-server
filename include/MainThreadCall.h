@@ -62,6 +62,24 @@ void release(Call* call);
 // INTERNAL_ERROR result; the waiting worker is always released.
 void runOnMainThread(DzScriptServerPane* pane, Call* call);
 
+// MAIN THREAD ONLY. Marks a server script as running for its lifetime
+// (daz-script-server-29gd). A script that pumps the event loop -- Iray's
+// DzProgress does -- would otherwise let runOnMainThread() start a queued
+// call inside it, and a nested DzScript::execute deadlocks on a lock the
+// outer one holds. While any ScriptScope is alive, runOnMainThread() holds
+// calls back instead and re-posts them when the outermost scope ends.
+class ScriptScope {
+public:
+    ScriptScope();
+    ~ScriptScope();
+private:
+    ScriptScope(const ScriptScope&);
+    ScriptScope& operator=(const ScriptScope&);
+};
+
+// MAIN THREAD ONLY. True while a ScriptScope is alive.
+bool scriptRunning();
+
 enum Outcome { Completed, GaveUp, PostFailed };
 
 // WORKER THREAD. Takes ownership of call (both references). Posts it to the

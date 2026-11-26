@@ -127,6 +127,9 @@ static ScriptRunResult runDazScript(
 	const QVariantMap& argsMap,
 	const QString& scriptFilename)
 {
+	// Hold back main-thread calls the script's event pumping would otherwise
+	// run nested inside it (daz-script-server-29gd).
+	MainThreadCall::ScriptScope scriptScope;
 	ScriptRunResult r;
 #if DAZ_SDK_MAJOR_VERSION >= 6
 	// On SDK6, evaluate() (needed for a usable completion value — see above)
