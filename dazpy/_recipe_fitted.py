@@ -155,3 +155,22 @@ def read_figures(client: DazClient, labels: list[str],
         out.setdefault(name, [])
         out[name] += [i for i in infos if i.name == name and i not in out[name]]
     return out
+
+
+def figure_labels_script() -> str:
+    """Read-only script listing the label of every non-follower figure in the scene."""
+    # Provisional until the Task 1 live probe confirms these calls.
+    return ScriptBuilder.iife("""// recipe:figure-labels
+var _all = Scene.getNodeList(), _out = [];
+for (var _i = 0; _i < _all.length; _i++) {
+    var n = _all[_i];
+    var f = (typeof n.getFollowTarget === "function") ? n.getFollowTarget() : null;
+    if (n.inherits("DzFigure") && !f) _out.push(n.getLabel());
+}
+return _out;""")
+
+
+def read_figure_labels(client: DazClient) -> list[str]:
+    """Labels of all non-follower figures (for near-match hints only)."""
+    value = client.execute(figure_labels_script()).value or []
+    return [str(x) for x in value]

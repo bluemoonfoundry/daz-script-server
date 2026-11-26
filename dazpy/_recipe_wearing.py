@@ -7,7 +7,7 @@ touches the scene. ``add`` entries need no planning here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from ._content_types import type_matches
 from ._recipe_diff import Conflict
@@ -38,6 +38,8 @@ class WearingPlan:
     errors: tuple[RecipeIssue, ...] = ()
     conflicts: tuple[Conflict, ...] = ()
     warnings: tuple[RecipeIssue, ...] = ()
+    # (actor_path, entry id) pairs that become done without an Unfit (ignored / add-fallback)
+    done_entries: tuple[tuple[str, str], ...] = ()
 
 
 def entry_id(entry: WearingEntry, index: int) -> str:
@@ -54,15 +56,16 @@ def _matches(selector, item: FittedItem) -> bool:
 
 
 def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
-                 live: LiveState) -> WearingPlan:
+                 live: LiveState, scene_labels: Sequence[str] = ()) -> WearingPlan:
     take_overs: list[TakeOver] = []
     unfits: list[Unfit] = []
     errors: list[RecipeIssue] = []
     conflicts: list[Conflict] = []
     warnings: list[RecipeIssue] = []
+    done_entries: list[tuple[str, str]] = []
 
     all_figures = [f for fs in figures.values() for f in fs]
-    all_labels = sorted({f.label for f in all_figures})
+    all_labels = sorted(set(scene_labels) or {f.label for f in all_figures})
     # Nodes belonging to this recipe's own entities (group members are not foreign).
     owned_nodes: set[str] = set()
     for ent in live.entities.values():
@@ -74,9 +77,11 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
         entity = live.entities.get(path)
         record = entity.record if entity is not None else None
         figure: FigureInfo | None = None
+        skip_entries = False
 
         if entity is not None:
             figure = next((f for f in all_figures if f.name == entity.node_name), None)
+            skip_entries = figure is None  # gone/relabelled: the diff reports deleted_in_scene
             requested = (record.source or {}).get("requested") if record else None
             ref = actor_ref(recipe, key)
             if (record is not None and record.adopted_from_scene and requested is not None
@@ -95,6 +100,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                     f"{path}.node", "ambiguous_node",
                     f"{len(matches)} figures are labelled {actor.node!r}; rename all but one.",
                     allowed=tuple(f.name for f in matches)))
+                skip_entries = True
             else:
                 near = next((lb for lb in all_labels if lb.lower() == actor.node.lower()), None)
                 near = near or _closest(actor.node, all_labels)
@@ -103,6 +109,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                         f"{path}.node", "node_not_found",
                         f"No figure labelled {actor.node!r} in the scene and the actor has no asset to create.",
                         suggestion=near))
+                    skip_entries = True
                 elif near is not None:
                     warnings.append(RecipeIssue(
                         f"{path}.node", "similar_node_label",
@@ -115,7 +122,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                  if not (it.record is not None and it.record.recipe_id == recipe.id)]
 
         for index, entry in enumerate(actor.wearing):
-            if entry.op == "add":
+            if skip_entries or entry.op == "add":
                 continue
             eid = entry_id(entry, index)
             if eid in done:
@@ -123,7 +130,9 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
             epath = f"{path}.wearing.{eid}"
             hit = [it for it in items if _matches(entry.target, it)]
             if not hit:
-                if entry.if_missing == "error":
+                if entry.if_missing != "error":
+                    done_entries.append((path, eid))
+                else:
                     code = "replace_target_missing" if entry.op == "replace" else "remove_target_missing"
                     errors.append(RecipeIssue(
                         epath, code,
@@ -147,7 +156,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                         f"{it.label!r} has no known source file; it cannot be restored once removed."))
 
     return WearingPlan(tuple(take_overs), tuple(unfits), tuple(errors), tuple(conflicts),
-                       tuple(warnings))
+                       tuple(warnings), tuple(done_entries))
 
 
 def _describe(selector) -> str:

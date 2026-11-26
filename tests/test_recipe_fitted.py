@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dazpy._recipe_fitted import figures_script, read_figures
+from dazpy._recipe_fitted import figures_script, read_figures, figure_labels_script, read_figure_labels
 from dazpy._result import ExecutionResult
 from recipe_fakes import rec
 
@@ -53,6 +53,20 @@ class FittedTests(unittest.TestCase):
         self.assertIn('!node.inherits("DzFigure") || _follow(node)', s)
         for bad in ("loadScene", "selectNode", "setSelectedNode", "mergeFile", "openFile"):
             self.assertNotIn(bad, s)
+
+
+class FigureLabelTests(unittest.TestCase):
+    def test_script_is_read_only_and_excludes_followers(self):
+        js = figure_labels_script()
+        self.assertIn("DzFigure", js)
+        self.assertIn("getFollowTarget", js)
+        for bad in ("removeNode", "addDataItem", "load("):
+            self.assertNotIn(bad, js)
+
+    def test_read_figure_labels(self):
+        c = MagicMock()
+        c.execute.return_value = ExecutionResult(value=["Abby", "Bob"])
+        self.assertEqual(read_figure_labels(c), ["Abby", "Bob"])
 
 
 if __name__ == "__main__":

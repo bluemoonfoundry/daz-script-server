@@ -172,6 +172,35 @@ class WearingTests(unittest.TestCase):
             p = plan_wearing(recipe(), {"Abby": [fig("Abby")]}, live(**{"actors.abby": owned(r)}))
             self.assertEqual(p.errors, ())
 
+    def test_ignore_and_add_fallback_mark_done(self):
+        r = recipe(remove(HAIR, if_missing="ignore"), replace(HAIR, key="k2", if_missing="add"))
+        p = plan_wearing(r, {"Abby": [fig("Abby")]}, live())
+        self.assertEqual(p.done_entries, (("actors.abby", "remove.0"), ("actors.abby", "k2")))
+        self.assertEqual((p.unfits, p.errors), ((), ()))
+
+    def test_done_fallback_blocks_later_hand_loaded_match(self):
+        rc = dataclasses.replace(rec("r1", "actors.abby"), done=({"entry": "k2"},))
+        r = recipe(replace(HAIR, key="k2", if_missing="add"))
+        p = plan_wearing(r, {"Abby": [fig("Abby", [item("NewHair")])]}, live(**{"actors.abby": owned(rc)}))
+        self.assertEqual((p.unfits, p.errors, p.done_entries), ((), (), ()))
+
+    def test_unresolved_node_skips_entry_errors(self):
+        r = recipe(replace(HAIR))
+        p = plan_wearing(r, {"Abby": [fig("Abby", name="G1"), fig("Abby", name="G2")]}, live())
+        self.assertEqual([e.code for e in p.errors], ["ambiguous_node"])
+        p = plan_wearing(recipe(replace(HAIR), asset=None), {"Abby": []}, live())
+        self.assertEqual([e.code for e in p.errors], ["node_not_found"])
+
+    def test_scene_labels_drive_similar_warning(self):
+        p = plan_wearing(recipe(node="abby"), {"abby": []}, live(), scene_labels=["Abby", "Other"])
+        self.assertEqual([w.code for w in p.warnings], ["similar_node_label"])
+        self.assertIn("Abby", p.warnings[0].message)
+
+    def test_owned_actor_figure_missing_skips_entries(self):
+        r = rec("r1", "actors.abby")
+        p = plan_wearing(recipe(replace(HAIR)), {}, live(**{"actors.abby": owned(r)}))
+        self.assertEqual((p.errors, p.unfits, p.warnings), ((), (), ()))
+
 
 if __name__ == "__main__":
     unittest.main()
