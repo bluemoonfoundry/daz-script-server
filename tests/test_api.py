@@ -999,15 +999,15 @@ class TestArtifacts(unittest.TestCase):
         # The progress stream keeps its terminal event for late subscribers.
         sse = requests.get(f"{BASE_URL}/render/{rid}/progress", headers=auth_headers(),
                            stream=True, timeout=10)
-        terminal = None
+        # Read to EOF: the stream must end cleanly after its terminal event
+        # (7qv4: it used to abort the connection -> ChunkedEncodingError).
         try:
-            for line in sse.iter_lines(decode_unicode=True):
-                if line in ("event: error", "event: complete"):
-                    terminal = line
-                    break
+            events = [line for line in sse.iter_lines(decode_unicode=True)
+                      if line.startswith("event:")]
         finally:
             sse.close()
-        self.assertEqual(terminal, "event: error")
+        self.assertEqual(events[-1:], ["event: error"], events)
+        self.assertNotIn("event: complete", events)
 
 
 class TestArtifactRoots(unittest.TestCase):

@@ -158,6 +158,21 @@ All notable changes to DazScript Server are documented here.
   an `error` event. `POST /render/animation` checks each frame the same way
   and now restores the playhead even when a frame fails. Live-verified on
   Studio 4.24 and 6.26.
+- **A render that doesn't succeed is `failed`, not `completed`** (rzp1). A
+  render job whose script reported `success: false` without a client cancel
+  (stopped from Studio's render window, a figure removed before the job ran)
+  was marked `completed` with job-level `success: true`, and the progress
+  stream sent `complete`. It's now `failed` with `SCRIPT_ERROR` and the
+  script's error (or "Render did not complete (it failed or was stopped in
+  DAZ Studio)"), and the stream sends `error`. A client cancel still gives
+  `cancelled` / `JOB_CANCELLED`. Live-verified on Studio 6.26 by cancelling
+  an Iray render in the UI.
+- **`GET /render/{id}/progress` ends cleanly** (7qv4). After its terminal
+  event the stream aborted the connection instead of sending the final
+  chunk, so clients that read to the end failed with "Response ended
+  prematurely". It could also end before writing a terminal event that was
+  queued behind a progress event. It now ends with the zero-length chunk once
+  every queued event has been sent.
 - **Imported and saved settings use the pane's ranges** (yau7.5.2).
   `SettingsService` validated and clamped some settings against wider
   ranges than the settings pane allowed (timeout 1-300 s, concurrent

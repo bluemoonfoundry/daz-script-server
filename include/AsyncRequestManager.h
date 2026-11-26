@@ -155,9 +155,12 @@ public:
     // stale timeout that happened mid-run selects the *_after_* variants (or
     // CANCELLED when a render was actually aborted) instead of discarding the
     // outcome. outWasCancelled is true only when the final status is CANCELLED.
+    // A render whose script ran but reported success:false without a client
+    // cancel (figure gone, render stopped in Studio's UI) is FAILED (rzp1);
+    // outRenderError then holds its error, and is empty otherwise.
     void markCompleted(const QString& id, bool executed, const QVariant& result,
                        const QStringList& output, const QString& error,
-                       bool& outWasCancelled);
+                       bool& outWasCancelled, QString& outRenderError);
 
     // Mark a request CANCELLED (used for queued requests cancelled before
     // they were dequeued, or for immediate queue removal).

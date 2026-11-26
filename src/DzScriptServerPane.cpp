@@ -1720,8 +1720,19 @@ void DzScriptServerPane::setupRoutes()
 						broker->notifyProgress(requestId, frame, total);
 				}
 				QString event = queue->pop(popMs);
+				// End only once the queue is closed AND drained, so a progress
+				// event queued just before the terminal one can't cut the
+				// stream short. close() follows the final push, so re-pop once
+				// after seeing it closed. End with sink.done() (the zero-length
+				// chunk), not return false, which aborts the connection and
+				// makes clients that read to EOF fail (7qv4).
+				if (event.isEmpty() && queue->isClosed())
+					event = queue->pop(0);
+				if (event.isEmpty() && queue->isClosed()) {
+					sink.done();
+					return true;
+				}
 				if (event.isEmpty()) {
-					if (queue->isClosed()) return false;
 					*idleMs += popMs;
 					if (*idleMs < ServerConfig::SSE_KEEPALIVE_INTERVAL_MS) return true;
 					*idleMs = 0;
@@ -1730,8 +1741,7 @@ void DzScriptServerPane::setupRoutes()
 				}
 				*idleMs = 0;
 				QByteArray payload = event.toUtf8();
-				bool ok = sink.write(payload.constData(), payload.size());
-				return ok && !queue->isClosed();
+				return sink.write(payload.constData(), payload.size());
 			},
 			[this, broker, requestId, queue](bool) {
 				broker->unwatchRequest(requestId, queue);
@@ -3709,11 +3719,14 @@ void DzScriptServerPane::processNextAsyncRequest()
 	m_sceneRevision.fetchAndAddOrdered(1);
 
 	bool wasCancelled = false;
-	m_pAsyncMgr->markCompleted(id, executed, scriptResult, capturedOutput, errorMsg, wasCancelled);
+	QString renderError;  // set when a render ran but didn't succeed (rzp1)
+	m_pAsyncMgr->markCompleted(id, executed, scriptResult, capturedOutput, errorMsg,
+	                           wasCancelled, renderError);
 	m_pAsyncMgr->clearCurrent();
+	const bool succeeded = executed && !wasCancelled && renderError.isEmpty();
 
 	if (isRender && m_pRenderProgress) {
-		if (executed && !wasCancelled) {
+		if (succeeded) {
 			// markCompleted() declared the render's files (every frame for an
 			// animation), so size those rather than the {frame} template path.
 			QStringList outputFiles;
@@ -3731,14 +3744,14 @@ void DzScriptServerPane::processNextAsyncRequest()
 		else
 			m_pRenderProgress->notifyFailed(id,
 				wasCancelled ? ErrorCode::JOB_CANCELLED : ErrorCode::SCRIPT_ERROR,
-				errorMsg, durationMs);
+				renderError.isEmpty() ? errorMsg : renderError, durationMs);
 	}
 
-	m_metrics.recordRequest(executed && !wasCancelled);
+	m_metrics.recordRequest(succeeded);
 
 	appendLog(QString("[%1] [ASYNC] [%2] [%3ms] %4")
 		.arg(QDateTime::currentDateTime().toString("HH:mm:ss"))
-		.arg(wasCancelled ? "CANCEL" : (executed ? "OK" : "ERR"))
+		.arg(wasCancelled ? "CANCEL" : (succeeded ? "OK" : "ERR"))
 		.arg(durationMs)
 		.arg(id));
 

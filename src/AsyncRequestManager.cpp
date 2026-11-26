@@ -925,10 +925,12 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
                                         const QVariant& result,
                                         const QStringList& output,
                                         const QString& error,
-                                        bool& outWasCancelled)
+                                        bool& outWasCancelled,
+                                        QString& outRenderError)
 {
     QMutexLocker locker(&m_mutex);
     outWasCancelled = false;
+    outRenderError.clear();
     if (!m_requests.contains(id)) return;
 
     AsyncRequest& req  = m_requests[id];
@@ -985,6 +987,17 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
         req.status      = REQUEST_CANCELLED;
         req.error       = "Cancelled by client";
         outWasCancelled = true;
+    } else if (renderAborted) {
+        // The script ran but the render didn't succeed and no client asked
+        // to cancel: a figure vanished before it ran, or the render was
+        // stopped or failed inside Studio. That's a failure, not "completed"
+        // (rzp1). The result object stays in scriptResult for history.
+        const QString scriptError = result.toMap().value("error").toString();
+        req.status     = REQUEST_FAILED;
+        req.error      = scriptError.isEmpty()
+            ? QString("Render did not complete (it failed or was stopped in DAZ Studio)")
+            : scriptError;
+        outRenderError = req.error;
     } else if (executed) {
         req.status = req.cancelRequested ? REQUEST_COMPLETED_AFTER_CANCEL_REQUEST
                    : wasStale            ? REQUEST_COMPLETED_AFTER_STALE

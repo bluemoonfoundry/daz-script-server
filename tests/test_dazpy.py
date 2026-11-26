@@ -9865,6 +9865,47 @@ class TestObservationThreadingContract(unittest.TestCase):
         # Only a still-queued request may be marked CANCELLED synchronously.
         self.assertEqual(cancel.count("req.status      = REQUEST_CANCELLED;"), 1)
 
+    def test_render_reporting_failure_without_cancel_is_failed(self):
+        # rzp1: a render script that returns success:false with no client
+        # cancel (figure gone, stopped in Studio's UI) used to be "completed"
+        # and send SSE "complete". It must be FAILED and send "error".
+        start = self.source.index("void AsyncRequestManager::markCompleted")
+        end = self.source.index("void AsyncRequestManager::markCancelled", start)
+        completion = self.source[start:end]
+        cancelled = completion.index("if (req.cancelRequested && renderAborted)")
+        aborted = completion.index("} else if (renderAborted) {")
+        executed = completion.index("} else if (executed) {")
+        self.assertLess(cancelled, aborted)
+        self.assertLess(aborted, executed)
+        branch = completion[aborted:executed]
+        self.assertIn("req.status     = REQUEST_FAILED;", branch)
+        self.assertIn("outRenderError = req.error;", branch)
+
+        pane = (Path(__file__).resolve().parents[1] / "src" / "DzScriptServerPane.cpp").read_text(
+            encoding="utf-8")
+        start = pane.index("void DzScriptServerPane::processNextAsyncRequest()")
+        process = pane[start:pane.index("// Drain the queue", start)]
+        self.assertIn(
+            "const bool succeeded = executed && !wasCancelled && renderError.isEmpty();", process)
+        # Only a succeeded render sends "complete"; everything else "error".
+        self.assertLess(process.index("if (succeeded) {"),
+                        process.index("notifyCompleted("))
+        self.assertIn("renderError.isEmpty() ? errorMsg : renderError", process)
+        self.assertIn("m_metrics.recordRequest(succeeded);", process)
+
+    def test_render_progress_stream_ends_cleanly_after_draining(self):
+        # 7qv4: the stream ends with sink.done() once the queue is closed and
+        # drained; returning false aborted the connection, and ending right
+        # after a write could drop a terminal event still queued.
+        pane = (Path(__file__).resolve().parents[1] / "src" / "DzScriptServerPane.cpp").read_text(
+            encoding="utf-8")
+        start = pane.index("// GET /render/:id/progress")
+        provider = pane[start:pane.index("applyPluginRoutes();", start)]
+        code = "\n".join(line.split("//")[0] for line in provider.splitlines())
+        self.assertIn("sink.done();", code)
+        self.assertNotIn("return false", code)
+        self.assertNotIn("!queue->isClosed();", provider)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
