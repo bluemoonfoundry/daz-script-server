@@ -14,6 +14,7 @@ Notes:
   - Auth tests are skipped when authentication is disabled in the plugin.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -1831,6 +1832,144 @@ class TestStress(unittest.TestCase):
         self.assertIn(r.status_code, (400, 200))
         if r.status_code == 200:
             self.assertFalse(r.json().get("success"))
+
+
+# ─── Scene event stream ?filter= ─────────────────────────────────────────────
+
+class _EventStream:
+    """GET /scene/events in a background thread, collecting event types."""
+
+    def __init__(self, query):
+        self.types = []
+        self._resp = requests.get(f"{BASE_URL}/scene/events{query}", headers=auth_headers(),
+                                  stream=True, timeout=(5, 30))
+        self.status = self._resp.status_code
+        self._thread = threading.Thread(target=self._read, daemon=True)
+        self._thread.start()
+
+    def _read(self):
+        try:
+            for line in self._resp.iter_lines(decode_unicode=True):
+                if line and line.startswith("data:"):
+                    try:
+                        self.types.append(json.loads(line[5:]).get("type"))
+                    except ValueError:
+                        pass
+        except Exception:  # noqa: BLE001 - the stream is closed under us on purpose
+            pass
+
+    def close(self):
+        self._resp.close()
+
+
+class TestSceneEventFilter(unittest.TestCase):
+    """The ?filter= value picks the categories a subscriber receives
+    (SceneEventFilter::parse). Moving the playhead one frame (and back) is the
+    trigger: it fires time.changed and leaves the scene as it was."""
+
+    def _stream_while_moving_frame(self, query):
+        stream = _EventStream(query)
+        self.assertEqual(stream.status, 200)
+        try:
+            time.sleep(0.5)  # subscriber registered before the trigger
+            r = execute(script=iife(
+                "var f = Scene.getFrame(); Scene.setFrame(f + 1); Scene.setFrame(f); return f;"))
+            self.assertTrue(r.json().get("success"), r.text)
+            time.sleep(2.0)
+        finally:
+            stream.close()
+        return stream.types
+
+    def test_time_filter_delivers_time_events(self):
+        self.assertIn("time.changed", self._stream_while_moving_frame("?filter=time"))
+
+    def test_other_category_filter_drops_time_events(self):
+        types = self._stream_while_moving_frame("?filter=selection,camera")
+        self.assertNotIn("time.changed", types)
+
+    def test_unknown_or_empty_filter_means_all(self):
+        for query in ("?filter=bogus", "?filter=", ""):
+            with self.subTest(query=query):
+                self.assertIn("time.changed", self._stream_while_moving_frame(query))
+
+
+# ─── Scene save-copy ─────────────────────────────────────────────────────────
+
+class TestSaveCopy(unittest.TestCase):
+    """POST /scene/save-copy. Only the clean-scene path is exercised live: it is
+    a plain file copy. With unsaved changes the handler re-saves over the
+    scene's own file, so the test skips rather than touch the user's scene."""
+
+    def test_missing_path_is_400(self):
+        r = requests.post(f"{BASE_URL}/scene/save-copy", headers=auth_headers(),
+                          json={}, timeout=10)
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(r.json().get("error_code"), "MISSING_FIELD")
+
+    def test_clean_saved_scene_is_copied(self):
+        state = execute(script=iife(
+            "return {file: Scene.getFilename(), dirty: Scene.needsSave()};")).json()
+        self.assertTrue(state.get("success"), state)
+        if not state["result"]["file"] or state["result"]["dirty"]:
+            self.skipTest("needs a saved scene with no unsaved changes")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "copy.duf").replace("\\", "/")
+            r = requests.post(f"{BASE_URL}/scene/save-copy", headers=auth_headers(),
+                              json={"path": dest}, timeout=60)
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual(body.get("method"), "copy", body)
+            self.assertEqual(body.get("path"), dest)
+            with open(state["result"]["file"], "rb") as a, open(dest, "rb") as b:
+                self.assertEqual(a.read(), b.read())
+
+
+# ─── Geometry frames ─────────────────────────────────────────────────────────
+
+class TestGeometryFrames(unittest.TestCase):
+
+    def test_missing_frames_is_400(self):
+        r = requests.post(f"{BASE_URL}/geometry/frames", headers=auth_headers(),
+                          json={}, timeout=10)
+        self.assertEqual(r.status_code, 400, r.text)
+
+    def test_current_frame_returns_dzgf_payload(self):
+        state = execute(script=iife(
+            "return {frame: Scene.getFrame(), figures: Scene.getNumSkeletons()};")).json()
+        self.assertTrue(state.get("success"), state)
+        if state["result"]["figures"] == 0:
+            self.skipTest("needs a figure in the scene")
+        frame = state["result"]["frame"]
+        r = requests.post(f"{BASE_URL}/geometry/frames", headers=auth_headers(),
+                          json={"frames": [frame], "indices": [0, 1, 2]}, timeout=60)
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        self.assertEqual(r.content[:4], b"DZGF")
+        after = execute(script=iife("return Scene.getFrame();")).json()
+        self.assertEqual(after.get("result"), frame, "playhead must be restored")
+
+
+# ─── Render batch ────────────────────────────────────────────────────────────
+
+class TestRenderBatch(unittest.TestCase):
+    """Two 64x64 viewport variants through POST /render/batch."""
+
+    def test_viewport_batch_completes_each_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outs = [os.path.join(tmp, f"v{i}.png").replace("\\", "/") for i in range(2)]
+            r = requests.post(f"{BASE_URL}/render/batch", headers=auth_headers(), json={
+                "base": {"engine": "viewport", "width": 64, "height": 64},
+                "variants": [{"label": f"v{i}", "output_path": out}
+                             for i, out in enumerate(outs)],
+            }, timeout=10)
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual(body.get("total"), 2, body)
+            self.assertTrue(body.get("batch_id"), body)
+            for rid, out in zip(body["request_ids"], outs):
+                with self.subTest(request_id=rid):
+                    res = get_result(rid, wait=True, timeout=120).json()
+                    self.assertEqual(res.get("status"), "completed", res)
+                    self.assertGreater(os.path.getsize(out), 0)
 
 
 if __name__ == "__main__":
