@@ -1,6 +1,7 @@
 // DzScriptServerPane: companion-plugin registration and the catch-all routes
 // that dispatch to plugin slots (applyPluginRoutes).
 #include "PaneInternal.h"
+#include "PluginRouteSelfTest.h"
 
 // ─── Plugin Route Registration ────────────────────────────────────────────────
 
@@ -66,6 +67,44 @@ void DzScriptServerPane::unregisterPluginRoute(const QString& method, const QStr
 {
 	m_pluginRegistry.unregisterRoute(method, path);
 	refreshCapabilitiesIfRunning();
+}
+
+// ─── Built-in self-test routes (ih7u) ────────────────────────────────────────
+
+namespace {
+struct SelfTestRoute { const char* method; const char* path; const char* slot; };
+// "gone" is registered against a receiver deleted right after, so its
+// QPointer reads null at dispatch; "noslot" names a slot the receiver lacks.
+const SelfTestRoute kSelfTestRoutes[] = {
+	{ "GET",  "/_selftest/plugin-route/:id",    "echo"       },
+	{ "POST", "/_selftest/plugin-route",        "echo"       },
+	{ "PUT",  "/_selftest/plugin-route/:id",    "echo"       },
+	{ "GET",  "/_selftest/plugin-route-bad",    "badStatus"  },
+	{ "GET",  "/_selftest/plugin-route-noslot", "noSuchSlot" },
+};
+const char kSelfTestGonePath[] = "/_selftest/plugin-route-gone";
+} // namespace
+
+bool DzScriptServerPane::setPluginRouteSelfTest(bool enabled)
+{
+	for (const SelfTestRoute& r : kSelfTestRoutes)
+		m_pluginRegistry.unregisterRoute(r.method, r.path);
+	m_pluginRegistry.unregisterRoute("GET", kSelfTestGonePath);
+	delete m_pRouteSelfTest.data();  // QPointer: no-op when null
+
+	bool ok = true;
+	if (enabled) {
+		m_pRouteSelfTest = new PluginRouteSelfTest(this);
+		// The same public entry point a companion plugin calls.
+		for (const SelfTestRoute& r : kSelfTestRoutes)
+			ok = registerPluginRoute(r.method, r.path, m_pRouteSelfTest.data(), r.slot) && ok;
+		QObject* gone = new PluginRouteSelfTest(this);
+		ok = registerPluginRoute("GET", kSelfTestGonePath, gone, "echo") && ok;
+		delete gone;
+	}
+	appendLog(QString("[INFO] Plugin route self-test %1").arg(enabled ? "enabled" : "disabled"));
+	refreshCapabilitiesIfRunning();
+	return ok;
 }
 
 void DzScriptServerPane::applyPluginRoutes()

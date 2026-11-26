@@ -52,9 +52,7 @@
 #include "RenderProgressBroker.h"
 #include "ArtifactThumbnail.h"
 
-// Metatype needed to pass HttpResult through queued calls.
-typedef QPair<int, QByteArray> HttpResult;
-Q_DECLARE_METATYPE(HttpResult)
+#include "HttpResult.h"
 
 // Forward-declare httplib::Server — httplib.h included only in DzScriptServerPane.cpp
 namespace httplib { class Server; struct Request; struct Response; }
@@ -103,6 +101,12 @@ public:
 	                                         const QString& description);
 	// Removes the plugin and every route attributed to it.
 	Q_INVOKABLE void unregisterCompanionPlugin(const QString& name);
+
+	// Registers (true) or removes (false) the built-in test routes under
+	// /_selftest/ that live tests use to exercise the companion-plugin route
+	// path without a second plugin; see PluginRouteSelfTest.h. Returns true
+	// when every route was registered (or removed).
+	Q_INVOKABLE bool setPluginRouteSelfTest(bool enabled);
 
 public slots:
 	Q_INVOKABLE void startServer();
@@ -356,6 +360,7 @@ private:
 	bool registerPluginRouteImpl(const QString& method, const QString& path,
 	                             QObject* receiver, const QString& slotName,
 	                             const QString& pluginName);
+	QPointer<QObject>  m_pRouteSelfTest;         // see setPluginRouteSelfTest()
 
 	QByteArray         m_serverInstanceId;       // see serverInstanceId()
 	mutable QAtomicInt m_sceneRevision;          // see sceneRevision()

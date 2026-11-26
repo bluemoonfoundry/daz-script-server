@@ -1972,6 +1972,136 @@ class TestRenderBatch(unittest.TestCase):
                     self.assertGreater(os.path.getsize(out), 0)
 
 
+def _set_plugin_route_self_test(enabled):
+    """Toggle the pane's built-in /_selftest/ plugin routes via POST /execute.
+    Returns the script result: true/false, or None when the running plugin
+    predates setPluginRouteSelfTest()."""
+    script = (
+        "(function(){var p = MainWindow.getPaneMgr().findPane('DzScriptServerPane');"
+        " if (!p || typeof p.setPluginRouteSelfTest !== 'function') return null;"
+        " return p.setPluginRouteSelfTest(%s);})()" % ("true" if enabled else "false"))
+    r = requests.post(f"{BASE_URL}/execute", headers=auth_headers(),
+                      json={"script": script}, timeout=10)
+    r.raise_for_status()
+    return r.json().get("result")
+
+
+class TestPluginRoutes(unittest.TestCase):
+    """Companion-plugin routes end to end (ih7u): registerPluginRoute(), the
+    catch-all dispatch in PluginRouteBridge.cpp, the read/write chain's auth,
+    and the slot call on the main thread. A companion plugin is a separate
+    Studio plugin, so this uses the pane's built-in receiver
+    (PluginRouteSelfTest.h), registered through the same public API."""
+
+    PREFIX = "/_selftest/plugin-route"
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            enabled = _set_plugin_route_self_test(True)
+        except requests.exceptions.RequestException as e:
+            raise unittest.SkipTest(f"server unreachable: {e}")
+        if enabled is None:
+            raise unittest.SkipTest("plugin predates setPluginRouteSelfTest()")
+        if enabled is not True:
+            raise AssertionError(f"setPluginRouteSelfTest(true) returned {enabled!r}")
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            _set_plugin_route_self_test(False)
+        except requests.exceptions.RequestException:
+            pass
+
+    def call(self, method, path, auth=True, **kwargs):
+        headers = auth_headers() if auth else {}
+        return requests.request(method, f"{BASE_URL}{path}", headers=headers,
+                                timeout=10, **kwargs)
+
+    def echo(self, r):
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["slot"], "echo")
+        self.assertTrue(body["ip"], "slot should receive the client IP")
+        return body["body"]
+
+    def test_get_with_path_param_gets_envelope(self):
+        received = json.loads(self.echo(self.call("GET", f"{self.PREFIX}/abc123")))
+        self.assertEqual(received, {"_pathParams": {"id": "abc123"}, "_body": None})
+
+    def test_path_param_with_quote_stays_valid_json(self):
+        # W10: a '"' or '\' in a segment must not break the envelope.
+        received = json.loads(self.echo(self.call("GET", f"{self.PREFIX}/a%22b%5Cc")))
+        self.assertEqual(received["_pathParams"], {"id": 'a"b\\c'})
+
+    def test_post_without_params_gets_raw_body(self):
+        raw = '{"hello": "world", "n": 3}'
+        received = self.echo(self.call("POST", self.PREFIX, data=raw,
+                                       headers={**auth_headers(),
+                                                "Content-Type": "application/json"}))
+        self.assertEqual(received, raw)
+
+    def test_put_with_params_wraps_body(self):
+        received = json.loads(self.echo(self.call("PUT", f"{self.PREFIX}/k9",
+                                                  json={"value": [1, 2]})))
+        self.assertEqual(received, {"_pathParams": {"id": "k9"}, "_body": {"value": [1, 2]}})
+
+    @unittest.skipUnless(AUTH_ENABLED, "Authentication is disabled in the running plugin")
+    def test_read_and_write_routes_require_auth(self):
+        for method, path in (("GET", f"{self.PREFIX}/x"), ("POST", self.PREFIX),
+                             ("PUT", f"{self.PREFIX}/x")):
+            with self.subTest(method=method):
+                r = self.call(method, path, auth=False, json={})
+                self.assertEqual(r.status_code, 401, r.text)
+                self.assertEqual(r.json()["error_code"], "AUTH_MISSING_TOKEN")
+
+    @unittest.skipUnless(AUTH_ENABLED, "Authentication is disabled in the running plugin")
+    def test_unknown_path_is_404_before_auth(self):
+        r = self.call("GET", f"{self.PREFIX}/x/extra", auth=False)
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertEqual(r.json()["error_code"], "ROUTE_NOT_FOUND")
+
+    def test_unregistered_method_is_404(self):
+        r = self.call("DELETE", f"{self.PREFIX}/x")
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertEqual(r.json()["error_code"], "ROUTE_NOT_FOUND")
+
+    def test_invalid_status_from_slot_is_500(self):
+        r = self.call("GET", "/_selftest/plugin-route-bad")
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["error_code"], "INTERNAL_ERROR")
+        self.assertIn("invalid HTTP status", r.json()["error"] + r.json().get("detail", ""))
+
+    def test_missing_slot_is_500(self):
+        r = self.call("GET", "/_selftest/plugin-route-noslot")
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["error_code"], "INTERNAL_ERROR")
+
+    def test_deleted_receiver_is_503(self):
+        r = self.call("GET", "/_selftest/plugin-route-gone")
+        self.assertEqual(r.status_code, 503, r.text)
+        self.assertEqual(r.json()["error_code"], "SERVER_UNAVAILABLE")
+
+    def test_capabilities_lists_routes(self):
+        caps = self.call("GET", "/capabilities").json()
+        routes = {(r["method"], r["path"]): r for r in caps["plugin_routes"]}
+        self.assertEqual(routes[("GET", f"{self.PREFIX}/:id")]["owner"], "PluginRouteSelfTest")
+        self.assertIn(("POST", self.PREFIX), routes)
+        self.assertTrue(caps["features"]["companion_plugins"])
+
+    def test_disable_removes_routes(self):
+        try:
+            self.assertIs(_set_plugin_route_self_test(False), True)
+            r = self.call("GET", f"{self.PREFIX}/abc")
+            self.assertEqual(r.status_code, 404, r.text)
+            caps = self.call("GET", "/capabilities").json()
+            self.assertFalse(any(p["path"].startswith("/_selftest/")
+                                 for p in caps["plugin_routes"]))
+        finally:
+            self.assertIs(_set_plugin_route_self_test(True), True)
+
+
 if __name__ == "__main__":
     if not TOKEN:
         print(f"NOTE: No token file found at {TOKEN_FILE}")

@@ -6,6 +6,17 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **Live test for companion-plugin routes** (ih7u): `TestPluginRoutes` in
+  `tests/test_api.py` covers `registerPluginRoute()` and the catch-all
+  dispatch from end to end: the path-param envelope (including a `"` in a
+  segment), raw bodies, auth on GET/POST/PUT, 404 before auth for unknown
+  paths, the 500 replies for an invalid status or a missing slot, the 503 for
+  a deleted receiver, `/capabilities` listing, and unregistering. The tests
+  use a built-in receiver (`PluginRouteSelfTest`). The new `Q_INVOKABLE`
+  `DzScriptServerPane::setPluginRouteSelfTest(bool)` registers it under
+  `/_selftest/`, so a test can turn it on and off through `POST /execute`.
+  It is off by default. `HttpResult` moved to its own header,
+  `include/HttpResult.h`.
 - **dazpy and daz-ts camera-move easing:** `shots.Keyframed` takes
   `easing` (`"linear"`, `"smooth"`, `"ease_in"`, `"ease_out"`) and each
   `CameraKeyframe` an `interpolation` (`"linear"`, `"constant"`, `"smooth"`)

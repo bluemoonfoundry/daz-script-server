@@ -13,6 +13,7 @@ add_library(DazScriptServer SHARED
 	HttpJobRoute.cpp
 	PaneRoutes.cpp
 	PluginRouteBridge.cpp
+	PluginRouteSelfTest.cpp
 	ScriptJobs.cpp
 	RenderJobs.cpp
 	RenderScriptBuilder.cpp
@@ -73,6 +74,8 @@ add_library(DazScriptServer SHARED
 	../include/ArtifactRoots.h
 	../include/ScriptRegistry.h
 	../include/PluginRouteRegistry.h
+	../include/PluginRouteSelfTest.h
+	../include/HttpResult.h
 	../include/ArtifactThumbnail.h
 	../include/RequestValidator.h
 	../include/common_version.h
