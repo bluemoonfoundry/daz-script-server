@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Mapping, Sequence
+from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
 
 from ._node import DazNode, NodeIdentifier
 from ._script_builder import ScriptBuilder
@@ -84,7 +85,7 @@ class DazSkeleton(DazNode):
         )
         return list(self._client.execute(script).value or [])
 
-    def bones(self) -> list["DazBone"]:
+    def bones(self) -> list[DazBone]:
         """Return all bones in this skeleton."""
         from ._bone import DazBone
         names = self.bone_names()
@@ -139,7 +140,7 @@ class DazSkeleton(DazNode):
         )
         return self._client.execute(script).value or []
 
-    def find_bone(self, name: str) -> "DazBone":
+    def find_bone(self, name: str) -> DazBone:
         """Find a bone by its internal name.
 
         Args:
@@ -171,7 +172,7 @@ class DazSkeleton(DazNode):
             )
         return DazBone._from_locator(self._client, self._bone_locator(result), result)
 
-    def find_bone_by_label(self, label: str) -> "DazBone":
+    def find_bone_by_label(self, label: str) -> DazBone:
         """Find a bone by its user-visible label.
 
         Args:
@@ -756,7 +757,7 @@ class DazSkeleton(DazNode):
         step_degrees: float = 1.0,
         damping: float = 0.25,
         tolerance: float = 0.15,
-    ) -> "LimbAlignmentResult":
+    ) -> LimbAlignmentResult:
         """Align a hand anchor toward a world-space target point."""
 
         from ._interaction import align_hand_target
@@ -780,7 +781,7 @@ class DazSkeleton(DazNode):
         step_degrees: float = 1.0,
         damping: float = 0.25,
         tolerance: float = 0.15,
-    ) -> "LimbAlignmentResult":
+    ) -> LimbAlignmentResult:
         """Align a foot anchor toward a world-space target point."""
 
         from ._interaction import align_foot_target
@@ -998,7 +999,7 @@ class DazSkeleton(DazNode):
         """)
         return self._client.execute(script).value or {}
 
-    def follow_target(self) -> "DazSkeleton | None":
+    def follow_target(self) -> DazSkeleton | None:
         """Return the IK follow-target skeleton, or ``None`` if not set."""
         script = self._skeleton_body(
             "var t = _node.getFollowTarget(); return t ? t.getName() : null;"

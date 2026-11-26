@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from ._client_aio import AsyncDazClient
 from ._render_api import FigureMorphs, RenderBase, RenderResult, RenderVariant, _base_to_dict, _variant_to_dict

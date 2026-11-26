@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import Mapping, Sequence
 
 from ._recipe_json import to_jsonable
 from ._script_builder import ScriptBuilder
@@ -60,8 +61,8 @@ class CheckFinding:
     code: str
     subject: str
     message: str
-    camera: Optional[str] = None
-    shot: Optional[str] = None
+    camera: str | None = None
+    shot: str | None = None
     sides: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
@@ -128,7 +129,7 @@ def frame_extent(camera: Mapping[str, Any], aspect: float, box: Sequence[float])
 
 def framing_findings(camera: Mapping[str, Any], aspect: float,
                      figures: Sequence[Mapping[str, Any]], *, allow_crop: bool = False,
-                     shot: Optional[str] = None) -> list[CheckFinding]:
+                     shot: str | None = None) -> list[CheckFinding]:
     """Findings for each figure (``{"label", "box"}``) against *camera*.
 
     ``subject_out_of_frame`` (warning): part of the figure's bounding box is
@@ -171,7 +172,7 @@ def framing_findings(camera: Mapping[str, Any], aspect: float,
     return out
 
 
-def _not_in_frame(name: str, camera: str, shot: Optional[str]) -> CheckFinding:
+def _not_in_frame(name: str, camera: str, shot: str | None) -> CheckFinding:
     return CheckFinding("warning", "subject_not_in_frame", name,
                         f"Figure {name!r} is entirely outside camera {camera!r}'s frame.",
                         camera=camera, shot=shot)
@@ -190,8 +191,8 @@ def _light_is_lit(light: Mapping[str, Any]) -> bool:
     return all(v is None or v > 0 for v in (light.get("intensity"), light.get("flux")))
 
 
-def lighting_findings(engine: Optional[str], lights: Sequence[Mapping[str, Any]],
-                      environment: Optional[Mapping[str, Any]], headlamp: bool = False,
+def lighting_findings(engine: str | None, lights: Sequence[Mapping[str, Any]],
+                      environment: Mapping[str, Any] | None, headlamp: bool = False,
                       ) -> list[CheckFinding]:
     """``no_light`` (error) when nothing will light a render on *engine*.
 
@@ -230,7 +231,7 @@ def lighting_findings(engine: Optional[str], lights: Sequence[Mapping[str, Any]]
 _ENGINE_CLASSES = {"DzIrayRenderer": "iray", "DzFilamentRenderer": "filament"}
 
 
-def gather_script(cameras: Sequence[Optional[str]]) -> str:
+def gather_script(cameras: Sequence[str | None]) -> str:
     """One script returning the data every check needs.
 
     *cameras*: labels to look up (``None`` = the active viewport camera). The
@@ -289,7 +290,7 @@ return {{cameras: cams, figures: figures, lights: lights, environment: environme
 """)
 
 
-def gather(client: "DazClient", cameras: Sequence[Optional[str]]) -> dict:
+def gather(client: DazClient, cameras: Sequence[str | None]) -> dict:
     """Run :func:`gather_script`; raises :class:`~dazpy.exceptions.DazError` on no result."""
     data = client.execute(gather_script(cameras)).value
     if not isinstance(data, dict) or "cameras" not in data:
@@ -297,13 +298,13 @@ def gather(client: "DazClient", cameras: Sequence[Optional[str]]) -> dict:
     return data
 
 
-def engine_name(raw: Optional[str]) -> Optional[str]:
+def engine_name(raw: str | None) -> str | None:
     return _ENGINE_CLASSES.get(raw, raw) if raw is not None else None
 
 
 def findings_for_camera(data: Mapping[str, Any], cam: Mapping[str, Any], *,
-                        aspect: Optional[float] = None, allow_crop: bool = False,
-                        shot: Optional[str] = None) -> list[CheckFinding]:
+                        aspect: float | None = None, allow_crop: bool = False,
+                        shot: str | None = None) -> list[CheckFinding]:
     """Framing findings for one gathered camera (``camera_not_found`` if missing)."""
     if cam.get("missing"):
         return [CheckFinding("error", "camera_not_found", cam["label"],
@@ -313,8 +314,8 @@ def findings_for_camera(data: Mapping[str, Any], cam: Mapping[str, Any], *,
                             allow_crop=allow_crop, shot=shot)
 
 
-def check_scene(client: "DazClient", camera: Optional[str] = None, *,
-                engine: Optional[str] = None, resolution: Optional[tuple[int, int]] = None,
+def check_scene(client: DazClient, camera: str | None = None, *,
+                engine: str | None = None, resolution: tuple[int, int] | None = None,
                 allow_crop: bool = False) -> CheckReport:
     """See :meth:`dazpy.DazScene.check`."""
     data = gather(client, [camera])

@@ -50,7 +50,7 @@ def look_at_euler(from_pos: Vec3, to_pos: Vec3) -> tuple[float, float, float]:
     return (pitch, yaw, 0.0)
 
 
-def resolve_target(target: "Vec3 | DazNode", vertical_offset_cm: float = 0.0) -> Vec3:
+def resolve_target(target: Vec3 | DazNode, vertical_offset_cm: float = 0.0) -> Vec3:
     """Resolve *target* to a :class:`~dazpy.math3.Vec3`, raised by *vertical_offset_cm*.
 
     If *target* is already a :class:`~dazpy.math3.Vec3`, it is used as-is

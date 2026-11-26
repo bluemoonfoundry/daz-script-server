@@ -56,7 +56,8 @@ accepted hand deletion) produce an ``unknown_resolution`` warning.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
+from collections.abc import Mapping
 
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity

@@ -148,6 +148,11 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy recipe rollback restores every entity's ownership record.** When
+  `apply_recipe` failed after writing records for several existing entities,
+  rollback restored the last entity's record onto the last node once per
+  entity (a late-binding closure), leaving the others with the new, unapplied
+  record. Each undo now binds its own node and record. Found by ruff B023.
 - **A render that writes no file now fails** (alaz). `POST /render` to an
   unwritable path (e.g. a folder on an unmapped drive) with the viewport
   engine reported `completed` and an SSE `complete` event with

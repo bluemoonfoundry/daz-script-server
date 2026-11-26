@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ._client import DazClient

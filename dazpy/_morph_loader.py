@@ -109,7 +109,7 @@ _LOADER_JS = """
 """
 
 
-def load_morph(node: "DazNode", obj_path: str, *, control_node: "DazNode | None" = None,
+def load_morph(node: DazNode, obj_path: str, *, control_node: DazNode | None = None,
                **options: Any) -> MorphLoadResult:
     """See :meth:`dazpy.DazNode.load_morph`."""
     from .exceptions import DazError, NodeNotFoundError

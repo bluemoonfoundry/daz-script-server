@@ -370,7 +370,7 @@ class FakeScene:
     :class:`FakeOps`) is what it writes through.
     """
 
-    def __init__(self, live: LiveState, missing_files=(), ops: "FakeOps | None" = None) -> None:
+    def __init__(self, live: LiveState, missing_files=(), ops: FakeOps | None = None) -> None:
         self.live = live
         self.ops = ops or FakeOps()
         self.missing = set(missing_files)
@@ -388,7 +388,7 @@ class FakeScene:
 
 
 def fake_scene(live: LiveState | None = None, *, missing_files=(),
-               ops: "FakeOps | None" = None) -> FakeScene:
+               ops: FakeOps | None = None) -> FakeScene:
     return FakeScene(live if live is not None else empty_live(), missing_files, ops)
 
 

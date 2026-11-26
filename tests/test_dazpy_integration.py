@@ -391,7 +391,7 @@ class TestDazNodeOnFirstNode(unittest.TestCase):
 
     def test_numeric_properties_values_are_numeric(self):
         props = self.node.numeric_properties()
-        for label, value in list(props.items())[:5]:  # spot-check first 5
+        for _label, value in list(props.items())[:5]:  # spot-check first 5
             self.assertIsInstance(value, (int, float))
 
     def test_class_name_is_string(self):

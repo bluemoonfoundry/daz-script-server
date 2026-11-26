@@ -38,7 +38,8 @@ import math
 import random
 import re
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence as Seq, Tuple, Union
+from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable, Mapping, Sequence as Seq
 
 from .math3 import Quat, Vec3
 from ._shot_geometry import spherical_offset
@@ -53,7 +54,7 @@ if TYPE_CHECKING:
     from ._scene import DazScene
 
 Positions = Mapping[str, Vec3]
-Rotation = Tuple[float, float, float]
+Rotation = tuple[float, float, float]
 
 #: Eye height above a standing Genesis-scale actor's root (cm); the
 #: ``close_up`` anchor of :data:`~dazpy.shots.SHOT_SIZES`.
@@ -93,9 +94,9 @@ def _slug(text: str | int) -> str:
     return s or "x"
 
 
-def shot_name(kind: str, subject: Optional[str] = None, over: Optional[str] = None, *,
-              tag: Optional[str] = None, scene: Optional[Union[int, str]] = None,
-              index: Optional[int] = None) -> str:
+def shot_name(kind: str, subject: str | None = None, over: str | None = None, *,
+              tag: str | None = None, scene: int | str | None = None,
+              index: int | None = None) -> str:
     """A consistent shot id: ``[SC<scene>_][<index>_]<ABBR>[_<tag>][_<subject>][_over_<over>]``.
 
     *kind* is a key of :data:`SHOT_ABBREVIATIONS` (a shot kind or size); any
@@ -135,7 +136,7 @@ def _eye(root: Vec3, eye_height: float = EYE_HEIGHT_CM) -> Vec3:
     return Vec3(root.x, root.y + eye_height, root.z)
 
 
-def _screen_right(position: Vec3, aim: Vec3) -> Optional[Vec3]:
+def _screen_right(position: Vec3, aim: Vec3) -> Vec3 | None:
     right = (aim - position).cross(_UP)
     return right.normalize() if right.length() > 1e-9 else None
 
@@ -163,7 +164,7 @@ def compose_aim(position: Vec3, target: Vec3, screen_x: float, focal_length: flo
     return target - right * (screen_x * half_width)
 
 
-def _lens(lens: Optional[Union[Lens, float]], family: str) -> Lens:
+def _lens(lens: Lens | float | None, family: str) -> Lens:
     if lens is None:
         return Lens(focal_length=DEFAULT_LENSES[family])
     return Lens(focal_length=float(lens)) if isinstance(lens, (int, float)) else lens
@@ -203,7 +204,7 @@ class LineOfAction:
             raise ValueError(f"{self.a!r} and {self.b!r} stand on the same spot; no line of action")
 
     @classmethod
-    def between(cls, positions: Positions, a: str, b: str, side: int = 1) -> "LineOfAction":
+    def between(cls, positions: Positions, a: str, b: str, side: int = 1) -> LineOfAction:
         """The line between keys *a* and *b* of *positions*."""
         return cls(a, b, _pos(positions, a), _pos(positions, b), side)
 
@@ -226,7 +227,7 @@ class LineOfAction:
     def separation(self) -> float:
         return _flat(self.b_pos - self.a_pos).length()
 
-    def flipped(self) -> "LineOfAction":
+    def flipped(self) -> LineOfAction:
         """The same line with cameras on the other side (a deliberate cross)."""
         return replace(self, side=-self.side)
 
@@ -291,7 +292,7 @@ BODY_WIDTH_CM = 60.0
 
 
 def _fit_distance(size: str, separation_cm: float, focal_length: float, frame_width_mm: float,
-                  aspect: float) -> Optional[float]:
+                  aspect: float) -> float | None:
     """The distance that fits two actors *separation_cm* apart across the frame,
     or ``None`` when the size's own fitted distance already does (which keeps
     the shot recipe-expressible)."""
@@ -302,8 +303,8 @@ def _fit_distance(size: str, separation_cm: float, focal_length: float, frame_wi
 
 # ---- shot types -----------------------------------------------------------
 
-def _side_framing(line: LineOfAction, family: str, size: str, *, lens: Optional[Union[Lens, float]],
-                  elevation_deg: Optional[float], id: Optional[str], frame_range: Optional[Tuple[int, int]],
+def _side_framing(line: LineOfAction, family: str, size: str, *, lens: Lens | float | None,
+                  elevation_deg: float | None, id: str | None, frame_range: tuple[int, int] | None,
                   frame_width_mm: float, aspect: float, **shot_kw: Any) -> Shot:
     ln = _lens(lens, family)
     framing = Framing(
@@ -315,24 +316,24 @@ def _side_framing(line: LineOfAction, family: str, size: str, *, lens: Optional[
 
 
 def establishing(line: LineOfAction, *, size: str = "extreme_wide", elevation_deg: float = 10.0,
-                 lens: Optional[Union[Lens, float]] = None, id: Optional[str] = None,
-                 frame_range: Optional[Tuple[int, int]] = None, frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
+                 lens: Lens | float | None = None, id: str | None = None,
+                 frame_range: tuple[int, int] | None = None, frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
                  aspect: float = DEFAULT_ASPECT) -> Shot:
     """A wide, slightly high shot of both actors from the camera side of the line."""
     return _side_framing(line, "establishing", size, lens=lens, elevation_deg=elevation_deg, id=id,
                          frame_range=frame_range, frame_width_mm=frame_width_mm, aspect=aspect)
 
 
-def master(line: LineOfAction, *, size: str = "wide", lens: Optional[Union[Lens, float]] = None,
-           id: Optional[str] = None, frame_range: Optional[Tuple[int, int]] = None,
+def master(line: LineOfAction, *, size: str = "wide", lens: Lens | float | None = None,
+           id: str | None = None, frame_range: tuple[int, int] | None = None,
            frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT) -> Shot:
     """The master: both actors, perpendicular to the line, at eye level."""
     return _side_framing(line, "master", size, lens=lens, elevation_deg=None, id=id,
                          frame_range=frame_range, frame_width_mm=frame_width_mm, aspect=aspect)
 
 
-def two_shot(line: LineOfAction, *, size: str = "medium_wide", lens: Optional[Union[Lens, float]] = None,
-             id: Optional[str] = None, frame_range: Optional[Tuple[int, int]] = None,
+def two_shot(line: LineOfAction, *, size: str = "medium_wide", lens: Lens | float | None = None,
+             id: str | None = None, frame_range: tuple[int, int] | None = None,
              frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT) -> Shot:
     """A two-shot: both actors at *size* (widened if they stand too far apart to fit)."""
     return _side_framing(line, "two_shot", size, lens=lens, elevation_deg=None, id=id,
@@ -340,9 +341,9 @@ def two_shot(line: LineOfAction, *, size: str = "medium_wide", lens: Optional[Un
 
 
 def single(line: LineOfAction, subject: str, *, size: str = "medium_close_up",
-           lens: Optional[Union[Lens, float]] = None, offset_deg: float = SINGLE_OFFSET_DEG,
+           lens: Lens | float | None = None, offset_deg: float = SINGLE_OFFSET_DEG,
            angle: str = "eye_level", headroom: bool = False, lead: bool = True,
-           id: Optional[str] = None, frame_range: Optional[Tuple[int, int]] = None) -> Shot:
+           id: str | None = None, frame_range: tuple[int, int] | None = None) -> Shot:
     """A clean single of *subject*, from near their partner's eyeline on the camera side.
 
     Args:
@@ -365,11 +366,11 @@ def single(line: LineOfAction, subject: str, *, size: str = "medium_close_up",
 
 
 def over_the_shoulder(line: LineOfAction, foreground: str, subject: str, *,
-                      lens: Optional[Union[Lens, float]] = None, back_cm: float = OTS_BACK_CM,
+                      lens: Lens | float | None = None, back_cm: float = OTS_BACK_CM,
                       side_cm: float = OTS_SIDE_CM, drop_cm: float = OTS_DROP_CM,
                       eye_height: float = EYE_HEIGHT_CM, compose: bool = True,
                       frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT,
-                      id: Optional[str] = None, frame_range: Optional[Tuple[int, int]] = None) -> Shot:
+                      id: str | None = None, frame_range: tuple[int, int] | None = None) -> Shot:
     """Over *foreground*'s shoulder onto *subject*, from the camera side of the line.
 
     The camera stands *back_cm* behind the foreground actor's head and
@@ -396,19 +397,19 @@ def over_the_shoulder(line: LineOfAction, foreground: str, subject: str, *,
                 camera=Placement(position=position, look_at=aim), lens=ln, frame_range=frame_range)
 
 
-def shot_reverse_shot(line: LineOfAction, *, lens: Optional[Union[Lens, float]] = None,
-                      frame_ranges: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
-                      **ots_kw: Any) -> Tuple[Shot, Shot]:
+def shot_reverse_shot(line: LineOfAction, *, lens: Lens | float | None = None,
+                      frame_ranges: tuple[tuple[int, int], tuple[int, int]] | None = None,
+                      **ots_kw: Any) -> tuple[Shot, Shot]:
     """The OTS pair: onto *b* over *a*, and the reverse onto *a* over *b*, both on the line's side."""
     r1, r2 = frame_ranges if frame_ranges is not None else (None, None)
     return (over_the_shoulder(line, line.a, line.b, lens=lens, frame_range=r1, **ots_kw),
             over_the_shoulder(line, line.b, line.a, lens=lens, frame_range=r2, **ots_kw))
 
 
-def pov(positions: Positions, viewer: str, target: Union[str, Vec3], *,
-        lens: Optional[Union[Lens, float]] = None, eye_height: float = EYE_HEIGHT_CM,
-        forward_cm: float = 10.0, id: Optional[str] = None,
-        frame_range: Optional[Tuple[int, int]] = None) -> Shot:
+def pov(positions: Positions, viewer: str, target: str | Vec3, *,
+        lens: Lens | float | None = None, eye_height: float = EYE_HEIGHT_CM,
+        forward_cm: float = 10.0, id: str | None = None,
+        frame_range: tuple[int, int] | None = None) -> Shot:
     """*viewer*'s point of view: from their eyes toward *target* (an actor key's eyes, or a point)."""
     aim = _eye(_pos(positions, target), eye_height) if isinstance(target, str) else target
     eye = _eye(_pos(positions, viewer), eye_height)
@@ -421,9 +422,9 @@ def pov(positions: Positions, viewer: str, target: Union[str, Vec3], *,
 
 
 def insert(point: Vec3, *, size: str = "extreme_close_up", azimuth_deg: float = 0.0,
-           elevation_deg: float = 30.0, line: Optional[LineOfAction] = None,
-           lens: Optional[Union[Lens, float]] = None, name: str = "detail", id: Optional[str] = None,
-           frame_range: Optional[Tuple[int, int]] = None) -> Shot:
+           elevation_deg: float = 30.0, line: LineOfAction | None = None,
+           lens: Lens | float | None = None, name: str = "detail", id: str | None = None,
+           frame_range: tuple[int, int] | None = None) -> Shot:
     """An insert: a tight shot of a detail at *point* (a prop, a hand), looking down at it.
 
     With *line*, the camera azimuth comes from the line's camera side
@@ -442,7 +443,7 @@ def _wrap_deg(a: float) -> float:
     return (a + 360.0 if a < 0 else a) - 180.0
 
 
-def euler_from_quaternion(q: Union[Quat, Mapping[str, float]]) -> Rotation:
+def euler_from_quaternion(q: Quat | Mapping[str, float]) -> Rotation:
     """Camera Euler ``(x, y, z)`` degrees for Studio's world rotation quaternion.
 
     *q* holds DzQuat components: the ``{"x", "y", "z", "w"}`` dict
@@ -514,13 +515,13 @@ MOVE_DEFAULTS: Mapping[str, float] = {
     "pedestal_up": 50.0, "pedestal_down": 50.0, "crane_up": 100.0, "crane_down": 100.0,
     "pan_left": 45.0, "pan_right": 45.0, "tilt_up": 20.0, "tilt_down": 20.0, "handheld": 2.0,
 }
-CAMERA_MOVES: Tuple[str, ...] = tuple(MOVE_DEFAULTS)
+CAMERA_MOVES: tuple[str, ...] = tuple(MOVE_DEFAULTS)
 
 
-def camera_move(kind: str, position: Vec3, rotation: Union[Rotation, Quat, Mapping[str, float]], *,
+def camera_move(kind: str, position: Vec3, rotation: Rotation | Quat | Mapping[str, float], *,
                 start: int, end: int,
-                amount: Optional[float] = None, lens: Optional[Union[Lens, float]] = None,
-                id: Optional[str] = None, seed: int = 0, step: int = 3) -> Shot:
+                amount: float | None = None, lens: Lens | float | None = None,
+                id: str | None = None, seed: int = 0, step: int = 3) -> Shot:
     """A camera move from the pose (*position*, *rotation*), keyed at *start* and *end*.
 
     *rotation* is Euler degrees, or Studio's world quaternion
@@ -550,7 +551,7 @@ def camera_move(kind: str, position: Vec3, rotation: Union[Rotation, Quat, Mappi
     track = flat.normalize() if flat.length() > 1e-6 else forward
     right = track.cross(_UP).normalize() if flat.length() > 1e-6 else Vec3(1.0, 0.0, 0.0)
 
-    keys: List[CameraKeyframe]
+    keys: list[CameraKeyframe]
     if kind == "handheld":
         rng = random.Random(seed)
         keys = [CameraKeyframe(start, position, rotation=rot)]
@@ -580,15 +581,15 @@ def camera_move(kind: str, position: Vec3, rotation: Union[Rotation, Quat, Mappi
 
 
 def _size_pose(positions: Positions, subject: str, size: str, azimuth_deg: float, focal_length: float,
-               frame_width_mm: float, aspect: float) -> Tuple[Vec3, Vec3]:
+               frame_width_mm: float, aspect: float) -> tuple[Vec3, Vec3]:
     framing = Framing(subjects=(subject,), size=size, azimuth_deg=azimuth_deg)
     return framing_transform([(_pos(positions, subject), True)], framing, focal_length,
                              frame_width_mm=frame_width_mm, aspect=aspect)
 
 
 def push_in(positions: Positions, subject: str, *, start: int, end: int, from_size: str = "wide",
-            to_size: str = "close_up", azimuth_deg: float = 0.0, line: Optional[LineOfAction] = None,
-            lens: Optional[Union[Lens, float]] = None, id: Optional[str] = None,
+            to_size: str = "close_up", azimuth_deg: float = 0.0, line: LineOfAction | None = None,
+            lens: Lens | float | None = None, id: str | None = None,
             frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT) -> Shot:
     """A dolly from *from_size* to *to_size* on *subject*, re-aiming as the frame tightens.
 
@@ -619,9 +620,9 @@ def pull_out(positions: Positions, subject: str, *, start: int, end: int, from_s
 
 def arc(subject: str, *, start: int, end: int, radius: float = 250.0, start_azimuth_deg: float = 0.0,
         end_azimuth_deg: float = 360.0, elevation_deg: float = 10.0,
-        target_offset_cm: float = SHOT_SIZES["medium"][1], lens: Optional[Union[Lens, float]] = None,
-        id: Optional[str] = None, step_deg: Optional[float] = None,
-        positions: Optional[Positions] = None) -> Shot:
+        target_offset_cm: float = SHOT_SIZES["medium"][1], lens: Lens | float | None = None,
+        id: str | None = None, step_deg: float | None = None,
+        positions: Positions | None = None) -> Shot:
     """An arc (orbit) around actor *subject*.
 
     By default it is an :class:`~dazpy.shots.Orbit`, baked one placement per
@@ -661,7 +662,7 @@ def arc(subject: str, *, start: int, end: int, radius: float = 250.0, start_azim
 
 # ---- focus ----------------------------------------------------------------
 
-def focus_point(target: Union[str, Vec3], positions: Optional[Positions] = None,
+def focus_point(target: str | Vec3, positions: Positions | None = None,
                 eye_height: float = EYE_HEIGHT_CM) -> Vec3:
     """Where to focus on *target*: an actor key's eyes, or a point as given."""
     if isinstance(target, str):
@@ -671,8 +672,8 @@ def focus_point(target: Union[str, Vec3], positions: Optional[Positions] = None,
     return target
 
 
-def rack_focus(camera_position: Vec3, from_target: Union[str, Vec3, float], to_target: Union[str, Vec3, float],
-               *, start: int, end: int, positions: Optional[Positions] = None, hold_from: int = 0,
+def rack_focus(camera_position: Vec3, from_target: str | Vec3 | float, to_target: str | Vec3 | float,
+               *, start: int, end: int, positions: Positions | None = None, hold_from: int = 0,
                hold_to: int = 0, eye_height: float = EYE_HEIGHT_CM) -> FocusPull:
     """A rack focus from *from_target* to *to_target* between *start* and *end*.
 
@@ -683,7 +684,7 @@ def rack_focus(camera_position: Vec3, from_target: Union[str, Vec3, float], to_t
     if end <= start:
         raise ValueError("end must be > start")
 
-    def dist(t: Union[str, Vec3, float]) -> float:
+    def dist(t: str | Vec3 | float) -> float:
         if isinstance(t, (int, float)):
             return float(t)
         return max(1.0, camera_position.distance(focus_point(t, positions, eye_height)))
@@ -706,7 +707,7 @@ CIRCLE_OF_CONFUSION_MM = 0.03
 
 
 def depth_of_field_limits(focal_length: float, f_stop: float, focal_distance: float, *,
-                          coc_mm: float = CIRCLE_OF_CONFUSION_MM) -> Tuple[float, Optional[float]]:
+                          coc_mm: float = CIRCLE_OF_CONFUSION_MM) -> tuple[float, float | None]:
     """``(near, far)`` limits of acceptable sharpness (cm) for a lens focused at *focal_distance* (cm).
 
     Thin-lens hyperfocal approximation; *far* is ``None`` (infinity) at or
@@ -721,14 +722,14 @@ def depth_of_field_limits(focal_length: float, f_stop: float, focal_distance: fl
     return near / 10.0, None if far is None else far / 10.0
 
 
-def camera_position(shot: Shot, positions: Optional[Positions] = None, *,
+def camera_position(shot: Shot, positions: Positions | None = None, *,
                     frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT) -> Vec3:
     """Where *shot*'s camera stands (its first position, for a move)."""
     return camera_positions(shot, positions, frame_width_mm=frame_width_mm, aspect=aspect)[0]
 
 
-def with_rack_focus(shot: Shot, from_target: Union[str, Vec3, float], to_target: Union[str, Vec3, float], *,
-                    start: int, end: int, positions: Optional[Positions] = None, f_stop: Optional[float] = None,
+def with_rack_focus(shot: Shot, from_target: str | Vec3 | float, to_target: str | Vec3 | float, *,
+                    start: int, end: int, positions: Positions | None = None, f_stop: float | None = None,
                     **kw: Any) -> Shot:
     """*shot* with a :func:`rack_focus` measured from its camera position, depth of field on."""
     pull = rack_focus(camera_position(shot, positions), from_target, to_target, start=start, end=end,
@@ -739,7 +740,7 @@ def with_rack_focus(shot: Shot, from_target: Union[str, Vec3, float], to_target:
 
 # ---- continuity -----------------------------------------------------------
 
-def _resolve(t: Any, positions: Optional[Positions], offset: float) -> Vec3:
+def _resolve(t: Any, positions: Positions | None, offset: float) -> Vec3:
     if isinstance(t, str):
         if positions is None:
             raise ValueError(f"target {t!r} is a key but no positions were given")
@@ -754,15 +755,15 @@ def _resolve(t: Any, positions: Optional[Positions], offset: float) -> Vec3:
     return Vec3(v.x, v.y + offset, v.z)
 
 
-def _framing_pose(f: Framing, focal_length: float, positions: Optional[Positions], frame_width_mm: float,
-                  aspect: float) -> Tuple[Vec3, Vec3]:
+def _framing_pose(f: Framing, focal_length: float, positions: Positions | None, frame_width_mm: float,
+                  aspect: float) -> tuple[Vec3, Vec3]:
     points = [(_resolve(s, positions, 0.0), not isinstance(s, Vec3)) for s in f.subjects]
     return framing_transform(points, f, focal_length, frame_width_mm=frame_width_mm, aspect=aspect)
 
 
-def camera_positions(shot: Shot, positions: Optional[Positions] = None, *,
+def camera_positions(shot: Shot, positions: Positions | None = None, *,
                      frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM, aspect: float = DEFAULT_ASPECT,
-                     orbit_step_deg: float = 10.0) -> List[Vec3]:
+                     orbit_step_deg: float = 10.0) -> list[Vec3]:
     """Every position *shot*'s camera passes through: one for a static shot, each
     waypoint of a :class:`~dazpy.shots.Keyframed` move, samples along an
     :class:`~dazpy.shots.Orbit`."""
@@ -783,8 +784,8 @@ def camera_positions(shot: Shot, positions: Optional[Positions] = None, *,
     return [c.position]
 
 
-def _static_pose(shot: Shot, positions: Optional[Positions], frame_width_mm: float,
-                 aspect: float) -> Optional[Tuple[Vec3, Vec3]]:
+def _static_pose(shot: Shot, positions: Positions | None, frame_width_mm: float,
+                 aspect: float) -> tuple[Vec3, Vec3] | None:
     if shot.movement is not None:
         return None
     c = shot.camera
@@ -805,12 +806,12 @@ class ContinuityIssue:
     kind: str
     shot_id: str
     message: str
-    other_shot_id: Optional[str] = None
+    other_shot_id: str | None = None
 
 
-def check_axis(shots: Iterable[Shot], line: LineOfAction, positions: Optional[Positions] = None, *,
+def check_axis(shots: Iterable[Shot], line: LineOfAction, positions: Positions | None = None, *,
                tolerance_cm: float = 1.0, frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
-               aspect: float = DEFAULT_ASPECT) -> List[ContinuityIssue]:
+               aspect: float = DEFAULT_ASPECT) -> list[ContinuityIssue]:
     """Shots whose camera stands (or moves) on the wrong side of *line*.
 
     A camera on the line itself (a neutral shot) is allowed.
@@ -827,10 +828,10 @@ def check_axis(shots: Iterable[Shot], line: LineOfAction, positions: Optional[Po
     return issues
 
 
-def check_thirty_degree(shots: Seq[Shot], positions: Optional[Positions] = None, *, min_angle_deg: float = 30.0,
+def check_thirty_degree(shots: Seq[Shot], positions: Positions | None = None, *, min_angle_deg: float = 30.0,
                         same_subject_cm: float = 50.0, size_ratio: float = 1.33,
                         frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
-                        aspect: float = DEFAULT_ASPECT) -> List[ContinuityIssue]:
+                        aspect: float = DEFAULT_ASPECT) -> list[ContinuityIssue]:
     """Consecutive static shots (in cut order) of the same subject whose camera
     angle changes by less than *min_angle_deg* without a clear size change --
     a jump cut.
@@ -856,8 +857,8 @@ def check_thirty_degree(shots: Seq[Shot], positions: Optional[Positions] = None,
     return issues
 
 
-def check_continuity(shots: Seq[Shot], positions: Optional[Positions] = None, *,
-                     line: Optional[LineOfAction] = None, **kw: Any) -> List[ContinuityIssue]:
+def check_continuity(shots: Seq[Shot], positions: Positions | None = None, *,
+                     line: LineOfAction | None = None, **kw: Any) -> list[ContinuityIssue]:
     """:func:`check_axis` (when *line* is given) plus :func:`check_thirty_degree`, in cut order."""
     shots = list(shots)
     geo = {k: kw[k] for k in ("frame_width_mm", "aspect") if k in kw}
@@ -866,7 +867,7 @@ def check_continuity(shots: Seq[Shot], positions: Optional[Positions] = None, *,
 
 
 def plan_line(plan: CoveragePlan, positions: Positions, *, frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
-              aspect: float = DEFAULT_ASPECT) -> Optional[LineOfAction]:
+              aspect: float = DEFAULT_ASPECT) -> LineOfAction | None:
     """The plan's line of action, its side taken from the first shot that is off the line."""
     if plan.axis is None:
         return None
@@ -879,11 +880,11 @@ def plan_line(plan: CoveragePlan, positions: Positions, *, frame_width_mm: float
     return line
 
 
-def check_plan(plan: CoveragePlan, positions: Positions, **kw: Any) -> List[ContinuityIssue]:
+def check_plan(plan: CoveragePlan, positions: Positions, **kw: Any) -> list[ContinuityIssue]:
     """:func:`check_continuity` for every sequence of *plan*, against the plan's axis."""
     geo = {k: kw[k] for k in ("frame_width_mm", "aspect") if k in kw}
     line = plan_line(plan, positions, **geo)
-    issues: List[ContinuityIssue] = []
+    issues: list[ContinuityIssue] = []
     for seq in plan.sequences:
         issues += check_continuity(seq.shots, positions, line=line, **kw)
     return issues
@@ -892,7 +893,7 @@ def check_plan(plan: CoveragePlan, positions: Positions, **kw: Any) -> List[Cont
 # ---- coverage -------------------------------------------------------------
 
 #: :func:`subject_coverage` presets: (kind tag, size, angle, azimuth offset deg, lens mm).
-COVERAGE_PRESETS: Mapping[str, Tuple[Tuple[Optional[str], str, str, float, float], ...]] = {
+COVERAGE_PRESETS: Mapping[str, tuple[tuple[str | None, str, str, float, float], ...]] = {
     "standard": ((None, "wide", "eye_level", 0.0, 35.0), (None, "medium", "eye_level", 0.0, 50.0),
                  (None, "close_up", "eye_level", 0.0, 85.0)),
     "interview": ((None, "medium", "eye_level", 0.0, 50.0), ("left", "medium_close_up", "eye_level", -30.0, 85.0),
@@ -905,7 +906,7 @@ COVERAGE_PRESETS: Mapping[str, Tuple[Tuple[Optional[str], str, str, float, float
 
 
 def subject_coverage(subject: str, *, preset: str = "standard", azimuth_deg: float = 0.0,
-                     plan_id: Optional[str] = None, headroom: bool = False) -> CoveragePlan:
+                     plan_id: str | None = None, headroom: bool = False) -> CoveragePlan:
     """Single-actor coverage from :data:`COVERAGE_PRESETS`, around *azimuth_deg* (0 = the actor's ``+Z`` side)."""
     if preset not in COVERAGE_PRESETS:
         raise ValueError(f"unknown coverage preset {preset!r}; valid: {', '.join(COVERAGE_PRESETS)}")
@@ -919,7 +920,7 @@ def subject_coverage(subject: str, *, preset: str = "standard", azimuth_deg: flo
     return CoveragePlan(id=pid, subjects=(subject,), sequences=(Sequence(id=pid, shots=shots),))
 
 
-def dialogue_coverage(line: LineOfAction, *, plan_id: Optional[str] = None,
+def dialogue_coverage(line: LineOfAction, *, plan_id: str | None = None,
                       include: Iterable[str] = ("master", "two_shot", "ots", "singles"),
                       single_size: str = "close_up", **kw: Any) -> CoveragePlan:
     """Standard two-actor coverage on one side of *line*: master, two-shot,
@@ -931,7 +932,7 @@ def dialogue_coverage(line: LineOfAction, *, plan_id: Optional[str] = None,
     unknown = set(include) - {"master", "two_shot", "ots", "singles"}
     if unknown:
         raise ValueError(f"unknown coverage part(s): {sorted(unknown)}")
-    shots: List[Shot] = []
+    shots: list[Shot] = []
     if "master" in include:
         shots.append(master(line, **kw))
     if "two_shot" in include:
@@ -953,7 +954,7 @@ class DialogueBeat:
     speaker: str
     start: int
     end: int
-    line: Optional[str] = None
+    line: str | None = None
 
     def __post_init__(self) -> None:
         if self.end < self.start:
@@ -962,7 +963,7 @@ class DialogueBeat:
 
 def conversation(line: LineOfAction, beats: Iterable[DialogueBeat], *, plan_id: str = "conversation",
                  style: str = "ots", establish_frames: int = 0, single_size: str = "medium_close_up",
-                 lens: Optional[Union[Lens, float]] = None, **kw: Any) -> CoveragePlan:
+                 lens: Lens | float | None = None, **kw: Any) -> CoveragePlan:
     """Cut a conversation between the line's two actors, one shot per beat.
 
     Each beat is covered on the speaker -- over the listener's shoulder
@@ -986,7 +987,7 @@ def conversation(line: LineOfAction, beats: Iterable[DialogueBeat], *, plan_id: 
             raise ValueError(f"beat {i}: speaker {b.speaker!r} is not {line.a!r} or {line.b!r}")
         if i and b.start <= beats[i - 1].end:
             raise ValueError(f"beat {i} starts at {b.start}, before beat {i - 1} ends ({beats[i - 1].end})")
-    shots: List[Shot] = []
+    shots: list[Shot] = []
     if establish_frames > 0:
         first = beats[0]
         est_end = min(first.end, first.start + establish_frames - 1)
@@ -1016,11 +1017,11 @@ def conversation(line: LineOfAction, beats: Iterable[DialogueBeat], *, plan_id: 
 
 # ---- apply ----------------------------------------------------------------
 
-def apply_coverage(scene: "DazScene", plan: Union[CoveragePlan, Iterable[Shot]], *,
-                   subjects: Optional[Mapping[str, Any]] = None,
-                   cameras: Optional[Mapping[str, "DazCamera"]] = None,
+def apply_coverage(scene: DazScene, plan: CoveragePlan | Iterable[Shot], *,
+                   subjects: Mapping[str, Any] | None = None,
+                   cameras: Mapping[str, DazCamera] | None = None,
                    frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
-                   aspect: float = DEFAULT_ASPECT) -> Dict[str, "DazCamera"]:
+                   aspect: float = DEFAULT_ASPECT) -> dict[str, DazCamera]:
     """Apply every shot of *plan* on its own camera, named and labelled after the shot id.
 
     Args:
@@ -1032,7 +1033,7 @@ def apply_coverage(scene: "DazScene", plan: Union[CoveragePlan, Iterable[Shot]],
         ``{shot id: camera}`` in plan order.
     """
     shots = plan.all_shots() if isinstance(plan, CoveragePlan) else tuple(plan)
-    out: Dict[str, "DazCamera"] = {}
+    out: dict[str, DazCamera] = {}
     for shot in shots:
         existing = (cameras or {}).get(shot.id)
         cam = existing if existing is not None else scene.create_camera(shot.id)

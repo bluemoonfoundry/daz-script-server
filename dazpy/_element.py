@@ -22,11 +22,11 @@ class DazElement:
     """
 
     # Set via object.__setattr__ in __init__; declared here for type checkers.
-    _client: "DazClient"
+    _client: DazClient
     _locator: str
     _cache: dict
 
-    def __init__(self, client: "DazClient", locator: str):
+    def __init__(self, client: DazClient, locator: str):
         object.__setattr__(self, "_client", client)
         object.__setattr__(self, "_locator", locator)
         object.__setattr__(self, "_cache", {})

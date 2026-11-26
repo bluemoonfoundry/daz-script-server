@@ -26,7 +26,7 @@ class UndoGroup:
         self._client = client
         self._label = label
 
-    def __enter__(self) -> "UndoGroup":
+    def __enter__(self) -> UndoGroup:
         script = ScriptBuilder.iife("beginUndo();")
         self._client.execute(script)
         return self

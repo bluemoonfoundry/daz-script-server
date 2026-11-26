@@ -159,7 +159,7 @@ class DazSceneState:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def capture(cls, scene: "DazScene", *, backup_path: str | None = None) -> "DazSceneState":
+    def capture(cls, scene: DazScene, *, backup_path: str | None = None) -> DazSceneState:
         """Capture the current state of every skeleton, camera, and light in *scene*.
 
         Args:
@@ -257,7 +257,7 @@ class DazSceneState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "DazSceneState":
+    def from_dict(cls, data: dict) -> DazSceneState:
         """Reconstruct a snapshot from :meth:`to_dict`'s output."""
         skeletons = {
             name: DazPose(figure=name, bones=p.get("bones", {}), morphs=p.get("morphs", {}), props=p.get("props", {}))
@@ -277,7 +277,7 @@ class DazSceneState:
 
     def apply(
         self,
-        scene: "DazScene",
+        scene: DazScene,
         *,
         max_verify_retries: int = _DEFAULT_MAX_VERIFY_RETRIES,
         verify_tolerance: float = _DEFAULT_VERIFY_TOLERANCE,
@@ -334,7 +334,7 @@ class DazSceneState:
         restored: list[str] = []
         skipped: list[dict] = []
         errors: list[str] = []
-        resolved_skeletons: dict[str, "DazSkeleton"] = {}
+        resolved_skeletons: dict[str, DazSkeleton] = {}
 
         def _skip(kind: str, name: str, message: str) -> None:
             skipped.append({"kind": kind, "name": name, "reason": "not_found"})
@@ -413,7 +413,7 @@ class DazSceneState:
                                 f"Follow-target {target_name} of skeleton {name} not found; fit not restored",
                             )
                             continue
-                    _retry_on_busy(lambda: skel.fit_to(target_skel))
+                    _retry_on_busy(lambda skel=skel, target_skel=target_skel: skel.fit_to(target_skel))
             except Exception as exc:
                 errors.append(f"Failed to restore follow-target for skeleton {name}: {exc}")
 

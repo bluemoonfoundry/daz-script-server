@@ -152,7 +152,7 @@ N = ITERS_QUICK if args.quick else ITERS_FULL
 print("\nDazScriptServer Performance Benchmarks")
 print(f"  Server : {BASE_URL}  (version {server_version})")
 print(f"  Auth   : {'enabled' if auth_enabled else 'disabled'}")
-print(f"  Mode   : {'quick (%d iters)' % N if args.quick else 'full (%d iters)' % N}")
+print(f"  Mode   : {'quick' if args.quick else 'full'} ({N} iters)")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Baseline latency — sequential requests
@@ -162,7 +162,7 @@ section("1. Baseline latency (sequential)")
 latencies_ms = []
 errors = 0
 
-for i in range(N):
+for _i in range(N):
     t0 = time.perf_counter()
     try:
         r = execute(iife("return 1;"), timeout=10)

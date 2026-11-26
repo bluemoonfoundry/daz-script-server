@@ -138,7 +138,7 @@ class TestSceneCheckLive(unittest.TestCase):
         self.assertNotIn("top", crop.sides)
 
     def test_crop_matches_the_rendered_image(self):
-        for key, expect_top in (("full_body", False), ("close_up", False)):
+        for key, _expect_top in (("full_body", False), ("close_up", False)):
             report = self.scene.check(self.cam(key), engine="viewport", resolution=(320, 240))
             sides = {s for f in report.findings for s in f.sides}
             path = f"{_OUT}/frame_{key}.png"

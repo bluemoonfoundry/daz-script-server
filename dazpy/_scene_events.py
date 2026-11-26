@@ -9,7 +9,8 @@ removed, selection changes, time scrubs, scene load/save, and render start/end.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 from ._client import DazClient
 from ._sse import iter_response_lines, iter_sse_events
@@ -44,9 +45,9 @@ def _parse_scene_events(response: Any) -> Iterator[SceneEvent]:
 
 def watch_scene_events(
     client: DazClient,
-    categories: "list[str] | None" = None,
-    event_types: "set[str] | None" = None,
-    stream_timeout: "float | None" = None,
+    categories: list[str] | None = None,
+    event_types: set[str] | None = None,
+    stream_timeout: float | None = None,
 ) -> Iterator[SceneEvent]:
     """Yield :class:`SceneEvent` objects as DAZ Studio reports scene changes.
 

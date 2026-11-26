@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 from ._client import DazClient
 from ._node import _FIND_NUMERIC_JS, _NODE_INFO_JS, DazNode, NodeIdentifier, NodeInfo
@@ -33,7 +34,7 @@ class ViewportCamera:
     name: str
     in_scene: bool
     position: tuple[float, float, float]
-    camera: "DazCamera | None" = None
+    camera: DazCamera | None = None
 
 
 # JS: resolve a node reference (elementID, Parent/Label path, or a unique
@@ -512,7 +513,7 @@ class DazScene:
 
     def check(self, camera: str | None = None, *, engine: str | None = None,
               resolution: tuple[int, int] | None = None,
-              allow_crop: bool = False) -> "CheckReport":
+              allow_crop: bool = False) -> CheckReport:
         """Pre-render checks for a render from *camera* (one Studio script).
 
         Checks that each visible figure (top-level, not fitted to another) is
@@ -544,7 +545,7 @@ class DazScene:
         return check_scene(self._client, camera, engine=engine, resolution=resolution,
                            allow_crop=allow_crop)
 
-    def cameras(self) -> list["DazCamera"]:
+    def cameras(self) -> list[DazCamera]:
         """Return all camera nodes in the scene."""
         from ._camera import DazCamera
         script = ScriptBuilder.iife("""
@@ -557,7 +558,7 @@ class DazScene:
         names = self._client.execute(script).value or []
         return [DazCamera(self._client, NodeIdentifier(n)) for n in names]
 
-    def lights(self) -> list["DazLight"]:
+    def lights(self) -> list[DazLight]:
         """Return all light nodes in the scene."""
         from ._light import DazLight
         script = ScriptBuilder.iife("""
@@ -605,7 +606,7 @@ class DazScene:
             camera=DazCamera(self._client, NodeIdentifier(raw["name"])) if in_scene else None,
         )
 
-    def set_viewport_camera(self, camera: "DazCamera | str") -> str | None:
+    def set_viewport_camera(self, camera: DazCamera | str) -> str | None:
         """Look through *camera* in the active 3D viewport.
 
         *camera* is a :class:`~dazpy.DazCamera`, or a label: a scene camera's,
@@ -689,7 +690,7 @@ class DazScene:
                           bool(r.get("on", True)))
                 for r in self._client.execute(script).value or []]
 
-    def find_camera_by_label(self, label: str) -> "DazCamera":
+    def find_camera_by_label(self, label: str) -> DazCamera:
         """Find a camera by its user-visible label.
 
         Args:
@@ -718,7 +719,7 @@ class DazScene:
         "distant": "DzDistantLight",
     }
 
-    def create_camera(self, name: str | None = None) -> "DazCamera":
+    def create_camera(self, name: str | None = None) -> DazCamera:
         """Create a new basic camera node and add it to the scene.
 
         Args:
@@ -742,7 +743,7 @@ class DazScene:
         element_id = self._client.execute(script).value
         return DazCamera(self._client, NodeIdentifier(str(int(element_id)), kind="element_id"))
 
-    def create_light(self, light_type: str, name: str | None = None) -> "DazLight":
+    def create_light(self, light_type: str, name: str | None = None) -> DazLight:
         """Create a new light node and add it to the scene.
 
         Args:
@@ -817,7 +818,7 @@ class DazScene:
         created_name = self._client.execute(script).value
         return DazNode(self._client, NodeIdentifier(created_name))
 
-    def find_light_by_label(self, label: str) -> "DazLight":
+    def find_light_by_label(self, label: str) -> DazLight:
         """Find a light by its user-visible label.
 
         Args:
@@ -838,7 +839,7 @@ class DazScene:
             raise NodeNotFoundError(f"Light with label not found: {label!r}")
         return DazLight(self._client, NodeIdentifier(label, kind="label"))
 
-    def skeletons(self) -> list["DazSkeleton"]:
+    def skeletons(self) -> list[DazSkeleton]:
         """Return all skeleton (figure) nodes in the scene."""
         from ._skeleton import DazSkeleton
         script = ScriptBuilder.iife("""
@@ -854,7 +855,7 @@ class DazScene:
 
     def find_skeleton(
         self, name: str, *, retry_attempts: int = 3, retry_delay: float = 0.15
-    ) -> "DazSkeleton":
+    ) -> DazSkeleton:
         """Find a skeleton by its internal name.
 
         Args:
@@ -919,7 +920,7 @@ class DazScene:
             raise NodeNotFoundError(f"Skeleton not found: {name!r} (no skeletons in scene).")
         return DazSkeleton(self._client, NodeIdentifier(name))
 
-    def find_skeleton_by_label(self, label: str) -> "DazSkeleton":
+    def find_skeleton_by_label(self, label: str) -> DazSkeleton:
         """Find a skeleton by its user-visible label.
 
         Args:
@@ -1236,15 +1237,15 @@ class DazScene:
 
     def apply_interaction_recipe(
         self,
-        recipe: "InteractionRecipe",
+        recipe: InteractionRecipe,
         *,
-        rig_profiles: dict[str, "FigureRigProfile"] | None = None,
+        rig_profiles: dict[str, FigureRigProfile] | None = None,
         align_limb_targets: bool = False,
         max_iterations: int | None = None,
         step_degrees: float = 1.0,
         damping: float = 0.25,
         tolerance: float = 0.15,
-    ) -> "PreparedInteractionResult":
+    ) -> PreparedInteractionResult:
         """Prepare and apply an interaction recipe against the current scene."""
 
         from ._interaction import apply_interaction_recipe_to_scene
@@ -1270,7 +1271,7 @@ class DazScene:
         script = ScriptBuilder.iife(f"Scene.selectAllNodes({flag});")
         self._client.execute(script)
 
-    def undo(self, label: str) -> "UndoGroup":
+    def undo(self, label: str) -> UndoGroup:
         """Return a context manager that groups all enclosed changes into a single undo step.
 
         Args:

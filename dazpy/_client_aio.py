@@ -5,7 +5,8 @@ import contextvars
 import os
 import time  # noqa: F401  (patched by tests: dazpy._client_aio.time.monotonic)
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator, cast
+from typing import Any, cast
+from collections.abc import Callable, Iterator
 
 try:
     import httpx
@@ -90,7 +91,7 @@ class AsyncDazClient(_BaseClient):
         super().__init__(host, port, token, timeout, check_version, on_version_check)
         self._http = httpx.AsyncClient(timeout=timeout)
 
-    async def __aenter__(self) -> "AsyncDazClient":
+    async def __aenter__(self) -> AsyncDazClient:
         return self
 
     async def __aexit__(self, *exc_info) -> None:
@@ -101,7 +102,7 @@ class AsyncDazClient(_BaseClient):
         await self._http.aclose()
 
     async def _send(self, method: str, path: str, headers: dict | None,
-                    timeout: float | None, **kwargs: Any) -> "httpx.Response":
+                    timeout: float | None, **kwargs: Any) -> httpx.Response:
         """Issue one request (``_post``/``_get``/``_delete``)."""
         await self._check_server_version()
         try:
@@ -138,7 +139,7 @@ class AsyncDazClient(_BaseClient):
         return known
 
     @contextmanager
-    def waiting_out_busy(self, max_wait: float) -> Iterator["AsyncDazClient"]:
+    def waiting_out_busy(self, max_wait: float) -> Iterator[AsyncDazClient]:
         """Within the block, this client's script execution and submission calls
         made from the current task retry a busy Studio for up to *max_wait*
         seconds, as if passed ``retry_on_busy=True``. See
@@ -161,7 +162,7 @@ class AsyncDazClient(_BaseClient):
         return _BUSY_WAIT.get({}).get(id(self))
 
     async def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *,
-                               retry_server_errors: "bool | Callable[[], bool]" = True):
+                               retry_server_errors: bool | Callable[[], bool] = True):
         """Await *fn* (a zero-arg async callable). See
         :meth:`dazpy.DazClient._with_busy_retry`."""
         deadline = self._busy_deadline(retry_on_busy, max_wait)
@@ -343,12 +344,12 @@ class AsyncDazClient(_BaseClient):
         self,
         request_id: str,
         artifact_id: str | int,
-        dest: "str | os.PathLike[str] | None" = None,
+        dest: str | os.PathLike[str] | None = None,
         *,
-        byte_range: "tuple[int, int | None] | None" = None,
+        byte_range: tuple[int, int | None] | None = None,
         chunk_size: int = 1 << 20,
         timeout: float | None = None,
-    ) -> "bytes | str":
+    ) -> bytes | str:
         """See :meth:`dazpy.DazClient.download_artifact`."""
         headers = self._merged_headers(_range_header(byte_range))
         await self._check_server_version()
@@ -377,9 +378,9 @@ class AsyncDazClient(_BaseClient):
         size: int = 256,
         *,
         format: str = "png",
-        dest: "str | os.PathLike[str] | None" = None,
+        dest: str | os.PathLike[str] | None = None,
         timeout: float | None = None,
-    ) -> "bytes | str":
+    ) -> bytes | str:
         """See :meth:`dazpy.DazClient.get_artifact_thumbnail`."""
         resp = await self._get(f"/artifacts/{request_id}/{artifact_id}",
                                params=_thumbnail_params(size, format), timeout=timeout)
@@ -387,8 +388,8 @@ class AsyncDazClient(_BaseClient):
         return _bytes_or_file(resp.content, dest)
 
     async def download_artifacts(
-        self, request_id: str, dest_dir: "str | os.PathLike[str]"
-    ) -> "list[str]":
+        self, request_id: str, dest_dir: str | os.PathLike[str]
+    ) -> list[str]:
         """See :meth:`dazpy.DazClient.download_artifacts`."""
         written: list[str] = []
         for aid, path in _artifact_targets(await self.list_artifacts(request_id), dest_dir):
@@ -499,8 +500,8 @@ class AsyncDazClient(_BaseClient):
 
     async def stream_scene_events(
         self,
-        categories: "list[str] | None" = None,
-        stream_timeout: "float | None" = None,
+        categories: list[str] | None = None,
+        stream_timeout: float | None = None,
     ):
         """Async-iterate ``(event_type, data)`` SSE pairs from ``GET /scene/events``.
 
@@ -529,6 +530,6 @@ class AsyncDazClient(_BaseClient):
         return _json_ok(await self._get("/capabilities"))
 
 
-def _aiter_sse_events(resp: "httpx.Response"):
+def _aiter_sse_events(resp: httpx.Response):
     """Yield ``(event_type, data_dict)`` pairs from a streaming httpx SSE response."""
     return aiter_sse_events(resp.aiter_lines())

@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import sys
 import textwrap
-from typing import Callable
+from collections.abc import Callable
 
 # ── colour helpers ─────────────────────────────────────────────────────────────
 
@@ -73,7 +73,7 @@ class Harness:
             try:
                 input(dim("  Press Enter to run …"))
             except (KeyboardInterrupt, EOFError):
-                raise HarnessAbort()
+                raise HarnessAbort() from None
 
     def ok(self, msg: str = "") -> None:
         tag = green("PASS")

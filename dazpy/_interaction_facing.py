@@ -283,7 +283,7 @@ def rotate_rig_profile(profile: FigureRigProfile, degrees: float) -> FigureRigPr
 LOOK_TOWARD_MIN_DISTANCE = 1.0
 
 
-def plan_facing(plan: "InteractionPlan", rig_profiles: dict[str, FigureRigProfile]) -> dict[str, FacingAssignment]:
+def plan_facing(plan: InteractionPlan, rig_profiles: dict[str, FigureRigProfile]) -> dict[str, FacingAssignment]:
     """Which figures to turn to face a partner.
 
     A pair qualifies when both have a ``LookAtTarget``. When a hand/foot

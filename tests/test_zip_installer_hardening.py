@@ -52,7 +52,7 @@ class ZipPathSegmentTest(unittest.TestCase):
     def test_reserved_device_names(self):
         body = function_body(self.src, "bool isWindowsReservedName(")
         for name in ("CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"):
-            self.assertIn('"%s"' % name, body)
+            self.assertIn(f'"{name}"', body)
         self.assertIn('"COM"', body)
         self.assertIn('"LPT"', body)
         # The extension is ignored: "nul.txt" is the NUL device.

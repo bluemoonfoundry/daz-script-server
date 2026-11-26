@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal, Sequence, TYPE_CHECKING
+from typing import Literal, TYPE_CHECKING
+from collections.abc import Sequence
 
 from .math3 import Vec3
 
@@ -60,7 +61,7 @@ def _as_tuple3(value: object | None) -> Rotation3 | None:
     return None
 
 
-def _lookup_rig_profile(rig_profiles: dict[str, "FigureRigProfile"], label: str | None) -> "FigureRigProfile" | None:
+def _lookup_rig_profile(rig_profiles: dict[str, FigureRigProfile], label: str | None) -> FigureRigProfile | None:
     if label is None:
         return None
     if label in rig_profiles:
@@ -225,7 +226,7 @@ class AxisLimit:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AxisLimit":
+    def from_dict(cls, data: dict) -> AxisLimit:
         return cls(
             axis=data.get("axis", "x"),
             min_degrees=float(data.get("min_degrees", 0.0)),
@@ -269,7 +270,7 @@ class BoneProfile:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BoneProfile":
+    def from_dict(cls, data: dict) -> BoneProfile:
         return cls(
             name=data.get("name", ""),
             label=data.get("label"),
@@ -458,7 +459,7 @@ class FigureRigProfile:
         return None
 
     def _find_terminal_bone(self, candidates: Sequence[tuple[str, ChainSide, tuple[str, ...]]]) -> BoneProfile | None:
-        for role, side, tokens in candidates:
+        for _role, side, tokens in candidates:
             for bone in self.bones:
                 if _match_any(bone.name, tokens) and _side_matches(bone.name, side):
                     return bone
@@ -482,7 +483,7 @@ class FigureRigProfile:
             ("l_thigh", "leg", "left", ("thigh", "upper_leg")),
             ("r_thigh", "leg", "right", ("thigh", "upper_leg")),
         ]
-        for anchor_name, role, side, tokens in candidates:
+        for _anchor_name, role, side, tokens in candidates:
             terminal = self._find_terminal_bone([(role, side, tokens)])
             if terminal is None:
                 continue
@@ -591,7 +592,7 @@ class FigureRigProfile:
     def resolve_anchor_target(
         self,
         target: AnchorTarget,
-        rig_profiles: dict[str, "FigureRigProfile"] | None = None,
+        rig_profiles: dict[str, FigureRigProfile] | None = None,
     ) -> ResolvedInteractionTarget:
         """Resolve an anchor target into concrete bones and an optional point."""
 
@@ -670,7 +671,7 @@ class FigureRigProfile:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "FigureRigProfile":
+    def from_dict(cls, data: dict) -> FigureRigProfile:
         return cls(
             figure_label=data.get("figure_label", ""),
             family=data.get("family", "generic"),
@@ -899,7 +900,7 @@ def resolve_interaction_target(
     return profile.resolve_anchor_target(target, rig_profiles)
 
 
-def build_rig_profiles_from_snapshot(snapshot: list[dict]) -> dict[str, "FigureRigProfile"]:
+def build_rig_profiles_from_snapshot(snapshot: list[dict]) -> dict[str, FigureRigProfile]:
     """Build rig profiles for all skeletons from a scene_snapshot() result.
 
     Converts the bulk snapshot (one HTTP call) to the same dict used by
@@ -941,7 +942,7 @@ def build_rig_profiles_from_snapshot(snapshot: list[dict]) -> dict[str, "FigureR
     return profiles
 
 
-def build_rig_profile(skeleton: "DazSkeleton") -> FigureRigProfile:
+def build_rig_profile(skeleton: DazSkeleton) -> FigureRigProfile:
     """Inspect a live DAZ skeleton and build a solver-friendly rig profile."""
 
     figure_label = skeleton.label or skeleton._identifier.value

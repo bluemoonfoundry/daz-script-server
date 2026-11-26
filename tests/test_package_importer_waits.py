@@ -44,10 +44,10 @@ class PackageImporterWaitTest(unittest.TestCase):
         for waiter, flag in (("ToolchainWaiter", "done"),
                              ("DependencyWaiter", "done"),
                              ("ProcessWaiter", "finished")):
-            start = self.src.index("class %s " % waiter)
+            start = self.src.index(f"class {waiter} ")
             body = self.src[start:self.src.index("};", start)]
-            self.assertIn("bool %s = false;" % flag, body, waiter)
-            self.assertIn("%s = true;" % flag, body, waiter)
+            self.assertIn(f"bool {flag} = false;", body, waiter)
+            self.assertIn(f"{flag} = true;", body, waiter)
 
     def test_toolchain_failure_marks_done(self):
         start = self.src.index("class ToolchainWaiter ")

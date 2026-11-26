@@ -85,8 +85,8 @@ class PackageImporterOrderTest(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertIn(
                     CLEANUP_CALL, block,
-                    "return %s between extractToStaging() and commit() leaks "
-                    "the staging dir" % code)
+                    f"return {code} between extractToStaging() and commit() leaks "
+                    "the staging dir")
 
 
 if __name__ == "__main__":

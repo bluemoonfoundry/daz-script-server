@@ -23,7 +23,8 @@ import json
 import os
 from dataclasses import dataclass
 from importlib import resources
-from typing import TYPE_CHECKING, Mapping, Sequence
+from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
 
 from ._recipe_apply import ApplyResult, execute
 from . import _render_api as render_api
@@ -116,7 +117,7 @@ def _file_refs(recipe: SceneRecipe) -> list[tuple[str, str]]:
 
 
 @_patient
-def validate(recipe: SceneRecipe | dict, scene: "DazScene | None" = None) -> ValidationReport:
+def validate(recipe: SceneRecipe | dict, scene: DazScene | None = None) -> ValidationReport:
     """Validate *recipe*; with *scene*, also check its files exist (one Studio script).
 
     Adds ``file_not_found`` at ``assets.<k>.path``, ``actors.<k>.pose`` and
@@ -144,19 +145,19 @@ def validate(recipe: SceneRecipe | dict, scene: "DazScene | None" = None) -> Val
     return ValidationReport(ok=False, errors=errors, warnings=report.warnings)
 
 
-def _checked(recipe: SceneRecipe | dict, scene: "DazScene | None") -> SceneRecipe:
+def _checked(recipe: SceneRecipe | dict, scene: DazScene | None) -> SceneRecipe:
     report = validate(recipe, scene)
     if not report.ok:
         raise RecipeValidationError(report)
     return recipe if isinstance(recipe, SceneRecipe) else SceneRecipe.from_dict(recipe)
 
 
-def _read(model: SceneRecipe, scene: "DazScene") -> tuple[dict, LiveState]:
+def _read(model: SceneRecipe, scene: DazScene) -> tuple[dict, LiveState]:
     return compute_desired(model), read_live(scene._client, model.id)
 
 
 @_patient
-def plan(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConflict = "ask",
+def plan(recipe: SceneRecipe | dict, scene: DazScene, *, on_conflict: OnConflict = "ask",
          resolutions: Mapping[str, Resolution] | None = None) -> RecipePlan:
     """What :func:`apply` would do now. Reads the scene, changes nothing.
 
@@ -169,7 +170,7 @@ def plan(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConfli
 
 
 @_patient
-def apply(recipe: SceneRecipe | dict, scene: "DazScene", *, on_conflict: OnConflict = "ask",
+def apply(recipe: SceneRecipe | dict, scene: DazScene, *, on_conflict: OnConflict = "ask",
           resolutions: Mapping[str, Resolution] | None = None,
           require_clean: bool = False) -> ApplyResult:
     """Apply *recipe* to *scene*, re-planning against the scene's current state.
@@ -203,7 +204,7 @@ def _pending(the_plan: RecipePlan) -> tuple[str, ...]:
 
 
 @_patient
-def observe(recipe: SceneRecipe | dict, scene: "DazScene") -> ObserveReport:
+def observe(recipe: SceneRecipe | dict, scene: DazScene) -> ObserveReport:
     """Compare *scene* with *recipe* without changing anything.
 
     Diffs as if the recipe won every conflict, except that hand deletions
@@ -278,7 +279,7 @@ def _check_shots(model: SceneRecipe, live: LiveState, client, chosen: Sequence) 
 
 
 @_patient
-def check(recipe: SceneRecipe | dict, scene: "DazScene", *,
+def check(recipe: SceneRecipe | dict, scene: DazScene, *,
           shots: Sequence[str] | None = None) -> CheckReport:
     """Pre-render checks for the recipe's shots (all, or the ids in *shots*).
 
@@ -345,7 +346,7 @@ def _guard(report: ObserveReport, camera_keys: Sequence[str]) -> None:
 
 
 @_patient
-def render(recipe: SceneRecipe | dict, scene: "DazScene", *, shots: Sequence[str] | None = None,
+def render(recipe: SceneRecipe | dict, scene: DazScene, *, shots: Sequence[str] | None = None,
            force: bool = False, wait: bool = True, timeout: float = 300.0,
            require_clean: bool = False) -> list[ShotRender]:
     """Render the recipe's shots (all, or the ids in *shots*) in recipe order.

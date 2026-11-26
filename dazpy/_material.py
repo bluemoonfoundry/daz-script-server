@@ -85,7 +85,7 @@ class DazMaterial(DazElement):
     :meth:`DazNode.find_material`.
     """
 
-    def __init__(self, client: "DazClient", locator: str):
+    def __init__(self, client: DazClient, locator: str):
         super().__init__(client, locator)
 
     @property
@@ -292,7 +292,7 @@ class DazMaterial(DazElement):
         }
         raise MaterialError(messages.get(status, f"Failed to set {name!r}"))
 
-    def copy_from(self, source: "DazMaterial") -> tuple[int, int]:
+    def copy_from(self, source: DazMaterial) -> tuple[int, int]:
         """Copy every property value from *source* onto matching properties here.
 
         Properties are matched by internal name. Returns ``(copied, skipped)``,

@@ -12,7 +12,8 @@ Import it the same way whether the test runs as a script
 from __future__ import annotations
 
 import time
-from typing import Callable, Tuple, TypeVar
+from typing import TypeVar
+from collections.abc import Callable
 
 T = TypeVar("T")
 
@@ -22,7 +23,7 @@ def poll_until(
     done: Callable[[T], bool],
     timeout: float,
     interval: float = 0.05,
-) -> Tuple[T, bool]:
+) -> tuple[T, bool]:
     """Call ``fetch()`` until ``done(value)`` is true or ``timeout`` seconds pass.
 
     Always calls ``fetch()`` at least once, and once more at the deadline, so

@@ -1721,7 +1721,7 @@ class TestConcurrency(unittest.TestCase):
         busy_ms = 8000
         blocker_result = {}
         blocker = threading.Thread(target=lambda: blocker_result.update(r=execute(script=iife(
-            "var t = Date.now(); while (Date.now() - t < %d) {} return 'done';" % busy_ms))))
+            f"var t = Date.now(); while (Date.now() - t < {busy_ms}) {{}} return 'done';"))))
         blocker.start()
         # Let the blocker be accepted (and so reach the main thread first).
         _, started = poll_until(active, lambda n: n >= 1, timeout=5.0)
@@ -1733,8 +1733,8 @@ class TestConcurrency(unittest.TestCase):
         def queued(i):
             # Writes a marker file if it ever runs; it must not.
             path = os.path.join(marker_dir, f"ran_{i}.txt").replace("\\", "/")
-            script = iife("var f = new DzFile(%r); f.open(DzFile.WriteOnly); "
-                          "f.write('x'); f.close(); return %d;" % (path, i))
+            script = iife(f"var f = new DzFile({path!r}); f.open(DzFile.WriteOnly); "
+                          f"f.write('x'); f.close(); return {i};")
             try:
                 requests.post(f"{BASE_URL}/execute", headers=auth_headers(),
                               json={"script": script}, timeout=1.5)

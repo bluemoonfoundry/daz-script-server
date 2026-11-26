@@ -154,7 +154,7 @@ def _bone_world_position(bone: object) -> Vector3 | None:
 
 
 def _align_single_limb_batch(
-    skeleton: "DazSkeleton",
+    skeleton: DazSkeleton,
     profile: FigureRigProfile,
     chain_names: list[str],
     target: ResolvedInteractionTarget,
@@ -163,7 +163,7 @@ def _align_single_limb_batch(
     step_degrees: float = 1.0,
     damping: float = 0.25,
     tolerance: float = 0.15,
-) -> "LimbAlignmentResult":
+) -> LimbAlignmentResult:
     """Batch IK path: 2 HTTP calls per iteration via evaluate_pose_jacobian."""
 
     target_point = target.target_point
@@ -272,7 +272,7 @@ def _align_single_limb_batch(
 
 
 def align_single_limb_target(
-    skeleton: "DazSkeleton",
+    skeleton: DazSkeleton,
     profile: FigureRigProfile,
     target: ResolvedInteractionTarget,
     *,
@@ -421,7 +421,7 @@ def align_single_limb_target(
 
 
 def align_hand_target(
-    skeleton: "DazSkeleton",
+    skeleton: DazSkeleton,
     target_point: object | None,
     *,
     source_anchor: str = "r_hand",
@@ -456,7 +456,7 @@ def align_hand_target(
 
 
 def align_foot_target(
-    skeleton: "DazSkeleton",
+    skeleton: DazSkeleton,
     target_point: object | None,
     *,
     source_anchor: str = "r_foot",

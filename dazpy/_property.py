@@ -25,7 +25,7 @@ class DazProperty(DazElement):
     _owner_locator: str
     _property_label: str
 
-    def __init__(self, client: "DazClient", owner_locator: str, property_label: str):
+    def __init__(self, client: DazClient, owner_locator: str, property_label: str):
         locator = (
             f"(function(){{"
             f"var obj = {owner_locator};"
@@ -37,7 +37,7 @@ class DazProperty(DazElement):
         object.__setattr__(self, "_property_label", property_label)
 
     @classmethod
-    def _from_locator(cls, client: "DazClient", locator: str) -> "DazProperty":
+    def _from_locator(cls, client: DazClient, locator: str) -> DazProperty:
         """Construct a DazProperty from a pre-built JavaScript locator expression."""
         from ._element import DazElement
         prop = object.__new__(cls)

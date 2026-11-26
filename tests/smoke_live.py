@@ -340,7 +340,7 @@ class Smoke:
             if resp is not None:
                 def _watch():
                     try:
-                        for ev_type, data in _parse_sse_events(resp):
+                        for _ev_type, data in _parse_sse_events(resp):
                             t = data.get("type") if isinstance(data, dict) else None
                             if t:
                                 scene_events.append(t)
@@ -668,7 +668,7 @@ def write_index() -> Path:
                 if order[c["status"]] > order[cur]:
                     cur = c["status"]
                 engines[eng] = cur
-        def cell(stage_or_engine, is_engine=False):
+        def cell(stage_or_engine, is_engine=False, engines=engines, rep=rep):
             if is_engine:
                 return engines.get(stage_or_engine, "-")
             stat = [c["status"] for c in rep.get("checks", []) if c["stage"] == stage_or_engine]

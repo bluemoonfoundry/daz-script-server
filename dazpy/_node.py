@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
 
 from ._element import DazElement
 from ._script_builder import ScriptBuilder
@@ -84,7 +85,7 @@ class NodeInfo:
     num_children: int | None = None
 
     @classmethod
-    def _from_raw(cls, raw: dict) -> "NodeInfo":
+    def _from_raw(cls, raw: dict) -> NodeInfo:
         return cls(
             label=raw.get("label", ""),
             name=raw.get("name", ""),
@@ -114,7 +115,7 @@ class PropertyDetails:
     is_animatable: bool
 
     @classmethod
-    def _from_raw(cls, r: dict) -> "PropertyDetails":
+    def _from_raw(cls, r: dict) -> PropertyDetails:
         return cls(r["label"], r["name"], r["type"], r.get("value"), r.get("min"),
                    r.get("max"), r.get("default"), r.get("path", ""),
                    bool(r.get("is_animatable")))
@@ -295,7 +296,7 @@ class DazNode(DazElement):
 
     _identifier: NodeIdentifier
 
-    def __init__(self, client: "DazClient", identifier: NodeIdentifier):
+    def __init__(self, client: DazClient, identifier: NodeIdentifier):
         locator = ScriptBuilder.find_node_expr(identifier)
         super().__init__(client, locator)
         object.__setattr__(self, "_identifier", identifier)
@@ -558,7 +559,7 @@ class DazNode(DazElement):
         if result:
             raise ScriptRuntimeError(f"unparent failed: {result}")
 
-    def reparent(self, new_parent: "DazNode", *, preserve_world_transform: bool = True) -> None:
+    def reparent(self, new_parent: DazNode, *, preserve_world_transform: bool = True) -> None:
         """Move this node to a new position in the scene hierarchy.
 
         Detaches the node from its current parent (if any) and attaches it
@@ -617,7 +618,7 @@ class DazNode(DazElement):
             f"}})()"
         )
 
-    def modifiers(self) -> list["DazModifier"]:
+    def modifiers(self) -> list[DazModifier]:
         """Return all modifiers (morphs, constraints, etc.) on this node.
 
         Returns:
@@ -645,7 +646,7 @@ class DazNode(DazElement):
             result.append(cls(self._client, loc))
         return result
 
-    def find_modifier(self, name: str) -> "DazModifier | None":
+    def find_modifier(self, name: str) -> DazModifier | None:
         """Find a modifier by internal name.
 
         Args:
@@ -682,7 +683,7 @@ class DazNode(DazElement):
             f"}})()"
         )
 
-    def materials(self) -> list["DazMaterial"]:
+    def materials(self) -> list[DazMaterial]:
         """Return all surface materials on this node's current shape."""
         from ._material import DazMaterial
         script = ScriptBuilder.node_body_from_locator(
@@ -702,7 +703,7 @@ class DazNode(DazElement):
         names = self._client.execute(script).value or []
         return [DazMaterial(self._client, self._material_locator(n)) for n in names]
 
-    def material_info(self) -> list["MaterialInfo"]:
+    def material_info(self) -> list[MaterialInfo]:
         """Index, name, label and shader class of every surface zone, in one call."""
         from ._material import MaterialInfo
         script = ScriptBuilder.node_body_from_locator(self._locator, """
@@ -721,7 +722,7 @@ class DazNode(DazElement):
         raw = self._client.execute(script).value or []
         return [MaterialInfo(int(r["index"]), r["name"], r["label"], r["shader"]) for r in raw]
 
-    def resolve_material(self, ref: str) -> "DazMaterial":
+    def resolve_material(self, ref: str) -> DazMaterial:
         """Find a surface zone by label, then by internal name.
 
         Raises:
@@ -764,7 +765,7 @@ class DazNode(DazElement):
         *,
         map_paths: Sequence[str] | None = None,
         allow_missing: bool = False,
-    ) -> list["MaterialInfo"]:
+    ) -> list[MaterialInfo]:
         """Apply a material or shader preset ``.duf`` to every surface of this node.
 
         Selects this node alone and every one of its surfaces (preset
@@ -831,7 +832,7 @@ class DazNode(DazElement):
         return [MaterialInfo(int(m["index"]), m["name"], m["label"], m["shader"])
                 for m in raw.get("materials", [])]
 
-    def find_material(self, name: str) -> "DazMaterial | None":
+    def find_material(self, name: str) -> DazMaterial | None:
         """Find a surface material by name.
 
         Args:
@@ -857,7 +858,7 @@ class DazNode(DazElement):
             return None
         return DazMaterial(self._client, self._material_locator(result))
 
-    def find_modifier_by_label(self, label: str) -> "DazModifier | None":
+    def find_modifier_by_label(self, label: str) -> DazModifier | None:
         """Find a modifier by its user-visible label (the name shown in the DAZ UI).
 
         DAZ Studio morphs have both an internal name (e.g. ``"PHMSmileFull"``) and a
@@ -891,7 +892,7 @@ class DazNode(DazElement):
         loc = self._modifier_locator(result["name"])
         return self._modifier_class_for(result["className"])(self._client, loc)
 
-    def find_property(self, name: str) -> "DazProperty | None":
+    def find_property(self, name: str) -> DazProperty | None:
         """Find a node-level property by its internal name.
 
         This searches properties directly on the node (via ``DzNode::findProperty``),
@@ -1076,7 +1077,7 @@ class DazNode(DazElement):
             raise PropertyNotFoundError(f"Property not found: {name!r}")
         return PropertyDetails._from_raw(raw["detail"])
 
-    def find_numeric_property(self, name: str) -> "DazProperty":
+    def find_numeric_property(self, name: str) -> DazProperty:
         """Return the numeric property whose label or name is *name* (case-insensitive).
 
         Searches like :meth:`set_numeric_property` (node properties, then
@@ -1329,8 +1330,8 @@ class DazNode(DazElement):
             raise PropertyNotFoundError(f"No color property {name!r} on {self._identifier.value!r}")
         return int(raw["keys"])
 
-    def load_morph(self, obj_path: str, *, control_node: "DazNode | None" = None,
-                   **options: Any) -> "MorphLoadResult":
+    def load_morph(self, obj_path: str, *, control_node: DazNode | None = None,
+                   **options: Any) -> MorphLoadResult:
         """Create a morph on this node from an OBJ with Morph Loader Pro.
 
         Args:
@@ -1427,7 +1428,7 @@ class DazNode(DazElement):
             raise DazError(f"DzNodeSupportAssetFilter.doSave failed (error {raw.get('code')})")
         return raw["base"]
 
-    def find_property_by_label(self, label: str) -> "DazProperty | None":
+    def find_property_by_label(self, label: str) -> DazProperty | None:
         """Find a node-level property by its user-visible label.
 
         Equivalent to :meth:`find_property` but matches on ``getLabel()`` instead
@@ -1452,12 +1453,12 @@ class DazNode(DazElement):
             return None
         return DazProperty._from_locator(self._client, locator)
 
-    def morphs(self) -> list["DazMorph"]:
+    def morphs(self) -> list[DazMorph]:
         """Return only the morph modifiers on this node (convenience filter)."""
         from ._morph import DazMorph
         return [m for m in self.modifiers() if isinstance(m, DazMorph)]
 
-    def dforce_modifiers(self) -> list["DazDForce"]:
+    def dforce_modifiers(self) -> list[DazDForce]:
         """Return only the dForce simulation modifiers on this node (convenience filter)."""
         from ._dforce import DazDForce
         return [m for m in self.modifiers() if isinstance(m, DazDForce)]
@@ -1557,7 +1558,7 @@ class DazNode(DazElement):
     def set_transform_key_interpolation(
         self,
         frames: Sequence[int],
-        kinds: Sequence[Optional[str]],
+        kinds: Sequence[str | None],
         *,
         rotation: bool = True,
         fast_start: bool = False,
@@ -1755,7 +1756,7 @@ class DazNode(DazElement):
         )
         return self._client.execute(script).value
 
-    def fit_to(self, figure: "DazNode") -> str:
+    def fit_to(self, figure: DazNode) -> str:
         """Fit this clothing/hair/prop node to a base figure.
 
         For figure-based conforming clothing and hair (nodes exposing
@@ -2078,7 +2079,7 @@ class DazNode(DazElement):
         """)
         return int(self._client.execute(script).value or 0)
 
-    def fitted_item_info(self) -> list["FittedItem"]:
+    def fitted_item_info(self) -> list[FittedItem]:
         """Items fitted to this figure, with their kind, in one call.
 
         A node counts as fitted if it follows this node (conforming clothing
@@ -2110,7 +2111,7 @@ class DazNode(DazElement):
         return [FittedItem(r["label"], r["name"], r["type"], int(r["element_id"]))
                 for r in self._client.execute(script).value or []]
 
-    def fitted_items(self) -> list["DazNode"]:
+    def fitted_items(self) -> list[DazNode]:
         """Proxies for the items fitted to this figure (see :meth:`fitted_item_info`).
 
         Bound by elementID. Bones are not fitted items (a figure's root bone

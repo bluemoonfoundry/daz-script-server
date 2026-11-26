@@ -73,7 +73,7 @@ class FakeRigBone:
         self,
         name: str,
         label: str | None = None,
-        parent: "FakeRigBone | None" = None,
+        parent: FakeRigBone | None = None,
         rotation_order: str | None = "XYZ",
         local_position: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
         local_euler: tuple[float, float, float] | None = (0.0, 0.0, 0.0),
@@ -124,7 +124,7 @@ class KinematicFakeBone:
         self,
         name: str,
         label: str | None = None,
-        parent: "KinematicFakeBone | None" = None,
+        parent: KinematicFakeBone | None = None,
         local_position: tuple[float, float, float] | None = (1.0, 0.0, 0.0),
     ) -> None:
         self.name = name

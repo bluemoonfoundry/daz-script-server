@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Literal
+from typing import Any, Literal
+from collections.abc import Callable
 
 from ._interaction_profile import (
     BalanceTarget,
@@ -88,7 +89,7 @@ class SolveOptions:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SolveOptions":
+    def from_dict(cls, data: dict) -> SolveOptions:
         return cls(
             backend=data.get("backend", "auto"),
             max_iterations=int(data.get("max_iterations", 100)),
@@ -122,7 +123,7 @@ class InteractionPlan:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "InteractionPlan":
+    def from_dict(cls, data: dict) -> InteractionPlan:
         constraints: list[PoseTarget | ContactTarget | LookAtTarget | BalanceTarget | HandTarget | FootTarget] = []
         for item in data.get("constraints", []):
             kind = item.get("kind")
@@ -321,7 +322,7 @@ class InteractionRecipe:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "InteractionRecipe":
+    def from_dict(cls, data: dict) -> InteractionRecipe:
         plan = InteractionPlan.from_dict(data)
         return cls(
             kind=data.get("kind", "custom"),
@@ -346,7 +347,7 @@ class PreparedInteractionRecipe:
     # ``rig_profiles`` (and so ``resolved_targets``) already have these turns
     # applied; ``build_pose_patch`` stages each partner a limb target links in
     # front of its anchor (a look-only partner is only turned).
-    facing: dict[str, "FacingAssignment"] = field(default_factory=dict)
+    facing: dict[str, FacingAssignment] = field(default_factory=dict)
 
     @property
     def is_valid(self) -> bool:
@@ -363,7 +364,7 @@ class PreparedInteractionRecipe:
             "facing": {label: assignment.to_dict() for label, assignment in self.facing.items()},
         }
 
-    def build_pose_patch(self) -> "InteractionPosePatch":
+    def build_pose_patch(self) -> InteractionPosePatch:
         """Build a coarse live-placement patch from the prepared recipe.
 
         Intentionally conservative: translates figures so their anchors are
@@ -530,7 +531,7 @@ class PreparedInteractionRecipe:
         step_degrees: float = 1.0,
         damping: float = 0.25,
         tolerance: float = 0.15,
-    ) -> "PreparedInteractionResult":
+    ) -> PreparedInteractionResult:
         """Apply the compiled recipe, optionally aligning a single limb chain."""
 
         patch = self.build_pose_patch()
@@ -550,7 +551,7 @@ class PreparedInteractionRecipe:
             )
         return result
 
-    def _staging_displacements(self, patch: "InteractionPosePatch") -> dict[str, Vector3]:
+    def _staging_displacements(self, patch: InteractionPosePatch) -> dict[str, Vector3]:
         """How far the patch moved each figure whose original position is known."""
 
         displacements: dict[str, Vector3] = {}
@@ -569,7 +570,7 @@ class PreparedInteractionRecipe:
         damping: float = 0.25,
         tolerance: float = 0.15,
         figure_displacements: dict[str, Vector3] | None = None,
-    ) -> list["LimbAlignmentResult"]:
+    ) -> list[LimbAlignmentResult]:
         """Apply live limb alignment for resolved hand and foot targets.
 
         ``figure_displacements`` (label -> how far staging moved that figure)
@@ -649,7 +650,7 @@ class PreparedInteractionRecipe:
         resolved: ResolvedInteractionTarget,
         bases: dict[int, Vector3],
         solve: dict[str, Any],
-    ) -> "LimbAlignmentResult | None":
+    ) -> LimbAlignmentResult | None:
         """IK passes for a wrap target: through each waypoint around the partner, then to the stop on its back.
 
         Returns the last pass, with iterations and initial error covering all
@@ -776,7 +777,7 @@ class PreparedInteractionRecipe:
             bases[id(profile)] = _vec3_add(profile.figure_position, shift) if shift is not None else profile.figure_position
         return bases
 
-    def _contact_geometry(self, target: ResolvedInteractionTarget, bases: dict[int, Vector3]) -> "_ContactGeometry | None":
+    def _contact_geometry(self, target: ResolvedInteractionTarget, bases: dict[int, Vector3]) -> _ContactGeometry | None:
         """Where ``target``'s effector should stop with the figure origins at ``bases`` (keyed by profile id).
 
         The target joint pulled back toward the source limb root by the surface

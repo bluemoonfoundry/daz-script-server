@@ -80,7 +80,7 @@ class EntityRecord:
         return json.dumps(asdict(self), sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "EntityRecord":
+    def from_json(cls, s: str) -> EntityRecord:
         d = json.loads(s)
         return cls(recipe_id=d["recipe_id"], path=d["path"],
                    recipe_version=int(d["recipe_version"]),
@@ -110,7 +110,7 @@ class Manifest:
         }, sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "Manifest":
+    def from_json(cls, s: str) -> Manifest:
         d = json.loads(s)
         env = d.get("environment")
         return cls(recipe_id=d["recipe_id"], entities=tuple(d.get("entities") or ()),
@@ -298,7 +298,7 @@ for (var _i = 0; _i < _nodes.length; _i++) {{
 return _out;""")
 
 
-def observed_channels(client: "DazClient", node_name: str, kind: str, info: dict) -> dict[str, dict]:
+def observed_channels(client: DazClient, node_name: str, kind: str, info: dict) -> dict[str, dict]:
     """Observed channels for one node from its ``_observe`` payload (+ pose capture for actors)."""
     from ._pose import DazPose
     from ._skeleton import DazSkeleton
@@ -358,7 +358,7 @@ def foreign_descendants(children: list, recipe_id: str,
     return out
 
 
-def read_live(client: "DazClient", recipe_id: str) -> LiveState:
+def read_live(client: DazClient, recipe_id: str) -> LiveState:
     """Read every node owned by *recipe_id* in one script call.
 
     Plus one ``DazPose.capture`` per actor with a record.  Nodes whose record

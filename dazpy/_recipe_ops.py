@@ -34,7 +34,8 @@ int, written back with ``setValue(int)`` for rollback).
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Callable, Iterable, Protocol
+from typing import TYPE_CHECKING, Protocol
+from collections.abc import Callable, Iterable
 
 from ._camera import DazCamera
 from ._light import DazLight
@@ -311,7 +312,7 @@ for (var _i = 0; _i < _paths.length; _i++) _out[_paths[_i]] = _resolve(_paths[_i
 return _out;""")
 
 
-def resolve_files(client: "DazClient", paths: Iterable[str]) -> dict[str, str]:
+def resolve_files(client: DazClient, paths: Iterable[str]) -> dict[str, str]:
     """``{path: absolute file or ""}`` for Studio-side files, in one script call.
 
     The one resolver ``validate`` and :class:`DazSceneOps` share.  Paths are
@@ -400,7 +401,7 @@ return true;""")
 class DazSceneOps:
     """:class:`SceneOps` backed by dazpy primitives on *scene*."""
 
-    def __init__(self, scene: "DazScene") -> None:
+    def __init__(self, scene: DazScene) -> None:
         self._scene = scene
         self._client = scene._client
 

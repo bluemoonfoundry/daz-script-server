@@ -13,7 +13,8 @@ from __future__ import annotations
 import os
 import re
 import time
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
+from collections.abc import Callable, Mapping
 
 from .exceptions import (
     AuthenticationError,
@@ -74,7 +75,7 @@ def _parse_retry_after(resp: _HTTPResponse, default: float = 2.0) -> float:
 
 
 def _retry_delay(exc: BaseException, backoff: float,
-                 retry_server_errors: "bool | Callable[[], bool]" = True) -> float | None:
+                 retry_server_errors: bool | Callable[[], bool] = True) -> float | None:
     """Seconds to wait before retrying after *exc*, or ``None`` if it is not
     retryable.
 
@@ -286,7 +287,7 @@ def _render_animation_payload(output_path: str, start_frame: int, end_frame: int
     }, width, height, camera, engine)
 
 
-def _result_query(wait: bool, wait_timeout: int) -> "tuple[dict | None, float | None]":
+def _result_query(wait: bool, wait_timeout: int) -> tuple[dict | None, float | None]:
     """``(params, http_timeout)`` for ``GET /requests/{id}/result``. A long
     poll gets an HTTP timeout 10 s past the server-side wait."""
     if not wait:
@@ -294,7 +295,7 @@ def _result_query(wait: bool, wait_timeout: int) -> "tuple[dict | None, float | 
     return {"wait": "true", "timeout": str(wait_timeout)}, wait_timeout + 10.0
 
 
-def _cancel_route(request_id: str) -> "tuple[str, str]":
+def _cancel_route(request_id: str) -> tuple[str, str]:
     """``(method, path)`` that cancels *request_id*: renders (``rnd-``) have
     their own cancel route, scripts are deleted."""
     if request_id.startswith("rnd-"):
@@ -302,7 +303,7 @@ def _cancel_route(request_id: str) -> "tuple[str, str]":
     return "delete", f"/requests/{request_id}"
 
 
-def _range_header(byte_range: "tuple[int, int | None] | None") -> dict:
+def _range_header(byte_range: tuple[int, int | None] | None) -> dict:
     """``Range`` header for an artifact download, or ``{}`` for the whole file."""
     if byte_range is None:
         return {}
@@ -322,7 +323,7 @@ def _safe_artifact_filename(name: str) -> str:
     return name if name.strip(". ") else "artifact"
 
 
-def _artifact_targets(listing: dict, dest_dir: "str | os.PathLike[str]") -> "list[tuple[str, str]]":
+def _artifact_targets(listing: dict, dest_dir: str | os.PathLike[str]) -> list[tuple[str, str]]:
     """``(artifact_id, local_path)`` for each available entry of a
     :meth:`DazClient.list_artifacts` listing, creating *dest_dir*. Files are
     named ``<artifact_id>_<filename>`` so equal base names can't collide."""
@@ -337,7 +338,7 @@ def _artifact_targets(listing: dict, dest_dir: "str | os.PathLike[str]") -> "lis
     return targets
 
 
-def _bytes_or_file(content: bytes, dest: "str | os.PathLike[str] | None") -> "bytes | str":
+def _bytes_or_file(content: bytes, dest: str | os.PathLike[str] | None) -> bytes | str:
     """Return *content*, or write it to *dest* and return that path."""
     if dest is None:
         return content
@@ -347,7 +348,7 @@ def _bytes_or_file(content: bytes, dest: "str | os.PathLike[str] | None") -> "by
     return path
 
 
-def _events_params(categories: "list[str] | None") -> dict | None:
+def _events_params(categories: list[str] | None) -> dict | None:
     return {"filter": ",".join(categories)} if categories else None
 
 
@@ -363,9 +364,9 @@ class _BaseClient:
     """
 
     # Transport exception classes, mapped by _transport_error in this order.
-    _CONNECT_ERRORS: "tuple[type[BaseException], ...]" = ()
-    _TIMEOUT_ERRORS: "tuple[type[BaseException], ...]" = ()
-    _TRANSPORT_ERRORS: "tuple[type[BaseException], ...]" = ()
+    _CONNECT_ERRORS: tuple[type[BaseException], ...] = ()
+    _TIMEOUT_ERRORS: tuple[type[BaseException], ...] = ()
+    _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = ()
 
     # Class defaults keep instances built without __init__ (tests) check-free.
     _versions: VersionTracker = VersionTracker(enabled=False)
@@ -474,7 +475,7 @@ class _BaseClient:
 
     @staticmethod
     def _retry_pause(exc: DazError, deadline: float, backoff: float,
-                     retry_server_errors: "bool | Callable[[], bool]") -> float | None:
+                     retry_server_errors: bool | Callable[[], bool]) -> float | None:
         """Seconds to sleep before the next attempt, or ``None`` to re-raise
         *exc* (not retryable, or the deadline has passed)."""
         delay = _retry_delay(exc, backoff, retry_server_errors)

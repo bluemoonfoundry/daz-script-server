@@ -50,7 +50,8 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from ._recipe_desired import DesiredEntity
 from ._recipe_diff import CREATE_KEY, ENVIRONMENT_PATH, Conflict, RecipePlan, Step
@@ -202,7 +203,7 @@ class _Run:
                 new = self.merged(path, path_steps, entity.record, entity.node_name)
                 node, prev = entity.node_name, entity.record
                 self.undo(f"restore the ownership record of {path} on {node!r}",
-                          lambda: self.ops.write_record(node, prev))
+                          partial(self.ops.write_record, node, prev))
                 self.ops.write_record(node, new)
         self.context = ""
 

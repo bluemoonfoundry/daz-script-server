@@ -17,7 +17,7 @@ class DazModifier(DazElement):
     specific :class:`~dazpy.DazMorph` subclass is returned automatically.
     """
 
-    def __init__(self, client: "DazClient", locator: str):
+    def __init__(self, client: DazClient, locator: str):
         super().__init__(client, locator)
 
     @property

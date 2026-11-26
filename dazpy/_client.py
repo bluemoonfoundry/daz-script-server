@@ -4,7 +4,8 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Callable, Iterator, cast
+from typing import cast
+from collections.abc import Callable, Iterator
 
 import requests as _requests
 
@@ -103,7 +104,7 @@ class DazClient(_BaseClient):
         super().__init__(host, port, token, timeout, check_version, on_version_check)
         self._session = _requests.Session()
 
-    def __enter__(self) -> "DazClient":
+    def __enter__(self) -> DazClient:
         return self
 
     def __exit__(self, *exc_info) -> None:
@@ -153,7 +154,7 @@ class DazClient(_BaseClient):
         return known
 
     @contextmanager
-    def waiting_out_busy(self, max_wait: float) -> Iterator["DazClient"]:
+    def waiting_out_busy(self, max_wait: float) -> Iterator[DazClient]:
         """Within the block, this client's script execution and submission calls
         on this thread (``execute``, ``execute_file``, registered-script and
         async submits, render submits) retry a busy Studio for up to *max_wait*
@@ -179,7 +180,7 @@ class DazClient(_BaseClient):
         return getattr(self.__dict__.get("_busy_wait"), "max_wait", None)
 
     def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *,
-                         retry_server_errors: "bool | Callable[[], bool]" = True):
+                         retry_server_errors: bool | Callable[[], bool] = True):
         """Run *fn* (a zero-arg callable), retrying busy and server-marked
         ``retryable`` errors while *retry_on_busy* is true (or inside
         :meth:`waiting_out_busy`), up to *max_wait* seconds total. Each wait is
@@ -583,12 +584,12 @@ class DazClient(_BaseClient):
         self,
         request_id: str,
         artifact_id: str | int,
-        dest: "str | os.PathLike[str] | None" = None,
+        dest: str | os.PathLike[str] | None = None,
         *,
-        byte_range: "tuple[int, int | None] | None" = None,
+        byte_range: tuple[int, int | None] | None = None,
         chunk_size: int = 1 << 20,
         timeout: float | None = None,
-    ) -> "bytes | str":
+    ) -> bytes | str:
         """Download one declared artifact (GET /artifacts/{request_id}/{artifact_id}).
 
         Args:
@@ -635,9 +636,9 @@ class DazClient(_BaseClient):
         size: int = 256,
         *,
         format: str = "png",
-        dest: "str | os.PathLike[str] | None" = None,
+        dest: str | os.PathLike[str] | None = None,
         timeout: float | None = None,
-    ) -> "bytes | str":
+    ) -> bytes | str:
         """Fetch a scaled preview of an image artifact
         (GET /artifacts/{request_id}/{artifact_id}?thumbnail=<size>).
 
@@ -675,8 +676,8 @@ class DazClient(_BaseClient):
         return _bytes_or_file(resp.content, dest)
 
     def download_artifacts(
-        self, request_id: str, dest_dir: "str | os.PathLike[str]"
-    ) -> "list[str]":
+        self, request_id: str, dest_dir: str | os.PathLike[str]
+    ) -> list[str]:
         """Download every available artifact of a job into *dest_dir*.
 
         Files are named ``<artifact_id>_<filename>`` so two outputs with the
@@ -872,7 +873,7 @@ class DazClient(_BaseClient):
             return False
         return self.cancel_request(request_id)
 
-    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "_requests.Response | None":
+    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> _requests.Response | None:
         """Open the SSE progress stream for a render request.
 
         Returns a streaming :class:`requests.Response` on success, or ``None``
@@ -894,9 +895,9 @@ class DazClient(_BaseClient):
 
     def stream_scene_events(
         self,
-        categories: "list[str] | None" = None,
-        stream_timeout: "float | None" = None,
-    ) -> "_requests.Response | None":
+        categories: list[str] | None = None,
+        stream_timeout: float | None = None,
+    ) -> _requests.Response | None:
         """Open the SSE stream for general scene-change events (GET /scene/events).
 
         Args:

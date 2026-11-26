@@ -21,9 +21,10 @@ Frames follow the SSE spec closely enough for the server's output
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterable, AsyncIterator, Iterable, Iterator, Optional, Tuple, Union
+from typing import Any
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
 
-SseEvent = Tuple[str, Any]
+SseEvent = tuple[str, Any]
 
 
 class _FrameParser:
@@ -35,7 +36,7 @@ class _FrameParser:
         self.event_type = "message"
         self.data_lines: list[str] = []
 
-    def feed(self, line: Union[str, bytes]) -> Optional[SseEvent]:
+    def feed(self, line: str | bytes) -> SseEvent | None:
         if isinstance(line, bytes):
             line = line.decode("utf-8", errors="replace")
         line = line.rstrip("\r\n")
@@ -48,8 +49,8 @@ class _FrameParser:
             self.data_lines.append(value[1:] if value.startswith(" ") else value)
         return None
 
-    def flush(self) -> Optional[SseEvent]:
-        event: Optional[SseEvent] = None
+    def flush(self) -> SseEvent | None:
+        event: SseEvent | None = None
         if self.data_lines:
             text = "\n".join(self.data_lines)
             try:
@@ -62,7 +63,7 @@ class _FrameParser:
         return event
 
 
-def iter_sse_events(lines: Iterable[Union[str, bytes]]) -> Iterator[SseEvent]:
+def iter_sse_events(lines: Iterable[str | bytes]) -> Iterator[SseEvent]:
     """Yield ``(event_type, data)`` pairs from SSE text lines."""
     parser = _FrameParser()
     for line in lines:
@@ -74,7 +75,7 @@ def iter_sse_events(lines: Iterable[Union[str, bytes]]) -> Iterator[SseEvent]:
         yield event
 
 
-async def aiter_sse_events(lines: AsyncIterable[Union[str, bytes]]) -> AsyncIterator[SseEvent]:
+async def aiter_sse_events(lines: AsyncIterable[str | bytes]) -> AsyncIterator[SseEvent]:
     """Async twin of :func:`iter_sse_events` (e.g. over ``httpx.Response.aiter_lines()``)."""
     parser = _FrameParser()
     async for line in lines:

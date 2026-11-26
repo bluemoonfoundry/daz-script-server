@@ -1493,8 +1493,7 @@ class _FakeSSEResponse:
         self.closed = False
 
     def iter_content(self, chunk_size=None):
-        for chunk in self._chunks:
-            yield chunk
+        yield from self._chunks
 
     def close(self):
         self.closed = True

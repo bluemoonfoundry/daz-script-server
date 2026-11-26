@@ -141,7 +141,7 @@ def _recipe_light(recipe: SceneRecipe, name: str, spec: RecipeLight) -> DesiredE
                   spec.intensity, spec.color)
 
 
-def compute_desired(recipe: SceneRecipe) -> "dict[str, DesiredEntity]":
+def compute_desired(recipe: SceneRecipe) -> dict[str, DesiredEntity]:
     """Compute every entity's desired channels, keyed by ``DesiredEntity.path``."""
     out: dict = {}
 
@@ -169,7 +169,7 @@ def compute_desired(recipe: SceneRecipe) -> "dict[str, DesiredEntity]":
         for role, default in _RIG_DEFAULTS:
             ov = getattr(rig, role)
 
-            def pick(field: str):
+            def pick(field: str, ov=ov, default=default):
                 val = getattr(ov, field, None) if ov is not None else None
                 return getattr(default, field) if val is None else val
 

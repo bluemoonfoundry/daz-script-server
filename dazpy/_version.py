@@ -10,7 +10,7 @@ import threading
 import warnings
 from dataclasses import dataclass
 from types import FrameType
-from typing import Callable
+from collections.abc import Callable
 
 from .exceptions import ServerVersionWarning
 
@@ -39,7 +39,7 @@ def parse_version(value: object) -> tuple[int, int] | None:
 ATOMIC_RENDER_BATCH_VERSION = (2, 17)
 
 
-def server_at_least(check: "VersionCheck | None", version: tuple[int, int]) -> bool:
+def server_at_least(check: VersionCheck | None, version: tuple[int, int]) -> bool:
     """True when *check* reports a plugin at or above *version*; False if unknown."""
     parsed = parse_version(check.server_version) if check is not None else None
     return parsed is not None and parsed >= version

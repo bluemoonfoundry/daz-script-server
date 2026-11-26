@@ -30,7 +30,8 @@ Typical usage::
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+from typing import Any
+from collections.abc import Mapping
 
 
 # ── Vec3 ──────────────────────────────────────────────────────────────────────
@@ -62,17 +63,17 @@ class Vec3:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Vec3":
+    def from_dict(cls, d: Mapping[str, Any]) -> Vec3:
         """Create from an ``{"x", "y", "z"}`` dict (e.g. from :attr:`~dazpy.DazNode.position`)."""
         return cls(d["x"], d["y"], d["z"])
 
     @classmethod
-    def from_list(cls, v: list[float]) -> "Vec3":
+    def from_list(cls, v: list[float]) -> Vec3:
         """Create from a ``[x, y, z]`` list (e.g. a vertex from :meth:`~dazpy.DazGeometry.vertex_positions_all`)."""
         return cls(v[0], v[1], v[2])
 
     @classmethod
-    def zero(cls) -> "Vec3":
+    def zero(cls) -> Vec3:
         """Return the zero vector ``(0, 0, 0)``."""
         return cls(0.0, 0.0, 0.0)
 
@@ -88,22 +89,22 @@ class Vec3:
 
     # ── arithmetic ────────────────────────────────────────────────────────────
 
-    def __add__(self, other: "Vec3") -> "Vec3":
+    def __add__(self, other: Vec3) -> Vec3:
         return Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
 
-    def __sub__(self, other: "Vec3") -> "Vec3":
+    def __sub__(self, other: Vec3) -> Vec3:
         return Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
 
-    def __mul__(self, scalar: float) -> "Vec3":
+    def __mul__(self, scalar: float) -> Vec3:
         return Vec3(self.x * scalar, self.y * scalar, self.z * scalar)
 
-    def __rmul__(self, scalar: float) -> "Vec3":
+    def __rmul__(self, scalar: float) -> Vec3:
         return self.__mul__(scalar)
 
-    def __truediv__(self, scalar: float) -> "Vec3":
+    def __truediv__(self, scalar: float) -> Vec3:
         return Vec3(self.x / scalar, self.y / scalar, self.z / scalar)
 
-    def __neg__(self) -> "Vec3":
+    def __neg__(self) -> Vec3:
         return Vec3(-self.x, -self.y, -self.z)
 
     def __eq__(self, other: object) -> bool:
@@ -116,11 +117,11 @@ class Vec3:
 
     # ── geometry ──────────────────────────────────────────────────────────────
 
-    def dot(self, other: "Vec3") -> float:
+    def dot(self, other: Vec3) -> float:
         """Dot product."""
         return self.x * other.x + self.y * other.y + self.z * other.z
 
-    def cross(self, other: "Vec3") -> "Vec3":
+    def cross(self, other: Vec3) -> Vec3:
         """Cross product (right-hand rule)."""
         return Vec3(
             self.y * other.z - self.z * other.y,
@@ -136,22 +137,22 @@ class Vec3:
         """Euclidean length."""
         return math.sqrt(self.length_sq())
 
-    def normalize(self) -> "Vec3":
+    def normalize(self) -> Vec3:
         """Return a unit-length copy.  Returns the zero vector unchanged."""
         mag = self.length()
         if mag < 1e-10:
             return Vec3(0.0, 0.0, 0.0)
         return self / mag
 
-    def distance_sq(self, other: "Vec3") -> float:
+    def distance_sq(self, other: Vec3) -> float:
         """Squared distance to *other*."""
         return (self - other).length_sq()
 
-    def distance(self, other: "Vec3") -> float:
+    def distance(self, other: Vec3) -> float:
         """Euclidean distance to *other*."""
         return math.sqrt(self.distance_sq(other))
 
-    def lerp(self, other: "Vec3", t: float) -> "Vec3":
+    def lerp(self, other: Vec3, t: float) -> Vec3:
         """Linearly interpolate toward *other*.  ``t=0`` → self, ``t=1`` → other."""
         return Vec3(
             self.x + (other.x - self.x) * t,
@@ -159,7 +160,7 @@ class Vec3:
             self.z + (other.z - self.z) * t,
         )
 
-    def reflect(self, normal: "Vec3") -> "Vec3":
+    def reflect(self, normal: Vec3) -> Vec3:
         """Reflect this vector about *normal* (normal must be unit length)."""
         return self - normal * (2.0 * self.dot(normal))
 
@@ -335,12 +336,12 @@ class Quat:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def identity(cls) -> "Quat":
+    def identity(cls) -> Quat:
         """Return the identity quaternion ``(0, 0, 0, 1)`` (no rotation)."""
         return cls(0.0, 0.0, 0.0, 1.0)
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "Quat":
+    def from_dict(cls, d: Mapping[str, Any]) -> Quat:
         """Create from an ``{"x", "y", "z", "w"}`` dict, components taken as-is.
 
         For a quaternion read from Studio (:attr:`~dazpy.DazNode.rotation`,
@@ -350,7 +351,7 @@ class Quat:
         return cls(d["x"], d["y"], d["z"], d["w"])
 
     @classmethod
-    def from_dz(cls, d: Mapping[str, Any]) -> "Quat":
+    def from_dz(cls, d: Mapping[str, Any]) -> Quat:
         """Create from a DAZ Studio ``DzQuat`` dict.
 
         A DzQuat stores the *conjugate* ``(-x, -y, -z, w)`` of the math3
@@ -367,7 +368,7 @@ class Quat:
 
     @classmethod
     def from_dz_euler(cls, x: float, y: float, z: float, rotation_order: str = "XYZ",
-                      orientation: "Quat | None" = None) -> "Quat":
+                      orientation: Quat | None = None) -> Quat:
         """The local rotation Studio produces from rotation channel values.
 
         Studio's rotation order string (``getRotationOrder()``, e.g. ``"YZX"``)
@@ -394,7 +395,7 @@ class Quat:
         return orientation.multiply(e).multiply(orientation.conjugate())
 
     def to_dz_euler(self, rotation_order: str = "XYZ",
-                    orientation: "Quat | None" = None) -> tuple[float, float, float]:
+                    orientation: Quat | None = None) -> tuple[float, float, float]:
         """Rotation channel values ``(x, y, z)`` that reproduce this local rotation.
 
         Inverse of :meth:`from_dz_euler`; pass the values to
@@ -406,7 +407,7 @@ class Quat:
         return q.to_euler(order=_dz_order(rotation_order))
 
     @classmethod
-    def from_euler(cls, x: float, y: float, z: float, order: str = "XYZ") -> "Quat":
+    def from_euler(cls, x: float, y: float, z: float, order: str = "XYZ") -> Quat:
         """Create from Euler angles in degrees using intrinsic rotations.
 
         Intrinsic means each rotation is applied in the frame left by the
@@ -432,7 +433,7 @@ class Quat:
         return cls(qx, qy, qz, qw)
 
     @classmethod
-    def from_axis_angle(cls, axis: "Vec3", angle_deg: float) -> "Quat":
+    def from_axis_angle(cls, axis: Vec3, angle_deg: float) -> Quat:
         """Create from an axis and angle in degrees.
 
         Args:
@@ -484,7 +485,7 @@ class Quat:
 
     # ── arithmetic ────────────────────────────────────────────────────────────
 
-    def multiply(self, other: "Quat") -> "Quat":
+    def multiply(self, other: Quat) -> Quat:
         """Hamilton product ``self * other``.
 
         Composing rotations: ``a.multiply(b)`` applies *a* first, then *b*
@@ -500,7 +501,7 @@ class Quat:
             aw*bw - ax*bx - ay*by - az*bz,
         )
 
-    def conjugate(self) -> "Quat":
+    def conjugate(self) -> Quat:
         """Return the conjugate ``(-x, -y, -z, w)``."""
         return Quat(-self.x, -self.y, -self.z, self.w)
 
@@ -508,20 +509,20 @@ class Quat:
         """Quaternion norm."""
         return math.sqrt(self.x**2 + self.y**2 + self.z**2 + self.w**2)
 
-    def normalize(self) -> "Quat":
+    def normalize(self) -> Quat:
         """Return a unit-length copy."""
         mag = self.length()
         if mag < 1e-10:
             return Quat.identity()
         return Quat(self.x/mag, self.y/mag, self.z/mag, self.w/mag)
 
-    def dot(self, other: "Quat") -> float:
+    def dot(self, other: Quat) -> float:
         """4D dot product (used internally by :meth:`slerp`)."""
         return self.x*other.x + self.y*other.y + self.z*other.z + self.w*other.w
 
     # ── rotation ──────────────────────────────────────────────────────────────
 
-    def rotate(self, v: "Vec3") -> "Vec3":
+    def rotate(self, v: Vec3) -> Vec3:
         """Rotate vector *v* by this quaternion.
 
         Uses the sandwich product ``q * v * q⁻¹``.
@@ -541,7 +542,7 @@ class Quat:
 
     # ── interpolation ─────────────────────────────────────────────────────────
 
-    def slerp(self, other: "Quat", t: float) -> "Quat":
+    def slerp(self, other: Quat, t: float) -> Quat:
         """Spherical linear interpolation.
 
         Always takes the shortest arc between the two orientations.
@@ -613,7 +614,7 @@ class BoundingBox:
     min: Vec3
     max: Vec3
 
-    def __init__(self, min: "Vec3", max: "Vec3") -> None:
+    def __init__(self, min: Vec3, max: Vec3) -> None:
         object.__setattr__(self, "min", min)
         object.__setattr__(self, "max", max)
 
@@ -623,7 +624,7 @@ class BoundingBox:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "BoundingBox":
+    def from_dict(cls, d: Mapping[str, Any]) -> BoundingBox:
         """Create from the dict returned by :meth:`~dazpy.DazNode.bounding_box`.
 
         Expected shape: ``{"min": {"x":..., "y":..., "z":...}, "max": {...}}``.
@@ -631,7 +632,7 @@ class BoundingBox:
         return cls(Vec3.from_dict(d["min"]), Vec3.from_dict(d["max"]))
 
     @classmethod
-    def from_points(cls, points: list["Vec3"]) -> "BoundingBox":
+    def from_points(cls, points: list[Vec3]) -> BoundingBox:
         """Compute the tight bounding box around a list of :class:`Vec3` points."""
         if not points:
             raise ValueError("from_points requires at least one point")
@@ -649,7 +650,7 @@ class BoundingBox:
     # ── geometry ──────────────────────────────────────────────────────────────
 
     @property
-    def center(self) -> "Vec3":
+    def center(self) -> Vec3:
         """Geometric center of the box."""
         return Vec3(
             (self.min.x + self.max.x) * 0.5,
@@ -658,7 +659,7 @@ class BoundingBox:
         )
 
     @property
-    def size(self) -> "Vec3":
+    def size(self) -> Vec3:
         """Width, height, and depth as a :class:`Vec3`."""
         return self.max - self.min
 
@@ -668,24 +669,24 @@ class BoundingBox:
         s = self.size
         return s.x * s.y * s.z
 
-    def contains(self, point: "Vec3") -> bool:
+    def contains(self, point: Vec3) -> bool:
         """Return ``True`` if *point* is inside or on the surface of the box."""
         return (self.min.x <= point.x <= self.max.x and
                 self.min.y <= point.y <= self.max.y and
                 self.min.z <= point.z <= self.max.z)
 
-    def overlaps(self, other: "BoundingBox") -> bool:
+    def overlaps(self, other: BoundingBox) -> bool:
         """Return ``True`` if this box and *other* share any volume."""
         return (self.min.x <= other.max.x and self.max.x >= other.min.x and
                 self.min.y <= other.max.y and self.max.y >= other.min.y and
                 self.min.z <= other.max.z and self.max.z >= other.min.z)
 
-    def expand(self, amount: float) -> "BoundingBox":
+    def expand(self, amount: float) -> BoundingBox:
         """Return a box uniformly expanded by *amount* on all sides."""
         v = Vec3(amount, amount, amount)
         return BoundingBox(self.min - v, self.max + v)
 
-    def union(self, other: "BoundingBox") -> "BoundingBox":
+    def union(self, other: BoundingBox) -> BoundingBox:
         """Return the smallest box that contains both this box and *other*."""
         return BoundingBox(
             Vec3(min(self.min.x, other.min.x),
@@ -728,7 +729,7 @@ def _mat3_det(m: list) -> float:
     )
 
 
-def _mat3_to_quat(m: list) -> "Quat":
+def _mat3_to_quat(m: list) -> Quat:
     """Convert a 3x3 rotation matrix (``m[row][col]``, det == +1) to a unit quaternion."""
     trace = m[0][0] + m[1][1] + m[2][2]
     if trace > 0:
@@ -823,13 +824,13 @@ class AxisRemap:
 
     # ── application ───────────────────────────────────────────────────────────
 
-    def apply_vec3(self, v: "Vec3") -> "Vec3":
+    def apply_vec3(self, v: Vec3) -> Vec3:
         """Remap a vector or point. Works for any remap, proper or reflective."""
         comps = (v.x, v.y, v.z)
         out = [comps[idx] * sign for idx, sign in self._specs]
         return Vec3(out[0], out[1], out[2])
 
-    def apply_quat(self, q: "Quat") -> "Quat":
+    def apply_quat(self, q: Quat) -> Quat:
         """Remap a rotation.
 
         Raises:
@@ -845,7 +846,7 @@ class AxisRemap:
         r = self._rotation_quat
         return r.multiply(q).multiply(r.conjugate())
 
-    def apply_bbox(self, b: "BoundingBox") -> "BoundingBox":
+    def apply_bbox(self, b: BoundingBox) -> BoundingBox:
         """Remap a bounding box.
 
         Both corners are remapped and the result is re-sorted per axis,

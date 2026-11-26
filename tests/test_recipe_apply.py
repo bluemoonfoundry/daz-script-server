@@ -359,6 +359,22 @@ class RollbackTests(unittest.TestCase):
         self.assertNotIn("reparent", ops.methods())
         self.assertEqual(r.rollback_errors, ())
 
+    def test_rollback_restores_each_entitys_own_record(self):
+        # The record-restore undo for every modified entity must capture that
+        # entity's node and prior record, not the loop's last ones (B023).
+        D_old = ds(d_camera("one"), d_camera("two"))
+        L = live_matching(D_old)
+        D_new = ds(d_camera("one", focal_length=85.0), d_camera("two", focal_length=24.0))
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        plan, r = run(D_new, L, ops)
+        self.assertTrue(r.rolled_back)
+        writes = [c for c in ops.calls_with_args if c[0] == "write_record"]
+        restores = writes[len(writes) // 2:]
+        expected = {L.entities[p].node_name: L.entities[p].record
+                    for p in ("cameras.one", "cameras.two")}
+        self.assertEqual(len(restores), 2)
+        self.assertEqual({c[1]: c[2] for c in restores}, expected)
+
     def test_rollback_error_is_reported_not_raised(self):
         ops = FakeOps(fail_on=[("set_channels", 2), ("delete", 1)], create_names=NAMES)
         plan, r = run(D_CREATE_MODIFY, L_OLD, ops)

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, fields, MISSING
-from typing import Any, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Literal
+from collections.abc import Mapping
 
-Vec3T = Tuple[float, float, float]
+Vec3T = tuple[float, float, float]
 LightKind = Literal["spot", "point", "distant"]
-RefOrVec = Union[str, Vec3T]
+RefOrVec = str | Vec3T
 
 
 @dataclass(frozen=True)
@@ -24,25 +25,25 @@ class AssetSpec:
 class ActorSpec:
     asset: str
     position: Vec3T = (0.0, 0.0, 0.0)
-    rotation: Optional[Vec3T] = None
-    facing: Optional[RefOrVec] = None
-    pose: Optional[str] = None
+    rotation: Vec3T | None = None
+    facing: RefOrVec | None = None
+    pose: str | None = None
 
 
 @dataclass(frozen=True)
 class PropSpec:
     asset: str
     position: Vec3T = (0.0, 0.0, 0.0)
-    rotation: Optional[Vec3T] = None
+    rotation: Vec3T | None = None
 
 
 @dataclass(frozen=True)
 class RigLightOverride:
-    azimuth_deg: Optional[float] = None
-    elevation_deg: Optional[float] = None
-    distance: Optional[float] = None
-    intensity: Optional[float] = None
-    color: Optional[Tuple[int, int, int]] = None
+    azimuth_deg: float | None = None
+    elevation_deg: float | None = None
+    distance: float | None = None
+    intensity: float | None = None
+    color: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,19 +51,19 @@ class RecipeRig:
     type: Literal["three_point"]
     target: str
     light_type: LightKind = "spot"
-    key: Optional[RigLightOverride] = None
-    fill: Optional[RigLightOverride] = None
-    rim: Optional[RigLightOverride] = None
+    key: RigLightOverride | None = None
+    fill: RigLightOverride | None = None
+    rim: RigLightOverride | None = None
 
 
 @dataclass(frozen=True)
 class RecipeLight:
     type: LightKind
     position: Vec3T
-    look_at: Optional[RefOrVec] = None
-    rotation: Optional[Vec3T] = None
+    look_at: RefOrVec | None = None
+    rotation: Vec3T | None = None
     intensity: float = 100.0
-    color: Tuple[int, int, int] = (255, 255, 255)
+    color: tuple[int, int, int] = (255, 255, 255)
 
 
 @dataclass(frozen=True)
@@ -77,26 +78,26 @@ class RecipeEnvironment:
 
 @dataclass(frozen=True)
 class RecipeCamera:
-    frame: Optional[Union[str, Tuple[str, ...]]] = None
+    frame: str | tuple[str, ...] | None = None
     shot_type: Literal["extreme_wide", "wide", "full_body", "medium_wide", "medium",
                        "medium_close_up", "close_up", "extreme_close_up"] = "medium"
     azimuth_deg: float = 0.0
     elevation_deg: float = 10.0
-    angle: Optional[Literal["eye_level", "high", "low", "birds_eye", "worms_eye"]] = None
+    angle: Literal["eye_level", "high", "low", "birds_eye", "worms_eye"] | None = None
     composition: Literal["center", "left_third", "right_third"] = "center"
-    position: Optional[Vec3T] = None
-    look_at: Optional[RefOrVec] = None
-    rotation: Optional[Vec3T] = None
+    position: Vec3T | None = None
+    look_at: RefOrVec | None = None
+    rotation: Vec3T | None = None
     focal_length: float = 50.0
     depth_of_field: bool = False
-    focal_distance: Optional[float] = None
+    focal_distance: float | None = None
 
 
 @dataclass(frozen=True)
 class RenderSpec:
-    engine: Optional[Literal["iray", "filament", "viewport"]] = None
-    resolution: Optional[Tuple[int, int]] = None
-    iray_samples: Optional[int] = None
+    engine: Literal["iray", "filament", "viewport"] | None = None
+    resolution: tuple[int, int] | None = None
+    iray_samples: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,7 @@ class ShotSpec:
     id: str
     camera: str
     output: str
-    render: Optional[RenderSpec] = None
+    render: RenderSpec | None = None
     allow_crop: bool = False
 
 
@@ -154,7 +155,7 @@ _NESTED: dict[Any, Mapping[str, Any]] = {
 }
 
 
-def _entities(cls: Any, section: Optional[Mapping[str, Any]]) -> dict:
+def _entities(cls: Any, section: Mapping[str, Any] | None) -> dict:
     return {k: _build(cls, v, _NESTED[cls]) for k, v in (section or {}).items()}
 
 
@@ -167,13 +168,13 @@ class SceneRecipe:
     props: Mapping[str, PropSpec] = field(default_factory=dict)
     rigs: Mapping[str, RecipeRig] = field(default_factory=dict)
     lights: Mapping[str, RecipeLight] = field(default_factory=dict)
-    environment: Optional[RecipeEnvironment] = None
+    environment: RecipeEnvironment | None = None
     cameras: Mapping[str, RecipeCamera] = field(default_factory=dict)
-    shots: Tuple[ShotSpec, ...] = ()
+    shots: tuple[ShotSpec, ...] = ()
     render: RenderSpec = field(default_factory=RenderSpec)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SceneRecipe":
+    def from_dict(cls, data: dict) -> SceneRecipe:
         from ._recipe_validate import validate_offline
         from .exceptions import RecipeValidationError
 
@@ -197,7 +198,7 @@ class SceneRecipe:
         )
 
     @classmethod
-    def from_json(cls, text: str) -> "SceneRecipe":
+    def from_json(cls, text: str) -> SceneRecipe:
         return cls.from_dict(json.loads(text))
 
     def to_dict(self) -> dict:

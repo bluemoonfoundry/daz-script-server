@@ -16,7 +16,8 @@ from __future__ import annotations
 import difflib
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
+from collections.abc import Iterable
 
 from ._recipe_json import to_jsonable
 
@@ -34,8 +35,8 @@ class RecipeIssue:
     path: str
     code: str
     message: str
-    allowed: Optional[Tuple[str, ...]] = None
-    suggestion: Optional[str] = None
+    allowed: tuple[str, ...] | None = None
+    suggestion: str | None = None
 
     def to_dict(self) -> dict:
         return to_jsonable(self)
@@ -44,8 +45,8 @@ class RecipeIssue:
 @dataclass(frozen=True)
 class ValidationReport:
     ok: bool
-    errors: Tuple[RecipeIssue, ...]
-    warnings: Tuple[RecipeIssue, ...]
+    errors: tuple[RecipeIssue, ...]
+    warnings: tuple[RecipeIssue, ...]
 
     def to_dict(self) -> dict:
         return to_jsonable(self)
@@ -58,7 +59,7 @@ def file_not_found(path: str, file: str) -> RecipeIssue:
                        "up in every Daz content directory; other paths must be absolute and exist.")
 
 
-def _closest(name: Any, candidates: Iterable[str]) -> Optional[str]:
+def _closest(name: Any, candidates: Iterable[str]) -> str | None:
     if not isinstance(name, str):
         return None
     m = difflib.get_close_matches(name, list(candidates), n=1, cutoff=0.6)
@@ -81,8 +82,8 @@ def _join(base: str, name: str) -> str:
 class _Validator:
     def __init__(self, data: Any):
         self.data = data
-        self.errors: List[RecipeIssue] = []
-        self.refs: List[Tuple[str, Any, str]] = []  # (path, value, namespace)
+        self.errors: list[RecipeIssue] = []
+        self.refs: list[tuple[str, Any, str]] = []  # (path, value, namespace)
 
     def err(self, path, code, message, allowed=None, suggestion=None):
         self.errors.append(RecipeIssue(
@@ -174,7 +175,7 @@ class _Validator:
         else:
             self.err(path, "invalid_type", "must be an entity key (string) or [x, y, z]")
 
-    def entities(self, v, path, check) -> Dict[str, Any]:
+    def entities(self, v, path, check) -> dict[str, Any]:
         if not isinstance(v, dict):
             self.err(path, "invalid_type", "must be an object")
             return {}
@@ -360,11 +361,11 @@ class _Validator:
                      "camera needs 'frame' (auto-framing) or 'position' plus "
                      "'look_at'/'rotation' (explicit)")
 
-    def shots(self, v, path) -> List[Any]:
+    def shots(self, v, path) -> list[Any]:
         if not isinstance(v, list):
             self.err(path, "invalid_type", "must be an array")
             return []
-        seen: Dict[str, int] = {}
+        seen: dict[str, int] = {}
         for i, s in enumerate(v):
             p = f"{path}[{i}]"
             if not self.obj(s, p, ("id", "camera", "output", "render", "allow_crop"),
