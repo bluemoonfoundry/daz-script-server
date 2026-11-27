@@ -171,7 +171,9 @@ from ._recipe_model import SceneRecipe
 from ._recipe_validate import RecipeIssue, ValidationReport
 from ._recipe_diff import Conflict, RecipePlan
 from ._recipe_apply import ApplyResult
-from .recipe import ObserveReport, ShotRender
+from .recipe import ObserveReport, ShotRender, pin
+from ._asset_ref import AssetRef
+from ._asset_finder import AssetFinder, ContentBrowserFinder, StudioFinder
 from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
@@ -313,6 +315,11 @@ __all__ = [
     "ApplyResult",
     "ObserveReport",
     "ShotRender",
+    "pin",
+    "AssetRef",
+    "AssetFinder",
+    "StudioFinder",
+    "ContentBrowserFinder",
     "CheckFinding",
     "CheckReport",
     "render",

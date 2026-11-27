@@ -1,6 +1,7 @@
 """Unit tests for the public scene-recipe facade (validate / plan / apply / observe)."""
 
 import copy
+import dataclasses
 import json
 import os
 import sys
@@ -516,6 +517,244 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual([(w.code, w.path) for w in p.warnings], [("hand_deleted_kept", "cameras.cu")])
         rep = observe(r, self.sim)
         self.assertEqual((rep.in_sync, rep.pending), (True, ()))
+
+
+# ── v2: asset refs, finders, compatibility, pins (Task 13) ───────────────────
+
+from dazpy._asset_finder import AssetCandidate
+from dazpy._asset_resolve import ResolvedAsset
+from dazpy.recipe import pin
+from recipe_fakes import (FakeFinder, fig_payload, item_payload, live_entity_for, live_of)
+
+HAIR = "/People/Genesis 9/Hair/Bob.duf"
+HAIR_B = "/People/Genesis 9/Hair/Bob B.duf"
+G8_HAIR = "/People/Genesis 8 Female/Hair/Long.duf"
+SHAPE = "/People/Genesis 9/Shapes/Tall.duf"
+COMPAT = {G9: {"bases": [], "known": True, "provides": "/Genesis 9"},
+          HAIR: {"bases": ["/Genesis 9"], "known": True, "provides": None},
+          SHAPE: {"bases": ["/Genesis 9"], "known": True, "provides": None},
+          G8_HAIR: {"bases": ["/Genesis 8/Female"], "known": True, "provides": None}}
+
+
+def cand(path=HAIR, product="Bob Hair", sku="123"):
+    return AssetCandidate(path, product, sku, "a1", "Follower/Hair")
+
+
+def v2_recipe(*wearing, presets=(), assets=None, abby_asset=G9, **abby) -> dict:
+    actor = {"asset": abby_asset, **abby}
+    if wearing:
+        actor["wearing"] = list(wearing)
+    if presets:
+        actor["presets"] = list(presets)
+    r = {"recipe_version": 2, "id": RID, "actors": {"abby": actor}}
+    if assets:
+        r["assets"] = assets
+    return r
+
+
+def codes(issues):
+    return {(i.path, i.code) for i in issues}
+
+
+class TestV2Facade(FacadeCase):
+    def test_validate_reports_ambiguous_find(self):
+        finder = FakeFinder(search=[cand(HAIR, "Bob Hair A"), cand(HAIR_B, "Bob Hair B", "124")])
+        rep = validate(v2_recipe({"add": {"find": "bob hair"}, "key": "hair"}),
+                       fake_scene(compat=COMPAT), finder=finder)
+        self.assertFalse(rep.ok)
+        self.assertIn(("actors.abby.wearing.hair", "ambiguous_asset"), codes(rep.errors))
+        self.assertEqual(finder.calls, ["search:bob hair"])
+
+    def test_validate_reports_incompatible(self):
+        scene = fake_scene(compat=COMPAT)
+        rep = validate(v2_recipe({"add": G8_HAIR, "key": "hair"}, presets=[SHAPE]), scene)
+        self.assertFalse(rep.ok)
+        self.assertEqual(codes(rep.errors), {("actors.abby.wearing.hair", "incompatible_asset")})
+        self.assertIn("/Genesis 8/Female", rep.errors[0].message)
+        # a created actor's base comes from its asset's metadata: no live figure read
+        self.assertEqual(scene.scripts_with("recipe:figures"), [])
+
+    def test_validate_unknown_compatibility_warns(self):
+        rep = validate(v2_recipe({"add": "/My/own/hat.duf", "key": "hat"}), fake_scene(compat=COMPAT))
+        self.assertTrue(rep.ok)
+        self.assertEqual(codes(rep.warnings), {("actors.abby.wearing.hat", "compatibility_unknown")})
+
+    def test_validate_taken_over_actor_uses_the_live_figure_base(self):
+        scene = fake_scene(compat=COMPAT, figures=[
+            fig_payload("Genesis8Female", "Abby", compat_base="/Genesis 8/Female")])
+        rep = validate(v2_recipe({"add": HAIR, "key": "hair"}, node="Abby"), scene)
+        self.assertEqual(codes(rep.errors), {("actors.abby.wearing.hair", "incompatible_asset")})
+        self.assertEqual(len(scene.scripts_with("recipe:figures")), 1)
+
+    def test_apply_incompatible_changes_nothing(self):
+        scene = fake_scene(compat=COMPAT)
+        r = v2_recipe({"add": G8_HAIR, "key": "hair"})
+        for fn in (plan, apply):
+            with self.assertRaises(RecipeValidationError) as cm:
+                fn(r, scene)
+            self.assertEqual(codes(cm.exception.report.errors),
+                             {("actors.abby.wearing.hair", "incompatible_asset")})
+        self.assertEqual(scene.ops.calls, [])
+        self.assertFalse([s for s in scene._client.scripts
+                          if "DzDeleteAction" in s or "loadContent" in s or "openFile" in s])
+
+    def test_apply_wearing_error_raises_before_diff(self):
+        scene = fake_scene(compat=COMPAT, figures=[fig_payload("G9", "Abby", compat_base="/Genesis 9")])
+        r = v2_recipe({"replace": {"type": "hair"}, "with": HAIR, "key": "hair"}, node="Abby")
+        with self.assertRaises(RecipeValidationError) as cm:
+            apply(r, scene)
+        self.assertEqual(codes(cm.exception.report.errors),
+                         {("actors.abby.wearing.hair", "replace_target_missing")})
+        self.assertEqual(scene.ops.calls, [])
+
+    def test_apply_resolves_fits_and_records_source(self):
+        scene = fake_scene(compat=COMPAT)
+        result = apply(v2_recipe({"add": {"sku": "123"}, "key": "hair"}), scene,
+                       finder=FakeFinder(files=[cand()]))
+        self.assertTrue(result.applied, result.error)
+        self.assertEqual([m for m in scene.ops.methods() if m in ("create", "fit")],
+                         ["create", "fit"])
+        records = {c[2].path: c[2] for c in scene.ops.calls_with_args if c[0] == "write_record"}
+        self.assertEqual(records["actors.abby.wearing.hair"].source["path"], HAIR)
+        self.assertEqual(records["actors.abby.wearing.hair"].source["sku"], "123")
+        self.assertEqual(records["actors.abby"].source["path"], G9)
+
+    def test_plan_names_finder(self):
+        finder = FakeFinder(files=[cand()], name="fake")
+        p = plan(v2_recipe({"add": {"product": "Bob Hair"}, "key": "hair"}), fake_scene(compat=COMPAT),
+                 finder=finder)
+        self.assertEqual(p.finder, "fake")
+        self.assertEqual(p.to_dict()["finder"], "fake")
+        self.assertIn("fit", [s.op for s in p.steps])
+        # path references never consult (or probe for) a finder
+        path_only = plan(v2_recipe({"add": HAIR, "key": "hair"}), fake_scene(compat=COMPAT),
+                         finder=FakeFinder(name="unused"))
+        self.assertEqual(path_only.finder, "path")
+        v1 = plan(R, fake_scene())
+        self.assertEqual(v1.finder, "path")
+        self.assertNotIn("finder", v1.to_dict())
+
+    def test_v1_recipe_makes_no_v2_round_trips(self):
+        with patch("dazpy.recipe.select_finder") as sel:
+            scene = fake_scene()
+            self.assertTrue(apply(R, scene).applied)
+            plan(R, scene)
+            observe(R, scene)
+            self.assertTrue(validate(R, scene).ok)
+        sel.assert_not_called()
+        for marker in ("recipe:compat", "recipe:figures", "asset_finder:"):
+            self.assertEqual(scene.scripts_with(marker), [], marker)
+
+    def test_compat_warnings_reach_plan_and_apply_result(self):
+        r = v2_recipe({"add": "/My/own/hat.duf", "key": "hat"})
+        p = plan(r, fake_scene(compat=COMPAT))
+        self.assertIn(("actors.abby.wearing.hat", "compatibility_unknown"), codes(p.warnings))
+        result = apply(r, fake_scene(compat=COMPAT))
+        self.assertIn(("actors.abby.wearing.hat", "compatibility_unknown"), codes(result.warnings))
+
+    def test_pin_fills_resolved(self):
+        r = v2_recipe({"add": {"sku": "123"}, "key": "hair"}, presets=[SHAPE],
+                      assets={"g9": G9}, abby_asset="g9")
+        finder = FakeFinder(files=[cand()])
+        out = pin(r, fake_scene(), finder=finder)
+        self.assertEqual(out["assets"]["g9"], {"path": G9, "resolved": {"path": G9}})
+        self.assertEqual(out["actors"]["abby"]["asset"], "g9")
+        self.assertEqual(out["actors"]["abby"]["presets"], [{"path": SHAPE, "resolved": {"path": SHAPE}}])
+        self.assertEqual(out["actors"]["abby"]["wearing"][0]["add"],
+                         {"sku": "123", "resolved": {"path": HAIR, "sku": "123",
+                                                     "product": "Bob Hair", "asset_id": "a1"}})
+        self.assertTrue(validate(out).ok)
+        # a pinned recipe resolves from its pins: the finder is not asked again
+        again = FakeFinder()
+        self.assertEqual(pin(out, fake_scene(), finder=again), out)
+        self.assertEqual(again.calls, [])
+
+    def test_pin_v1_recipe_becomes_v2(self):
+        out = pin(R, fake_scene())
+        self.assertEqual(out["recipe_version"], 2)
+        self.assertEqual(out["assets"]["g9"]["resolved"], {"path": G9})
+        self.assertTrue(validate(out).ok)
+
+    def test_pin_unresolvable_raises(self):
+        with self.assertRaises(RecipeValidationError) as cm:
+            pin(v2_recipe({"add": {"find": "nothing"}, "key": "hair"}), fake_scene(),
+                finder=FakeFinder())
+        self.assertEqual(codes(cm.exception.report.errors),
+                         {("actors.abby.wearing.hair", "asset_not_found")})
+
+    def test_validate_env_browser_down_warns(self):
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]  # closed once the socket is
+        old = os.environ.get("DAZ_BROWSER_URL")
+        os.environ["DAZ_BROWSER_URL"] = f"http://127.0.0.1:{port}"
+        try:
+            scene = fake_scene(compat=COMPAT, cms=[
+                {"path": HAIR, "product": "Bob Hair", "sku": "123", "asset_id": "a1",
+                 "type": "Follower/Hair"}])
+            r = v2_recipe({"add": {"product": "Bob Hair"}, "key": "hair"})
+            rep = validate(r, scene)
+            self.assertTrue(rep.ok, rep.errors)
+            self.assertIn(("", "finder_fallback"), codes(rep.warnings))
+            self.assertEqual(len(scene.scripts_with("asset_finder:product_files")), 1)
+        finally:
+            if old is None:
+                os.environ.pop("DAZ_BROWSER_URL", None)
+            else:
+                os.environ["DAZ_BROWSER_URL"] = old
+
+    def _applied_with_hair(self, live_source: str):
+        r = v2_recipe({"add": HAIR, "key": "hair"})
+        model = SceneRecipe.from_dict(r)
+        resolved = {"actors.abby.asset": ResolvedAsset(dazpy.AssetRef(path=G9), G9, None, None, None,
+                                                       None, "path"),
+                    "actors.abby.wearing.hair": ResolvedAsset(dazpy.AssetRef(path=HAIR), HAIR,
+                                                              None, None, None, None, "path")}
+        d = compute_desired(model, resolved)
+        actor = live_entity_for(d["actors.abby"], node_name="Genesis 9")
+        item = live_entity_for(d["actors.abby.wearing.hair"], group_nodes=("Bob",))
+        item = dataclasses.replace(item, record=dataclasses.replace(
+            item.record, source=resolved["actors.abby.wearing.hair"].to_dict(), primary=True))
+        scene = fake_scene(live_of(actor, item), compat=COMPAT, figures=[fig_payload(
+            "Genesis 9", f"{RID}:abby", compat_base="/Genesis 9",
+            items=[item_payload("Bob", source_path=live_source, record=item.record)])])
+        return r, scene
+
+    def test_observe_source_changed(self):
+        r, scene = self._applied_with_hair("/People/Genesis 9/Hair/Other.duf")
+        rep = observe(r, scene)
+        self.assertIn(("actors.abby.wearing.hair", "source_changed"), codes(rep.drift))
+        self.assertFalse(rep.in_sync)
+
+    def test_observe_same_source_is_not_drift(self):
+        r, scene = self._applied_with_hair("/People/Genesis%209/Hair/Bob.duf")
+        rep = observe(r, scene)
+        self.assertNotIn("source_changed", [i.code for i in rep.drift])
+
+    def test_unchanged_reference_reuses_the_recorded_resolution(self):
+        r = v2_recipe({"add": {"sku": "123"}, "key": "hair"})
+        first = fake_scene(compat=COMPAT)
+        self.assertTrue(apply(r, first, finder=FakeFinder(files=[cand()])).applied)
+        records = {c[2].path: c[2] for c in first.ops.calls_with_args if c[0] == "write_record"}
+        entities = []
+        for path, node_name in (("actors.abby", "Genesis 9"), ("actors.abby.wearing.hair", "Bob")):
+            e = live_entity_for(compute_desired(SceneRecipe.from_dict(r), {
+                "actors.abby.asset": ResolvedAsset(dazpy.AssetRef(path=G9), G9, None, None, None,
+                                                   None, "path"),
+                "actors.abby.wearing.hair": ResolvedAsset(dazpy.AssetRef(sku="123"), HAIR, "123",
+                                                          None, None, None, "fake")})[path],
+                node_name=node_name)
+            entities.append(dataclasses.replace(e, record=records[path]))
+        again = FakeFinder()
+        p = plan(r, fake_scene(live_of(*entities), compat=COMPAT), finder=again)
+        self.assertEqual((again.calls, p.finder), ([], "path"))
+        self.assertNotIn("fit", [s.op for s in p.steps])
+
+    def test_package_exports_v2(self):
+        for name in ("pin", "AssetRef", "AssetFinder", "StudioFinder", "ContentBrowserFinder"):
+            self.assertIn(name, dazpy.__all__)
+            self.assertTrue(hasattr(dazpy, name))
 
 
 if __name__ == "__main__":

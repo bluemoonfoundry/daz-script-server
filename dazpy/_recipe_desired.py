@@ -123,10 +123,11 @@ def _actor_entities(recipe: SceneRecipe, name: str,
     if a.node is not None:
         create["take_over"] = a.node
         create["label"] = a.node
-        rp = f"actors.{name}.asset"
-        if resolved is not None and rp in resolved:
-            # provenance for the take-over record (source.requested); never a replace trigger
-            create["source"] = resolved[rp].to_dict()
+    rp = f"actors.{name}.asset"
+    if resolved is not None and rp in resolved:
+        # provenance for the record (source.requested, re-used by later resolutions);
+        # never a replace trigger
+        create["source"] = resolved[rp].to_dict()
     channels: dict = {}
     if a.node is None:
         pos = _spec_position(a)
@@ -225,9 +226,12 @@ def compute_desired(recipe: SceneRecipe,
         for e in _actor_entities(recipe, name, resolved):
             add(e)
     for name, p in recipe.props.items():
+        rp = f"props.{name}.asset"
+        create = {"asset_path": _path_for(prop_ref(recipe, name), rp, resolved)}
+        if resolved is not None:
+            create["source"] = resolved[rp].to_dict()  # provenance, as for actors
         add(DesiredEntity(
-            f"props.{name}", "prop", f"{recipe.id}:{name}",
-            {"asset_path": _path_for(prop_ref(recipe, name), f"props.{name}.asset", resolved)},
+            f"props.{name}", "prop", f"{recipe.id}:{name}", create,
             {"transform": {"position": _t(p.position),
                            "rotation": _t(p.rotation) if p.rotation is not None else (0.0, 0.0, 0.0)}}))
     for name, cam in recipe.cameras.items():

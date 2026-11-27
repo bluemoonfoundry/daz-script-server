@@ -391,17 +391,46 @@ class FakeScene:
     :class:`FakeOps`) is what it writes through.
     """
 
-    def __init__(self, live: LiveState, missing_files=(), ops: FakeOps | None = None) -> None:
+    def __init__(self, live: LiveState, missing_files=(), ops: FakeOps | None = None, *,
+                 compat: dict | None = None, figures: list | None = None,
+                 cms: list | None = None) -> None:
         self.live = live
         self.ops = ops or FakeOps()
         self.missing = set(missing_files)
-        self._client = scripted_client(("recipe:resolve", self._resolve))
+        # v2 (Task 13): compat {path: {"bases", "known", "provides"}} (absent = unknown),
+        # figures = the recipe:figures payload's "figures" list, cms = Studio content
+        # database assets for asset_finder scripts (None = CMS not running).
+        self.compat = dict(compat or {})
+        self.figures = list(figures or [])
+        self.cms = cms
+        self._client = scripted_client(("recipe:resolve", self._resolve),
+                                       ("recipe:compat", self._compat),
+                                       ("recipe:figure-labels", self._labels),
+                                       ("recipe:figures", lambda s: {"figures": self.figures}),
+                                       ("asset_finder:", self._cms))
         self._client.scene = self
 
-    def _resolve(self, script: str) -> dict:
+    @staticmethod
+    def _paths(script: str) -> list:
         import re
-        paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
-        return {p: ("" if p in self.missing else p) for p in paths}
+        return json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
+
+    def _resolve(self, script: str) -> dict:
+        return {p: ("" if p in self.missing else p) for p in self._paths(script)}
+
+    def _compat(self, script: str) -> dict:
+        return {p: self.compat.get(p, {"bases": [], "known": False, "provides": None})
+                for p in self._paths(script)}
+
+    def _labels(self, script: str) -> list:
+        return [f["label"] for f in self.figures]
+
+    def _cms(self, script: str) -> dict:
+        return {"cms": self.cms is not None, "assets": list(self.cms or [])}
+
+    def scripts_with(self, marker: str) -> list[str]:
+        """The executed scripts containing *marker* (e.g. ``"recipe:compat"``)."""
+        return [s for s in self._client.scripts if marker in s]
 
     def tweak(self, path: str, channel: str) -> None:
         """Hand-edit *path*'s observed *channel* in the live state."""
@@ -409,8 +438,41 @@ class FakeScene:
 
 
 def fake_scene(live: LiveState | None = None, *, missing_files=(),
-               ops: FakeOps | None = None) -> FakeScene:
-    return FakeScene(live if live is not None else empty_live(), missing_files, ops)
+               ops: FakeOps | None = None, **v2) -> FakeScene:
+    """A :class:`FakeScene`; *v2* passes ``compat`` / ``figures`` / ``cms`` through."""
+    return FakeScene(live if live is not None else empty_live(), missing_files, ops, **v2)
+
+
+def fig_payload(name: str, label: str | None = None, *, compat_base: str | None = None,
+                record: EntityRecord | None = None, items: list[dict] | None = None) -> dict:
+    """One figure as the ``recipe:figures`` script reports it."""
+    return {"name": name, "label": label or name, "record": record.to_json() if record else None,
+            "compat_base": compat_base, "items": list(items or [])}
+
+
+def item_payload(name: str, *, label: str | None = None, type_: str | None = "Follower/Hair",
+                 source_path: str | None = None, record: EntityRecord | None = None,
+                 foreign=()) -> dict:
+    """One fitted item of a :func:`fig_payload` figure."""
+    return {"name": name, "label": label or name, "type": type_, "source_path": source_path,
+            "record": record.to_json() if record else None, "foreign": list(foreign)}
+
+
+class FakeFinder:
+    """An :class:`~dazpy.AssetFinder` answering canned candidates and counting calls."""
+
+    def __init__(self, search=(), files=(), name: str = "fake") -> None:
+        self.name = name
+        self._search, self._files = list(search), list(files)
+        self.calls: list[str] = []
+
+    def search(self, phrase, *, type, limit=10):
+        self.calls.append(f"search:{phrase}")
+        return list(self._search)[:limit]
+
+    def product_files(self, *, sku=None, product=None):
+        self.calls.append(f"product_files:{sku or product}")
+        return list(self._files)
 
 
 def patch_facade(test) -> None:

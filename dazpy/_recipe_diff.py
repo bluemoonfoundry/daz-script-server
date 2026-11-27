@@ -180,11 +180,15 @@ class RecipePlan:
     tombstones: tuple[str, ...] = ()
     # (actor path, done entry) to append to that actor's record ``done`` log.
     done_log: tuple[tuple[str, dict], ...] = ()
+    # The finder that answered find/product/sku references; "path" when none was asked.
+    finder: str = "path"
 
     def to_dict(self) -> dict:
         d = to_jsonable(self)
         if not self.done_log:
             del d["done_log"]  # v1 plans serialise exactly as before
+        if self.finder == "path":
+            del d["finder"]
         return d
 
 

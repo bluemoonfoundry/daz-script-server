@@ -216,7 +216,18 @@ class DesiredV2Tests(unittest.TestCase):
     def test_taken_over_actor_create_carries_source(self):
         d = compute_desired(v2_recipe({"node": "Abby"}), RESOLVED)
         self.assertEqual(d["actors.abby"].create["source"], RESOLVED["actors.abby.asset"].to_dict())
-        self.assertNotIn("source", compute_desired(v2_recipe(), RESOLVED)["actors.abby"].create)
+
+    def test_created_actor_create_carries_source_for_stable_resolution(self):
+        # Task 13: the recorded resolution (spec 5, 9) is re-used while the reference is unchanged
+        d = compute_desired(v2_recipe(), RESOLVED)
+        self.assertEqual(d["actors.abby"].create["source"], RESOLVED["actors.abby.asset"].to_dict())
+
+    def test_unresolved_desired_has_no_source(self):
+        d = compute_desired(SceneRecipe.from_dict({
+            "recipe_version": 1, "id": "r", "assets": {"g": {"path": "/G.duf"}, "b": {"path": "/P.duf"}},
+            "actors": {"a": {"asset": "g"}}, "props": {"p": {"asset": "b"}}}))
+        self.assertNotIn("source", d["actors.a"].create)
+        self.assertNotIn("source", d["props.p"].create)
 
     def test_taken_over_actor_with_position_has_transform(self):
         d = compute_desired(v2_recipe({"node": "Abby", "position": [5, 0, 0]}), RESOLVED)
