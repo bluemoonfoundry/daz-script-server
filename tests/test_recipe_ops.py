@@ -10,6 +10,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from dazpy._recipe_ops import DazSceneOps  # noqa: E402
 from dazpy.exceptions import NodeNotFoundError  # noqa: E402
 
+# the anchor-release answer of a clean fit (spec 15.6)
+RELEASED = {"error": "", "moved": [], "deleted": True}
+
 SAVED = {"XPos": 0.0, "YPos": 0.0, "ZPos": 0.0, "XRot": 0.0, "YRot": 15.0, "ZRot": 0.0,
          "XScale": 1.0, "YScale": 1.0, "ZScale": 1.0, "Scale": 1.0}
 
@@ -80,9 +83,11 @@ class TestSceneOpsFitting(unittest.TestCase):
                              channels={})
 
     def _fit_ops(self, names, fitted, extra=()):
-        # resolve, snapshot, load, claim, fit, then cleanup (failure) or settle (success)
+        # resolve, snapshot, anchored load, claim, fit, then cleanup (failure) or
+        # anchor release + settle (success)
         fit_out = {"error": "", "fitted": fitted, "unfitted": [n for n in names if n not in fitted]}
-        return _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, names, fit_out, *(extra or (True,))])
+        return _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, names, fit_out,
+                     *(extra or (RELEASED, True))])
 
     def test_fit_multi_node_returns_all(self):
         ops, client = self._fit_ops(["Top", "Skirt"], ["Top", "Skirt"])
@@ -157,7 +162,7 @@ class TestSceneOpsFitting(unittest.TestCase):
 
     def test_restore_reloads_and_fits_each_source(self):
         fit = {"error": "", "fitted": ["Top"], "unfitted": []}
-        ops, client = _ops([{"/o.duf": "C:/o.duf"}, ["k"], True, ["Top"], fit, True])
+        ops, client = _ops([{"/o.duf": "C:/o.duf"}, ["k"], True, ["Top"], fit, RELEASED, True])
         self.assertEqual(ops.restore(["/o.duf"], "Genesis 9"), ["Top"])
         claim = client.execute.call_args_list[3].args[0]
         self.assertNotIn("setLabel", claim)
@@ -205,6 +210,7 @@ class TestDs4ProbeFindings(unittest.TestCase):
     _ANSWERS = {"recipe:resolve": {"/Outfit.duf": "C:/Outfit.duf"}, "recipe:snapshot": ["k1"],
                 "recipe:load": True, "recipe:claim": ["Top"],
                 "recipe:fit": {"error": "", "fitted": ["Top"], "unfitted": []},
+                "recipe:release-anchor": {"error": "", "moved": [], "deleted": True},
                 "recipe:settle": True, "recipe:cleanup": 1}
 
     def test_calls_after_the_load_retry_while_studio_is_busy(self):
@@ -230,7 +236,8 @@ class TestDs4ProbeFindings(unittest.TestCase):
         # DS4: Studio answers busy for a while after a fit returns, so the next
         # operation's first call would fail; the fit settles before returning.
         fit_out = {"error": "", "fitted": ["Top"], "unfitted": []}
-        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out, True])
+        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out,
+                            RELEASED, True])
         self.assertEqual(ops.fit(self._entity(), "Genesis 9"), ["Top"])
         last = client.execute.call_args_list[-1]
         self.assertIn("recipe:settle", last.args[0])
@@ -239,7 +246,7 @@ class TestDs4ProbeFindings(unittest.TestCase):
         from dazpy.exceptions import DazError, StudioBusyError
         fit_out = {"error": "", "fitted": ["Top"], "unfitted": []}
         ops, client = _ops([])
-        answers = iter([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out])
+        answers = iter([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out, RELEASED])
 
         def execute(script, *a, **kw):
             if "recipe:settle" in script:
@@ -311,6 +318,100 @@ class TestDs4ProbeFindings(unittest.TestCase):
         self.assertIn('indexOf("#")', js)
         for bad in ("loadScene", "openFile", "setFollowTarget", "removeNode", "DzDeleteAction"):
             self.assertNotIn(bad, js)
+
+
+
+class TestAnchoredItemLoad(unittest.TestCase):
+    """Task 1c: items load with a temporary null as the sole selection, so Studio's
+    "Choose Content to Replace" dialog cannot appear (spec 15.6)."""
+
+    def _entity(self):
+        from dazpy._recipe_desired import DesiredEntity
+        return DesiredEntity(path="items.anna.hair", kind="item", label="r:anna.hair",
+                             create={"asset_path": "/Hair.duf", "fit_to": "actors.anna"},
+                             channels={})
+
+    def _fit(self, release=RELEASED):
+        fit_out = {"error": "", "fitted": ["Danny"], "unfitted": []}
+        ops, client = _ops([{"/Hair.duf": "C:/Hair.duf"}, ["k1"], True, ["Danny"], fit_out,
+                            release, True])
+        return ops, client
+
+    def test_anchored_load_script_selects_only_the_anchor_before_loading(self):
+        from dazpy._recipe_ops import _anchored_load_script
+        js = _anchored_load_script("C:/Hair.duf", "__dazpy_load_anchor_ab12cd34")
+        self.assertIn("new DzNode()", js)
+        self.assertIn('"__dazpy_load_anchor_ab12cd34"', js)
+        order = [js.index(x) for x in ("Scene.addNode(_anchor)", "Scene.selectAllNodes(false)",
+                                       "_anchor.select(true)", "Scene.setPrimarySelection(_anchor)",
+                                       "Scene.loadScene(")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn('"C:/Hair.duf"', js)
+        self.assertNotIn("removeNode", js)
+
+    def test_fit_uses_one_anchor_through_load_claim_and_release(self):
+        ops, client = self._fit()
+        self.assertEqual(ops.fit(self._entity(), "Genesis 9"), ["Danny"])
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        tags = [next((t for t in ("recipe:load-anchored", "recipe:claim", "recipe:fit",
+                                  "recipe:release-anchor", "recipe:settle") if t in x), None)
+                for x in scripts]
+        self.assertEqual(tags[2:], ["recipe:load-anchored", "recipe:claim", "recipe:fit",
+                                    "recipe:release-anchor", "recipe:settle"])
+        import re
+        names = {re.search(r"__dazpy_load_anchor_[0-9a-f]+", x).group(0) for x in scripts[2:4] + scripts[5:6]}
+        self.assertEqual(len(names), 1, names)    # the same anchor in load, claim and release
+
+    def test_claim_with_anchor_takes_its_children_and_excludes_it(self):
+        from dazpy._recipe_ops import _claim_script
+        js = _claim_script(["k1"], None, anchor="__dazpy_load_anchor_1")
+        self.assertIn('var _anchor = "__dazpy_load_anchor_1"', js)
+        self.assertIn("n.getName() === _anchor", js)           # the anchor itself is skipped
+        self.assertIn("_p.getName() === _anchor", js)          # its children are the loaded roots
+        plain = _claim_script(["k1"], None)
+        self.assertIn("var _anchor = null", plain)             # v1 / create: roots only
+
+    def test_release_unparents_stragglers_and_deletes_only_a_childless_anchor(self):
+        from dazpy._recipe_ops import _release_anchor_script
+        js = _release_anchor_script("__dazpy_load_anchor_1")
+        self.assertLess(js.index("removeNodeChild("), js.index("_deleteSelected([_a])"))
+        self.assertIn("_a.getNodeChildren(false).length", js)   # guard before deleting
+        self.assertIn("DzDeleteAction", js)
+        self.assertNotIn("Scene.removeNode", js)
+
+    def test_release_refusing_to_delete_fails_the_fit_and_cleans_up(self):
+        from dazpy.exceptions import DazError
+        fit_out = {"error": "", "fitted": ["Danny"], "unfitted": []}
+        ops, client = _ops([{"/Hair.duf": "C:/Hair.duf"}, ["k1"], True, ["Danny"], fit_out,
+                            {"error": "anchor still has children", "moved": [], "deleted": False}, 3])
+        with self.assertRaisesRegex(DazError, "anchor"):
+            ops.fit(self._entity(), "Genesis 9")
+        self.assertIn("recipe:cleanup", client.execute.call_args_list[-1].args[0])
+
+    def test_failure_after_load_cleanup_covers_the_anchor(self):
+        # the snapshot is taken before the anchor exists, so cleanup removes it (and
+        # whatever is still under it) as an added subtree; no release on failure
+        from dazpy.exceptions import DazError
+        ops, client = _ops([{"/Hair.duf": "C:/Hair.duf"}, ["k1"], True, [], 2])
+        with self.assertRaises(DazError):
+            ops.fit(self._entity(), "Genesis 9")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertIn("recipe:cleanup", scripts[-1])
+        self.assertIn('["k1"]', scripts[-1])
+        self.assertFalse(any("recipe:release-anchor" in x for x in scripts))
+
+    def test_create_keeps_the_nothing_selected_load(self):
+        from dazpy._recipe_desired import DesiredEntity
+        e = DesiredEntity(path="actors.anna", kind="actor", label="r:anna",
+                          create={"asset_path": "/G9.duf"}, channels={})
+        ops, client = _ops([{"/G9.duf": "C:/G9.duf"}, ["k1"], True, ["Genesis9"]])
+        self.assertEqual(ops.create(e), ["Genesis9"])
+        load = next(c.args[0] for c in client.execute.call_args_list if "loadScene" in c.args[0])
+        self.assertIn("recipe:load", load)
+        self.assertNotIn("DzNode", load)
+        self.assertNotIn("anchor", load)
+        claim = next(c.args[0] for c in client.execute.call_args_list if "recipe:claim" in c.args[0])
+        self.assertIn("var _anchor = null", claim)
 
 
 if __name__ == "__main__":

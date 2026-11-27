@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from typing import TYPE_CHECKING, Protocol
 from collections.abc import Callable, Iterable
 
@@ -178,6 +179,55 @@ Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);
 return true;""")
 
 
+# Prefix of the temporary null an item load selects (spec 15.6).
+_ANCHOR_PREFIX = "__dazpy_load_anchor_"
+
+
+def _anchored_load_script(path: str, anchor: str) -> str:
+    """Merge-load the item at *path* with a fresh null *anchor* as the sole and
+    primary selection.
+
+    Wearables whose ``.duf`` targets ``name://@selection:`` (e.g. a smoothing
+    modifier's Collision Item) make Studio fall back to the scene's figure when
+    nothing is selected and pop the modal "Choose Content to Replace" dialog
+    (DS4, spec 15.6).  With the anchor selected the load is dialog-free and the
+    item's roots land under the anchor; ``_fit_script`` then moves them to the
+    figure and ``_release_anchor_script`` removes the anchor.
+    """
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:load-anchored
+var _anchor = new DzNode();
+_anchor.setName({esc(anchor)});
+_anchor.setLabel({esc(anchor)});
+Scene.addNode(_anchor);
+Scene.selectAllNodes(false);
+_anchor.select(true);
+Scene.setPrimarySelection(_anchor);
+Scene.loadScene({esc(path)}, DzScene.MergeFile);
+Scene.selectAllNodes(false);
+return true;""")
+
+
+def _release_anchor_script(anchor: str) -> str:
+    """Remove the load anchor: first move any child still under it to scene root
+    (keeping its world transform), then delete it with DzDeleteAction, never
+    while it has children (the action removes the whole subtree).
+    Returns ``{error, moved, deleted}``."""
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:release-anchor{_DELETE_SELECTED_JS}
+var _a = Scene.findNode({esc(anchor)});
+if (!_a) return {{error: "", moved: [], deleted: false}};
+var _kids = _a.getNodeChildren(false), _moved = [];
+for (var _i = 0; _i < _kids.length; _i++) {{
+    _a.removeNodeChild(_kids[_i], true);
+    _moved.push(_kids[_i].getName());
+}}
+if (_a.getNodeChildren(false).length)
+    return {{error: {esc(anchor)} + ": load anchor still has children; not deleted", moved: _moved, deleted: false}};
+_deleteSelected([_a]);
+return {{error: "", moved: _moved, deleted: !Scene.findNode({esc(anchor)})}};""")
+
+
 # Nodes are removed with Studio's own "Delete Selected Item(s)" action on an
 # exact selection, never Scene.removeNode: on DS4, Scene.removeNode on a Genesis 9
 # figure hangs Studio while unfollowing its eyebrow cards (the action does not).
@@ -305,19 +355,27 @@ def _check_pose_ext(path: str) -> None:
                        f"({', '.join(_POSE_JSON_EXTS)})")
 
 
-def _claim_script(before: list[str], label: str | None) -> str:
+def _claim_script(before: list[str], label: str | None, anchor: str | None = None) -> str:
     """New root nodes since *before*: make their names unique, label the first
-    (no label change when *label* is None)."""
+    (no label change when *label* is None).
+
+    With *anchor* (an anchored item load, :func:`_anchored_load_script`), the
+    anchor's new children are the loaded roots too, and the anchor itself is
+    never one."""
     esc = ScriptBuilder.escape_string
     fallback = label if label is not None else "node"
     set_label = f"if (_new.length) _new[0].setLabel({esc(label)});" if label is not None else ""
+    anchor_js = esc(anchor) if anchor is not None else "null"
     return ScriptBuilder.iife(f"""// recipe:claim{_KEY_JS}
+var _anchor = {anchor_js};
 var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
 var _nodes = Scene.getNodeList(), _new = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
-    var n = _nodes[_i];
-    if (!n.getNodeParent() && !_before[_key(n)]) _new.push(n);
+    var n = _nodes[_i], _p = n.getNodeParent();
+    if (_before[_key(n)]) continue;
+    if (_anchor !== null && n.getName() === _anchor) continue;
+    if (!_p || (_anchor !== null && _p.getName() === _anchor)) _new.push(n);
 }}
 function _count(name) {{
     var c = 0;
@@ -831,11 +889,13 @@ class DazSceneOps:
             raise DazError(f"{where}: {asset_path} is a Daz data file, not a loadable asset; "
                            "nothing was loaded")
         path = self._resolve_asset(asset_path)
+        # the snapshot precedes the anchor, so cleanup on failure removes it too
         before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
+        anchor = _ANCHOR_PREFIX + uuid.uuid4().hex[:12]
         try:
-            self._client.execute(_load_asset_script(path), timeout=ASSET_LOAD_TIMEOUT_S)
+            self._client.execute(_anchored_load_script(path, anchor), timeout=ASSET_LOAD_TIMEOUT_S)
             # Studio can answer busy for a while after a load/fit (DS4, spec 15.1)
-            names = self._busy_execute(_claim_script(before, label)) or []
+            names = self._busy_execute(_claim_script(before, label, anchor)) or []
             if not names or not all(names):
                 raise DazError(f"{where}: loading it added no named root node to the scene; "
                                "every node it added was removed")
@@ -849,6 +909,11 @@ class DazSceneOps:
             if stray:
                 raise DazError(f"{asset_path}: loading it added nodes that are not fitted to "
                                f"{figure_name}: {', '.join(stray)}; every node it added was removed")
+            released = self._busy_execute(_release_anchor_script(anchor))
+            if not isinstance(released, dict) or released.get("error") or not released.get("deleted"):
+                why = released.get("error") if isinstance(released, dict) else "no result"
+                raise DazError(f"{where}: removing the load anchor {anchor} failed ({why or 'not deleted'}); "
+                               "every node it added was removed")
             # Studio keeps answering busy for a while after the fit returns (DS4,
             # spec 15.1); wait that out so the caller's next call does not fail.
             # Inside the try: if it never settles, the fitted nodes are removed

@@ -571,6 +571,9 @@ Consequences:
 
 ### 15.4 Fitting method (chosen: (a))
 
+Amended by §15.6: items now load with a temporary null anchor as the sole
+selection instead of nothing selected; the follow + parent step is unchanged.
+
 Probed on the same figure with nothing else changed:
 
 | | (a) nothing selected, then `setFollowTarget(fig)` + `fig.addNodeChild(item, true)` | (b) figure as sole primary selection, then load |
@@ -607,3 +610,31 @@ repeated load.
 - `preferredBase` on a loaded item node is the target base, a usable fallback
   for nodes. Files cannot be read this way without loading them, so the
   "presentation fallback" in step 2 applies only to scene nodes.
+
+### 15.6 Replace dialog with nothing selected (item loads use a temporary anchor)
+
+Found live on DS4 (2026-11-27, user watching): loading SWAM "Danny Hair G9" with
+**nothing selected**, into a scene whose Genesis 9 already wears a
+`Follower/Hair` item, popped Studio's modal **"Choose Content to Replace"**
+dialog and blocked the main thread. Danny's `.duf` has a `DzMeshSmoothModifier`
+whose Collision Item is `name://@selection:`; with an empty selection Studio
+falls back to the scene's figure. Kara Ponytail (no such modifier) never
+prompts. So "nothing selected" (§15.4 method (a)) is not dialog-free for every
+item.
+
+Loading Danny with a fresh `DzNode` null as the **sole and primary selection**
+did not prompt (0.8 s). The hair's root landed under the null with no follow
+target; `_fit_script` then moved it under the figure and set the follow target
+(parent = follow = figure). The null, now childless, was deleted with
+`DzDeleteAction`.
+
+Method used for every fitted-item load (`fit`, `restore`; actor/prop `create`
+keeps the nothing-selected load, proven dialog-free for figures and props):
+snapshot → `resolve_files` → create the anchor `__dazpy_load_anchor_<hex>`,
+select it alone as primary, `loadScene(absolute path, MergeFile)` → claim the
+anchor's new children (and any new roots), never the anchor → `_fit_script` →
+move any child still under the anchor to scene root, then delete the anchor
+with `DzDeleteAction`, never while it has children → settle. The snapshot
+precedes the anchor, so any failure's cleanup removes the anchor along with
+everything else the load added.
+
