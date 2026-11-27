@@ -342,6 +342,27 @@ def _roots() -> tuple[int, list[tuple[str, str]]]:
     return int(value.get("count") or 0), [tuple(r) for r in value.get("roots") or []]
 
 
+_MANIFEST_PREFIX = "dazpy.scene_recipe."
+_LIVE_IDS = ("live-af-", "live-hand-")  # recipe ids these tests use, and only these
+
+
+def _live_manifests() -> list[str]:
+    """Names of the scene-level recipe manifests for this class's recipe ids; read-only."""
+    names = _CLIENT.execute(
+        "(function(){var o=[];for(var i=0;i<Scene.getNumDataItems();i++)"
+        "o.push(Scene.getDataItem(i).name);return o;})()").value or []
+    return [n for n in names
+            if n.startswith(_MANIFEST_PREFIX) and n[len(_MANIFEST_PREFIX):].startswith(_LIVE_IDS)]
+
+
+def _remove_manifests(names: list[str]) -> None:
+    """Remove the named scene-level manifests (only names from _live_manifests())."""
+    if names:
+        _CLIENT.execute(
+            "(function(){var n=" + json.dumps(names) + ";for(var i=0;i<n.length;i++){"
+            "var d=Scene.findDataItem(n[i]);if(d)Scene.removeDataItem(d);}return true;})()")
+
+
 def _scene_revision() -> int | None:
     try:
         return _req.get("http://127.0.0.1:18811/status", timeout=5).json().get("scene_revision")
@@ -358,7 +379,7 @@ def _abby_fixture(rid: str, label: str) -> dict:
     for name in _LIVE_VARS:
         value = _env(name)
         if value is not None:
-            text = text.replace("${%s}" % name, json.dumps(value)[1:-1])
+            text = text.replace("${" + name + "}", json.dumps(value)[1:-1])
     data = json.loads(text)
     data["id"] = rid
     actor = data["actors"]["abby"]
@@ -402,6 +423,7 @@ class AssetFittingLiveTests(unittest.TestCase):
         self.addCleanup(wait.__exit__, None, None, None)
         self.scene = DazScene(_CLIENT)
         self.count0, self.roots0 = _roots()
+        self.manifests0 = set(_live_manifests())
         self.rev0 = _scene_revision()
         print(f"\n[{self._testMethodName}] scene_revision={self.rev0} nodes={self.count0} "
               f"roots={[label for _, label in self.roots0]}")
@@ -498,6 +520,13 @@ class AssetFittingLiveTests(unittest.TestCase):
                         ops.delete(fig.name)
             except Exception as e:  # report, never retry against a stuck Studio
                 print(f"cleanup of {label!r} failed: {e}")
+        # Deleting the figures leaves each recipe's scene-level manifest behind, and a
+        # re-run of the same recipe id would then see "deleted in scene" conflicts.
+        # Remove only the live-test manifests this test added.
+        try:
+            _remove_manifests(sorted(set(_live_manifests()) - self.manifests0))
+        except Exception as e:
+            print(f"cleanup of recipe manifests failed: {e}")
 
     # ── tests ─────────────────────────────────────────────────────────────────
 
@@ -719,7 +748,8 @@ class AssetFittingLiveTests(unittest.TestCase):
 
         live = read_live(_CLIENT, recipe["id"])
         actor = live.entities["actors.abby"].record
-        self.assertEqual(actor.source["requested"], {"path": _env("DAZ_LIVE_G9F")})
+        # a path-only ref is recorded in its shorthand (string) form, as AssetRef.to_dict gives it
+        self.assertEqual(actor.source["requested"], _env("DAZ_LIVE_G9F"))
         self.assertEqual(actor.source["finder"], "path")
         self.assertTrue(actor.source["path"])
         if _env("DAZ_LIVE_PRESET"):
