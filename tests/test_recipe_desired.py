@@ -197,6 +197,10 @@ RESOLVED = {"actors.abby.asset": _ra("/P/G9.duf"),
             "actors.abby.presets[1]": _ra("/P/skin.duf"),
             "actors.abby.wearing.hair": _ra("/W/updo.duf"),
             "actors.abby.wearing.outfit": _ra("/W/outfit.duf")}
+# the actor's own resolution plus its presets' by index (Task 13 fix round 1)
+ABBY_SOURCE = dict(RESOLVED["actors.abby.asset"].to_dict(),
+                   presets=[RESOLVED["actors.abby.presets[0]"].to_dict(),
+                            RESOLVED["actors.abby.presets[1]"].to_dict()])
 
 
 class DesiredV2Tests(unittest.TestCase):
@@ -215,12 +219,12 @@ class DesiredV2Tests(unittest.TestCase):
 
     def test_taken_over_actor_create_carries_source(self):
         d = compute_desired(v2_recipe({"node": "Abby"}), RESOLVED)
-        self.assertEqual(d["actors.abby"].create["source"], RESOLVED["actors.abby.asset"].to_dict())
+        self.assertEqual(d["actors.abby"].create["source"], ABBY_SOURCE)
 
     def test_created_actor_create_carries_source_for_stable_resolution(self):
         # Task 13: the recorded resolution (spec 5, 9) is re-used while the reference is unchanged
         d = compute_desired(v2_recipe(), RESOLVED)
-        self.assertEqual(d["actors.abby"].create["source"], RESOLVED["actors.abby.asset"].to_dict())
+        self.assertEqual(d["actors.abby"].create["source"], ABBY_SOURCE)
 
     def test_unresolved_desired_has_no_source(self):
         d = compute_desired(SceneRecipe.from_dict({

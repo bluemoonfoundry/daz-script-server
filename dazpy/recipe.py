@@ -38,7 +38,7 @@ from collections.abc import Mapping, Sequence
 
 from urllib.parse import unquote
 
-from ._asset_compat import base_of_asset, check_compat, read_compat
+from ._asset_compat import check_compat, read_compat
 from ._asset_finder import AssetCandidate, AssetFinder, select_finder
 from ._asset_ref import AssetRef, ResolvedPin
 from ._asset_resolve import ResolvedAsset, recipe_refs, resolve_refs
@@ -156,10 +156,9 @@ def _missing_files(model: SceneRecipe, scene: DazScene, *,
 # ── v2 pipeline: resolve, figures, compatibility ──────────────────────────────
 
 def _uses_v2(model: SceneRecipe) -> bool:
-    """Does *model* need the v2 pipeline (anything a v1 recipe cannot say)?"""
-    if any(a.node is not None or a.presets or a.wearing for a in model.actors.values()):
-        return True
-    return any(ref.kind != "path" or ref.resolved is not None for _, ref in recipe_refs(model))
+    """Every ``recipe_version: 2`` recipe takes the v2 pipeline (so inline asset
+    paths are resolved, i.e. existence-checked); v1 recipes keep the v1 path."""
+    return model.recipe_version >= 2
 
 
 class _LazyFinder:
@@ -197,8 +196,16 @@ def _prior(live: LiveState) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for path, entity in live.entities.items():
         source = entity.record.source
-        if source:
-            out[path if is_item_path(path) else f"{path}.asset"] = source
+        if not source:
+            continue
+        if is_item_path(path):
+            out[path] = source
+            continue
+        if source.get("path"):
+            out[f"{path}.asset"] = source
+        for i, preset in enumerate(source.get("presets") or ()):  # actor records, by index
+            if isinstance(preset, dict):
+                out[f"{path}.presets[{i}]"] = preset
     return out
 
 
@@ -265,25 +272,28 @@ def _resolve_and_check(client: DazClient, model: SceneRecipe, live: LiveState,
     items = {k: v for k, v in items.items() if v}
     if not items:
         return chk
-    info = read_compat(client, sorted({r.path for v in items.values() for r in v.values()}))
+    # One metadata read answers the items' compatibilities and, for actors to be
+    # created, the base their figure file provides.
+    figure_base: dict[str, str | None] = {}
+    from_asset: dict[str, str] = {}
+    for key in items:
+        figs = _actor_figures(model, key, live, chk.figures)
+        asset = chk.resolved.get(f"actors.{key}.asset")
+        if len(figs) == 1:
+            figure_base[key] = figs[0].compat_base
+        elif figs or asset is None:
+            figure_base[key] = None  # ambiguous take-over (reported by the wearing plan) / unknown
+        else:
+            from_asset[key] = asset.path
+    paths = {r.path for v in items.values() for r in v.values()} | set(from_asset.values())
+    info = read_compat(client, sorted(paths))
+    for key, path in from_asset.items():
+        figure_base[key] = info[path].provides
     for key, its in items.items():
-        errors, warnings = check_compat(_target_base(client, model, key, live, chk), its, info)
+        errors, warnings = check_compat(figure_base[key], its, info)
         chk.errors += errors
         chk.warnings += warnings
     return chk
-
-
-def _target_base(client: DazClient, model: SceneRecipe, key: str, live: LiveState,
-                 chk: _Checked) -> str | None:
-    """Actor *key*'s figure base: its live figure's, else (an actor to be created)
-    its asset's metadata; None when unknown or the take-over label is ambiguous."""
-    figs = _actor_figures(model, key, live, chk.figures)
-    if len(figs) == 1:
-        return figs[0].compat_base
-    if len(figs) > 1:
-        return None  # ambiguous_node, reported by the wearing plan
-    asset = chk.resolved.get(f"actors.{key}.asset")
-    return base_of_asset(client, asset.path) if asset is not None else None
 
 
 def _raise_if(errors: Sequence[RecipeIssue], warnings: Sequence[RecipeIssue]) -> None:
@@ -401,11 +411,12 @@ def apply(recipe: SceneRecipe | dict, scene: DazScene, *, on_conflict: OnConflic
     manifest is written; errors roll the apply back (``applied=False``,
     ``rolled_back=True``) and ``ApplyResult.check`` holds the report either way.
     """
-    model = _checked(recipe, None)
-    if _uses_v2(model):
-        _raise_if(_missing_files(model, scene, assets=False), ())
-    else:
-        model = _checked(recipe, scene)
+    report = validate_offline(_as_dict(recipe))
+    if not report.ok:
+        raise RecipeValidationError(report)
+    model = recipe if isinstance(recipe, SceneRecipe) else SceneRecipe.from_dict(recipe)
+    missing = _missing_files(model, scene, assets=not _uses_v2(model))
+    _raise_if(report.errors + missing, report.warnings)
     the_plan, desired, live = _plan(model, scene, on_conflict, resolutions, finder)
     verify = (lambda: _check_shots(model, read_live(scene._client, model.id), scene._client,
                                    model.shots)) if require_clean else None
@@ -494,13 +505,19 @@ def _source_drift(live: LiveState, figures: Mapping[str, list[FigureInfo]]
                   ) -> tuple[RecipeIssue, ...]:
     """``source_changed`` for owned fitted items whose live source file differs from
     the recorded one (spec section 9). Gone items are ``deleted_in_scene`` instead."""
-    fitted = {it.name: it for fs in figures.values() for f in fs for it in f.items}
     out: list[RecipeIssue] = []
     for path, entity in live.entities.items():
+        if not is_item_path(path):
+            continue
+        actor = live.entities.get(item_actor(path))
+        if actor is None:
+            continue
+        # the item under its own actor's figure: item node names repeat across figures
+        item = next((it for f in figures.get(actor.node_name, []) if f.name == actor.node_name
+                     for it in f.items if it.name == entity.node_name), None)
         source = entity.record.source or {}
         want = source.get("path") or (source.get("resolved") or {}).get("path")
-        item = fitted.get(entity.node_name)
-        if not is_item_path(path) or not want or item is None or item.source_path is None:
+        if not want or item is None or item.source_path is None:
             continue
         if not _same_file(item.source_path, want):
             out.append(RecipeIssue(
@@ -678,7 +695,7 @@ def _guard(report: ObserveReport, camera_keys: Sequence[str]) -> None:
 @_patient
 def render(recipe: SceneRecipe | dict, scene: DazScene, *, shots: Sequence[str] | None = None,
            force: bool = False, wait: bool = True, timeout: float = 300.0,
-           require_clean: bool = False) -> list[ShotRender]:
+           require_clean: bool = False, finder: AssetFinder | None = None) -> list[ShotRender]:
     """Render the recipe's shots (all, or the ids in *shots*) in recipe order.
 
     Each shot renders from the recipe's camera node, found through its ownership
@@ -695,10 +712,14 @@ def render(recipe: SceneRecipe | dict, scene: DazScene, *, shots: Sequence[str] 
     With *require_clean* (independent of *force*), runs :func:`check` on the
     chosen shots first and raises :class:`~dazpy.exceptions.SceneCheckError`
     if it finds errors; nothing is rendered.
+
+    A ``recipe_version: 2`` recipe's asset references are resolved first (as in
+    :func:`observe`, through *finder* when given), so this can raise
+    :class:`RecipeValidationError` when one cannot be resolved.
     """
     model = _checked(recipe, None)
     chosen = _choose(model, shots)
-    report, _, live = _observe(model, scene, None)
+    report, _, live = _observe(model, scene, finder)
     if not force:
         _guard(report, [s.camera for s in chosen])
     if not chosen:

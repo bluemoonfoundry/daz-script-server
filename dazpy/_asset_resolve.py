@@ -102,8 +102,11 @@ def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: As
     for p, ref in refs:
         rec = prior.get(p)
         if ok(p, "record"):
+            # keep the finder that originally answered (spec 9); "record" only for
+            # records written before the finder was recorded
             resolved[p] = ResolvedAsset(ref, ok(p, "record"), rec.get("sku"), rec.get("product"),
-                                        rec.get("asset_id"), rec.get("type"), "record")
+                                        rec.get("asset_id"), rec.get("type"),
+                                        rec.get("finder") or "record")
         elif ref.kind == "path":
             if ok(p, "path"):
                 resolved[p] = ResolvedAsset(ref, ok(p, "path"), None, None, None, ref.type, "path")

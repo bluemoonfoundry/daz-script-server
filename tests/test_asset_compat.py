@@ -49,7 +49,8 @@ class CompatTests(unittest.TestCase):
                    "/b.duf": {"bases": [], "known": False, "provides": None}}
         client = scripted_client(("recipe:compat", lambda s: payload))
         got = read_compat(client, ["/a.duf", "/b.duf"])
-        self.assertEqual(got["/a.duf"], CompatInfo("/a.duf", ("/Genesis 9",), True))
+        self.assertEqual(got["/a.duf"], CompatInfo("/a.duf", ("/Genesis 9",), True, "/Genesis 9"))
+        self.assertIsNone(got["/b.duf"].provides)
         self.assertFalse(got["/b.duf"].known)
         self.assertEqual(base_of_asset(client, "/a.duf"), "/Genesis 9")
         self.assertIsNone(base_of_asset(client, "/b.duf"))

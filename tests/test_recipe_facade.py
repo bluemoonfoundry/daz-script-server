@@ -757,5 +757,108 @@ class TestV2Facade(FacadeCase):
             self.assertTrue(hasattr(dazpy, name))
 
 
+# ── Task 13 fix round 1 ──────────────────────────────────────────────────────
+
+def live_after(scene) -> LiveState:
+    """The LiveState the records *scene*'s FakeOps wrote describe (last write wins)."""
+    from dazpy._recipe_store import _kind_from_path
+    ents = {}
+    for _, node_name, r in (c for c in scene.ops.calls_with_args if c[0] == "write_record"):
+        if not r.primary:
+            continue
+        kind = _kind_from_path(r.path)
+        ents[r.path] = LiveEntity(path=r.path, node_name=node_name, kind=kind, record=r,
+                                  observed=copy.deepcopy(r.observed), foreign_children=(),
+                                  group_nodes=(node_name,) if kind == "item" else ())
+    return live_of(*ents.values())
+
+
+TALL = SHAPE
+SHORT = "/People/Genesis 9/Shapes/Short.duf"
+
+
+class TestV2FixRound1(FacadeCase):
+    def test_v2_inline_missing_file_is_invalid_and_apply_raises_first(self):
+        missing = "/Missing/G9.duf"
+        for r in ({"recipe_version": 2, "id": RID, "actors": {"a": {"asset": missing}}},
+                  {"recipe_version": 2, "id": RID, "actors": {"a": {"asset": {"path": missing}}}},
+                  {"recipe_version": 2, "id": RID, "props": {"p": {"asset": missing}}}):
+            scene = fake_scene(missing_files={missing})
+            rep = validate(r, scene)
+            self.assertFalse(rep.ok, r)
+            self.assertEqual({e.code for e in rep.errors}, {"asset_not_found"})
+            with self.assertRaises(RecipeValidationError):
+                apply(r, scene)
+            self.assertEqual(scene.ops.calls, [])
+
+    def test_recorded_finder_and_preset_resolution_survive_a_second_apply(self):
+        r1 = v2_recipe(presets=[{"find": "Tall"}])
+        first = fake_scene(compat={**COMPAT, SHORT: COMPAT[SHAPE]})
+        found = FakeFinder(search=[AssetCandidate(TALL, "Tall", "55", "t1", "Actor/Shape")],
+                           name="studio")
+        self.assertTrue(apply(r1, first, finder=found).applied)
+        live = live_after(first)
+        self.assertEqual(live.entities["actors.abby"].record.source["presets"][0]["finder"], "studio")
+        r2 = v2_recipe(presets=[{"find": "Tall"}, SHORT])
+        second = fake_scene(live, compat={**COMPAT, SHORT: COMPAT[SHAPE]})
+        again = FakeFinder(name="unused")
+        result = apply(r2, second, finder=again)
+        self.assertTrue(result.applied, result.error)
+        self.assertEqual(again.calls, [])  # the recorded preset resolution is re-used
+        rec2 = live_after(second).entities["actors.abby"].record
+        self.assertEqual([(x["path"], x["finder"]) for x in rec2.source["presets"]],
+                         [(TALL, "studio"), (SHORT, "path")])
+        self.assertEqual(rec2.source["presets"][0]["sku"], "55")
+
+    def test_reused_item_resolution_keeps_its_finder(self):
+        r = v2_recipe({"add": {"sku": "123"}, "key": "hair"})
+        first = fake_scene(compat=COMPAT)
+        self.assertTrue(apply(r, first, finder=FakeFinder(files=[cand()], name="studio")).applied)
+        live = live_after(first)
+        _, desired, _ = dazpy.recipe._plan(SceneRecipe.from_dict(r), fake_scene(live, compat=COMPAT),
+                                           "ask", None, FakeFinder(name="unused"))
+        self.assertEqual(desired["actors.abby.wearing.hair"].create["source"]["finder"], "studio")
+
+    def test_created_actor_bases_share_one_compat_read(self):
+        r = {"recipe_version": 2, "id": RID, "actors": {
+            "abby": {"asset": G9, "presets": [SHAPE]},
+            "ben": {"asset": G9 + "x", "presets": [SHAPE], "position": [100, 0, 0]}}}
+        scene = fake_scene(compat={**COMPAT, G9 + "x": COMPAT[G9]})
+        self.assertTrue(validate(r, scene).ok)
+        self.assertEqual(len(scene.scripts_with("recipe:compat")), 1)
+
+    def test_source_drift_matches_items_under_their_own_figure(self):
+        r = {"recipe_version": 2, "id": RID, "actors": {
+            "abby": {"asset": G9, "wearing": [{"add": HAIR, "key": "hair"}]},
+            "ben": {"asset": G9, "position": [100, 0, 0],
+                    "wearing": [{"add": HAIR, "key": "hair"}]}}}
+        first = fake_scene(compat=COMPAT)
+        first.ops.create_names = {"actors.abby": ["Abby"], "actors.ben": ["Ben"]}
+        first.ops.fit_names = {"actors.abby.wearing.hair": ["Bob"],
+                               "actors.ben.wearing.hair": ["Bob"]}
+        self.assertTrue(apply(r, first).applied)
+        live = live_after(first)
+        rec_of = {p: e.record for p, e in live.entities.items()}
+        figures = [
+            fig_payload("Abby", f"{RID}:abby", compat_base="/Genesis 9", items=[item_payload(
+                "Bob", source_path=HAIR, record=rec_of["actors.abby.wearing.hair"])]),
+            fig_payload("Ben", f"{RID}:ben", compat_base="/Genesis 9", items=[item_payload(
+                "Bob", source_path="/Other/hair.duf", record=rec_of["actors.ben.wearing.hair"])])]
+        rep = observe(r, fake_scene(live, compat=COMPAT, figures=figures))
+        self.assertEqual([(i.path, i.code) for i in rep.drift if i.code == "source_changed"],
+                         [("actors.ben.wearing.hair", "source_changed")])
+
+    def test_render_passes_finder_through(self):
+        finder = FakeFinder(files=[cand()])
+        self.assertEqual(render(v2_recipe({"add": {"sku": "123"}, "key": "hair"}),
+                                fake_scene(compat=COMPAT), finder=finder, force=True), [])
+        self.assertEqual(finder.calls, ["product_files:123"])
+
+    def test_v1_apply_validates_offline_once(self):
+        with patch("dazpy.recipe.validate_offline", wraps=dazpy.recipe.validate_offline) as vo:
+            self.assertTrue(apply(R, fake_scene()).applied)
+        self.assertEqual(vo.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -123,11 +123,17 @@ def _actor_entities(recipe: SceneRecipe, name: str,
     if a.node is not None:
         create["take_over"] = a.node
         create["label"] = a.node
-    rp = f"actors.{name}.asset"
-    if resolved is not None and rp in resolved:
+    if resolved is not None:
         # provenance for the record (source.requested, re-used by later resolutions);
-        # never a replace trigger
-        create["source"] = resolved[rp].to_dict()
+        # never a replace trigger.  Preset resolutions ride along by index.
+        rp = f"actors.{name}.asset"
+        source = resolved[rp].to_dict() if rp in resolved else {}
+        if a.presets:
+            source["presets"] = [resolved[f"actors.{name}.presets[{i}]"].to_dict()
+                                 for i in range(len(a.presets))
+                                 if f"actors.{name}.presets[{i}]" in resolved]
+        if source:
+            create["source"] = source
     channels: dict = {}
     if a.node is None:
         pos = _spec_position(a)

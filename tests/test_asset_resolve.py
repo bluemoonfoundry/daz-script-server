@@ -129,6 +129,13 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(r.resolved["a"].path, "/new.duf")
         self.assertEqual(r.resolved["a"].finder, "studio")
 
+    def test_record_reuse_keeps_the_recorded_finder(self):
+        ref = AssetRef(find="Updo")
+        prior = {"a": {"requested": ref.to_dict(), "path": "/old.duf", "finder": "content_browser"}}
+        r = run([("a", ref)], Finder(), found={"/old.duf": "/old.duf"}, prior=prior)
+        self.assertEqual(r.resolved["a"].finder, "content_browser")
+        self.assertEqual(r.resolved["a"].to_dict()["finder"], "content_browser")
+
     def test_finder_unavailable(self):
         r = run([("a", AssetRef(sku="1")), ("b", AssetRef(path="/x.duf"))],
                 Finder(unavailable=True), found={"/x.duf": "/x.duf"})

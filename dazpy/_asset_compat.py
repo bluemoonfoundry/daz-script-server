@@ -30,6 +30,8 @@ class CompatInfo:
     path: str
     bases: tuple[str, ...]
     known: bool
+    # the figure base the file itself defines (a figure's compatibilityBase), if any
+    provides: str | None = None
 
 
 def compat_script(paths: list[str]) -> str:
@@ -74,13 +76,17 @@ def _read_raw(client: DazClient, paths: list[str]) -> dict[str, dict]:
 
 
 def read_compat(client: DazClient, paths: list[str]) -> dict[str, CompatInfo]:
-    """Compatibilities per file; files the database does not know come back ``known=False``."""
+    """Compatibilities per file; files the database does not know come back ``known=False``.
+
+    ``provides`` is filled too, so one call also answers :func:`base_of_asset`
+    for figure files."""
     raw = _read_raw(client, paths)
     out: dict[str, CompatInfo] = {}
     for p in paths:
         e = raw.get(p) or {}
         bases = tuple(str(b) for b in e.get("bases") or ())
-        out[p] = CompatInfo(p, bases, bool(e.get("known")) and bool(bases))
+        out[p] = CompatInfo(p, bases, bool(e.get("known")) and bool(bases),
+                            str(e["provides"]) if e.get("provides") else None)
     return out
 
 

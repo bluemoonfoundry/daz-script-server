@@ -382,10 +382,17 @@ class _Run:
                     observed[ch] = fresh.get(ch)
         if prev is None:
             return self.record(path, desired, observed)
-        # keep provenance, group and done-log fields (v2) of the previous record
+        # keep provenance, group and done-log fields (v2) of the previous record,
+        # except the preset resolutions when the presets changed (re-used by later
+        # resolutions, spec 5)
+        source = prev.source
+        if any(PRESETS_CHANNEL in s.channels for s in steps) and path in self.desired:
+            presets = (self.desired[path].create.get("source") or {}).get("presets")
+            if presets is not None:
+                source = dict(copy.deepcopy(prev.source or {}), presets=copy.deepcopy(presets))
         return dataclasses.replace(prev, recipe_id=self.recipe_id,
                                    recipe_version=self.recipe_version,
-                                   desired=desired, observed=observed)
+                                   desired=desired, observed=observed, source=source)
 
     def write_manifest(self) -> None:
         gone = {s.path for s in self.deleted_steps} | self.released
