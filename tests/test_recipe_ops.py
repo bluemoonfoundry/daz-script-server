@@ -388,9 +388,51 @@ class TestAnchoredItemLoad(unittest.TestCase):
             ops.fit(self._entity(), "Genesis 9")
         self.assertIn("recipe:cleanup", client.execute.call_args_list[-1].args[0])
 
+    def test_release_that_moved_a_root_fails_the_fit_and_cleans_up(self):
+        # a non-empty "moved" means a loaded root was not fitted: never a success
+        from dazpy.exceptions import DazError
+        ops, client = self._fit(release={"error": "", "moved": ["Stray"], "deleted": True})
+        client.execute.side_effect = list(client.execute.side_effect)[:6] + [SimpleNamespace(value=1)]
+        with self.assertRaisesRegex(DazError, "Stray"):
+            ops.fit(self._entity(), "Genesis 9")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertIn("recipe:cleanup", scripts[-1])
+        self.assertFalse(any("recipe:settle" in x for x in scripts))
+
+    def test_release_not_deleted_without_error_fails_the_fit(self):
+        from dazpy.exceptions import DazError
+        ops, client = self._fit(release={"error": "", "moved": [], "deleted": False})
+        client.execute.side_effect = list(client.execute.side_effect)[:6] + [SimpleNamespace(value=1)]
+        with self.assertRaisesRegex(DazError, "not deleted"):
+            ops.fit(self._entity(), "Genesis 9")
+        self.assertIn("recipe:cleanup", client.execute.call_args_list[-1].args[0])
+
+    def test_failure_cleanup_rescues_pre_existing_nodes_under_the_anchor(self):
+        # ruling: before cleanup deletes the anchor subtree, any descendant whose key is
+        # in the pre-load snapshot (should never happen) goes back to scene root
+        from dazpy._recipe_ops import _cleanup_script
+        js = _cleanup_script(["k1", "k2"], anchor="__dazpy_load_anchor_1")
+        self.assertIn('var _anchor = "__dazpy_load_anchor_1"', js)
+        rescue = js.index("_before[_key(_d)] && !_before[_key(_d.getNodeParent())]")
+        self.assertLess(rescue, js.index("removeNodeChild(_d, true)"))
+        self.assertLess(js.index("removeNodeChild(_d, true)"), js.index("return _deleteSelected(_tops)"))
+        plain = _cleanup_script(["k1"])
+        self.assertIn("var _anchor = null", plain)     # v1 / create cleanup unchanged
+
+    def test_fit_failure_cleanup_is_given_the_anchor(self):
+        from dazpy.exceptions import DazError
+        import re
+        ops, client = _ops([{"/Hair.duf": "C:/Hair.duf"}, ["k1"], True, [], 2])
+        with self.assertRaises(DazError):
+            ops.fit(self._entity(), "Genesis 9")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        anchor = re.search(r"__dazpy_load_anchor_[0-9a-f]+", scripts[2]).group(0)
+        self.assertIn(f'var _anchor = "{anchor}"', scripts[-1])
+
     def test_failure_after_load_cleanup_covers_the_anchor(self):
-        # the snapshot is taken before the anchor exists, so cleanup removes it (and
-        # whatever is still under it) as an added subtree; no release on failure
+        # the snapshot is taken before the anchor exists, so cleanup removes it with
+        # its subtree (added nodes only; pre-existing ones are rescued first, see
+        # test_failure_cleanup_rescues_pre_existing_nodes_under_the_anchor); no release
         from dazpy.exceptions import DazError
         ops, client = _ops([{"/Hair.duf": "C:/Hair.duf"}, ["k1"], True, [], 2])
         with self.assertRaises(DazError):

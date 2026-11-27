@@ -630,11 +630,17 @@ target; `_fit_script` then moved it under the figure and set the follow target
 
 Method used for every fitted-item load (`fit`, `restore`; actor/prop `create`
 keeps the nothing-selected load, proven dialog-free for figures and props):
-snapshot → `resolve_files` → create the anchor `__dazpy_load_anchor_<hex>`,
+`resolve_files` → snapshot → create the anchor `__dazpy_load_anchor_<hex>`,
 select it alone as primary, `loadScene(absolute path, MergeFile)` → claim the
 anchor's new children (and any new roots), never the anchor → `_fit_script` →
-move any child still under the anchor to scene root, then delete the anchor
-with `DzDeleteAction`, never while it has children → settle. The snapshot
-precedes the anchor, so any failure's cleanup removes the anchor along with
-everything else the load added.
+release: move any child still under the anchor to scene root, then delete the
+anchor with `DzDeleteAction`, never while it has children → settle. The fit
+fails if the release moved anything (a loaded root that was not fitted), or did
+not delete the anchor.
+
+On any failure after the snapshot, cleanup removes everything the load added.
+The anchor was created empty just before the load, so its subtree holds only
+added nodes, and cleanup deletes it with that subtree. As a guard, any anchor
+descendant whose key is in the pre-load snapshot (which should never happen) is
+first moved back to scene root.
 

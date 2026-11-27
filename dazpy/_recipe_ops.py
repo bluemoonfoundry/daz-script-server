@@ -262,11 +262,28 @@ _deleteSelected([_n]);
 return _count() < _was;""")
 
 
-def _cleanup_script(before: list[str]) -> str:
-    """Remove every node whose key is not in *before*; return how many were removed."""
+def _cleanup_script(before: list[str], anchor: str | None = None) -> str:
+    """Remove every node whose key is not in *before*; return how many were removed.
+
+    With *anchor* (a failed anchored item load), the anchor is deleted with its
+    subtree, which can only hold nodes the load added.  As a guard, any anchor
+    descendant whose key *is* in *before* (should never happen) is first moved
+    back to scene root, keeping its transform and its own children."""
+    anchor_js = ScriptBuilder.escape_string(anchor) if anchor is not None else "null"
     return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}{_DELETE_SELECTED_JS}
+var _anchor = {anchor_js};
 var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
+var _an = _anchor !== null ? Scene.findNode(_anchor) : null;
+if (_an) {{
+    var _desc = _an.getNodeChildren(true);
+    for (var _j = 0; _j < _desc.length; _j++) {{
+        var _d = _desc[_j];
+        // the topmost pre-existing node of each branch (its parent is a new node)
+        if (_before[_key(_d)] && !_before[_key(_d.getNodeParent())])
+            _d.getNodeParent().removeNodeChild(_d, true);
+    }}
+}}
 var _nodes = Scene.getNodeList(), _tops = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
     var _n = _nodes[_i], _p = _n.getNodeParent();
@@ -402,11 +419,12 @@ for (var _m = 0; _m < _new.length; _m++) {{
 return _names;""")
 
 
-# Fitting method (a), chosen by the Task 1 live probe (spec 15.4): load with
-# nothing selected, then follow + parent.  Confirmed on DS4; DS6 pending.
+# Fitting (spec 15.4, amended by 15.6): the item is loaded under a temporary
+# anchor selection, then follow + parent.  Confirmed on DS4; DS6 pending.
 def _fit_script(names: list[str], figure_name: str) -> str:
-    """Fit each named scene-root node that is a figure to *figure_name*: follow
-    it and parent it under it.  Returns ``{error, fitted, unfitted}``.
+    """Fit each named loaded root (a child of the load anchor, or a scene root)
+    that is a figure to *figure_name*: follow it and parent it under it, which
+    moves it off the anchor.  Returns ``{error, fitted, unfitted}``.
 
     Added non-figure roots (a prop in an outfit preset) stay unfitted.
     """
@@ -640,10 +658,12 @@ class DazSceneOps:
                 time.sleep(min(max(backoff, float(getattr(e, "retry_after", 0) or 0)), remaining))
                 backoff = min(backoff + 1.0, 5.0)
 
-    def _remove_added(self, before: list[str], path: str, cause: Exception) -> None:
-        """Remove every node added since *before* (a create that cannot be owned)."""
+    def _remove_added(self, before: list[str], path: str, cause: Exception,
+                      anchor: str | None = None) -> None:
+        """Remove every node added since *before* (a create or fit that cannot be
+        owned), including a load *anchor* and its subtree."""
         try:
-            self._busy_execute(_cleanup_script(before))
+            self._busy_execute(_cleanup_script(before, anchor))
         except Exception as e:
             raise DazError(f"{path}: create failed ({cause}) and removing the nodes it added "
                            f"also failed: {e}") from cause
@@ -878,12 +898,15 @@ class DazSceneOps:
 
     def _load_and_fit(self, asset_path: str, label: str | None, figure_name: str,
                       where: str) -> list[str]:
-        """Load with nothing selected, then fit every added root to the figure.
+        """Load with a temporary null anchor as the sole selection (spec 15.6), fit
+        every loaded root to the figure, then release (delete) the empty anchor.
 
-        Anything not fitted (or any failure after the snapshot, including Studio
-        staying busy after the fit) removes all the nodes the load added.  A Daz
-        data file (``.dsf``, e.g. a ``getAssetUriForNode`` value) is refused before
-        anything is resolved or loaded.
+        Order: ``resolve_files`` → snapshot → anchor + load → claim → fit →
+        release → settle.  Anything not fitted, a root left under the anchor, or
+        any failure after the snapshot (including Studio staying busy after the
+        fit) removes all the nodes the load added, the anchor and its subtree
+        included.  A Daz data file (``.dsf``, e.g. a ``getAssetUriForNode`` value)
+        is refused before anything is resolved or loaded.
         """
         if is_data_file(asset_path):
             raise DazError(f"{where}: {asset_path} is a Daz data file, not a loadable asset; "
@@ -914,12 +937,18 @@ class DazSceneOps:
                 why = released.get("error") if isinstance(released, dict) else "no result"
                 raise DazError(f"{where}: removing the load anchor {anchor} failed ({why or 'not deleted'}); "
                                "every node it added was removed")
+            if released.get("moved"):
+                # claim + fit should leave the anchor childless: a root it still held
+                # was not fitted, so the fit fails and everything added is removed
+                raise DazError(f"{where}: loading it left nodes under the load anchor that were not "
+                               f"fitted to {figure_name}: {', '.join(map(str, released['moved']))}; "
+                               "every node it added was removed")
             # Studio keeps answering busy for a while after the fit returns (DS4,
             # spec 15.1); wait that out so the caller's next call does not fail.
             # Inside the try: if it never settles, the fitted nodes are removed
             # rather than left in the scene unowned.
             self._busy_execute(_SETTLE_SCRIPT)
         except Exception as e:
-            self._remove_added(before, where, e)
+            self._remove_added(before, where, e, anchor)
             raise
         return list(names)
