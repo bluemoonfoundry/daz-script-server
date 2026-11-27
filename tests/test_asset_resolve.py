@@ -70,6 +70,14 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(r.resolved["a"].path, "/hair.duf")
         self.assertFalse(r.errors)
 
+    def test_find_wardrobe_type_keeps_wearables_preset(self):
+        # an outfit preset file is Preset/Wearables, not Follower/Wardrobe/... (spec 15.3)
+        f = Finder(search=[cand("/outfit.duf", "Summer Outfit Set", type="Preset/Wearables"),
+                           cand("/mat.duf", "Summer Outfit Mats", type="Preset/Materials/MDL")])
+        r = run([("a", AssetRef(find="Summer", type="wardrobe"))], f)
+        self.assertEqual(r.resolved["a"].path, "/outfit.duf")
+        self.assertFalse(r.errors)
+
     def test_sku_multi_file_needs_file(self):
         f = Finder(files=[cand("/P/Updo.duf"), cand("/P/Other.duf")])
         r = run([("a", AssetRef(sku="1"))], f)

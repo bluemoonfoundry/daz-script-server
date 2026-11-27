@@ -90,6 +90,53 @@ class StudioFinderTests(unittest.TestCase):
         self.assertEqual([a.path for a in f.search("x", type="hair")], ["/a.duf"])
         self.assertEqual([a.path for a in f.search("x", type="Follower")], ["/a.duf", "/b.duf"])
 
+    def test_studio_search_script_pumps_events_with_bound(self):
+        from dazpy._asset_finder import _studio_script
+        js = _studio_script("search", "ponytail", None, 10, None, None)
+        self.assertIn("searchForAssets", js)
+        self.assertIn("processEvents()", js)      # the container fills asynchronously
+        self.assertIn("5000", js)                 # bounded total wait
+        self.assertIn("timed_out", js)
+
+    def test_studio_script_paths_and_products_match_ds4(self):
+        from dazpy._asset_finder import _studio_script
+        for js in (_studio_script("search", "x", None, 10, None, None),
+                   _studio_script("product_files", "", None, 10, "86958", None),
+                   _studio_script("product_files", "", None, 10, None, "Genesis 9 Starter Essentials")):
+            self.assertIn('"/" + String(_x.getRelativeFilePath())', js)
+            for gone in ("assetID(", "getAsFilePath", "searchForProducts"):
+                self.assertNotIn(gone, js)
+        js = _studio_script("product_files", "", None, 10, "86958", None)
+        self.assertIn('findProductByStoreToken("DAZ 3D", _a.sku)', js)
+        self.assertIn("findProductsByName(_a.product)", js)
+        self.assertIn("getNumAssets()", js)
+
+    def test_studio_search_timed_out_is_noted(self):
+        c = _client({"cms": True, "timed_out": True, "assets": [{"path": "/a.duf", "type": "Follower/Hair"}]})
+        f = StudioFinder(c)
+        self.assertEqual([a.path for a in f.search("x", type=None)], ["/a.duf"])
+        self.assertTrue(f.timed_out)
+        f2 = StudioFinder(_client({"cms": True, "assets": []}))
+        f2.search("x", type=None)
+        self.assertFalse(f2.timed_out)
+
+    def test_studio_wardrobe_filter_keeps_wearables_presets(self):
+        c = _client({"cms": True, "assets": [
+            {"path": "/outfit.duf", "type": "Preset/Wearables"},
+            {"path": "/mat.duf", "type": "Preset/Materials/MDL"},
+            {"path": "/hair.duf", "type": "Follower/Hair"}]})
+        self.assertEqual([a.path for a in StudioFinder(c).search("x", type="wardrobe")], ["/outfit.duf"])
+        self.assertEqual([a.path for a in StudioFinder(c).search("x", type="hair")], ["/hair.duf"])
+
+    def test_typed_search_collects_up_to_studio_cap_before_filtering(self):
+        # DS4 lists material presets first ("ponytail"): a small pre-filter cap
+        # could drop every hair; collect up to Studio's 1200 and filter here.
+        c = _client({"cms": True, "assets": []})
+        StudioFinder(c).search("ponytail", type="hair", limit=5)
+        self.assertIn('"limit": 1200', c.scripts[0])
+        StudioFinder(c).search("ponytail", type=None, limit=5)
+        self.assertIn('"limit": 5', c.scripts[1])
+
     def test_studio_cms_off_raises(self):
         with self.assertRaises(FinderUnavailable) as cm:
             StudioFinder(_client({"cms": False})).search("x", type=None)

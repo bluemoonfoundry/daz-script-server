@@ -38,7 +38,7 @@ def compat_script(paths: list[str]) -> str:
     """Read-only script reporting each file's compatibilities from the asset database."""
     esc = ScriptBuilder.escape_string
     paths_js = "[" + ", ".join(esc(p) for p in paths) + "]"
-    # Provisional until the Task 1 live probe confirms these calls.
+    # Confirmed on DS4 by the Task 1 live probe (spec 15); DS6 pending.
     return ScriptBuilder.iife(f"""// recipe:compat
 var _paths = {paths_js}, _out = {{}};
 var _mgr = App.getAssetMgr(), _cms = App.getContentMgr();

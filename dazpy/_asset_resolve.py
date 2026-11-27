@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal
 
 from ._asset_finder import AssetCandidate, AssetFinder, FinderUnavailable
 from ._asset_ref import AssetRef
-from ._content_types import type_matches
+from ._content_types import file_type_matches
 from ._recipe_issue import RecipeIssue
 from ._recipe_ops import resolve_files
 
@@ -150,7 +150,7 @@ def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: As
 
 
 def _typed(ref: AssetRef, cands: list[AssetCandidate]) -> list[AssetCandidate]:
-    return [c for c in cands if type_matches(ref.type, c.type)] if ref.type else cands
+    return [c for c in cands if file_type_matches(ref.type, c.type)] if ref.type else cands
 
 
 def _pick_product(p: str, ref: AssetRef, finder: AssetFinder,

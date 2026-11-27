@@ -341,12 +341,14 @@ class _Run:
         """One record per fitted node (spec 6.6, 9).  Items are not observed:
         they follow their figure, so their transform is never a hand edit."""
         actor_key = d.create["fit_to"].split(".", 1)[1]
+        uris = self.ops.asset_uris(names)
         for i, name in enumerate(names):
             source = dict(copy.deepcopy(d.create.get("source") or {}),
                           fitted_to=actor_key, group=path, primary=i == 0)
             self.ops.write_record(name, dataclasses.replace(
                 self.record(path, copy.deepcopy(desired), {}, self.ops.native_descendants(name)),
-                source=source, group=path, primary=i == 0, members=tuple(names)))
+                source=source, group=path, primary=i == 0, members=tuple(names),
+                asset_uri=uris.get(name)))
 
     def write_taken(self, path: str) -> None:
         d = self.desired[path]

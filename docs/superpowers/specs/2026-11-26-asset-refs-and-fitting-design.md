@@ -494,7 +494,10 @@ never loaded).
 - After a load, Studio selects what it loaded (method (a): the first new root).
 - After fitting the dForce hair, Studio answered the next request with
   `StudioBusyError` (503) for a while; it cleared without any dialog. Calls
-  after a load/fit need `retry_on_busy`.
+  after a load/fit need `retry_on_busy`. The busy period starts *after* the fit
+  script returns, so it hits whatever call comes next (Task 1b reproduced it on
+  the next fit's `resolve_files`); `DazSceneOps` therefore ends each load-and-fit
+  with a no-op call retried while busy.
 
 ### 15.2 Per call: what DS4 returns
 

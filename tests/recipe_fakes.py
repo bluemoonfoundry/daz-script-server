@@ -268,6 +268,7 @@ class FakeOps:
         self.native = native or {}
         self.moved = moved or {}
         self.fit_names = fit_names or {}          # entity path -> names fit returns
+        self.asset_uri_map: dict = {}             # node name -> asset_uris() answer
         self.restore_names = restore_names or {}  # source path -> names restore returns
         self.calls: list[tuple] = []
         self.calls_with_args: list[tuple] = []
@@ -345,6 +346,10 @@ class FakeOps:
     def restore(self, source_paths, figure_name):
         self._call("restore", source_paths, figure_name)
         return [n for p in source_paths for n in self.restore_names.get(p, [p])]
+
+    def asset_uris(self, node_names):
+        # read-only, so not logged in ``calls``; ``asset_uri_map``: node -> .dsf URI
+        return {n: self.asset_uri_map[n] for n in node_names if n in self.asset_uri_map}
 
 
 FAKE_OBSERVED = {"transform": {"position": [1.0, 2.0, 3.0], "rotation": [0.0, 0.0, 0.0]}}

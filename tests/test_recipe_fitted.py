@@ -54,6 +54,29 @@ class FittedTests(unittest.TestCase):
         for bad in ("loadScene", "selectNode", "setSelectedNode", "mergeFile", "openFile"):
             self.assertNotIn(bad, s)
 
+    def test_figures_script_compares_node_wrappers_loosely(self):
+        # DS4: two wrappers of one node are == but never === (spec 15.2), so a
+        # strict follow-target comparison would report no fitted items at all.
+        s = figures_script(["Abby"], [])
+        self.assertIn("_follow(it) != fig", s)
+        self.assertIn("it == fig", s)
+        for strict in ("=== fig", "!== fig"):
+            self.assertNotIn(strict, s)
+        self.assertNotIn("Provisional", s)
+
+    def test_read_figures_returns_fitted_items(self):
+        items = [{"name": n, "label": l, "type": t, "source_path": u, "record": None, "foreign": []}
+                 for n, l, t, u in (
+                     ("Scalp_1085", "Kara Ponytail", "Follower/Hair",
+                      "/data/DAZ%203D/Kara%20Ponytail/Kara%20Ponytail%20Scalp/Scalp_1085.dsf"),
+                     ("WD_Hat_1022", "Detective Hat", "Follower/Wardrobe/Headwear",
+                      "/data/Barbara_Brundon/Detective%20Outfit/Detective%20Hat/WD_Hat_1022.dsf"))]
+        c = _client([_fig("Genesis9", "Abby", items, base="/Genesis 9/Base")])
+        fig = read_figures(c, ["Abby"], [])["Abby"][0]
+        self.assertEqual([(i.name, i.type) for i in fig.items],
+                         [("Scalp_1085", "Follower/Hair"), ("WD_Hat_1022", "Follower/Wardrobe/Headwear")])
+        self.assertEqual(fig.compat_base, "/Genesis 9/Base")
+
 
 class FigureLabelTests(unittest.TestCase):
     def test_script_is_read_only_and_excludes_followers(self):

@@ -704,7 +704,8 @@ class TestV2Facade(FacadeCase):
             else:
                 os.environ["DAZ_BROWSER_URL"] = old
 
-    def _applied_with_hair(self, live_source: str):
+    def _applied_with_hair(self, live_source: str,
+                           recorded_uri: str | None = "/data/DAZ%203D/Bob/Bob.dsf"):
         r = v2_recipe({"add": HAIR, "key": "hair"})
         model = SceneRecipe.from_dict(r)
         resolved = {"actors.abby.asset": ResolvedAsset(dazpy.AssetRef(path=G9), G9, None, None, None,
@@ -715,22 +716,34 @@ class TestV2Facade(FacadeCase):
         actor = live_entity_for(d["actors.abby"], node_name="Genesis 9")
         item = live_entity_for(d["actors.abby.wearing.hair"], group_nodes=("Bob",))
         item = dataclasses.replace(item, record=dataclasses.replace(
-            item.record, source=resolved["actors.abby.wearing.hair"].to_dict(), primary=True))
+            item.record, source=resolved["actors.abby.wearing.hair"].to_dict(), primary=True,
+            asset_uri=recorded_uri))
         scene = fake_scene(live_of(actor, item), compat=COMPAT, figures=[fig_payload(
             "Genesis 9", f"{RID}:abby", compat_base="/Genesis 9",
             items=[item_payload("Bob", source_path=live_source, record=item.record)])])
         return r, scene
 
+    # getAssetUriForNode is the node's .dsf data URI, never the loaded .duf (spec 15.2):
+    # drift compares it with the URI recorded at fit time.
     def test_observe_source_changed(self):
-        r, scene = self._applied_with_hair("/People/Genesis 9/Hair/Other.duf")
+        r, scene = self._applied_with_hair("/data/DAZ%203D/Other/Other.dsf")
         rep = observe(r, scene)
         self.assertIn(("actors.abby.wearing.hair", "source_changed"), codes(rep.drift))
         self.assertFalse(rep.in_sync)
 
     def test_observe_same_source_is_not_drift(self):
-        r, scene = self._applied_with_hair("/People/Genesis%209/Hair/Bob.duf")
+        r, scene = self._applied_with_hair("/data/DAZ 3D/Bob/Bob.dsf")
         rep = observe(r, scene)
         self.assertNotIn("source_changed", [i.code for i in rep.drift])
+
+    def test_live_dsf_uri_never_compared_with_the_duf_source(self):
+        # the record's source path is the .duf; the live URI is a .dsf: not drift
+        r, scene = self._applied_with_hair("/data/DAZ%203D/Bob/Bob.dsf")
+        self.assertNotIn("source_changed", [i.code for i in observe(r, scene).drift])
+
+    def test_no_recorded_uri_is_never_drift(self):
+        r, scene = self._applied_with_hair("/data/DAZ%203D/Other/Other.dsf", recorded_uri=None)
+        self.assertNotIn("source_changed", [i.code for i in observe(r, scene).drift])
 
     def test_unchanged_reference_reuses_the_recorded_resolution(self):
         r = v2_recipe({"add": {"sku": "123"}, "key": "hair"})
@@ -836,17 +849,33 @@ class TestV2FixRound1(FacadeCase):
         first.ops.create_names = {"actors.abby": ["Abby"], "actors.ben": ["Ben"]}
         first.ops.fit_names = {"actors.abby.wearing.hair": ["Bob"],
                                "actors.ben.wearing.hair": ["Bob"]}
+        first.ops.asset_uri_map = {"Bob": "/data/DAZ%203D/Bob/Bob.dsf"}
         self.assertTrue(apply(r, first).applied)
         live = live_after(first)
         rec_of = {p: e.record for p, e in live.entities.items()}
+        self.assertEqual(rec_of["actors.abby.wearing.hair"].asset_uri, "/data/DAZ%203D/Bob/Bob.dsf")
         figures = [
             fig_payload("Abby", f"{RID}:abby", compat_base="/Genesis 9", items=[item_payload(
-                "Bob", source_path=HAIR, record=rec_of["actors.abby.wearing.hair"])]),
+                "Bob", source_path="/data/DAZ%203D/Bob/Bob.dsf",
+                record=rec_of["actors.abby.wearing.hair"])]),
             fig_payload("Ben", f"{RID}:ben", compat_base="/Genesis 9", items=[item_payload(
-                "Bob", source_path="/Other/hair.duf", record=rec_of["actors.ben.wearing.hair"])])]
+                "Bob", source_path="/data/Other/hair.dsf", record=rec_of["actors.ben.wearing.hair"])])]
         rep = observe(r, fake_scene(live, compat=COMPAT, figures=figures))
         self.assertEqual([(i.path, i.code) for i in rep.drift if i.code == "source_changed"],
                          [("actors.ben.wearing.hair", "source_changed")])
+
+    def test_fit_records_each_group_node_asset_uri(self):
+        r = v2_recipe({"add": HAIR, "key": "hair"})
+        scene = fake_scene(compat=COMPAT)
+        scene.ops.fit_names = {"actors.abby.wearing.hair": ["Bob", "Cap"]}
+        scene.ops.asset_uri_map = {"Bob": "/data/Bob/Bob.dsf", "Cap": "/data/Bob/Cap.dsf"}
+        self.assertTrue(apply(r, scene).applied)
+        uris = {c[1]: c[2].asset_uri for c in scene.ops.calls_with_args
+                if c[0] == "write_record" and c[2].path == "actors.abby.wearing.hair"}
+        self.assertEqual(uris, {"Bob": "/data/Bob/Bob.dsf", "Cap": "/data/Bob/Cap.dsf"})
+        actor = next(c[2] for c in scene.ops.calls_with_args
+                     if c[0] == "write_record" and c[2].path == "actors.abby")
+        self.assertNotIn("asset_uri", actor.to_json())   # only fitted items carry it
 
     def test_render_passes_finder_through(self):
         finder = FakeFinder(files=[cand()])

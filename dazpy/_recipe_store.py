@@ -83,6 +83,9 @@ class EntityRecord:
     members: tuple[str, ...] = ()       # every node name of the group as created, primary first
     # One-shot log on actor records: {"entry", "op", "removed": [{"label","type","source_path"}]}
     done: tuple[dict, ...] = ()
+    # Fitted items: the node's getAssetUriForNode file part (its .dsf data file)
+    # recorded at fit time, for source-change drift (spec 9, 15.2).
+    asset_uri: str | None = None
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -102,11 +105,13 @@ class EntityRecord:
                    primary=bool(d.get("primary", True)),
                    adopted_from_scene=bool(d.get("adopted_from_scene", False)),
                    members=tuple(d.get("members") or ()),
-                   done=tuple(d.get("done") or ()))
+                   done=tuple(d.get("done") or ()),
+                   asset_uri=d.get("asset_uri") or None)
 
 
 _RECORD_DEFAULTS: dict = {"source": None, "group": None, "primary": True,
-                          "adopted_from_scene": False, "members": (), "done": ()}
+                          "adopted_from_scene": False, "members": (), "done": (),
+                          "asset_uri": None}
 
 
 @dataclass(frozen=True)

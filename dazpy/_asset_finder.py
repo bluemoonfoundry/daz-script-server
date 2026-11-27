@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ._content_types import type_matches
+from ._content_types import file_type_matches
 from ._recipe_issue import RecipeIssue
 from ._script_builder import ScriptBuilder
 from .exceptions import DazError
@@ -21,42 +21,74 @@ if TYPE_CHECKING:
     from .client import DazClient
 
 
+# How long a search may take to fill its result container (ms).  On DS4 the
+# broadest query is stable after ~1.6 s; an empty result is taken as final once
+# nothing has arrived for _SEARCH_EMPTY_MS.
+_SEARCH_BOUND_MS = 5000
+_SEARCH_EMPTY_MS = 3000
+_SEARCH_STABLE_MS = 750
+# Studio returns at most this many search results.
+_STUDIO_SEARCH_CAP = 1200
+
+
 def _studio_script(op: str, phrase: str, type_: str | None, limit: int,
                    sku: str | None, product: str | None) -> str:
-    # Provisional until the Task 1 live probe confirms these calls.
-    # Result shape (all the Python side relies on):
-    #   {"cms": bool, "assets": [{"path","product","sku","asset_id","type"}]}
-    # Never opens a file or pops a dialog: read-only database queries.
+    """Read-only query of Studio's content database (DS4-confirmed; DS6 pending).
+
+    Result shape (all the Python side relies on)::
+
+        {"cms": bool, "timed_out": bool, "assets": [{"path","product","sku","type"}]}
+
+    ``searchForAssets`` returns an empty container that fills asynchronously, so
+    the script pumps ``processEvents()`` until the count is stable, bounded by
+    ``_SEARCH_BOUND_MS`` (``timed_out`` is then true and the partial result is
+    returned).  Studio caps a search at 1200 results.  Products are looked up
+    synchronously: SKU via ``findProductByStoreToken("DAZ 3D", sku)``, name via
+    ``findProductsByName`` (exact title).  ``path`` is the content path
+    (``"/" + getRelativeFilePath()``); Studio exposes no asset id.  Never opens a
+    file or pops a dialog.
+    """
     args = ScriptBuilder.to_js({"op": op, "phrase": phrase, "type": type_, "limit": limit,
                                 "sku": sku, "product": product})
     return ScriptBuilder.iife(f"""// asset_finder:{op}
 var _a = {args};
 var _mgr = App.getAssetMgr();
-if (!_mgr || !_mgr.isConnectedToCMS()) return {{ cms: false, assets: [] }};
-var _out = [];
+if (!_mgr || !_mgr.isConnectedToCMS()) return {{ cms: false, timed_out: false, assets: [] }};
+var _out = [], _timedOut = false;
 function _add(_x) {{
-    _out.push({{ path: String(_x.getAsFilePath ? _x.getAsFilePath() : (_x.originalPath + "/" + _x.originalFilename)),
+    _out.push({{ path: "/" + String(_x.getRelativeFilePath()),
                  product: String(_x.productName || ""), sku: String(_x.productID || ""),
-                 asset_id: String(_x.assetID()), type: String(_x.contentType || "") }});
+                 type: String(_x.contentType || "") }});
 }}
 function _collect(_c) {{
     if (!_c) return;
     var _n = _c.getNumAssets();
     for (var _i = 0; _i < _n && _out.length < _a.limit; _i++) _add(_c.getAsset(_i));
 }}
-var _types = _a.type ? [_a.type] : [];
-if (_a.op === "search") {{
-    _collect(_mgr.searchForAssets(_a.phrase, [], [], _types, 0));
-}} else {{
-    var _prods = _mgr.searchForProducts(_a.product || _a.sku || "", [], [], [], 0);
-    var _kids = _prods ? _prods.getChildContainers() : [];
-    for (var _k = 0; _k < _kids.length; _k++) {{
-        var _name = String(_kids[_k].getContainerName());
-        if (_a.product && _name !== _a.product) continue;
-        _collect(_kids[_k]);
+function _pump(_r) {{
+    // true when the bound was hit before the count settled
+    var _t0 = new Date().getTime(), _last = -1, _since = _t0;
+    while (true) {{
+        processEvents();
+        var _n = _r.getNumAssets(), _now = new Date().getTime();
+        if (_n !== _last) {{ _last = _n; _since = _now; }}
+        if (_n > 0 && _now - _since > {_SEARCH_STABLE_MS}) return false;
+        if (_n === 0 && _now - _t0 > {_SEARCH_EMPTY_MS}) return false;
+        if (_now - _t0 > {_SEARCH_BOUND_MS}) return true;
     }}
 }}
-return {{ cms: true, assets: _out }};""")
+if (_a.op === "search") {{
+    var _r = _mgr.searchForAssets(_a.phrase, [], [], _a.type ? [_a.type] : [], 0);
+    if (_r) {{ _timedOut = _pump(_r); _collect(_r); }}
+}} else if (_a.sku) {{
+    var _p = _mgr.findProductByStoreToken("DAZ 3D", _a.sku);
+    if (_p && (!_a.product || String(_p.title) === _a.product)) _collect(_p);
+}} else if (_a.product) {{
+    var _ps = _mgr.findProductsByName(_a.product) || [];
+    for (var _k = 0; _k < _ps.length; _k++)
+        if (String(_ps[_k].title) === _a.product) _collect(_ps[_k]);
+}}
+return {{ cms: true, timed_out: _timedOut, assets: _out }};""")
 
 
 @dataclass(frozen=True)
@@ -91,6 +123,8 @@ class StudioFinder:
 
     def __init__(self, client: "DazClient") -> None:
         self._client = client
+        # True when the last query hit the search time bound (partial result).
+        self.timed_out = False
 
     def _run(self, script: str) -> list[AssetCandidate]:
         value = self._client.execute(script, timeout=30).value
@@ -98,6 +132,7 @@ class StudioFinder:
             raise FinderUnavailable("content_database_unavailable: Studio returned no result")
         if not value.get("cms"):
             raise FinderUnavailable("content_database_unavailable")
+        self.timed_out = bool(value.get("timed_out"))
         return [AssetCandidate(path=str(a.get("path", "")), product=_opt(a.get("product")),
                                sku=_opt(a.get("sku")), asset_id=_opt(a.get("asset_id")),
                                type=_opt(a.get("type")))
@@ -105,10 +140,10 @@ class StudioFinder:
 
     def search(self, phrase: str, *, type: str | None, limit: int = 10) -> list[AssetCandidate]:
         # The type filter runs here (friendly names and prefixes), not in the script.
-        found = self._run(_studio_script("search", phrase, None, limit * 5 if type else limit,
+        found = self._run(_studio_script("search", phrase, None, _STUDIO_SEARCH_CAP if type else limit,
                                          None, None))
         if type:
-            found = [c for c in found if type_matches(type, c.type)]
+            found = [c for c in found if file_type_matches(type, c.type)]
         return found[:limit]
 
     def product_files(self, *, sku: str | None = None,
@@ -181,7 +216,7 @@ class ContentBrowserFinder:
             except FinderUnavailable:
                 continue  # one bad product must not discard the other hits
             for f in files.get("files") or []:
-                if type and not type_matches(type, f.get("content_type")):
+                if type and not file_type_matches(type, f.get("content_type")):
                     continue
                 out.append(self._file(f, str(sku), meta.get("name"),
                                       float(hit.get("relevance_score") or 0.0)))

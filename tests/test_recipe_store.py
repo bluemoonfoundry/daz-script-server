@@ -27,6 +27,15 @@ class RecordTests(unittest.TestCase):
                              "desired": {}, "observed": {}})
         self.assertEqual(EntityRecord.from_json(legacy).native, ())
 
+    def test_record_asset_uri_round_trips_and_is_omitted_by_default(self):
+        r = EntityRecord("r1", "actors.a.wearing.hair", 2, {}, {},
+                         asset_uri="/data/DAZ%203D/Kara%20Ponytail/Kara%20Ponytail%20Scalp/Scalp_1085.dsf")
+        self.assertEqual(EntityRecord.from_json(r.to_json()), r)
+        self.assertNotIn("asset_uri", EntityRecord("r1", "props.a", 1, {}, {}).to_json())
+        legacy = json.dumps({"recipe_id": "r1", "path": "props.a", "recipe_version": 1,
+                             "desired": {}, "observed": {}})
+        self.assertIsNone(EntityRecord.from_json(legacy).asset_uri)
+
     def test_record_backward_compatible(self):
         v1 = json.dumps({"recipe_id": "r1", "path": "props.a", "recipe_version": 1,
                          "desired": {}, "observed": {}})

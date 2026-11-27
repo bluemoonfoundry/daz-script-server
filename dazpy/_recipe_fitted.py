@@ -52,7 +52,7 @@ def figures_script(labels: list[str], owned_names: list[str]) -> str:
     esc = ScriptBuilder.escape_string
     labels_js = "[" + ", ".join(esc(x) for x in labels) + "]"
     names_js = "[" + ", ".join(esc(x) for x in owned_names) + "]"
-    # Provisional until the Task 1 live probe confirms these calls.
+    # Confirmed on DS4 by the Task 1 live probe (spec 15); DS6 pending.
     return ScriptBuilder.iife(f"""// recipe:figures
 var _labels = {labels_js}, _owned = {names_js};
 function _rec(n) {{
@@ -112,7 +112,8 @@ for (var _f = 0; _f < _figs.length; _f++) {{
     var items = [];
     for (var _k = 0; _k < _all.length; _k++) {{
         var it = _all[_k];
-        if (it === fig || _follow(it) !== fig) continue;
+        // ==, not ===: two wrappers of one node are never === (DS4, spec 15.2)
+        if (it == fig || _follow(it) != fig) continue;
         items.push({{name: it.getName(), label: it.getLabel(), type: _type(it),
                     source_path: _source(it), record: _rec(it), foreign: _foreign(it, [])}});
     }}
@@ -159,7 +160,7 @@ def read_figures(client: DazClient, labels: list[str],
 
 def figure_labels_script() -> str:
     """Read-only script listing the label of every non-follower figure in the scene."""
-    # Provisional until the Task 1 live probe confirms these calls.
+    # Confirmed on DS4 by the Task 1 live probe (spec 15); DS6 pending.
     return ScriptBuilder.iife("""// recipe:figure-labels
 var _all = Scene.getNodeList(), _out = [];
 for (var _i = 0; _i < _all.length; _i++) {

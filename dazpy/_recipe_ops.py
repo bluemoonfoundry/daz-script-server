@@ -130,18 +130,28 @@ class SceneOps(Protocol):
         """Reload each source file and fit it to the figure (undoes a removal);
         return the new root names."""
 
+    def asset_uris(self, node_names: list[str]) -> dict[str, str]:
+        """``getAssetUriForNode`` file part (``.dsf``) per node; nodes without one are
+        left out.  Read-only."""
+
 
 # HTTP timeout for a call that opens a content file (asset merge-load, pose
 # preset).  The client default (30s) is too short for the first load after
 # Studio starts: on DS4 a Genesis 9 load takes ~15s warm but 19-32s cold, and a
 # timeout there rolls the whole apply back (y33z).
 ASSET_LOAD_TIMEOUT_S = 300.0
+# How long a call right after a load/fit waits out StudioBusyError (DS4: Studio
+# answered busy for a while after fitting a dForce hair, spec 15.1).
+_AFTER_LOAD_BUSY_WAIT_S = 120.0
 
-# Node keys: element ID when the API exposes it (survives duplicate names),
-# else the node name.
+# Node keys: the element ID, which survives duplicate names (a second load of
+# one file repeats every node name).  DS4 has no getElementID(); it exposes
+# elementID as a numeric property (spec 15.2).  The name is a last resort.
 _KEY_JS = """
 function _key(n) {
-    return (typeof n.getElementID === "function") ? String(n.getElementID()) : n.getName();
+    if (typeof n.getElementID === "function") return String(n.getElementID());
+    if (n.elementID !== undefined) return String(n.elementID);
+    return n.getName();
 }"""
 
 # Keys of every node in the scene (not just roots), so a create can find and,
@@ -231,6 +241,29 @@ try {{
 }}""")
 
 
+def _preset_script(node_name: str, path: str) -> str:
+    """Make *node_name* the only selected node, merge-open the preset at *path*,
+    then restore the previous selection (primary last).
+
+    Unlike the v1 pose path, the selection is cleared first:
+    ``setPrimarySelection`` does not deselect other nodes, and a preset opened
+    with another figure selected can reach it too."""
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:preset
+var _node = Scene.findNode({esc(node_name)});
+if (!_node) return "node_not_found";
+var _prev = Scene.getPrimarySelection(), _sel = Scene.getSelectedNodeList();
+Scene.selectAllNodes(false);
+Scene.setPrimarySelection(_node);
+try {{
+    return !!App.getContentMgr().openFile({esc(path)}, true);
+}} finally {{
+    Scene.selectAllNodes(false);
+    for (var _i = 0; _i < _sel.length; _i++) _sel[_i].select(true);
+    if (_prev) Scene.setPrimarySelection(_prev);
+}}""")
+
+
 # The figure node's own transform controls (DzNode.get<X>Control()).
 _NODE_XFORM_CONTROLS = ("XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot",
                         "XScale", "YScale", "ZScale", "Scale")
@@ -309,7 +342,8 @@ for (var _m = 0; _m < _new.length; _m++) {{
 return _names;""")
 
 
-# Provisional until the Task 1 live probe confirms these calls.
+# Fitting method (a), chosen by the Task 1 live probe (spec 15.4): load with
+# nothing selected, then follow + parent.  Confirmed on DS4; DS6 pending.
 def _fit_script(names: list[str], figure_name: str) -> str:
     """Fit each named scene-root node that is a figure to *figure_name*: follow
     it and parent it under it.  Returns ``{error, fitted, unfitted}``.
@@ -342,6 +376,27 @@ for (var _i = 0; _i < _names.length; _i++) {{
 }}
 if (!_missing.length) _deleteSelected(_nodes);
 return _missing;""")
+
+
+# A no-op round trip, retried while Studio reports busy after a load/fit.
+_SETTLE_SCRIPT = ScriptBuilder.iife("""// recipe:settle
+return true;""")
+
+
+def _asset_uris_script(names: list[str]) -> str:
+    """``{name: getAssetUriForNode file part (before "#") or ""}``; read-only.
+
+    The URI is the node's data (``.dsf``) file, not the ``.duf`` that loaded it
+    (spec 15.2)."""
+    return ScriptBuilder.iife(f"""// recipe:asset-uris
+var _names = {ScriptBuilder.to_js(names)}, _mgr = App.getAssetMgr(), _out = {{}};
+for (var _i = 0; _i < _names.length; _i++) {{
+    var _n = Scene.findNode(_names[_i]), _u = "";
+    if (_n && _mgr) _u = String(_mgr.getAssetUriForNode(_n) || "");
+    var _h = _u.indexOf("#");
+    _out[_names[_i]] = _h >= 0 ? _u.substring(0, _h) : _u;
+}}
+return _out;""")
 
 
 def _exists_script(node_name: str) -> str:
@@ -507,10 +562,15 @@ class DazSceneOps:
             raise err
         return list(names)
 
+    def _busy_execute(self, script: str):
+        """Execute a call that follows a load or fit, waiting out Studio's busy replies."""
+        return self._client.execute(script, retry_on_busy=True,
+                                    max_wait=_AFTER_LOAD_BUSY_WAIT_S).value
+
     def _remove_added(self, before: list[str], path: str, cause: Exception) -> None:
         """Remove every node added since *before* (a create that cannot be owned)."""
         try:
-            self._client.execute(_cleanup_script(before))
+            self._busy_execute(_cleanup_script(before))
         except Exception as e:
             raise DazError(f"{path}: create failed ({cause}) and removing the nodes it added "
                            f"also failed: {e}") from cause
@@ -706,7 +766,7 @@ class DazSceneOps:
     def apply_presets(self, node_name: str, paths: list[str]) -> None:
         for path in paths:
             resolved = self._resolve_asset(path)
-            result = self._client.execute(_pose_preset_script(node_name, resolved),
+            result = self._client.execute(_preset_script(node_name, resolved),
                                           timeout=ASSET_LOAD_TIMEOUT_S).value
             if result == "node_not_found":
                 raise NodeNotFoundError(f"Cannot apply preset, node not found: {node_name!r}")
@@ -722,6 +782,10 @@ class DazSceneOps:
         for path in source_paths:
             names += self._load_and_fit(path, None, figure_name, path)
         return names
+
+    def asset_uris(self, node_names: list[str]) -> dict[str, str]:
+        out = self._busy_execute(_asset_uris_script(list(node_names))) or {}
+        return {str(k): str(v) for k, v in out.items() if v}
 
     def unfit(self, node_names: list[str], owner_recipe: str | None = None) -> None:
         if owner_recipe is not None:
@@ -750,11 +814,12 @@ class DazSceneOps:
         before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
         try:
             self._client.execute(_load_asset_script(path), timeout=ASSET_LOAD_TIMEOUT_S)
-            names = self._client.execute(_claim_script(before, label)).value or []
+            # Studio can answer busy for a while after a load/fit (DS4, spec 15.1)
+            names = self._busy_execute(_claim_script(before, label)) or []
             if not names or not all(names):
                 raise DazError(f"{where}: loading it added no named root node to the scene; "
                                "every node it added was removed")
-            out = self._client.execute(_fit_script(list(names), figure_name)).value
+            out = self._busy_execute(_fit_script(list(names), figure_name))
             if not isinstance(out, dict):
                 raise DazError(f"{where}: Daz Studio returned no result for the fit; "
                                "every node it added was removed")
@@ -767,4 +832,7 @@ class DazSceneOps:
         except Exception as e:
             self._remove_added(before, where, e)
             raise
+        # Studio keeps answering busy for a while after the fit returns (DS4, spec
+        # 15.1); wait that out here so the caller's next call does not fail.
+        self._busy_execute(_SETTLE_SCRIPT)
         return list(names)

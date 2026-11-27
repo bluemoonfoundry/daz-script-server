@@ -68,9 +68,6 @@ class TestPoseKeepsNodeTransform(unittest.TestCase):
         self.assertEqual(client.execute.call_count, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestSceneOpsFitting(unittest.TestCase):
     """Task 11: take over, presets, multi-node fit, unfit, restore."""
@@ -83,9 +80,9 @@ class TestSceneOpsFitting(unittest.TestCase):
                              channels={})
 
     def _fit_ops(self, names, fitted, extra=()):
-        # resolve, snapshot, load, claim, fit, then any cleanup answers
+        # resolve, snapshot, load, claim, fit, then cleanup (failure) or settle (success)
         fit_out = {"error": "", "fitted": fitted, "unfitted": [n for n in names if n not in fitted]}
-        return _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, names, fit_out, *extra])
+        return _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, names, fit_out, *(extra or (True,))])
 
     def test_fit_multi_node_returns_all(self):
         ops, client = self._fit_ops(["Top", "Skirt"], ["Top", "Skirt"])
@@ -160,7 +157,87 @@ class TestSceneOpsFitting(unittest.TestCase):
 
     def test_restore_reloads_and_fits_each_source(self):
         fit = {"error": "", "fitted": ["Top"], "unfitted": []}
-        ops, client = _ops([{"/o.duf": "C:/o.duf"}, ["k"], True, ["Top"], fit])
+        ops, client = _ops([{"/o.duf": "C:/o.duf"}, ["k"], True, ["Top"], fit, True])
         self.assertEqual(ops.restore(["/o.duf"], "Genesis 9"), ["Top"])
         claim = client.execute.call_args_list[3].args[0]
         self.assertNotIn("setLabel", claim)
+
+
+class TestDs4ProbeFindings(unittest.TestCase):
+    """Task 1b: DS4 live-probe findings applied to the Studio scripts (spec 15)."""
+
+    def test_node_key_uses_element_id_property(self):
+        # DS4 has no getElementID(); elementID is a numeric property.  A name key
+        # would hide every node of a second load of the same file.
+        from dazpy._recipe_ops import _KEY_JS, _SNAPSHOT_SCRIPT
+        self.assertIn("n.elementID !== undefined", _KEY_JS)
+        self.assertIn("String(n.elementID)", _KEY_JS)
+        self.assertIn('typeof n.getElementID === "function"', _KEY_JS)
+        self.assertIn("return n.getName();", _KEY_JS)   # last-resort fallback
+        self.assertIn("n.elementID", _SNAPSHOT_SCRIPT)
+
+    def _entity(self):
+        from dazpy._recipe_desired import DesiredEntity
+        return DesiredEntity(path="items.anna.outfit", kind="item", label="r:anna.outfit",
+                             create={"asset_path": "/Outfit.duf", "fit_to": "actors.anna"},
+                             channels={})
+
+    def test_calls_after_the_load_retry_while_studio_is_busy(self):
+        fit_out = {"error": "", "fitted": ["Top"], "unfitted": []}
+        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out, True])
+        ops.fit(self._entity(), "Genesis 9")
+        calls = client.execute.call_args_list
+        by_tag = {tag: c for c in calls for tag in ("recipe:claim", "recipe:fit", "recipe:load")
+                  if tag in c.args[0]}
+        self.assertTrue(by_tag["recipe:claim"].kwargs.get("retry_on_busy"))
+        self.assertTrue(by_tag["recipe:fit"].kwargs.get("retry_on_busy"))
+        # the load itself is not retried: a busy reply there means it did not run
+        self.assertFalse(by_tag["recipe:load"].kwargs.get("retry_on_busy", False))
+
+    def test_fit_waits_out_busy_before_returning(self):
+        # DS4: Studio answers busy for a while after a fit returns, so the next
+        # operation's first call would fail; the fit settles before returning.
+        fit_out = {"error": "", "fitted": ["Top"], "unfitted": []}
+        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out, True])
+        self.assertEqual(ops.fit(self._entity(), "Genesis 9"), ["Top"])
+        last = client.execute.call_args_list[-1]
+        self.assertIn("recipe:settle", last.args[0])
+        self.assertTrue(last.kwargs.get("retry_on_busy"))
+
+    def test_cleanup_after_a_failed_fit_retries_while_busy(self):
+        from dazpy.exceptions import DazError
+        fit_out = {"error": "", "fitted": ["Top"], "unfitted": ["Prop"]}
+        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top", "Prop"],
+                            fit_out, 1])
+        with self.assertRaises(DazError):
+            ops.fit(self._entity(), "Genesis 9")
+        last = client.execute.call_args_list[-1]
+        self.assertIn("recipe:cleanup", last.args[0])
+        self.assertTrue(last.kwargs.get("retry_on_busy"))
+
+    def test_apply_presets_clears_selection_first(self):
+        ops, client = _ops([{"/a.duf": "C:/a.duf"}, True])
+        ops.apply_presets("Genesis 9", ["/a.duf"])
+        js = next(c.args[0] for c in client.execute.call_args_list if "openFile" in c.args[0])
+        self.assertLess(js.index("Scene.selectAllNodes(false)"), js.index("setPrimarySelection(_node)"))
+        self.assertIn("getSelectedNodeList()", js)   # the previous selection is restored
+
+    def test_pose_preset_selection_handling_unchanged(self):
+        # v1 pose channel: same script as before (no selection clearing)
+        from dazpy._recipe_ops import _pose_preset_script
+        js = _pose_preset_script("Genesis 9", "C:/p.duf")
+        self.assertNotIn("selectAllNodes", js)
+        self.assertIn("setPrimarySelection(_prev)", js)
+
+    def test_asset_uris_script_is_read_only(self):
+        ops, client = _ops([{"Top": "/data/x/Top.dsf", "Gone": ""}])
+        self.assertEqual(ops.asset_uris(["Top", "Gone"]), {"Top": "/data/x/Top.dsf"})
+        js = client.execute.call_args.args[0]
+        self.assertIn("getAssetUriForNode", js)
+        self.assertIn('indexOf("#")', js)
+        for bad in ("loadScene", "openFile", "setFollowTarget", "removeNode", "DzDeleteAction"):
+            self.assertNotIn(bad, js)
+
+
+if __name__ == "__main__":
+    unittest.main()

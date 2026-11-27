@@ -493,18 +493,19 @@ def _norm_file(path: str) -> str:
 
 
 def _same_file(live_uri: str, recorded: str) -> bool:
-    """Does the node's asset URI file (often content-relative) name *recorded*?"""
-    a, b = _norm_file(live_uri), _norm_file(recorded)
-    if a == b:
-        return True
-    short, long_ = sorted((a, b), key=len)
-    return long_.endswith("/" + short.lstrip("/"))
+    """Do two ``getAssetUriForNode`` file parts name the same data file?"""
+    return _norm_file(live_uri.split("#", 1)[0]) == _norm_file(recorded.split("#", 1)[0])
 
 
 def _source_drift(live: LiveState, figures: Mapping[str, list[FigureInfo]]
                   ) -> tuple[RecipeIssue, ...]:
-    """``source_changed`` for owned fitted items whose live source file differs from
-    the recorded one (spec section 9). Gone items are ``deleted_in_scene`` instead."""
+    """``source_changed`` for owned fitted items whose live data file differs from
+    the one recorded at fit time (spec section 9). Gone items are
+    ``deleted_in_scene`` instead.
+
+    Both sides are ``getAssetUriForNode`` file parts (the node's ``.dsf``), never the
+    ``.duf`` the recipe names (spec 15.2): a record without ``asset_uri`` (written
+    before it was recorded) is never drift."""
     out: list[RecipeIssue] = []
     for path, entity in live.entities.items():
         if not is_item_path(path):
@@ -515,8 +516,7 @@ def _source_drift(live: LiveState, figures: Mapping[str, list[FigureInfo]]
         # the item under its own actor's figure: item node names repeat across figures
         item = next((it for f in figures.get(actor.node_name, []) if f.name == actor.node_name
                      for it in f.items if it.name == entity.node_name), None)
-        source = entity.record.source or {}
-        want = source.get("path") or (source.get("resolved") or {}).get("path")
+        want = entity.record.asset_uri
         if not want or item is None or item.source_path is None:
             continue
         if not _same_file(item.source_path, want):

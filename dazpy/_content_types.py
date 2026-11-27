@@ -1,6 +1,7 @@
 """Content-type names and matching for fitted items (scene recipe v2).
 
-FRIENDLY_TYPES is plain data; prefixes may be corrected by live probing.
+FRIENDLY_TYPES is spec section 6.3 as confirmed by the DS4 live probe against
+Studio's own type list and real Genesis 9 content (spec 15.3).  DS6 pending.
 """
 
 from __future__ import annotations
@@ -9,15 +10,21 @@ from typing import Mapping, Optional
 
 FRIENDLY_TYPES: Mapping[str, "tuple[str, ...]"] = {
     "hair": ("Follower/Hair",),
-    "top": ("Follower/Wardrobe/Top",),
-    "bottom": ("Follower/Wardrobe/Pants", "Follower/Wardrobe/Skirt"),
+    "top": ("Follower/Wardrobe/Shirt", "Follower/Wardrobe/Outerwear/Top"),
+    "bottom": ("Follower/Wardrobe/Pant", "Follower/Wardrobe/Skirt",
+               "Follower/Wardrobe/Outerwear/Bottom"),
     "dress": ("Follower/Wardrobe/Dress",),
     "outerwear": ("Follower/Wardrobe/Outerwear",),
-    "shoes": ("Follower/Wardrobe/Shoe",),
-    "hat": ("Follower/Wardrobe/Hat", "Follower/Accessory/Head"),
+    "shoes": ("Follower/Wardrobe/Footwear", "Follower/Wardrobe/Shoes"),
+    "hat": ("Follower/Wardrobe/Headwear",),
     "accessory": ("Follower/Accessory",),
     "wardrobe": ("Follower/Wardrobe",),
 }
+
+# The type of a wearables preset *file* (an outfit or garment preset).  It is
+# never a node type: the nodes it loads carry their own Follower/Wardrobe/... types.
+WEARABLES_PRESET_TYPE = "Preset/Wearables"
+_WARDROBE = "Follower/Wardrobe"
 
 
 def type_prefixes(t: str) -> "tuple[str, ...]":
@@ -25,14 +32,29 @@ def type_prefixes(t: str) -> "tuple[str, ...]":
     return tuple(FRIENDLY_TYPES.get(t, (t,)))
 
 
+def _under(prefix: str, root: str) -> bool:
+    return prefix == root or prefix.startswith(root + "/")
+
+
 def type_matches(t: str, presentation_type: Optional[str]) -> bool:
-    """True if presentation_type equals or lies under a prefix of t ("/" boundary)."""
+    """True if presentation_type equals or lies under a prefix of t ("/" boundary).
+
+    For scene nodes (``getPresentation().type``)."""
     if not presentation_type:
         return False
-    for p in type_prefixes(t):
-        if presentation_type == p or presentation_type.startswith(p + "/"):
-            return True
-    return False
+    return any(_under(presentation_type, p) for p in type_prefixes(t))
+
+
+def file_type_matches(t: str, content_type: Optional[str]) -> bool:
+    """:func:`type_matches` for a content *file*'s CMS ``contentType``.
+
+    A wearables preset file is ``Preset/Wearables`` whatever garments it loads,
+    so it matches every wardrobe type (friendly or raw ``Follower/Wardrobe...``);
+    which garments it holds is only known after loading."""
+    if type_matches(t, content_type):
+        return True
+    return content_type == WEARABLES_PRESET_TYPE and all(
+        _under(p, _WARDROBE) for p in type_prefixes(t))
 
 
 def is_known_type(t: str) -> bool:
