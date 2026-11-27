@@ -6,6 +6,44 @@ All notable changes to DazScript Server are documented here.
 
 ### Added
 
+- **dazpy scene recipe v2: asset references, compatibility and fitting**
+  (5d6f.21). With `"recipe_version": 2` (schema
+  `schemas/scene-recipe.v2.schema.json`, shared reference schema
+  `schemas/asset-ref.v1.schema.json`):
+  - Any asset can be an asset reference: `path`, `product`, `sku` or `find`,
+    plus `file` / `type` to narrow and a `resolved` pin. `find` / `product` /
+    `sku` are answered by `StudioFinder` (Studio's content database) or
+    `ContentBrowserFinder` (daz-content-browser, `DAZ_BROWSER_URL`). Only a
+    clear single match is accepted; anything else is `ambiguous_asset` listing
+    the candidates. `dazpy.recipe.pin()` fills in every `resolved` pin, and
+    recorded resolutions are reused on later applies.
+  - Before the scene changes, every preset and fitted item is checked against
+    its actor's figure from asset metadata (`incompatible_asset`;
+    `compatibility_unknown` warning when there is none). Nothing is loaded to
+    find out, so an incompatible item can't pop Studio's modal.
+  - Actors in layers: `node` takes over a figure by Scene-pane label (or
+    creates and labels it), `presets` are applied in order, and `wearing`
+    `add` / `replace` / `remove` entries fit and remove hair, clothing and
+    accessories by label or content type (`hair`, `top`, `wardrobe`, ...).
+    Multi-node items (hair plus cap, outfit presets) are one entry. Removals
+    run last; a failed apply leaves replaced hand content in place.
+  - Every loaded node records its `source` (requested reference, resolved
+    file / SKU / product, finder, actor, group). `observe` reports
+    `source_changed` for items swapped by hand.
+  - New codes. Errors: `invalid_asset_ref`, `asset_not_found`,
+    `ambiguous_asset`, `content_database_unavailable`, `incompatible_asset`,
+    `ambiguous_node`, `node_not_found`, `take_over_asset_changed`,
+    `replace_target_missing`, `remove_target_missing`. Warnings:
+    `compatibility_unknown`, `pin_mismatch`, `pin_file_missing`,
+    `finder_fallback`, `search_incomplete`, `similar_node_label`,
+    `unrestorable_removal`, `preset_dropped`.
+  v1 recipes behave exactly as before. Documented in `docs/scene_recipes.rst`
+  (worked "Abby" example). Live acceptance tests:
+  `tests/test_recipe_live.py -k AssetFitting`, with content paths from
+  `DAZ_LIVE_*` env vars. On Studio 4.24 the ambiguous-find,
+  incompatible-hair and build-from-empty tests pass. The take-over, fit-failure,
+  multi-node and provenance tests and all of Studio 6 still need a live run.
+
 - **Live test for companion-plugin routes** (ih7u): `TestPluginRoutes` in
   `tests/test_api.py` covers `registerPluginRoute()` and the catch-all
   dispatch from end to end: the path-param envelope (including a `"` in a

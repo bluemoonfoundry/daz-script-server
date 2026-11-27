@@ -32,6 +32,29 @@ figure = scene.find_skeleton_by_label("Genesis 9")
 figure.find_bone("neck1").set_local_rotation(0, 15, 0)
 ```
 
+## Scene recipes
+
+`dazpy.recipe` validates, plans, applies and observes declarative scene
+recipes (JSON). With `"recipe_version": 2` a recipe can name content by path,
+product, SKU or search phrase, check every preset and fitted item against its
+figure before anything loads, take over a figure built by hand, and add,
+replace or remove its hair and clothing by label or content type:
+
+```python
+from dazpy.recipe import apply, pin, validate
+
+recipe = {"recipe_version": 2, "id": "vn-a", "actors": {"abby": {
+    "node": "Abby",
+    "wearing": [{"replace": {"type": "hair"}, "key": "hair",
+                 "with": {"find": "Bunched Hair Updo", "type": "hair"}}]}}}
+print(validate(recipe, scene).errors)   # e.g. ambiguous_asset with the candidates
+```
+
+Studio's content search matches broadly, so a `find` often lists several
+candidates. Pick one and pin it (`pin(recipe, scene)` or a `resolved` path).
+See the scene recipes guide in the API reference for every error and warning
+code.
+
 ## Documentation
 
 - API reference: https://bluemoonfoundry.github.io/daz-script-server/

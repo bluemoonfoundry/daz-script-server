@@ -1,0 +1,15 @@
+{
+  "recipe_version": 2,
+  "id": "live-abby",
+  "actors": {
+    "abby": {
+      "node": "Abby",
+      "asset": {"path": "${DAZ_LIVE_G9F}"},
+      "presets": ["${DAZ_LIVE_PRESET}"],
+      "wearing": [
+        {"add": {"path": "${DAZ_LIVE_HAIR_A}", "type": "hair"}, "key": "hair"}
+      ],
+      "position": [0, 0, 0]
+    }
+  }
+}
