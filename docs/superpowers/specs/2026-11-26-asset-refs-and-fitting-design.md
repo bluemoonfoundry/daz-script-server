@@ -234,17 +234,22 @@ matches as a prefix:
 | Friendly | Daz type prefix |
 |---|---|
 | `hair` | `Follower/Hair` |
-| `top` | `Follower/Wardrobe/Top` |
-| `bottom` | `Follower/Wardrobe/Pants`, `Follower/Wardrobe/Skirt` |
+| `top` | `Follower/Wardrobe/Shirt`, `Follower/Wardrobe/Outerwear/Top` |
+| `bottom` | `Follower/Wardrobe/Pant`, `Follower/Wardrobe/Skirt`, `Follower/Wardrobe/Outerwear/Bottom` |
 | `dress` | `Follower/Wardrobe/Dress` |
 | `outerwear` | `Follower/Wardrobe/Outerwear` |
-| `shoes` | `Follower/Wardrobe/Shoe` |
-| `hat` | `Follower/Wardrobe/Hat` (or `Follower/Accessory/Head`) |
+| `shoes` | `Follower/Wardrobe/Footwear`, `Follower/Wardrobe/Shoes` |
+| `hat` | `Follower/Wardrobe/Headwear` |
 | `accessory` | `Follower/Accessory` |
 | `wardrobe` | `Follower/Wardrobe` |
 
-The exact prefixes must be confirmed against real content on DS4/DS6 while
-building; the table is the intent, the builder fixes the strings. Items whose
+Strings confirmed on DS4 4.24 against Studio's own type list
+(`DzAssetMgr.getType`) and real Genesis 9 content (§15.3; DS6 pending). Studio
+has no `Follower/Wardrobe/Top`, `.../Pants`, `.../Shoe` or `.../Hat`. `hat` no
+longer includes `Follower/Accessory/Head`, which covers ear, eye (glasses), nose
+and mouth accessories, not hats. `outerwear` also covers `Outerwear/Top` and
+`Outerwear/Bottom`, so it can overlap `top`/`bottom`. A wearables preset file's
+own type is `Preset/Wearables` (§15.3). Items whose
 presentation type is empty never match a `type` selector (they can still be
 targeted by name).
 
@@ -460,3 +465,129 @@ load unchanged (string asset = path). The MCP tools in daz-mcp-server accept v2.
   loading with the actor as primary selection), provided no modal can appear.
 - Internal module layout, step names, error-code spellings.
 - How `StudioFinder` maps to `DzAssetMgr` search calls.
+
+## 15. Live probe findings (DS4/DS6)
+
+Probe: `tests/live_probe_asset_apis.py` (Task 1). Content used: figure
+`/People/Genesis 9/Genesis 9.duf` (labelled `Abby`), hair `/People/Genesis
+9/Hair/Daz Originals/Kara Ponytail/Kara Ponytail.duf` (SKU 93714), wearables
+preset `/People/Genesis 9/Clothing/Daz Originals/Detective Outfit/Detective
+!Outfit.duf` (SKU 105542, six garments), incompatible item `/People/Genesis 8
+Female/Hair/Goldtassel/Cafe Curls/Cafe Curls.duf` (read from metadata only,
+never loaded).
+
+| Studio | Status |
+|---|---|
+| DS4 4.24.0.4, CMS connected | probed 2026-11-27 (below) |
+| DS6 | **pending**: re-run the probe after Studio is switched |
+
+### 15.1 Loading and paths
+
+- `Scene.loadScene(path, DzScene.MergeFile)` needs an **absolute** path. A
+  content-relative path (`/People/...`) pops a modal "could not find file"
+  dialog (the probe's first run did this). Every load must use the path
+  `resolve_files` returns (`findFile` over the content dirs, then
+  `DzFileInfo.exists`), never the raw reference.
+- `DzContentMgr.findFile("/People/...")` returns the absolute path (original
+  case); `getRelativePath(abs, true)` gives back `/People/...` with a leading
+  slash.
+- After a load, Studio selects what it loaded (method (a): the first new root).
+- After fitting the dForce hair, Studio answered the next request with
+  `StudioBusyError` (503) for a while; it cleared without any dialog. Calls
+  after a load/fit need `retry_on_busy`.
+
+### 15.2 Per call: what DS4 returns
+
+| Call | DS4 result |
+|---|---|
+| `DzAssetMgr.findAssetsForFile(rel, true, true)` | Array of `DzAsset`, 1 per file here. Works with or without the leading `/`. |
+| `DzAsset.contentType` | File type: figure `Actor/Character`, hair `Follower/Hair`, wearables preset `Preset/Wearables`. |
+| `DzAsset.compatibilities` | Bases the file is for: figure `["/Genesis 9/Base"]`, hair and outfit `["/Genesis 9/Base"]`, G8 hair `["/Genesis 8/Female"]`. Some items name the parent base (`["/Genesis 9"]`). `vendorCompatibilities` is the same list and `userCompatibilities` is empty. |
+| `DzAsset.compatibilityBase` | The base the file *provides*: figure `/Genesis 9/Base`; also set on items (hair `/dForce Kara Ponytail for Genesis 9/Kara Ponytail`, outfit `/dForce Detective Outfit for Genesis 9`); G8 hair `""`. Only meaningful as "actor base" for figure files. |
+| `DzAsset.productName` / `.productID` / `.storeID` | `"Genesis 9 Starter Essentials"` / `"86958"` (the SKU, a string) / `"DAZ 3D"`. |
+| `DzAsset.getProduct()` | `DzProductAssetContainer`: `.title`, `.token` (= SKU), `.store`, `.guid`. |
+| `DzAsset.getRelativeFilePath()` | `People/Genesis 9/Genesis 9.duf` (**no** leading `/`). |
+| `DzAsset.getAsLocalFile()` | Absolute but **lower-cased** (`x:/daz libraries/project/people/genesis 9/genesis 9.duf`). |
+| `DzAsset.assetID()`, `DzAsset.getAsFilePath()` | **Do not exist** (`undefined`). No asset id is exposed; use product GUID + relative path if an id is needed. |
+| `DzAssetMgr.findProductsForFile(rel)` | Products owning the file (`title`, `token`). |
+| `DzAssetMgr.findProductByStoreToken("DAZ 3D", sku)` | Product, synchronous. `getNumAssets()` / `getAsset(i)` work directly (592 assets for SKU 86958). |
+| `DzAssetMgr.findProductsByName(name)` | Exact-title product list, synchronous. |
+| `DzAssetMgr.searchForAssets(text, cats, bases, types, sort)` | Returns a `DzSearchContainer` that is **empty when returned** and fills **asynchronously**: the script must pump `processEvents()` until the count is stable (first results after 30–850 ms, stable within ~1.6 s). Without pumping, every search returns 0 assets. Text matches broadly (`ponytail`: 772 hits incl. material presets). Base and type filters work (`ponytail` + `/Genesis 9/Base` + `Follower/Hair`: 10). An **unknown type string is ignored** (no filtering). Results are **capped at 1200**, and `hasMoreSearchResults()` stays false at the cap. Sort: `DzAssetMgr.NoSort` = 0, `NameSort` = 1. |
+| `DzAssetMgr.searchForProducts(...)` | Needs **6 arguments** `(text, cats, bases, types, installStateFlags, sort)`; the 5-argument call is a syntax error. Async like `searchForAssets`. The text barely filters (`"Genesis 9 Starter Essentials"` → 2212 products), so not usable for exact product lookup. `DzAssetMgr.InstalledState` = 1. |
+| `DzAssetMgr.searchForProductAssets(product, ...)` | Async; same 592 as the product's direct `getNumAssets()`. |
+| `DzAssetMgr.getTypeForContentFile(abs)` | Same string as the CMS `contentType`. |
+| `DzAssetMgr.getCompatibilityBasePathForNode(figure)` | `/Genesis 9/Base`. For an item node: the item's own base (`/dForce Detective Outfit for Genesis 9/Detective Shoes`). |
+| `DzAssetMgr.getAssetUriForNode(node)` | The node's **data (`.dsf`) URI**, URL-encoded, with `#id`: figure `/data/Daz%203D/Genesis%209/Base/Genesis9.dsf#Genesis9`, hair `/data/DAZ%203D/Kara%20Ponytail/Kara%20Ponytail%20Scalp/Scalp_1085.dsf#Scalp_1085`. It is **not** the `.duf` the user loaded, so it cannot be compared with a recorded `.duf` path. |
+| `DzAssetMgr.getTypeForNode(node)` | Same as `node.getPresentation().type`. |
+| `node.getPresentation().type` | Figure `Actor` (not `Actor/Character`); items: the garment's own type (see 15.3); G9's own followers `Follower/Attachment/Head/Face/{Eyelashes,Tears,Eyes,Mouth}`, `Follower/Attachment/Head/Forehead/Eyebrows`. |
+| `.preferredBase` | Items: `/Genesis 9/Base` (the figure they are for). Figure: `""`. |
+| `.extendedBases` | `[]` on every node probed. |
+| `.autoFitBase` | A **property** (string), not the documented method: calling `autoFitBase()` throws. Figure `/Genesis 9/Base`, G9 eyelashes/eyes/mouth/tear `/Genesis 9/<part>`, hair/garments `""`. |
+| `DzSkeleton.getFollowTarget()` | Figure: `null`. Fitted item: the figure. Sub-parts of an item (Kara Ponytail's band, braid, ...) follow the item's root (`Scalp_1085`), not the figure. |
+| Node identity in script | Two wrappers of the same node are `==` but **not `===`**: `item.getFollowTarget() === figure` is false. Compare with `==` or by `elementID`. |
+| `node.elementID` | A numeric **property** (e.g. 85534). `getElementID()` does **not** exist on DS4. |
+| CMS off | Not tested: switching the CMS off is not safe to script. `isConnectedToCMS()` returned true. |
+
+### 15.3 Content types seen
+
+Studio's own vocabulary (`DzAssetMgr.getType(i)`) for wardrobe:
+`Follower/Wardrobe` + `/Dress`, `/Full-Body`, `/Footwear` (`/Left`, `/Right`),
+`/Shoes`, `/Glove(s)`, `/Headwear`, `/Outerwear` (`/Top`, `/Bottom`), `/Pant`,
+`/Shirt`, `/Skirt`, `/Sock(s)`, `/Underwear` (`/Top`, `/Bottom`). Hair:
+`Follower/Hair` (+ `/Animal/...`). Accessories: `Follower/Accessory/...` (Arm,
+Arms, Head/{Ear,Eye,Eyes,Eyelashes,Mouth,Nose}, Leg(s), Neck, Waist, Torso).
+Figure parts: `Follower/Attachment/...`. Presets: `Preset/Wearables`,
+`Preset/Character`, `Preset/Materials/...`, `Preset/Morph/...`, `Preset/Pose`.
+
+Node types on the loaded Detective Outfit: Shoes `Follower/Wardrobe/Footwear`,
+Pants `Follower/Wardrobe/Pant`, Shirt and Vest `Follower/Wardrobe/Shirt`, Coat
+`Follower/Wardrobe/Outerwear`, Hat `Follower/Wardrobe/Headwear`. Hair
+`Follower/Hair`. The §6.3 table is corrected to these strings.
+
+Consequences:
+- A wearables preset *file* has type `Preset/Wearables`, not a
+  `Follower/Wardrobe/...` type, so a `find` filtered by `wardrobe`/`top`/...
+  on the CMS `contentType` never returns an outfit preset. File type filtering
+  must treat `Preset/Wearables` as matching any wardrobe friendly name (or skip
+  the type filter for it and check node types after load).
+- A raw prefix `Follower` matches the figure's own eyes, mouth, eyebrows,
+  eyelashes and tear (`Follower/Attachment/...`); no friendly name does.
+
+### 15.4 Fitting method (chosen: (a))
+
+Probed on the same figure with nothing else changed:
+
+| | (a) nothing selected, then `setFollowTarget(fig)` + `fig.addNodeChild(item, true)` | (b) figure as sole primary selection, then load |
+|---|---|---|
+| Dialog for a compatible item | none (hair, 6-garment preset) | none (hair, 6-garment preset) |
+| Nodes added | hair: 1 root (`Scalp_1085`) with 5 sub-parts that follow it; outfit: **6 roots**, one per garment, each a `DzFigure` with a `DzPushModifierWeightNode` child ("Clothing Expander ...") | the same nodes, already parented to the figure |
+| After | follow target = figure, parent = figure, smoothing modifier's Collision Item = figure (set by `setFollowTarget`) | identical readback |
+| Load time | hair 7.0 s, outfit 1.6 s | hair 7.0 s, outfit 2.4 s |
+
+Readback (follow target, parent, presentation, collision item) is identical.
+**Chosen: (a)**, as Task 11's provisional `_fit_script` does: the load never
+depends on the selection (so it cannot take the "replace the selected figure"
+or auto-fit dialog paths), the added nodes arrive as scene roots that the
+before/after diff finds, and only `DzFigure` roots are fitted. Method (b) is not
+needed. It would also put an incompatible item on Studio's auto-fit path, which
+§2 forbids. Not measured: morph projection / auto-follow details beyond the
+readback above.
+
+Before/after diff: on DS4 the snapshot key must be `node.elementID`. Node
+names repeat when a file is loaded again (the second hair is again `Scalp_1085`,
+labelled `Kara Ponytail (2)`), so a name-keyed snapshot misses every node of a
+repeated load.
+
+### 15.5 Compatibility check (§7)
+
+- §7 step 1 works: `getCompatibilityBasePathForNode(figure)` gives
+  `/Genesis 9/Base`, and for a figure file to be created `DzAsset.compatibilityBase`
+  gives the same.
+- Step 2 works from `DzAsset.compatibilities`. A preset's own record already
+  says what it is for (`Preset/Wearables` → `["/Genesis 9/Base"]`).
+- Step 3: an item base can be an ancestor (`/Genesis 9`) of the figure base,
+  so the `/`-boundary prefix match is needed. G8 hair (`/Genesis 8/Female`) vs
+  `/Genesis 9/Base` → incompatible, decided from metadata alone.
+- `preferredBase` on a loaded item node is the target base, a usable fallback
+  for nodes. Files cannot be read this way without loading them, so the
+  "presentation fallback" in step 2 applies only to scene nodes.
