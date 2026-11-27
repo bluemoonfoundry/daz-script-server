@@ -143,6 +143,7 @@ class ReadLiveTests(unittest.TestCase):
         ent = read_live(client, "r1").entities[path]
         self.assertEqual(ent.kind, "item")
         self.assertEqual(ent.foreign_children, ("Bow", "Pin"))
+        self.assertEqual(ent.foreign_by_node, (("hair", ("Bow",)), ("cap", ("Pin",))))
         self.assertNotIn("pose", ent.observed)  # items are never pose-captured
 
     def test_same_path_without_group_is_duplicate(self):

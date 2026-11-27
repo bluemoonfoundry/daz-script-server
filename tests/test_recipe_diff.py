@@ -570,8 +570,9 @@ class V2DiffTests(unittest.TestCase):
             ("actors.abby", {"entry": "remove.1", "op": "remove", "removed": []})))
 
     def test_wearing_conflict_blocks_ask(self):
-        c = Conflict("actors.abby.wearing.hair", "has_foreign_children", "type 'hair'",
+        c = Conflict("actors.abby.wearing.hair[HandHair]", "has_foreign_children", "type 'hair'",
                      {"node": "HandHair"}, ["Bow"])
+        epath = "actors.abby.wearing.hair"
         w = WearingPlan(unfits=(UNFIT,), conflicts=(c,))
         p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w)
         self.assertTrue(p.blocked)
@@ -579,13 +580,14 @@ class V2DiffTests(unittest.TestCase):
         self.assertEqual(p.conflicts, (c,))
         # recipe: foreign children are moved out of the item before it is removed
         p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w, on_conflict="recipe_wins")
-        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("unparent", c.path), ("unfit", c.path)])
+        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("unparent", epath), ("unfit", epath)])
         self.assertEqual((p.steps[1].node_name, p.steps[1].channels),
                          ("HandHair", {"children": {"names": ["Bow"]}}))
-        # scene: the hand item stays, the entry is not marked done
+        # scene: the hand item stays; the entry is still done (ruling: never fires again)
         p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w, on_conflict="scene_wins")
         self.assertEqual(ops(p), [("fit", HAIR_A.path)])
-        self.assertEqual(p.done_log, ())
+        self.assertEqual(p.done_log, (("actors.abby", {"entry": "hair", "op": "replace",
+                                                       "removed": []}),))
 
     def test_removed_taken_over_actor_released_not_deleted(self):
         actor = d_taken("abby", pose_path="/p/stand.duf")
@@ -651,6 +653,52 @@ class V2DiffTests(unittest.TestCase):
         p = diff(ds(anna2, hair), L)
         self.assertEqual(ops(p), [("create", anna.path), ("fit", hair.path),
                                   ("delete", hair.path), ("delete", anna.path)])
+
+    def test_group_foreign_child_under_non_primary_unparented_from_its_member(self):
+        L = _abby_live(live_entity_for(HAIR_A, group_nodes=("Hair", "Cap"),
+                                       foreign={"Hair": ["Bow"], "Cap": ["Pin"]}))
+        p = diff(ds(ABBY), L, on_conflict="recipe_wins")
+        self.assertEqual([(s.op, s.node_name, s.channels) for s in p.steps], [
+            ("unparent", "Hair", {"children": {"names": ["Bow"]}}),
+            ("unparent", "Cap", {"children": {"names": ["Pin"]}}),
+            ("delete", "Hair", {"group": {"names": ["Hair", "Cap"]}})])
+
+    def test_v1_plan_dict_has_no_done_log(self):
+        self.assertNotIn("done_log", diff(D, live_matching(D)).to_dict())
+        w = WearingPlan(done_entries=(("actors.abby", "remove.1"),))
+        self.assertIn("done_log", diff(ds(ABBY), _abby_live(), wearing=w).to_dict())
+
+    def test_wearing_scene_keeps_only_conflicting_item_and_marks_done(self):
+        removed = HAND_HAIR + ({"label": "Other", "type": "Follower/Hair", "source_path": "/o.duf"},)
+        u = Unfit("actors.abby", "hair", ("HandHair", "Other"), removed)
+        c = Conflict("actors.abby.wearing.hair[HandHair]", "has_foreign_children", "type 'hair'",
+                     {"node": "HandHair"}, ["Bow"])
+        p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=WearingPlan(unfits=(u,), conflicts=(c,)),
+                 resolutions={c.path: "scene"})
+        self.assertFalse(p.blocked)
+        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("unfit", "actors.abby.wearing.hair")])
+        self.assertEqual(p.steps[1].channels["unfit"]["names"], ["Other"])
+        self.assertEqual(p.steps[1].channels["unfit"]["removed"], [removed[1]])
+        self.assertEqual(p.done_log, (("actors.abby", {"entry": "hair", "op": "replace",
+                                                       "removed": [removed[1]]}),))
+        # only the conflicting item matched: no unfit, but the entry is still done
+        u1 = Unfit("actors.abby", "hair", ("HandHair",), HAND_HAIR)
+        p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=WearingPlan(unfits=(u1,), conflicts=(c,)),
+                 on_conflict="scene_wins")
+        self.assertEqual(ops(p), [("fit", HAIR_A.path)])
+        self.assertEqual(p.done_log, (("actors.abby", {"entry": "hair", "op": "replace",
+                                                       "removed": []}),))
+
+    def test_released_item_under_deleted_actor_unparented_first(self):
+        anna = d_actor("anna")
+        hair = d_item("anna", "hair")
+        L = live_of(live_entity_for(anna, node_name="Anna"),
+                    live_entity_for(hair, group_nodes=("Hair", "Cap"), foreign={"Hair": ["Bow"]}))
+        p = diff({}, L, on_conflict="recipe_wins", resolutions={hair.path: "scene"})
+        self.assertEqual([(s.op, s.path, s.node_name, s.channels) for s in p.steps], [
+            ("release", hair.path, "Hair", {"group": {"names": ["Hair", "Cap"]}}),
+            ("unparent", hair.path, "Anna", {"children": {"names": ["Hair", "Cap"]}}),
+            ("delete", anna.path, "Anna", {})])
 
     def test_wearing_errors_refused(self):
         from dazpy._recipe_issue import RecipeIssue

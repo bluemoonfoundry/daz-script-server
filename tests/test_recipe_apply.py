@@ -1076,7 +1076,7 @@ class V2ExecuteTests(unittest.TestCase):
         ops = FakeOps()
         _, r = run_v2(ds(d_taken("abby")), L, ops)
         self.assertTrue(r.applied, r.error)
-        self.assertIn(("unfit", ["Hair", "Cap"]), ops.calls_with_args)
+        self.assertIn(("unfit", ["Hair", "Cap"], RID), ops.calls_with_args)
         self.assertNotIn("delete", ops.methods())
         self.assertNotIn(HAIR.path, written_manifest(ops).entities)
 
@@ -1102,6 +1102,40 @@ class V2ExecuteTests(unittest.TestCase):
         cap = records_for(ops, "Cap")[-1]
         self.assertEqual((cap.path, cap.group, cap.primary), (HAIR.path, HAIR.path, False))
         self.assertTrue(records_for(ops, "Hair")[-1].primary)
+
+    def test_replaced_actor_keeps_done_log(self):
+        done = ({"entry": "hair", "op": "replace", "removed": []},)
+        anna = d_actor("anna")
+        L = live_of(live_entity_for(anna, node_name="Anna", done=done))
+        anna2 = d_actor("anna")
+        anna2.create["asset_path"] = "/g8.duf"
+        ops = FakeOps(create_names={anna.path: ["Anna 2"]})
+        _, r = run_v2(ds(anna2), L, ops,
+                      wearing=WearingPlan(done_entries=(("actors.anna", "remove.1"),)))
+        self.assertTrue(r.applied, r.error)
+        self.assertEqual(written_records(ops)["Anna 2"].done,
+                         done + ({"entry": "remove.1", "op": "remove", "removed": []},))
+
+    def test_take_over_record_undo_registered_before_write(self):
+        w = WearingPlan(take_overs=(TakeOver("actors.abby", "Genesis 9"),))
+        ops = FakeOps(fail_on=("write_record", 1))
+        _, r = run_v2(ds(d_taken("abby")), EMPTY, ops, wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertIn(("remove_record", "Genesis 9"), ops.calls)
+
+    def test_group_delete_is_checked(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True),
+                    live_entity_for(HAIR, group_nodes=("Hair", "Cap")))
+        ops = FakeOps()
+        run_v2(ds(d_taken("abby")), L, ops)
+        self.assertIn(("unfit", ["Hair", "Cap"], RID), ops.calls_with_args)
+
+    def test_fitted_records_list_native_descendants(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        ops = FakeOps(fit_names={HAIR.path: ["Hair", "Cap"]}, native={"Hair": ("HairMesh",)})
+        run_v2(ds(d_taken("abby"), HAIR), L, ops)
+        self.assertEqual(written_records(ops)["Hair"].native, ("HairMesh",))
+        self.assertEqual(written_records(ops)["Cap"].native, ())
 
     def test_preset_on_existing_actor_cannot_be_undone(self):
         old = d_taken("abby", presets=("/m/a.duf",))

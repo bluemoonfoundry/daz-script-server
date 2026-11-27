@@ -122,6 +122,23 @@ class TestSceneOpsFitting(unittest.TestCase):
         self.assertIn('["Top", "Skirt"]', script)
         self.assertNotIn("Scene.removeNode", script)
 
+    def test_unfit_checked_refuses_foreign_descendant(self):
+        from dazpy._recipe_store import EntityRecord
+        from dazpy.exceptions import DazError
+        mine = EntityRecord("r1", "actors.a.wearing.h", 2, {}, {}, native=("HairMesh",)).to_json()
+        clean = {"record": mine, "children": [
+            {"name": "HairMesh", "record": None, "bone": False, "children": []}]}
+        dirty = {"record": mine, "children": [
+            {"name": "Bow", "record": None, "bone": False, "children": []}]}
+        ops, client = _ops([clean, dirty])
+        with self.assertRaisesRegex(DazError, "Bow"):
+            ops.unfit(["Hair", "Cap"], owner_recipe="r1")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertFalse(any("DzDeleteAction" in s for s in scripts))  # nothing deleted
+        ops, client = _ops([clean, clean, []])
+        ops.unfit(["Hair", "Cap"], owner_recipe="r1")
+        self.assertIn("DzDeleteAction", client.execute.call_args.args[0])
+
     def test_apply_presets_order_and_selection_restore(self):
         ops, client = _ops([{"/a.duf": "C:/a.duf"}, True, {"/b.duf": "C:/b.duf"}, True])
         ops.apply_presets("Genesis 9", ["/a.duf", "/b.duf"])

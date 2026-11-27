@@ -141,7 +141,7 @@ class WearingTests(unittest.TestCase):
         p = plan_wearing(recipe(replace(HAIR)), {"Abby": [f]}, live())
         self.assertEqual(len(p.conflicts), 1)
         c = p.conflicts[0]
-        self.assertEqual((c.path, c.kind), ("actors.abby.wearing.k", "has_foreign_children"))
+        self.assertEqual((c.path, c.kind), ("actors.abby.wearing.k[H1]", "has_foreign_children"))
         self.assertEqual(c.live, ["Cap"])
         self.assertEqual(c.base, {"node": "H1"})  # the item to unparent from
 

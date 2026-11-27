@@ -338,8 +338,9 @@ class FakeOps:
         self._call("fit", entity.path, figure_name)
         return list(self.fit_names.get(entity.path, [entity.label]))
 
-    def unfit(self, node_names):
-        self._call("unfit", node_names)
+    def unfit(self, node_names, owner_recipe=None):
+        # calls_with_args carries owner_recipe only when given (checked group deletes)
+        self._call("unfit", *((node_names,) if owner_recipe is None else (node_names, owner_recipe)))
 
     def restore(self, source_paths, figure_name):
         self._call("restore", source_paths, figure_name)
@@ -667,8 +668,11 @@ def d_item(actor: str, key: str, asset: str = "/hair/a.duf", finder: str = "path
 
 
 def live_entity_for(e: DesiredEntity, *, node_name: str | None = None, adopted: bool = False,
-                    group_nodes: tuple = (), missing: tuple = (), done: tuple = ()) -> LiveEntity:
-    """The LiveEntity a faithful earlier apply of *e* leaves (v2-aware)."""
+                    group_nodes: tuple = (), missing: tuple = (), done: tuple = (),
+                    foreign: dict | None = None) -> LiveEntity:
+    """The LiveEntity a faithful earlier apply of *e* leaves (v2-aware).
+
+    *foreign*: ``{group node: [foreign child names]}`` (items only)."""
     item = e.kind == "item"
     obs = {} if item else observed_for(e)
     rdesired = _copy.deepcopy(e.channels)
@@ -678,8 +682,11 @@ def live_entity_for(e: DesiredEntity, *, node_name: str | None = None, adopted: 
                     adopted_from_scene=adopted, done=tuple(done),
                     group=e.path if item else None, members=members)
     names = tuple(group_nodes) or (node_name or e.label,)
+    by_node = tuple((n, tuple(c)) for n, c in (foreign or {}).items())
     return LiveEntity(path=e.path, node_name=node_name or names[0], kind=e.kind, record=r,
-                      observed=_copy.deepcopy(obs), foreign_children=(),
+                      observed=_copy.deepcopy(obs),
+                      foreign_children=tuple(c for _, cs in by_node for c in cs),
+                      foreign_by_node=by_node,
                       group_nodes=tuple(group_nodes) if item else (),
                       missing_members=tuple(missing) if item else ())
 

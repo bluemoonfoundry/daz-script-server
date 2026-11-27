@@ -182,7 +182,10 @@ class RecipePlan:
     done_log: tuple[tuple[str, dict], ...] = ()
 
     def to_dict(self) -> dict:
-        return to_jsonable(self)
+        d = to_jsonable(self)
+        if not self.done_log:
+            del d["done_log"]  # v1 plans serialise exactly as before
+        return d
 
 
 # ── comparison ────────────────────────────────────────────────────────────────
@@ -472,31 +475,54 @@ class _Planner:
             return
         self.removed(entity)
 
+    def unparent_released_items(self) -> None:
+        """A released item under an actor deleted in this run moves to scene root
+        first (it is no longer owned, so the actor's checked delete would refuse)."""
+        assert self.live is not None
+        for s in list(self.steps):
+            actor = item_actor(s.path)
+            if (s.op != "release" or not is_item_path(s.path)
+                    or self.retired.get(actor) != "delete" or actor not in self.live.entities):
+                continue
+            names = (s.channels.get("group") or {}).get("names") or [s.node]
+            self.step("unparent", s.path, {"children": {"names": list(names)}}, None,
+                      self.live.entities[actor].node_name)
+
     def wearing(self, w: WearingPlan) -> None:
         """One-shot unfits, their conflicts and the done-log (spec 6.4)."""
-        skip: set[str] = set()
+        # Conflicts are per matched item (path "<entry path>[<node>]"): "scene" keeps
+        # that item only, "recipe" moves its foreign children out before the unfit.
+        kept: set[str] = set()
+        blocked: set[str] = set()
         for c in w.conflicts:
             res = self.conflict(c)
+            owner = c.base.get("node") if isinstance(c.base, dict) else None
+            if owner is None:
+                raise ValueError(f"wearing conflict {c.path} names no matched node")
             if res == "scene":
-                skip.add(c.path)
-            elif res == "recipe" and c.kind == "has_foreign_children":
-                owner = c.base.get("node") if isinstance(c.base, dict) else None
-                if owner is None:
-                    raise ValueError(f"wearing conflict {c.path} names no node to unparent from")
+                kept.add(owner)
+            elif res == "recipe":
                 names = list(c.live) if isinstance(c.live, (list, tuple)) else []
-                self.step("unparent", c.path, {"children": {"names": names}}, None, owner)
+                epath = c.path[:-len(f"[{owner}]")] if c.path.endswith(f"[{owner}]") else c.path
+                self.step("unparent", epath, {"children": {"names": names}}, None, owner)
+            else:
+                blocked.add(owner)  # unresolved: the plan is blocked anyway
         for u in w.unfits:
             epath = f"{u.actor_path}.wearing.{u.entry}"
             # Never on an actor whose old node is retired (re-evaluated next apply).
-            if (epath in skip or not self.actor_has_node(u.actor_path)
+            if (blocked & set(u.node_names) or not self.actor_has_node(u.actor_path)
                     or u.actor_path in self.retired):
                 continue
             op = _entry_op(u.entry)
-            self.step("unfit", epath, {"unfit": {
-                "actor": u.actor_path, "entry": u.entry, "op": op,
-                "names": list(u.node_names), "removed": [dict(r) for r in u.removed]}}, None, None)
+            pairs = [(n, dict(r)) for n, r in zip(u.node_names, u.removed) if n not in kept]
+            removed = [r for _, r in pairs]
+            if pairs:
+                self.step("unfit", epath, {"unfit": {
+                    "actor": u.actor_path, "entry": u.entry, "op": op,
+                    "names": [n for n, _ in pairs], "removed": removed}}, None, None)
+            # done even when every match was kept: the one-shot never fires again
             self.done_log.append((u.actor_path, {"entry": u.entry, "op": op,
-                                                 "removed": [dict(r) for r in u.removed]}))
+                                                 "removed": [dict(r) for r in removed]}))
         for actor, entry in w.done_entries:
             if self.actor_has_node(actor):
                 self.done_log.append((actor, {"entry": entry, "op": _entry_op(entry),
@@ -533,7 +559,10 @@ class _Planner:
                 self.step("release", path, _group(entity), None, entity.node_name)
                 self.retired[path] = "release"
                 return True
-        if entity.foreign_children:
+        if entity.foreign_by_node:  # a group: unparent from the member each child is under
+            for owner, names in entity.foreign_by_node:
+                self.step("unparent", path, {"children": {"names": list(names)}}, None, owner)
+        elif entity.foreign_children:
             self.step("unparent", path, {"children": {"names": list(entity.foreign_children)}},
                       None, entity.node_name)
         # A fitted group goes in one delete of all its surviving nodes.
@@ -633,6 +662,7 @@ def diff(desired: dict[str, DesiredEntity], live: LiveState, *, on_conflict: OnC
             p.removed_item(entity)
     if wearing is not None:
         p.wearing(wearing)
+    p.unparent_released_items()
     for dup in live.duplicates:
         p.duplicate(dup, desired.get(dup.path), live)
     p.environment(desired.get(ENVIRONMENT_PATH), live)

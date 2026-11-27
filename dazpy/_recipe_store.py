@@ -151,6 +151,8 @@ class LiveEntity:
     label: str | None = None  # the node's current label (the user may have renamed it)
     group_nodes: tuple[str, ...] = ()  # surviving nodes of a group, primary first
     missing_members: tuple[str, ...] = ()  # recorded group members no longer in the scene
+    # groups only: (member, its foreign children) for members that have any
+    foreign_by_node: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -425,15 +427,18 @@ def read_live(client: DazClient, recipe_id: str) -> LiveState:
         live_names = tuple(m["name"] for m, _ in found)
         observed = observed_channels(client, n["name"], kind, n)
         # A group's foreign children are those of every member (one delete takes them all).
-        foreign = tuple(c for m, r in (found if is_group else found[:1])
-                        for c in foreign_descendants(m.get("children") or [], recipe_id, r.native))
+        by_node = tuple((m["name"], tuple(foreign_descendants(m.get("children") or [], recipe_id,
+                                                              r.native)))
+                        for m, r in (found if is_group else found[:1]))
+        foreign = tuple(c for _, cs in by_node for c in cs)
         entities[path] = LiveEntity(
             path=path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
             label=n.get("label"),
             group_nodes=live_names if is_group else (),
             missing_members=(tuple(x for x in rec.members if x not in live_names)
-                             if is_group else ()))
+                             if is_group else ()),
+            foreign_by_node=tuple((n, cs) for n, cs in by_node if cs) if is_group else ())
         if len(found) > 1 and not is_group:
             duplicates.append(DuplicateRecord(
                 path, tuple(m["name"] for m, _ in found),

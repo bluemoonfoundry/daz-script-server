@@ -119,8 +119,12 @@ class SceneOps(Protocol):
         figure; return all added root names, the primary first.  Raises, with
         everything it added removed, when an added root cannot be fitted."""
 
-    def unfit(self, node_names: list[str]) -> None:
-        """Delete the named nodes (and their subtrees) in one exact-selection delete."""
+    def unfit(self, node_names: list[str], owner_recipe: str | None = None) -> None:
+        """Delete the named nodes (and their subtrees) in one exact-selection delete.
+
+        With *owner_recipe*, first verify that no node has a descendant foreign to
+        that recipe (raise, deleting nothing, instead of deleting a user's node).
+        """
 
     def restore(self, source_paths: list[str], figure_name: str) -> list[str]:
         """Reload each source file and fit it to the figure (undoes a removal);
@@ -719,7 +723,18 @@ class DazSceneOps:
             names += self._load_and_fit(path, None, figure_name, path)
         return names
 
-    def unfit(self, node_names: list[str]) -> None:
+    def unfit(self, node_names: list[str], owner_recipe: str | None = None) -> None:
+        if owner_recipe is not None:
+            for name in node_names:
+                sub = self._client.execute(subtree_script(name)).value
+                if sub is None:
+                    raise NodeNotFoundError(f"Cannot remove, node not found: {name!r}")
+                own = owned_by(sub.get("record"), owner_recipe)
+                foreign = foreign_descendants(sub.get("children") or [], owner_recipe,
+                                              own.native if own else ())
+                if foreign:
+                    raise DazError(f"Refusing to remove {name!r}: it still has descendants the "
+                                   f"recipe does not own ({', '.join(foreign)})")
         missing = self._client.execute(_unfit_script(list(node_names))).value
         if missing:
             raise DazError(f"Cannot remove, node(s) not found: {', '.join(map(str, missing))}")

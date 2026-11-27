@@ -33,7 +33,15 @@ removed items from their source files onto the figure (items with no known
 source are reported in ``rollback_errors``); preset on a node not created by
 this apply → cannot be undone, reported in ``rollback_errors``.  A failure
 before the removal phase leaves the one-shot unfit targets untouched (they
-have not run).  Group deletes are one ``unfit`` of every surviving node.
+have not run).  Children a wearing ``unparent`` moved out of an item stay at
+scene root when that item's unfit is rolled back (the restored item is a new
+node).  Group deletes are one checked ``unfit`` of every surviving node
+(``owner_recipe``: refused, and the apply rolled back, when any member still
+has a descendant the recipe does not own).
+
+Done log: an actor record keeps its earlier ``done`` entries when the recipe
+replaces the actor (new asset).  An actor deleted by hand and re-created loses
+them (the record lived on the deleted node).
 Plan deletes are checked deletes (``owner_recipe``): a node that still has a
 descendant the recipe does not own is not deleted, the apply fails and rolls
 back instead.  Deletes cannot be undone: a failure in the delete phase leaves the deletes
@@ -261,9 +269,9 @@ class _Run:
             self.undo(f"reparent {names} under {owner!r}", reparent)
         elif step.op == "delete":
             group = step.channels.get("group")
-            if group:  # a fitted group: one exact-selection delete of every surviving node
+            if group:  # a fitted group: one checked exact-selection delete of every node
                 names = list(group["names"])
-                ops.unfit(names)
+                ops.unfit(names, owner_recipe=self.recipe_id)
                 self.deleted_nodes.update(names)
             else:
                 ops.delete(step.node, owner_recipe=self.recipe_id)
@@ -322,6 +330,9 @@ class _Run:
             return
         rec = self.record(path, desired, self.ops.observe(node, d.kind),
                           self.ops.native_descendants(node))
+        old = self.live.entities.get(path)
+        if old is not None:  # a replace: one-shot entries already done stay done (spec 6.4)
+            rec = dataclasses.replace(rec, done=tuple(copy.deepcopy(old.record.done)))
         if d.create.get("source") is not None:
             rec = dataclasses.replace(rec, source=copy.deepcopy(d.create["source"]))
         self.ops.write_record(node, self.with_done(path, rec))
@@ -334,8 +345,8 @@ class _Run:
             source = dict(copy.deepcopy(d.create.get("source") or {}),
                           fitted_to=actor_key, group=path, primary=i == 0)
             self.ops.write_record(name, dataclasses.replace(
-                self.record(path, copy.deepcopy(desired), {}), source=source, group=path,
-                primary=i == 0, members=tuple(names)))
+                self.record(path, copy.deepcopy(desired), {}, self.ops.native_descendants(name)),
+                source=source, group=path, primary=i == 0, members=tuple(names)))
 
     def write_taken(self, path: str) -> None:
         d = self.desired[path]
@@ -345,9 +356,9 @@ class _Run:
         rec = dataclasses.replace(self.record(path, desired, self.ops.observe(node, d.kind)),
                                   adopted_from_scene=True,
                                   source=copy.deepcopy(d.create.get("source")))
-        self.ops.write_record(node, self.with_done(path, rec))
         self.undo(f"remove the ownership record of {path} from {node!r}",
                   partial(self.ops.remove_record, node))
+        self.ops.write_record(node, self.with_done(path, rec))
 
     def merged(self, path: str, steps: list[Step], prev: EntityRecord | None,
                node: str | None) -> EntityRecord:
