@@ -407,7 +407,7 @@ cannot do this: it only drops the undo grouping.
   ``rollback_errors``.
 
 Recipe version 2: asset references, compatibility and fitting
-------------------------------------------------------------
+-------------------------------------------------------------
 
 ``recipe_version: 2`` (schema ``schemas/scene-recipe.v2.schema.json``,
 ``recipe_schema(2)``) adds four things to v1:
@@ -434,18 +434,18 @@ Anywhere a recipe takes an asset (``assets.<k>``, ``actors.<k>.asset``,
 emitted by daz-content-browser-mcp). A plain string is a path, so every v1 asset
 value is still valid. The object form has these fields:
 
-===========  ==============================================================================
-Field        Meaning
-===========  ==============================================================================
-``path``     Content-relative (``/People/...``) or absolute file path
-``product``  Product name (exact, case-insensitive)
-``sku``      Product SKU
-``find``     Free-text search phrase
-``file``     Picks one file of a ``product`` / ``sku``: content-relative path or file name
-``type``     Expected content type (friendly name or raw Daz type, see below). It narrows a
-             search and filters a product's files
-``resolved`` A **pin**: ``{path, sku?, product?, asset_id?}`` from an earlier resolution
-===========  ==============================================================================
+============  ==============================================================================
+Field         Meaning
+============  ==============================================================================
+``path``      Content-relative (``/People/...``) or absolute file path
+``product``   Product name (exact, case-insensitive)
+``sku``       Product SKU
+``find``      Free-text search phrase
+``file``      Picks one file of a ``product`` / ``sku``: content-relative path or file name
+``type``      Expected content type (friendly name or raw Daz type, see below). It narrows a
+              search and filters a product's files
+``resolved``  A **pin**: ``{path, sku?, product?, asset_id?}`` from an earlier resolution
+============  ==============================================================================
 
 At least one of ``path``, ``product``, ``sku`` and ``find`` is required, even
 with a pin, so a reference always says what was meant. When several are given,
@@ -485,11 +485,17 @@ Pass ``finder=`` to ``validate`` / ``plan`` / ``apply`` / ``observe`` /
 (warning ``finder_fallback``). ``RecipePlan.finder`` names the finder that
 answered.
 
-**Choosing a match.** A search result is accepted only when it is a clear single
-winner: one candidate whose product name equals the phrase (case-insensitive),
-or exactly one candidate left after the ``type`` filter. Anything else is
-``ambiguous_asset``, and the error's ``allowed`` lists up to ten candidates as
-``"<product> (<sku>): <path>"``. Studio's text search matches broadly. On a
+**Choosing a match.** A ``find``'s candidates are first filtered by ``type``,
+then by the target figure: a candidate whose compatibility metadata says it is
+made for another figure is dropped (one with no metadata stays). The figure is
+the actor's live figure, or the figure file of an actor the recipe will create.
+A result is then accepted only when it is a clear single winner: one candidate
+whose product name equals the phrase (case-insensitive), or exactly one
+candidate left. Several left is ``ambiguous_asset``: for a ``find`` the
+error's ``allowed`` lists up to ten as ``"<product> (<sku>): <path>"``; for a
+``product`` / ``sku`` with several matching files it lists the file paths.
+When every candidate was dropped as incompatible the error is
+``incompatible_asset``, naming the best of them, not ``asset_not_found``. Studio's text search matches broadly. On a
 typical library a phrase such as ``"Flirty Casual Ponytail"`` with ``type:
 "hair"`` returns several ponytail hairs, not just that one. **Expect a ``find``
 to come back ambiguous: pick one of the listed candidates and pin it**, either
@@ -640,12 +646,14 @@ Code                               Meaning
                                    ``find``, or has a ``resolved`` pin without ``path``.
 ``asset_not_found``                The path does not exist on the Studio host, the search found
                                    nothing, or the product has no matching file.
-``ambiguous_asset``                Several files match (search or product); ``allowed`` lists them.
+``ambiguous_asset``                Several files match. ``allowed`` lists them (``find``:
+                                   ``"<product> (<sku>): <path>"``; ``product`` / ``sku``: paths).
                                    Add ``file`` / ``type`` or pin one.
 ``content_database_unavailable``   A ``find`` / ``product`` / ``sku`` needs Studio's content
                                    database (CMS) and it is not running. Paths still work.
 ``incompatible_asset``             A preset or fitted item is made for another figure; the message
-                                   names its bases and the actor's base.
+                                   names its bases and the actor's base. Also when every ``find``
+                                   candidate is made for another figure (``allowed`` lists them).
 ``ambiguous_node``                 Several figures carry the actor's ``node`` label.
 ``node_not_found``                 No figure has the ``node`` label and the actor has no ``asset`` to
                                    create it from (``suggestion``: a near label).

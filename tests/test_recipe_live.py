@@ -12,9 +12,11 @@ section comment above AssetFittingLiveTests).
 Known issue (2026-11-27, DS4 4.24): test_take_over_hand_built_and_swap_hair_by_type
 hung Studio's main thread once (every call answered busy; cause unknown, possibly
 another client driving the same Studio at the time). It still needs a clean
-re-run, as do test_fit_failure_keeps_hand_hair,
-test_multi_node_hair_and_outfit_add_swap_remove and test_records_have_source
-(never run live) and the whole class on DS6.
+re-run (its G8 and release checks are now the separate
+test_g8_hair_on_taken_over_figure_rejected and test_release_keeps_taken_over_figure),
+as do test_fit_failure_keeps_hand_hair,
+test_multi_node_hair_and_outfit_add_swap_remove and test_records_have_source (none
+of these ran live yet), and the whole class on DS6.
 """
 
 import copy
@@ -375,11 +377,15 @@ class EnvironmentInterference(AssertionError):
 class AssetFittingLiveTests(unittest.TestCase):
     """Spec §12 acceptance on a live Studio (scoped: ``-k AssetFitting``)."""
 
-    # The content each test needs; checked before setUp sends anything to Studio.
+    # The content each test needs (the only list: tests read the values with _env);
+    # checked before setUp sends anything to Studio.
     _NEEDS = {
         "test_empty_scene_build_abby": ("DAZ_LIVE_G9F", "DAZ_LIVE_HAIR_A"),
         "test_take_over_hand_built_and_swap_hair_by_type":
             ("DAZ_LIVE_G9F", "DAZ_LIVE_HAIR_A", "DAZ_LIVE_HAIR_B"),
+        "test_g8_hair_on_taken_over_figure_rejected":
+            ("DAZ_LIVE_G9F", "DAZ_LIVE_HAIR_A", "DAZ_LIVE_G8_HAIR"),
+        "test_release_keeps_taken_over_figure": ("DAZ_LIVE_G9F", "DAZ_LIVE_HAIR_A"),
         "test_g8_hair_rejected_scene_unchanged": ("DAZ_LIVE_G9F", "DAZ_LIVE_G8_HAIR"),
         "test_ambiguous_find_changes_nothing": ("DAZ_LIVE_G9F",),
         "test_fit_failure_keeps_hand_hair":
@@ -390,7 +396,7 @@ class AssetFittingLiveTests(unittest.TestCase):
     }
 
     def setUp(self):
-        self.need(*self._NEEDS.get(self._testMethodName, ()))
+        self.need(*self._NEEDS[self._testMethodName])  # every test has an entry
         wait = _CLIENT.waiting_out_busy(_BUSY_WAIT_S)  # enterContext needs 3.11
         wait.__enter__()
         self.addCleanup(wait.__exit__, None, None, None)
@@ -404,11 +410,10 @@ class AssetFittingLiveTests(unittest.TestCase):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def need(self, *names: str) -> list[str]:
+    def need(self, *names: str) -> None:
         missing = [n for n in names if _env(n) is None]
         if missing:
             self.skipTest(f"set {', '.join(missing)} to run this test")
-        return [_env(n) for n in names]
 
     def label(self, test: str) -> str:
         """A figure label unique to *test*; the figure is deleted after the test."""
@@ -498,7 +503,6 @@ class AssetFittingLiveTests(unittest.TestCase):
 
     def test_empty_scene_build_abby(self):
         """Abby (spec §1) from nothing: create + optional preset + fitted hair."""
-        self.need("DAZ_LIVE_G9F", "DAZ_LIVE_HAIR_A")
         label = self.label("build")
         recipe = _abby_fixture("live-af-build", label)
         report = self.timed(validate, recipe, self.scene)
@@ -525,7 +529,7 @@ class AssetFittingLiveTests(unittest.TestCase):
 
     def test_take_over_hand_built_and_swap_hair_by_type(self):
         """A hand-built Abby is taken over and her hair swapped by ``{type: hair}``."""
-        hair_a, hair_b, _ = self.need("DAZ_LIVE_HAIR_A", "DAZ_LIVE_HAIR_B", "DAZ_LIVE_G9F")
+        hair_a, hair_b = _env("DAZ_LIVE_HAIR_A"), _env("DAZ_LIVE_HAIR_B")
         label = self.label("takeover")
         hand_hair = self.hand_built(label, hair_a)
         fig0 = self.figure(label)
@@ -553,29 +557,44 @@ class AssetFittingLiveTests(unittest.TestCase):
         # the replace selector is one-shot: inert on the next apply
         self.assertEqual(plan(recipe, self.scene).steps, ())
 
-        # A Genesis 8 hair on this live Genesis 9 figure fails the plan (nothing loads).
-        if _env("DAZ_LIVE_G8_HAIR"):
-            g8 = {"recipe_version": 2, "id": "live-af-takeover", "actors": {"abby": {
-                "node": label,
-                "wearing": recipe["actors"]["abby"]["wearing"] + [
-                    {"add": _env("DAZ_LIVE_G8_HAIR"), "key": "g8hair"}]}}}
-            count, roots = _roots()
+
+    def test_g8_hair_on_taken_over_figure_rejected(self):
+        """A Genesis 8 hair for a live (hand-built) Genesis 9 figure fails the plan
+        from the live figure's base; nothing loads."""
+        hair_a, g8_hair = _env("DAZ_LIVE_HAIR_A"), _env("DAZ_LIVE_G8_HAIR")
+        label = self.label("takeover-g8")
+        self.hand_built(label, hair_a)
+        recipe = {"recipe_version": 2, "id": "live-af-takeover-g8", "actors": {"abby": {
+            "node": label, "wearing": [{"add": g8_hair, "key": "g8hair"}]}}}
+        before = _roots()
+        for fn in (plan, apply):
             with self.assertRaises(RecipeValidationError) as cm:
-                self.timed(plan, g8, self.scene)
+                self.timed(fn, recipe, self.scene)
             self.assertIn(("actors.abby.wearing.g8hair", "incompatible_asset"),
                           [(e.path, e.code) for e in cm.exception.report.errors])
-            self.assertEqual(_roots(), (count, roots))
+        self.check_environment()
+        self.assertEqual(_roots(), before, "the scene changed")
+        self.assertIsNone(self.figure(label).record, "the figure was taken over")
 
-        # Dropping the actor releases it: a taken-over figure is never deleted.
-        released = self.timed(apply, {"recipe_version": 2, "id": recipe["id"]}, self.scene)
+    def test_release_keeps_taken_over_figure(self):
+        """Dropping a taken-over actor releases it: the figure is never deleted."""
+        label = self.label("release")
+        self.hand_built(label, _env("DAZ_LIVE_HAIR_A"))
+        rid = "live-af-release"
+        self.assertApplied(self.timed(apply, {"recipe_version": 2, "id": rid, "actors": {
+            "abby": {"node": label}}}, self.scene))
+        fig0 = self.figure(label)
+        self.assertTrue(fig0.record is not None and fig0.record.adopted_from_scene)
+        released = self.timed(apply, {"recipe_version": 2, "id": rid}, self.scene)
         self.assertApplied(released)
         self.assertNotIn("delete", [s.op for s in released.steps])
+        self.assertIn("release", [s.op for s in released.steps])
         fig = self.figure(label)
+        self.assertEqual(fig.name, fig0.name)
         self.assertIsNone(fig.record)
 
     def test_g8_hair_rejected_scene_unchanged(self):
         """An incompatible hair fails validate/plan/apply before anything loads."""
-        self.need("DAZ_LIVE_G9F", "DAZ_LIVE_G8_HAIR")
         label = self.label("g8")
         recipe = {"recipe_version": 2, "id": "live-af-g8", "actors": {"abby": {
             "node": label, "asset": _env("DAZ_LIVE_G9F"),
@@ -596,7 +615,6 @@ class AssetFittingLiveTests(unittest.TestCase):
 
     def test_ambiguous_find_changes_nothing(self):
         """A ``find`` matching several hairs lists them and changes nothing."""
-        self.need("DAZ_LIVE_G9F")
         phrase = os.environ.get("DAZ_LIVE_AMBIGUOUS_FIND") or "ponytail"
         label = self.label("ambiguous")
         recipe = {"recipe_version": 2, "id": "live-af-ambiguous", "actors": {"abby": {
@@ -616,8 +634,8 @@ class AssetFittingLiveTests(unittest.TestCase):
 
     def test_fit_failure_keeps_hand_hair(self):
         """A failure in the fit phase removes the new hair and keeps the hand hair."""
-        hair_a, hair_b, outfit, _ = self.need("DAZ_LIVE_HAIR_A", "DAZ_LIVE_HAIR_B",
-                                              "DAZ_LIVE_OUTFIT", "DAZ_LIVE_G9F")
+        hair_a, hair_b, outfit = (_env("DAZ_LIVE_HAIR_A"), _env("DAZ_LIVE_HAIR_B"),
+                                  _env("DAZ_LIVE_OUTFIT"))
         label = self.label("fitfail")
         hand_hair = self.hand_built(label, hair_a)
         items0 = sorted(it.name for it in self.figure(label).items)
@@ -653,10 +671,7 @@ class AssetFittingLiveTests(unittest.TestCase):
     def test_multi_node_hair_and_outfit_add_swap_remove(self):
         """One entry owns a multi-node group: add an outfit, swap it for a
         multi-node hair, remove it."""
-        _, outfit = self.need("DAZ_LIVE_G9F", "DAZ_LIVE_OUTFIT")
-        multi = _env("DAZ_LIVE_HAIR_MULTI")
-        if multi is None:
-            self.skipTest("set DAZ_LIVE_HAIR_MULTI (a hair loading several root nodes)")
+        outfit, multi = _env("DAZ_LIVE_OUTFIT"), _env("DAZ_LIVE_HAIR_MULTI")
         label = self.label("multi")
         rid = "live-af-multi"
 
@@ -695,7 +710,7 @@ class AssetFittingLiveTests(unittest.TestCase):
 
     def test_records_have_source(self):
         """Every recipe-owned node carries ``source`` provenance (spec §9)."""
-        _, _, outfit = self.need("DAZ_LIVE_G9F", "DAZ_LIVE_HAIR_A", "DAZ_LIVE_OUTFIT")
+        outfit = _env("DAZ_LIVE_OUTFIT")
         label = self.label("source")
         recipe = _abby_fixture("live-af-source", label)
         recipe["actors"]["abby"]["wearing"].append({"add": outfit, "key": "outfit"})

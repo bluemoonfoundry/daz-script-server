@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -72,12 +72,24 @@ def _file_matches(file: str, c: AssetCandidate) -> bool:
             or os.path.basename(got) == want)
 
 
+# Spec 5: a find's candidates are narrowed by the target figure's compatibility.
+# ``narrow(ref path, candidates, known files)`` returns ``(kept, dropped, target)``:
+# ``dropped`` = ``(candidate, its bases)`` known to be incompatible with ``target``;
+# candidates of unknown compatibility are kept.  ``known`` maps the ref paths
+# resolved or chosen so far to their file (an actor's ``.asset`` comes before its items).
+Narrower = Callable[[str, list[AssetCandidate], Mapping[str, str]],
+                    "tuple[list[AssetCandidate], Sequence[tuple[AssetCandidate, tuple[str, ...]]], str | None]"]
+
+
 def _from_candidate(ref: AssetRef, c: AssetCandidate, path: str, finder: str) -> ResolvedAsset:
     return ResolvedAsset(ref, path, c.sku, c.product, c.asset_id, c.type, finder)  # type: ignore[arg-type]
 
 
 def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: AssetFinder,
-                 prior: Mapping[str, dict] | None = None) -> ResolveReport:
+                 prior: Mapping[str, dict] | None = None, *,
+                 narrow: Narrower | None = None) -> ResolveReport:
+    """Resolve *refs*; *narrow* (see :data:`Narrower`) filters ``find`` candidates
+    by the target figure's compatibility before a match is picked."""
     prior = prior or {}
     errors: list[RecipeIssue] = []
     warnings: list[RecipeIssue] = []
@@ -131,7 +143,9 @@ def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: As
     for p, ref in pending:
         try:
             if ref.kind == "find":
-                c = _pick_find(p, ref, finder, errors)
+                known = {k: v.path for k, v in resolved.items()}
+                known.update({k: v.path for k, v in chosen.items()})
+                c = _pick_find(p, ref, finder, errors, narrow, known)
                 if getattr(finder, "timed_out", False):
                     warnings.append(RecipeIssue(
                         p, "search_incomplete",
@@ -178,9 +192,23 @@ def _pick_product(p: str, ref: AssetRef, finder: AssetFinder,
     return cands[0]
 
 
-def _pick_find(p: str, ref: AssetRef, finder: AssetFinder,
-               errors: list[RecipeIssue]) -> AssetCandidate | None:
+def _pick_find(p: str, ref: AssetRef, finder: AssetFinder, errors: list[RecipeIssue],
+               narrow: Narrower | None = None,
+               known: Mapping[str, str] | None = None) -> AssetCandidate | None:
     cands = _typed(ref, finder.search(ref.find, type=ref.type))  # type: ignore[arg-type]
+    dropped: Sequence[tuple[AssetCandidate, tuple[str, ...]]] = ()
+    target = None
+    if cands and narrow is not None:
+        cands, dropped, target = narrow(p, cands, known or {})
+    if not cands and dropped:
+        best, bases = dropped[0]
+        errors.append(RecipeIssue(
+            p, "incompatible_asset",
+            f"every match for {ref.find!r} is made for another figure; the best, "
+            f"{best.product or best.path} ({best.path}), is made for {', '.join(bases)}, "
+            f"the target figure is {target}",
+            allowed=tuple(f"{c.product} ({c.sku}): {c.path}" for c, _ in dropped[:_MAX_LISTED])))
+        return None
     if not cands:
         errors.append(RecipeIssue(p, "asset_not_found", f"nothing found for {ref.find!r}"))
         return None

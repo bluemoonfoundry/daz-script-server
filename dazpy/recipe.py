@@ -38,7 +38,7 @@ from collections.abc import Mapping, Sequence
 
 from urllib.parse import unquote
 
-from ._asset_compat import check_compat, read_compat
+from ._asset_compat import check_compat, is_compatible, read_compat
 from ._asset_finder import AssetCandidate, AssetFinder, select_finder
 from ._asset_ref import AssetRef, ResolvedPin
 from ._asset_resolve import ResolvedAsset, recipe_refs, resolve_refs
@@ -222,10 +222,58 @@ class _Checked:
 
 def _resolve(client: DazClient, model: SceneRecipe, live: LiveState,
              finder: AssetFinder | None) -> _Checked:
+    """Resolve every reference; the figures involved are read first, so a
+    ``find`` for an actor's preset or item is narrowed by that figure's base."""
+    labels, owned = _figure_keys(model, live)
+    figures = read_figures(client, labels, owned) if labels or owned else {}
     lazy = _LazyFinder(client, finder)
-    report = resolve_refs(client, recipe_refs(model), lazy, _prior(live))
-    return _Checked(dict(report.resolved), {}, list(report.errors),
+    report = resolve_refs(client, recipe_refs(model), lazy, _prior(live),
+                          narrow=_find_narrower(client, model, live, figures))
+    return _Checked(dict(report.resolved), figures, list(report.errors),
                     lazy.warnings + list(report.warnings), lazy.name)
+
+
+def _find_narrower(client: DazClient, model: SceneRecipe, live: LiveState,
+                   figures: Mapping[str, list[FigureInfo]]):
+    """The :data:`~dazpy._asset_resolve.Narrower` for *model* (spec 5).
+
+    The target base is the actor's live figure's, else (an actor to be created)
+    the base its asset file provides.  One ``read_compat`` per narrowed ``find``
+    answers its candidates and, the first time, the actor asset's base."""
+    provides: dict[str, str | None] = {}
+
+    def narrow(p: str, cands: list, known: Mapping[str, str]):
+        key = p.split(".")[1] if p.startswith("actors.") and not p.endswith(".asset") else None
+        if key is None or key not in model.actors:
+            return cands, (), None
+        figs = _actor_figures(model, key, live, figures)
+        target, asset = None, None
+        if len(figs) == 1:
+            target = figs[0].compat_base
+        elif not figs:
+            asset = known.get(f"actors.{key}.asset")
+        if not target and asset is None:
+            return cands, (), None
+        paths = {c.path for c in cands}
+        if asset is not None and asset not in provides:
+            paths.add(asset)
+        info = read_compat(client, sorted(paths))
+        if asset is not None:
+            if asset not in provides:
+                provides[asset] = info[asset].provides
+            target = provides[asset]
+        if not target:
+            return cands, (), None
+        kept, dropped = [], []
+        for c in cands:
+            ci = info[c.path]
+            if ci.known and not is_compatible(target, ci.bases):
+                dropped.append((c, ci.bases))
+            else:
+                kept.append(c)
+        return kept, dropped, target
+
+    return narrow
 
 
 def _figure_keys(model: SceneRecipe, live: LiveState) -> tuple[list[str], list[str]]:
@@ -262,9 +310,6 @@ def _resolve_and_check(client: DazClient, model: SceneRecipe, live: LiveState,
     """Resolve every reference, read the figures involved, and (with *compat*)
     check each actor's presets and fitted items against its figure's base."""
     chk = _resolve(client, model, live, finder)
-    labels, owned = _figure_keys(model, live)
-    if labels or owned:
-        chk.figures = read_figures(client, labels, owned)
     if not compat:
         return chk
     items = {k: {p: chk.resolved[p] for p in _item_keys(model, k) if p in chk.resolved}

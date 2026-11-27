@@ -13,9 +13,11 @@ All notable changes to DazScript Server are documented here.
   - Any asset can be an asset reference: `path`, `product`, `sku` or `find`,
     plus `file` / `type` to narrow and a `resolved` pin. `find` / `product` /
     `sku` are answered by `StudioFinder` (Studio's content database) or
-    `ContentBrowserFinder` (daz-content-browser, `DAZ_BROWSER_URL`). Only a
-    clear single match is accepted; anything else is `ambiguous_asset` listing
-    the candidates. `dazpy.recipe.pin()` fills in every `resolved` pin, and
+    `ContentBrowserFinder` (daz-content-browser, `DAZ_BROWSER_URL`). A
+    `find`'s candidates are narrowed by type and by the target figure's
+    compatibility. Only a clear single match is accepted; anything else is
+    `ambiguous_asset` listing the candidates (`incompatible_asset` when every
+    candidate is made for another figure). `dazpy.recipe.pin()` fills in every `resolved` pin, and
     recorded resolutions are reused on later applies.
   - Before the scene changes, every preset and fitted item is checked against
     its actor's figure from asset metadata (`incompatible_asset`;
@@ -40,9 +42,8 @@ All notable changes to DazScript Server are documented here.
   v1 recipes behave exactly as before. Documented in `docs/scene_recipes.rst`
   (worked "Abby" example). Live acceptance tests:
   `tests/test_recipe_live.py -k AssetFitting`, with content paths from
-  `DAZ_LIVE_*` env vars. On Studio 4.24 the ambiguous-find,
-  incompatible-hair and build-from-empty tests pass. The take-over, fit-failure,
-  multi-node and provenance tests and all of Studio 6 still need a live run.
+  `DAZ_LIVE_*` env vars. Live acceptance is pending: the full class has not
+  yet run cleanly on Studio 4.24 or 6.26.
 
 - **Live test for companion-plugin routes** (ih7u): `TestPluginRoutes` in
   `tests/test_api.py` covers `registerPluginRoute()` and the catch-all

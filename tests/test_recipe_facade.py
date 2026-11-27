@@ -565,6 +565,53 @@ class TestV2Facade(FacadeCase):
         self.assertIn(("actors.abby.wearing.hair", "ambiguous_asset"), codes(rep.errors))
         self.assertEqual(finder.calls, ["search:bob hair"])
 
+    # find narrows by the target figure's compatibility (spec 5)
+
+    def test_find_narrows_to_the_one_compatible_candidate(self):
+        finder = FakeFinder(search=[cand(G8_HAIR, "Long Hair G8", "9"), cand(HAIR, "Bob Hair")])
+        r = v2_recipe({"add": {"find": "hair"}, "key": "hair"})
+        rep = validate(r, fake_scene(compat=COMPAT), finder=finder)
+        self.assertTrue(rep.ok, rep.errors)
+        p = plan(r, fake_scene(compat=COMPAT), finder=finder)
+        self.assertIn("fit", [s.op for s in p.steps])
+        out = pin(r, fake_scene(compat=COMPAT), finder=finder)
+        self.assertEqual(out["actors"]["abby"]["wearing"][0]["add"]["resolved"]["path"], HAIR)
+
+    def test_find_with_only_incompatible_candidates_is_incompatible_asset(self):
+        g8b = "/People/Genesis 8 Female/Hair/Short.duf"
+        finder = FakeFinder(search=[cand(G8_HAIR, "Long Hair G8", "9"), cand(g8b, "Short G8", "8")])
+        compat = {**COMPAT, g8b: {"bases": ["/Genesis 8/Female"], "known": True, "provides": None}}
+        rep = validate(v2_recipe({"add": {"find": "hair"}, "key": "hair"}), fake_scene(compat=compat),
+                       finder=finder)
+        self.assertEqual(codes(rep.errors), {("actors.abby.wearing.hair", "incompatible_asset")})
+        self.assertIn("Long Hair G8", rep.errors[0].message)
+        self.assertIn("/Genesis 8/Female", rep.errors[0].message)
+
+    def test_find_keeps_candidates_of_unknown_compatibility(self):
+        own = "/My/own/hair.duf"
+        finder = FakeFinder(search=[cand(HAIR, "Bob Hair"), cand(own, "My Hair", "0"),
+                                    cand(G8_HAIR, "Long Hair G8", "9")])
+        rep = validate(v2_recipe({"add": {"find": "hair"}, "key": "hair"}), fake_scene(compat=COMPAT),
+                       finder=finder)
+        self.assertEqual(codes(rep.errors), {("actors.abby.wearing.hair", "ambiguous_asset")})
+        listed = " ".join(rep.errors[0].allowed)
+        self.assertIn(own, listed)
+        self.assertNotIn(G8_HAIR, listed)
+        # the unknown one alone is picked and warns as before
+        only = FakeFinder(search=[cand(own, "My Hair", "0"), cand(G8_HAIR, "Long Hair G8", "9")])
+        rep = validate(v2_recipe({"add": {"find": "hair"}, "key": "hair"}), fake_scene(compat=COMPAT),
+                       finder=only)
+        self.assertTrue(rep.ok, rep.errors)
+        self.assertEqual(codes(rep.warnings), {("actors.abby.wearing.hair", "compatibility_unknown")})
+
+    def test_find_narrows_by_a_taken_over_figures_live_base(self):
+        scene = fake_scene(compat=COMPAT, figures=[
+            fig_payload("Genesis8Female", "Abby", compat_base="/Genesis 8/Female")])
+        finder = FakeFinder(search=[cand(HAIR, "Bob Hair"), cand(G8_HAIR, "Long Hair G8", "9")])
+        rep = validate(v2_recipe({"add": {"find": "hair"}, "key": "hair"}, node="Abby"), scene,
+                       finder=finder)
+        self.assertTrue(rep.ok, rep.errors)
+
     def test_validate_reports_incompatible(self):
         scene = fake_scene(compat=COMPAT)
         rep = validate(v2_recipe({"add": G8_HAIR, "key": "hair"}, presets=[SHAPE]), scene)
