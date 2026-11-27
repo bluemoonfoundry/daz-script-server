@@ -642,3 +642,49 @@ def fake_resolve_client(found: dict[str, str]) -> MagicMock:
         return {p: found.get(p, "") for p in paths}
 
     return scripted_client(("recipe:resolve", answer))
+
+
+# ── v2 fixtures: taken-over actors, presets, fitted items (Task 12) ──────────
+
+def d_taken(name: str, node: str = "Abby", presets=(), pose_path: str | None = None,
+            source: dict | None = None) -> DesiredEntity:
+    """A v2 actor taken over from the scene figure labelled *node* (no transform)."""
+    create = {"asset_path": "/g9.duf", "take_over": node, "label": node}
+    if source is not None:
+        create["source"] = source
+    channels: dict = {"pose": {"pose_path": pose_path}}
+    if presets:
+        channels["presets"] = {"paths": list(presets)}
+    return DesiredEntity(f"actors.{name}", "actor", node, create, channels)
+
+
+def d_item(actor: str, key: str, asset: str = "/hair/a.duf", finder: str = "path") -> DesiredEntity:
+    """A v2 fitted item ``actors.<actor>.wearing.<key>``."""
+    return DesiredEntity(f"actors.{actor}.wearing.{key}", "item", f"{RID}:{actor}.{key}",
+                         {"asset_path": asset, "fit_to": f"actors.{actor}",
+                          "source": {"requested": {"path": asset}, "path": asset,
+                                     "finder": finder}}, {})
+
+
+def live_entity_for(e: DesiredEntity, *, node_name: str | None = None, adopted: bool = False,
+                    group_nodes: tuple = (), missing: tuple = (), done: tuple = ()) -> LiveEntity:
+    """The LiveEntity a faithful earlier apply of *e* leaves (v2-aware)."""
+    item = e.kind == "item"
+    obs = {} if item else observed_for(e)
+    rdesired = _copy.deepcopy(e.channels)
+    rdesired["_create"] = _copy.deepcopy(e.create)
+    members = tuple(group_nodes) + tuple(missing) if item else ()
+    r = _dc.replace(rec(RID, e.path, rdesired, _copy.deepcopy(obs)),
+                    adopted_from_scene=adopted, done=tuple(done),
+                    group=e.path if item else None, members=members)
+    names = tuple(group_nodes) or (node_name or e.label,)
+    return LiveEntity(path=e.path, node_name=node_name or names[0], kind=e.kind, record=r,
+                      observed=_copy.deepcopy(obs), foreign_children=(),
+                      group_nodes=tuple(group_nodes) if item else (),
+                      missing_members=tuple(missing) if item else ())
+
+
+def live_of(*entities: LiveEntity, deleted: tuple = ()) -> LiveState:
+    """A LiveState holding *entities* (all listed in the manifest)."""
+    return LiveState(manifest=Manifest(RID, tuple(e.path for e in entities), None, tuple(deleted)),
+                     entities={e.path: e for e in entities}, environment_observed=None)

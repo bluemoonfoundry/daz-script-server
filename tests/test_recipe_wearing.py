@@ -143,6 +143,7 @@ class WearingTests(unittest.TestCase):
         c = p.conflicts[0]
         self.assertEqual((c.path, c.kind), ("actors.abby.wearing.k", "has_foreign_children"))
         self.assertEqual(c.live, ["Cap"])
+        self.assertEqual(c.base, {"node": "H1"})  # the item to unparent from
 
     def test_own_group_members_are_not_foreign(self):
         r = rec("r1", "actors.abby")

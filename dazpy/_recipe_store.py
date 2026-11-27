@@ -355,6 +355,8 @@ _KIND_PREFIXES: tuple[tuple[str, EntityKind], ...] = (("actors.", "actor"), ("pr
 
 
 def _kind_from_path(path: str) -> EntityKind | None:
+    if path.startswith("actors.") and ".wearing." in path:
+        return "item"  # a fitted item: no pose capture
     for prefix, kind in _KIND_PREFIXES:
         if path.startswith(prefix):
             return kind
@@ -422,7 +424,9 @@ def read_live(client: DazClient, recipe_id: str) -> LiveState:
         n, rec = found[0]
         live_names = tuple(m["name"] for m, _ in found)
         observed = observed_channels(client, n["name"], kind, n)
-        foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id, rec.native))
+        # A group's foreign children are those of every member (one delete takes them all).
+        foreign = tuple(c for m, r in (found if is_group else found[:1])
+                        for c in foreign_descendants(m.get("children") or [], recipe_id, r.native))
         entities[path] = LiveEntity(
             path=path, node_name=n["name"], kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"),

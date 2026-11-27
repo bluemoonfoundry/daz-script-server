@@ -502,5 +502,162 @@ class FixRound1Tests(unittest.TestCase):
         self.assertEqual(p.steps, ())
 
 
+# ── v2: take-over, presets, fitted items, one-shot unfits (Task 12) ──────────
+
+from dazpy._recipe_diff import _STEP_ORDER  # noqa: E402
+from dazpy._recipe_wearing import TakeOver, Unfit, WearingPlan  # noqa: E402
+from recipe_fakes import d_item, d_taken, live_entity_for, live_of  # noqa: E402
+
+ABBY = d_taken("abby")
+HAIR_A = d_item("abby", "hair", "/hair/a.duf")
+HAIR_B = d_item("abby", "hair", "/hair/b.duf")
+HAND_HAIR = ({"label": "Hand Hair", "type": "Follower/Hair", "source_path": "/hand/hair.duf"},)
+UNFIT = Unfit("actors.abby", "hair", ("HandHair",), HAND_HAIR)
+
+
+def _abby_live(*extra, done=()):
+    return live_of(live_entity_for(ABBY, node_name="Abby", adopted=True, done=done), *extra)
+
+
+class V2DiffTests(unittest.TestCase):
+    def test_step_order_removes_last(self):
+        self.assertEqual(list(_STEP_ORDER), [
+            "create", "take_over", "preset", "fit", "modify", "set_environment", "adopt",
+            "release", "unparent", "unfit", "delete"])
+
+    def test_item_create_is_fit(self):
+        p = diff(ds(ABBY, HAIR_A), _abby_live())
+        self.assertEqual(ops(p), [("fit", HAIR_A.path)])
+        self.assertEqual(p.steps[0].channels, {})
+
+    def test_take_over_step_from_wearing_plan(self):
+        actor = d_taken("abby", presets=("/m/skin.duf",), pose_path="/p/stand.duf")
+        w = WearingPlan(take_overs=(TakeOver("actors.abby", "Genesis 9"),))
+        p = diff(ds(actor, HAIR_A), LiveState(None, {}, None), wearing=w)
+        self.assertEqual(ops(p), [("take_over", "actors.abby"), ("preset", "actors.abby"),
+                                  ("fit", HAIR_A.path)])
+        take = p.steps[0]
+        self.assertEqual(take.node_name, "Genesis 9")
+        self.assertEqual(take.channels, {"pose": {"pose_path": "/p/stand.duf"}})  # no presets
+        self.assertEqual(p.steps[1].channels, {"presets": {"paths": ["/m/skin.duf"]}})
+
+    def test_item_asset_change_fits_then_deletes_group(self):
+        L = _abby_live(live_entity_for(HAIR_A, group_nodes=("Hair", "Cap")))
+        p = diff(ds(ABBY, HAIR_B), L)
+        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("delete", HAIR_A.path)])
+        self.assertEqual(p.steps[1].channels, {"group": {"names": ["Hair", "Cap"]}})
+
+    def test_item_source_metadata_change_is_not_a_replace(self):
+        L = _abby_live(live_entity_for(HAIR_A, group_nodes=("Hair",)))
+        p = diff(ds(ABBY, d_item("abby", "hair", "/hair/a.duf", finder="record")), L)
+        self.assertEqual(p.steps, ())
+
+    def test_removed_item_deletes_whole_group(self):
+        L = _abby_live(live_entity_for(HAIR_A, group_nodes=("Hair", "Cap")))
+        p = diff(ds(ABBY), L)
+        self.assertEqual(ops(p), [("delete", HAIR_A.path)])
+        self.assertEqual(p.steps[0].channels, {"group": {"names": ["Hair", "Cap"]}})
+
+    def test_unfit_steps_from_wearing_plan(self):
+        w = WearingPlan(unfits=(UNFIT,), done_entries=(("actors.abby", "remove.1"),))
+        p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w)
+        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("unfit", "actors.abby.wearing.hair")])
+        self.assertEqual(p.steps[1].channels["unfit"], {
+            "actor": "actors.abby", "entry": "hair", "op": "replace", "names": ["HandHair"],
+            "removed": list(HAND_HAIR)})
+        self.assertEqual(p.done_log, (
+            ("actors.abby", {"entry": "hair", "op": "replace", "removed": list(HAND_HAIR)}),
+            ("actors.abby", {"entry": "remove.1", "op": "remove", "removed": []})))
+
+    def test_wearing_conflict_blocks_ask(self):
+        c = Conflict("actors.abby.wearing.hair", "has_foreign_children", "type 'hair'",
+                     {"node": "HandHair"}, ["Bow"])
+        w = WearingPlan(unfits=(UNFIT,), conflicts=(c,))
+        p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w)
+        self.assertTrue(p.blocked)
+        self.assertEqual((p.steps, p.done_log), ((), ()))
+        self.assertEqual(p.conflicts, (c,))
+        # recipe: foreign children are moved out of the item before it is removed
+        p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w, on_conflict="recipe_wins")
+        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("unparent", c.path), ("unfit", c.path)])
+        self.assertEqual((p.steps[1].node_name, p.steps[1].channels),
+                         ("HandHair", {"children": {"names": ["Bow"]}}))
+        # scene: the hand item stays, the entry is not marked done
+        p = diff(ds(ABBY, HAIR_A), _abby_live(), wearing=w, on_conflict="scene_wins")
+        self.assertEqual(ops(p), [("fit", HAIR_A.path)])
+        self.assertEqual(p.done_log, ())
+
+    def test_removed_taken_over_actor_released_not_deleted(self):
+        actor = d_taken("abby", pose_path="/p/stand.duf")
+        L = live_of(live_entity_for(actor, node_name="Abby", adopted=True),
+                    live_entity_for(HAIR_A, group_nodes=("Hair", "Cap")))
+        L = live_tweaked(None, "actors.abby", "pose", live=L)  # hand-edited: still never deleted
+        p = diff({}, L, on_conflict="recipe_wins")
+        self.assertEqual(ops(p), [("release", "actors.abby"), ("release", HAIR_A.path)])
+        self.assertEqual(p.steps[1].channels, {"group": {"names": ["Hair", "Cap"]}})
+        self.assertNotIn("delete", [s.op for s in p.steps])
+        self.assertEqual(p.conflicts, ())
+
+    def test_taken_over_actor_never_replaced(self):
+        L = _abby_live()
+        changed = d_taken("abby")
+        changed.create["asset_path"] = "/other.duf"
+        self.assertEqual(diff(ds(changed), L).steps, ())
+
+    def test_group_node_deleted_by_hand_is_deleted_in_scene(self):
+        L = _abby_live(live_entity_for(HAIR_A, group_nodes=("Hair",), missing=("Cap",)))
+        p = diff(ds(ABBY, HAIR_A), L)
+        self.assertTrue(p.blocked)
+        self.assertEqual([(c.path, c.kind) for c in p.conflicts],
+                         [(HAIR_A.path, "deleted_in_scene")])
+        p = diff(ds(ABBY, HAIR_A), L, on_conflict="recipe_wins")
+        self.assertEqual(ops(p), [("fit", HAIR_A.path), ("delete", HAIR_A.path)])
+        self.assertEqual(p.steps[1].channels, {"group": {"names": ["Hair"]}})
+        p = diff(ds(ABBY, HAIR_A), L, on_conflict="scene_wins")
+        self.assertEqual(ops(p), [("release", HAIR_A.path)])
+        self.assertEqual(p.tombstones, (HAIR_A.path,))
+
+    def test_preset_change_is_preset_step(self):
+        old = d_taken("abby", presets=("/m/a.duf",))
+        new = d_taken("abby", presets=("/m/a.duf", "/m/b.duf"))
+        p = diff(ds(new), live_of(live_entity_for(old, node_name="Abby", adopted=True)))
+        self.assertEqual([(s.op, s.channels, s.node_name) for s in p.steps],
+                         [("preset", {"presets": {"paths": ["/m/a.duf", "/m/b.duf"]}}, "Abby")])
+
+    def test_preset_dropped_warns(self):
+        old = d_taken("abby", presets=("/m/a.duf", "/m/b.duf"))
+        new = d_taken("abby", presets=("/m/a.duf",))
+        p = diff(ds(new), live_of(live_entity_for(old, node_name="Abby", adopted=True)))
+        self.assertEqual([w.code for w in p.warnings], ["preset_dropped"])
+        self.assertIn("/m/b.duf", p.warnings[0].message)
+        self.assertNotIn("preset", [s.op for s in p.steps])
+        # record-only catch-up so the warning does not repeat on every apply
+        self.assertEqual([(s.op, s.channels) for s in p.steps],
+                         [("adopt", {"presets": {"paths": ["/m/a.duf"]}})])
+
+    def test_unchanged_recipe_zero_steps_after_replace(self):
+        done = ({"entry": "hair", "op": "replace", "removed": list(HAND_HAIR)},)
+        L = _abby_live(live_entity_for(HAIR_A, group_nodes=("Hair",)), done=done)
+        # plan_wearing skips done entries, so the wearing plan is empty
+        p = diff(ds(ABBY, HAIR_A), L, wearing=WearingPlan())
+        self.assertEqual((p.steps, p.conflicts, p.warnings, p.done_log), ((), (), (), ()))
+
+    def test_item_refit_when_actor_replaced(self):
+        anna = d_actor("anna")
+        hair = d_item("anna", "hair")
+        L = live_of(live_entity_for(anna), live_entity_for(hair, group_nodes=("Hair",)))
+        anna2 = DesiredEntity(anna.path, "actor", anna.label, {"asset_path": "/g8.duf"},
+                              anna.channels)
+        p = diff(ds(anna2, hair), L)
+        self.assertEqual(ops(p), [("create", anna.path), ("fit", hair.path),
+                                  ("delete", hair.path), ("delete", anna.path)])
+
+    def test_wearing_errors_refused(self):
+        from dazpy._recipe_issue import RecipeIssue
+        w = WearingPlan(errors=(RecipeIssue("actors.abby.node", "node_not_found", "x"),))
+        with self.assertRaises(ValueError):
+            diff(ds(ABBY), _abby_live(), wearing=w)
+
+
 if __name__ == "__main__":
     unittest.main()

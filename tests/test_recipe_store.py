@@ -134,6 +134,17 @@ class ReadLiveTests(unittest.TestCase):
         self.assertEqual(state.entities[path].node_name, "hair")
         self.assertEqual(state.entities[path].group_nodes, ("hair", "cap"))
 
+    def test_item_kind_and_group_foreign_children(self):
+        path = "actors.abby.wearing.hair"
+        mk = lambda primary: EntityRecord("r1", path, 1, {}, {}, group=path, primary=primary,
+                                          members=("hair", "cap"))
+        client = fake_client([node("hair", mk(True), children=[node("Bow", None)]),
+                              node("cap", mk(False), children=[node("Pin", None)])])
+        ent = read_live(client, "r1").entities[path]
+        self.assertEqual(ent.kind, "item")
+        self.assertEqual(ent.foreign_children, ("Bow", "Pin"))
+        self.assertNotIn("pose", ent.observed)  # items are never pose-captured
+
     def test_same_path_without_group_is_duplicate(self):
         path = "props.ball"
         state = read_live(fake_client([node("a", rec("r1", path)), node("b", rec("r1", path))]), "r1")

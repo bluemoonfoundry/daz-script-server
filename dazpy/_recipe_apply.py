@@ -7,11 +7,12 @@ walked in reverse, so a failed apply leaves the scene as it was (dazpy's
 
 Order of work:
 
-1. ``create`` / ``modify`` / ``set_environment`` / ``adopt`` / ``release``
-   steps;
-2. ownership records for every created, modified or adopted entity;
-3. ``unparent`` / ``delete`` steps (irreversible, so after everything that can
-   still fail and be undone);
+1. ``create`` / ``take_over`` / ``preset`` / ``fit`` / ``modify`` /
+   ``set_environment`` / ``adopt`` / ``release`` steps;
+2. ownership records for every created, taken-over, fitted, modified or
+   adopted entity, and the actors' ``done`` logs (``RecipePlan.done_log``);
+3. ``unparent`` / ``unfit`` / ``delete`` steps (removals, after everything
+   that can still fail and be undone);
 4. the manifest, last (skipped when the plan has no steps and the manifest
    would not change).
 
@@ -25,6 +26,14 @@ release → write the removed record back and restore the ``<recipe id>:`` label
 (a release strips that prefix from a label the user has not changed);
 unparent → reparent exactly the nodes it moved (by key), unless their owner
 has already been deleted (a refused unparent moved nothing and is not undone).
+v2 compensations: take_over → write the figure's prior channel values back
+and remove the record written on it (the figure itself is never deleted);
+fit → delete the whole fitted group in one ``unfit``; unfit → ``restore`` the
+removed items from their source files onto the figure (items with no known
+source are reported in ``rollback_errors``); preset on a node not created by
+this apply → cannot be undone, reported in ``rollback_errors``.  A failure
+before the removal phase leaves the one-shot unfit targets untouched (they
+have not run).  Group deletes are one ``unfit`` of every surviving node.
 Plan deletes are checked deletes (``owner_recipe``): a node that still has a
 descendant the recipe does not own is not deleted, the apply fails and rolls
 back instead.  Deletes cannot be undone: a failure in the delete phase leaves the deletes
@@ -48,21 +57,37 @@ handled specially (they go with it).
 from __future__ import annotations
 
 import copy
+import dataclasses
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
 from collections.abc import Callable
 
 from ._recipe_desired import DesiredEntity
-from ._recipe_diff import CREATE_KEY, ENVIRONMENT_PATH, Conflict, RecipePlan, Step
+from ._recipe_diff import (CREATE_KEY, ENVIRONMENT_PATH, PRESETS_CHANNEL, Conflict, RecipePlan,
+                           Step)
 from ._recipe_json import to_jsonable
 from ._recipe_ops import SceneOps
 from ._recipe_store import EntityRecord, LiveState, Manifest
 from ._recipe_validate import RecipeIssue
 from ._scene_check import CheckReport
+from .exceptions import DazError
 
 _ENV_CHANNEL = "environment"
-_REMOVAL_OPS = ("unparent", "delete")
+_REMOVAL_OPS = ("unparent", "unfit", "delete")
+_RECORD_OPS = ("create", "take_over", "preset", "fit", "modify", "set_environment", "adopt")
+
+
+def _member_record(rec: EntityRecord, name: str) -> EntityRecord:
+    """The record group member *name* carries, rebuilt from another member's
+    (they differ only in ``primary``)."""
+    primary = bool(rec.members) and name == rec.members[0]
+    source = dict(rec.source, primary=primary) if rec.source else rec.source
+    return dataclasses.replace(rec, primary=primary, source=source)
+
+
+def _cannot_undo(message: str) -> None:
+    raise DazError(message)
 
 
 @dataclass(frozen=True)
@@ -109,8 +134,12 @@ class _Run:
         self.recipe_id, self.recipe_version = recipe_id, recipe_version
         self.verify = verify
         self.check: CheckReport | None = None
-        self.journal: list[tuple[str, Callable[[], None]]] = []
-        self.created: dict[str, list[str]] = {}
+        self.journal: list[tuple[str, Callable[[], object]]] = []
+        self.created: dict[str, list[str]] = {}   # created or fitted nodes, primary first
+        self.taken: dict[str, str] = {}           # taken-over figure per actor path
+        self.done_for: dict[str, list[dict]] = {}
+        for actor, entry in plan.done_log:
+            self.done_for.setdefault(actor, []).append(entry)
         self.deleted_steps: list[Step] = []
         self.deleted_nodes: set[str] = set()
         self.released: set[str] = set()
@@ -118,8 +147,19 @@ class _Run:
         self.context = ""
         self.env_record = live.manifest.environment if live.manifest else None
 
-    def undo(self, label: str, fn: Callable[[], None]) -> None:
+    def undo(self, label: str, fn: Callable[[], object]) -> None:
         self.journal.append((label, fn))
+
+    def node_for(self, path: str) -> str:
+        """The node *path* has now: created / taken over in this run, else live."""
+        if path in self.created:
+            return self.created[path][0]
+        if path in self.taken:
+            return self.taken[path]
+        entity = self.live.entities.get(path)
+        if entity is None:
+            raise DazError(f"{path} has no node in the scene")
+        return entity.node_name
 
     # ── steps ─────────────────────────────────────────────────────────────────
 
@@ -148,12 +188,56 @@ class _Run:
                 restore = env_prior
                 self.undo("restore the scene environment", lambda: ops.set_environment(restore))
             ops.set_environment(step.channels[_ENV_CHANNEL])
+        elif step.op == "take_over":
+            node = step.node
+            ops.take_over(node)
+            if step.channels:
+                observed = ops.observe(node, "actor")
+                prior = {ch: observed[ch] for ch in step.channels if observed.get(ch) is not None}
+                if prior:
+                    self.undo(f"restore {step.path} ({', '.join(prior)}) on {node!r}",
+                              partial(ops.set_channels, node, "actor", prior))
+                ops.set_channels(node, "actor", step.channels)
+            self.taken[step.path] = node
+        elif step.op == "preset":
+            node = self.node_for(step.path)
+            paths = list(step.channels[PRESETS_CHANNEL]["paths"])
+            if step.path not in self.created:  # a created node is deleted on rollback
+                self.undo(f"undo presets on {node!r}", partial(
+                    _cannot_undo, f"preset(s) {paths} applied to {node!r} cannot be undone"))
+            ops.apply_presets(node, paths)
+        elif step.op == "fit":
+            d = self.desired[step.path]
+            figure = self.node_for(d.create["fit_to"])
+            names = list(ops.fit(d, figure))
+            if not names:
+                raise DazError(f"{step.path}: fitting added no node")
+            self.undo(f"remove fitted group {names} ({step.path})", partial(ops.unfit, names))
+            self.created[step.path] = names
+        elif step.op == "unfit":
+            u = step.channels["unfit"]
+            figure, names = self.node_for(u["actor"]), list(u["names"])
+            ops.unfit(names)
+            self.deleted_nodes.update(names)
+            sources = [r["source_path"] for r in u["removed"] if r.get("source_path")]
+            lost = [r.get("label") for r in u["removed"] if not r.get("source_path")]
+            if sources:
+                self.undo(f"restore removed items {sources} onto {figure!r}",
+                          partial(ops.restore, sources, figure))
+            if lost:
+                self.undo(f"restore removed items {lost}", partial(
+                    _cannot_undo, f"{', '.join(map(repr, lost))} removed from {figure!r} "
+                                  "cannot be restored: no known source file"))
         elif step.op == "release":
             entity = self.live.entities[step.path]
-            node, prev = step.node, entity.record
-            self.undo(f"restore the ownership record of {step.path} on {node!r}",
-                      lambda: ops.write_record(node, prev))
-            ops.remove_record(node)
+            node = step.node
+            group = step.channels.get("group")
+            for name in (list(group["names"]) if group else [node]):
+                prev = entity.record if name == entity.node_name else _member_record(
+                    entity.record, name)
+                self.undo(f"restore the ownership record of {step.path} on {name!r}",
+                          partial(ops.write_record, name, prev))
+                ops.remove_record(name)
             self.released.add(step.path)
             # A kept node gives up the "<recipe id>:" label, so a node the recipe
             # creates for the same path later is the only one carrying it.
@@ -176,8 +260,14 @@ class _Run:
 
             self.undo(f"reparent {names} under {owner!r}", reparent)
         elif step.op == "delete":
-            ops.delete(step.node, owner_recipe=self.recipe_id)
-            self.deleted_nodes.add(step.node)
+            group = step.channels.get("group")
+            if group:  # a fitted group: one exact-selection delete of every surviving node
+                names = list(group["names"])
+                ops.unfit(names)
+                self.deleted_nodes.update(names)
+            else:
+                ops.delete(step.node, owner_recipe=self.recipe_id)
+                self.deleted_nodes.add(step.node)
             self.deleted_steps.append(step)
         # adopt: nothing to write to Studio; handled by write_records
 
@@ -187,20 +277,34 @@ class _Run:
                native: tuple[str, ...] = ()) -> EntityRecord:
         return EntityRecord(self.recipe_id, path, self.recipe_version, desired, observed, native)
 
+    def with_done(self, path: str, rec: EntityRecord) -> EntityRecord:
+        """*rec* with this run's done-log entries for actor *path* appended."""
+        if path not in self.done_for:
+            return rec
+        return dataclasses.replace(rec, done=tuple(rec.done) + tuple(
+            copy.deepcopy(self.done_for[path])))
+
     def write_records(self, steps: list[Step]) -> None:
         by_path: dict[str, list[Step]] = {}
         for s in steps:
-            if s.op in ("create", "modify", "set_environment", "adopt"):
+            if s.op in _RECORD_OPS:
                 by_path.setdefault(s.path, []).append(s)
+        for path in self.done_for:  # the done-log alone also rewrites an actor's record
+            if path in by_path or path in self.created or path in self.taken \
+                    or path in self.live.entities:
+                by_path.setdefault(path, [])
         for path, path_steps in by_path.items():
             self.context = f"writing the ownership record for {path}"
             if path == ENVIRONMENT_PATH:
                 self.env_record = self.merged(path, path_steps, self.env_record, None)
             elif path in self.created:
                 self.write_created(path)
+            elif path in self.taken:
+                self.write_taken(path)
             else:
                 entity = self.live.entities[path]
-                new = self.merged(path, path_steps, entity.record, entity.node_name)
+                new = self.with_done(path, self.merged(path, path_steps, entity.record,
+                                                       entity.node_name))
                 node, prev = entity.node_name, entity.record
                 self.undo(f"restore the ownership record of {path} on {node!r}",
                           partial(self.ops.write_record, node, prev))
@@ -209,11 +313,41 @@ class _Run:
 
     def write_created(self, path: str) -> None:
         d = self.desired[path]
-        node = self.created[path][0]
+        names = self.created[path]
+        node = names[0]
         desired = copy.deepcopy(d.channels)
         desired[CREATE_KEY] = copy.deepcopy(d.create)
-        self.ops.write_record(node, self.record(path, desired, self.ops.observe(node, d.kind),
-                                                self.ops.native_descendants(node)))
+        if d.kind == "item":
+            self.write_group(path, d, names, desired)
+            return
+        rec = self.record(path, desired, self.ops.observe(node, d.kind),
+                          self.ops.native_descendants(node))
+        if d.create.get("source") is not None:
+            rec = dataclasses.replace(rec, source=copy.deepcopy(d.create["source"]))
+        self.ops.write_record(node, self.with_done(path, rec))
+
+    def write_group(self, path: str, d: DesiredEntity, names: list[str], desired: dict) -> None:
+        """One record per fitted node (spec 6.6, 9).  Items are not observed:
+        they follow their figure, so their transform is never a hand edit."""
+        actor_key = d.create["fit_to"].split(".", 1)[1]
+        for i, name in enumerate(names):
+            source = dict(copy.deepcopy(d.create.get("source") or {}),
+                          fitted_to=actor_key, group=path, primary=i == 0)
+            self.ops.write_record(name, dataclasses.replace(
+                self.record(path, copy.deepcopy(desired), {}), source=source, group=path,
+                primary=i == 0, members=tuple(names)))
+
+    def write_taken(self, path: str) -> None:
+        d = self.desired[path]
+        node = self.taken[path]
+        desired = copy.deepcopy(d.channels)
+        desired[CREATE_KEY] = copy.deepcopy(d.create)
+        rec = dataclasses.replace(self.record(path, desired, self.ops.observe(node, d.kind)),
+                                  adopted_from_scene=True,
+                                  source=copy.deepcopy(d.create.get("source")))
+        self.ops.write_record(node, self.with_done(path, rec))
+        self.undo(f"remove the ownership record of {path} from {node!r}",
+                  partial(self.ops.remove_record, node))
 
     def merged(self, path: str, steps: list[Step], prev: EntityRecord | None,
                node: str | None) -> EntityRecord:
@@ -224,6 +358,8 @@ class _Run:
         for s in steps:
             for ch, value in s.channels.items():
                 desired[ch] = copy.deepcopy(value)
+                if ch == PRESETS_CHANNEL:
+                    continue  # presets are not observable
                 if s.op == "adopt":
                     observed[ch] = copy.deepcopy((s.prior or {}).get(ch))
                 elif path == ENVIRONMENT_PATH:
@@ -233,12 +369,18 @@ class _Run:
                         assert node is not None  # only the environment has no node
                         fresh = self.ops.observe(node, self.desired[path].kind)
                     observed[ch] = fresh.get(ch)
-        return self.record(path, desired, observed, prev.native if prev else ())
+        if prev is None:
+            return self.record(path, desired, observed)
+        # keep provenance, group and done-log fields (v2) of the previous record
+        return dataclasses.replace(prev, recipe_id=self.recipe_id,
+                                   recipe_version=self.recipe_version,
+                                   desired=desired, observed=observed)
 
     def write_manifest(self) -> None:
         gone = {s.path for s in self.deleted_steps} | self.released
-        entities = [p for p in self.live.entities if p not in gone or p in self.created]
-        entities += [p for p in self.created if p not in entities]
+        built = set(self.created) | set(self.taken)
+        entities = [p for p in self.live.entities if p not in gone or p in built]
+        entities += [p for p in (*self.created, *self.taken) if p not in entities]
         new = Manifest(self.recipe_id, tuple(entities), self.env_record,
                        tuple(self.plan.tombstones))
         old = self.live.manifest

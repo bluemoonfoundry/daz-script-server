@@ -148,8 +148,10 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
             for it in hit:
                 foreign = tuple(c for c in it.foreign_children if c not in owned_nodes)
                 if foreign:
+                    # base names the item, so a "recipe" resolution can unparent from it
                     conflicts.append(Conflict(epath, "has_foreign_children",
-                                              _describe(entry.target), None, list(foreign)))
+                                              _describe(entry.target), {"node": it.name},
+                                              list(foreign)))
                 if it.source_path is None:
                     warnings.append(RecipeIssue(
                         epath, "unrestorable_removal",

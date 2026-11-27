@@ -123,6 +123,10 @@ def _actor_entities(recipe: SceneRecipe, name: str,
     if a.node is not None:
         create["take_over"] = a.node
         create["label"] = a.node
+        rp = f"actors.{name}.asset"
+        if resolved is not None and rp in resolved:
+            # provenance for the take-over record (source.requested); never a replace trigger
+            create["source"] = resolved[rp].to_dict()
     channels: dict = {}
     if a.node is None:
         pos = _spec_position(a)

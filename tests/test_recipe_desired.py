@@ -213,6 +213,11 @@ class DesiredV2Tests(unittest.TestCase):
         self.assertEqual(d["actors.abby"].create["asset_path"], "/P/G9.duf")
         self.assertEqual(d["actors.abby"].label, "Abby")
 
+    def test_taken_over_actor_create_carries_source(self):
+        d = compute_desired(v2_recipe({"node": "Abby"}), RESOLVED)
+        self.assertEqual(d["actors.abby"].create["source"], RESOLVED["actors.abby.asset"].to_dict())
+        self.assertNotIn("source", compute_desired(v2_recipe(), RESOLVED)["actors.abby"].create)
+
     def test_taken_over_actor_with_position_has_transform(self):
         d = compute_desired(v2_recipe({"node": "Abby", "position": [5, 0, 0]}), RESOLVED)
         self.assertEqual(d["actors.abby"].channels["transform"]["position"], (5.0, 0.0, 0.0))
