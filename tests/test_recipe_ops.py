@@ -170,7 +170,8 @@ class TestDs4ProbeFindings(unittest.TestCase):
         # DS4 has no getElementID(); elementID is a numeric property.  A name key
         # would hide every node of a second load of the same file.
         from dazpy._recipe_ops import _KEY_JS, _SNAPSHOT_SCRIPT
-        self.assertIn("n.elementID !== undefined", _KEY_JS)
+        self.assertIn('typeof n.elementID === "number"', _KEY_JS)   # null -> name key
+        self.assertNotIn("!== undefined", _KEY_JS)
         self.assertIn("String(n.elementID)", _KEY_JS)
         self.assertIn('typeof n.getElementID === "function"', _KEY_JS)
         self.assertIn("return n.getName();", _KEY_JS)   # last-resort fallback
@@ -182,17 +183,48 @@ class TestDs4ProbeFindings(unittest.TestCase):
                              create={"asset_path": "/Outfit.duf", "fit_to": "actors.anna"},
                              channels={})
 
+    def _busy_once_client(self, busy_tags, answers):
+        """A client raising StudioBusyError on the first call whose script has a tag in
+        *busy_tags*, answering everything else from *answers* (by tag)."""
+        from dazpy.exceptions import StudioBusyError
+        ops, client = _ops([])
+        hit = set()
+
+        def execute(script, *a, **kw):
+            for tag in busy_tags:
+                if tag in script and tag not in hit:
+                    hit.add(tag)
+                    raise StudioBusyError("busy")
+            for tag, value in answers.items():
+                if tag in script:
+                    return SimpleNamespace(value=value)
+            return SimpleNamespace(value=None)
+        client.execute.side_effect = execute
+        return ops, client
+
+    _ANSWERS = {"recipe:resolve": {"/Outfit.duf": "C:/Outfit.duf"}, "recipe:snapshot": ["k1"],
+                "recipe:load": True, "recipe:claim": ["Top"],
+                "recipe:fit": {"error": "", "fitted": ["Top"], "unfitted": []},
+                "recipe:settle": True, "recipe:cleanup": 1}
+
     def test_calls_after_the_load_retry_while_studio_is_busy(self):
-        fit_out = {"error": "", "fitted": ["Top"], "unfitted": []}
-        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out, True])
-        ops.fit(self._entity(), "Genesis 9")
-        calls = client.execute.call_args_list
-        by_tag = {tag: c for c in calls for tag in ("recipe:claim", "recipe:fit", "recipe:load")
-                  if tag in c.args[0]}
-        self.assertTrue(by_tag["recipe:claim"].kwargs.get("retry_on_busy"))
-        self.assertTrue(by_tag["recipe:fit"].kwargs.get("retry_on_busy"))
-        # the load itself is not retried: a busy reply there means it did not run
-        self.assertFalse(by_tag["recipe:load"].kwargs.get("retry_on_busy", False))
+        ops, client = self._busy_once_client(("recipe:claim", "recipe:fit", "recipe:settle"),
+                                             self._ANSWERS)
+        with mock.patch("dazpy._recipe_ops.time.sleep"):
+            self.assertEqual(ops.fit(self._entity(), "Genesis 9"), ["Top"])
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        for tag in ("recipe:claim", "recipe:fit", "recipe:settle"):
+            self.assertEqual(sum(tag in x for x in scripts), 2, tag)   # busy, then retried
+
+    def test_the_load_itself_is_not_retried(self):
+        # a busy reply to the load means it did not run: no blind re-load
+        from dazpy.exceptions import StudioBusyError
+        ops, client = self._busy_once_client(("recipe:load",), self._ANSWERS)
+        with mock.patch("dazpy._recipe_ops.time.sleep"):
+            with self.assertRaises(StudioBusyError):
+                ops.fit(self._entity(), "Genesis 9")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertEqual(sum("recipe:load" in x for x in scripts), 1)
 
     def test_fit_waits_out_busy_before_returning(self):
         # DS4: Studio answers busy for a while after a fit returns, so the next
@@ -202,18 +234,60 @@ class TestDs4ProbeFindings(unittest.TestCase):
         self.assertEqual(ops.fit(self._entity(), "Genesis 9"), ["Top"])
         last = client.execute.call_args_list[-1]
         self.assertIn("recipe:settle", last.args[0])
-        self.assertTrue(last.kwargs.get("retry_on_busy"))
+
+    def test_settle_timeout_still_removes_the_added_nodes(self):
+        from dazpy.exceptions import DazError, StudioBusyError
+        fit_out = {"error": "", "fitted": ["Top"], "unfitted": []}
+        ops, client = _ops([])
+        answers = iter([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top"], fit_out])
+
+        def execute(script, *a, **kw):
+            if "recipe:settle" in script:
+                raise StudioBusyError("busy")
+            if "recipe:cleanup" in script:
+                return SimpleNamespace(value=1)
+            return SimpleNamespace(value=next(answers))
+        client.execute.side_effect = execute
+        with mock.patch("dazpy._recipe_ops.time.sleep"),              mock.patch("dazpy._recipe_ops._AFTER_LOAD_BUSY_WAIT_S", 0.0):
+            with self.assertRaises(DazError):
+                ops.fit(self._entity(), "Genesis 9")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertTrue(any("recipe:cleanup" in s for s in scripts), scripts)
+
+    def test_post_load_retry_is_busy_only(self):
+        from dazpy.exceptions import ServerResponseError, StudioBusyError
+        ops, client = _ops([])
+        client.execute.side_effect = [StudioBusyError("busy"), SimpleNamespace(value=["Top"])]
+        with mock.patch("dazpy._recipe_ops.time.sleep"):
+            self.assertEqual(ops._busy_execute("// recipe:claim"), ["Top"])
+        for call in client.execute.call_args_list:
+            self.assertFalse(call.kwargs.get("retry_on_busy", False))  # no client-side retry
+        ops, client = _ops([])
+        err = ServerResponseError("queue full", 503, "QUEUE_FULL", retryable=True)
+        client.execute.side_effect = [err, SimpleNamespace(value=["Top"])]
+        with mock.patch("dazpy._recipe_ops.time.sleep"):
+            with self.assertRaises(ServerResponseError):
+                ops._busy_execute("// recipe:fit")
+        self.assertEqual(client.execute.call_count, 1)
+
+    def test_restore_refuses_a_data_file(self):
+        from dazpy.exceptions import DazError
+        ops, client = _ops([])
+        with self.assertRaisesRegex(DazError, "data file"):
+            ops.restore(["/data/DAZ%203D/Kara%20Ponytail/Scalp_1085.dsf"], "Genesis 9")
+        client.execute.assert_not_called()   # never resolved, never loaded
 
     def test_cleanup_after_a_failed_fit_retries_while_busy(self):
         from dazpy.exceptions import DazError
-        fit_out = {"error": "", "fitted": ["Top"], "unfitted": ["Prop"]}
-        ops, client = _ops([{"/Outfit.duf": "C:/Outfit.duf"}, ["k1"], True, ["Top", "Prop"],
-                            fit_out, 1])
-        with self.assertRaises(DazError):
-            ops.fit(self._entity(), "Genesis 9")
-        last = client.execute.call_args_list[-1]
-        self.assertIn("recipe:cleanup", last.args[0])
-        self.assertTrue(last.kwargs.get("retry_on_busy"))
+        answers = dict(self._ANSWERS, **{"recipe:claim": ["Top", "Prop"],
+                                         "recipe:fit": {"error": "", "fitted": ["Top"],
+                                                        "unfitted": ["Prop"]}})
+        ops, client = self._busy_once_client(("recipe:cleanup",), answers)
+        with mock.patch("dazpy._recipe_ops.time.sleep"):
+            with self.assertRaisesRegex(DazError, "every node it added was removed"):
+                ops.fit(self._entity(), "Genesis 9")
+        scripts = [c.args[0] for c in client.execute.call_args_list]
+        self.assertEqual(sum("recipe:cleanup" in x for x in scripts), 2)
 
     def test_apply_presets_clears_selection_first(self):
         ops, client = _ops([{"/a.duf": "C:/a.duf"}, True])

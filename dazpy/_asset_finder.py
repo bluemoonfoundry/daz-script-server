@@ -29,6 +29,8 @@ _SEARCH_EMPTY_MS = 3000
 _SEARCH_STABLE_MS = 750
 # Studio returns at most this many search results.
 _STUDIO_SEARCH_CAP = 1200
+# product_files lists at most this many files of one product.
+_PRODUCT_FILES_CAP = 1000
 
 
 def _studio_script(op: str, phrase: str, type_: str | None, limit: int,
@@ -42,9 +44,12 @@ def _studio_script(op: str, phrase: str, type_: str | None, limit: int,
     ``searchForAssets`` returns an empty container that fills asynchronously, so
     the script pumps ``processEvents()`` until the count is stable, bounded by
     ``_SEARCH_BOUND_MS`` (``timed_out`` is then true and the partial result is
-    returned).  Studio caps a search at 1200 results.  Products are looked up
-    synchronously: SKU via ``findProductByStoreToken("DAZ 3D", sku)``, name via
-    ``findProductsByName`` (exact title).  ``path`` is the content path
+    returned; resolution reports it as ``search_incomplete``).  Studio caps a
+    search at 1200 results.  Products are looked up synchronously: SKU via
+    ``findProductByStoreToken("DAZ 3D", sku)``, so only SKUs of the "DAZ 3D" store
+    resolve; name via ``findProductsByName`` (exact title).  ``product_files``
+    lists at most 1000 files of a product (``_PRODUCT_FILES_CAP``), silently
+    truncated beyond that.  ``path`` is the content path
     (``"/" + getRelativeFilePath()``); Studio exposes no asset id.  Never opens a
     file or pops a dialog.
     """
@@ -132,7 +137,7 @@ class StudioFinder:
             raise FinderUnavailable("content_database_unavailable: Studio returned no result")
         if not value.get("cms"):
             raise FinderUnavailable("content_database_unavailable")
-        self.timed_out = bool(value.get("timed_out"))
+        self.timed_out = bool(value.get("timed_out"))  # read by resolution: search_incomplete
         return [AssetCandidate(path=str(a.get("path", "")), product=_opt(a.get("product")),
                                sku=_opt(a.get("sku")), asset_id=_opt(a.get("asset_id")),
                                type=_opt(a.get("type")))
@@ -148,7 +153,9 @@ class StudioFinder:
 
     def product_files(self, *, sku: str | None = None,
                       product: str | None = None) -> list[AssetCandidate]:
-        return self._run(_studio_script("product_files", "", None, 1000, sku, product))
+        """Files of the product with *sku* (store "DAZ 3D" only) or the exact title
+        *product*; at most ``_PRODUCT_FILES_CAP`` (1000)."""
+        return self._run(_studio_script("product_files", "", None, _PRODUCT_FILES_CAP, sku, product))
 
 
 class ContentBrowserFinder:

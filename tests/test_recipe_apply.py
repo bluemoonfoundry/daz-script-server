@@ -1061,14 +1061,16 @@ class V2ExecuteTests(unittest.TestCase):
         # the actor record is restored to its pre-apply value
         self.assertEqual(records_for(ops, "Abby")[-1], L.entities["actors.abby"].record)
 
-    def test_unrestorable_removal_reported_on_rollback(self):
+    def test_unrestorable_removal_skipped_on_rollback(self):
+        # warned at plan time (unrestorable_removal); rollback restores the rest and skips it
         L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
         w = WearingPlan(unfits=(Unfit("actors.abby", "remove.1", ("Hat", "Cap"), HAND2),))
         ops = FakeOps(fail_on=("write_manifest", 1))
         _, r = run_v2(ds(d_taken("abby")), L, ops, wearing=w)
         self.assertTrue(r.rolled_back)
-        self.assertIn(("restore", ["/hand/hat.duf"], "Abby"), ops.calls_with_args)
-        self.assertTrue(any("Hand Cap" in e for e in r.rollback_errors), r.rollback_errors)
+        self.assertEqual([c for c in ops.calls_with_args if c[0] == "restore"],
+                         [("restore", ["/hand/hat.duf"], "Abby")])
+        self.assertFalse(any("Hand Cap" in e for e in r.rollback_errors), r.rollback_errors)
 
     def test_group_delete_is_one_unfit_call(self):
         L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True),

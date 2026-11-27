@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from ._content_types import type_matches
 from ._recipe_diff import Conflict
 from ._recipe_issue import RecipeIssue, _closest
-from ._recipe_fitted import FigureInfo, FittedItem
+from ._recipe_fitted import FigureInfo, FittedItem, is_data_file
 from ._recipe_model import SceneRecipe, TypeSelector, WearingEntry, actor_ref
 from ._recipe_store import LiveState
 
@@ -143,7 +143,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
             items = [it for it in items if it.name not in hit_names]
             unfits.append(Unfit(
                 path, eid, tuple(it.name for it in hit),
-                tuple({"label": it.label, "type": it.type, "source_path": it.source_path}
+                tuple({"label": it.label, "type": it.type, "source_path": restore_source(it)}
                       for it in hit)))
             for it in hit:
                 foreign = tuple(c for c in it.foreign_children if c not in owned_nodes)
@@ -153,13 +153,24 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                     conflicts.append(Conflict(f"{epath}[{it.name}]", "has_foreign_children",
                                               _describe(entry.target), {"node": it.name},
                                               list(foreign)))
-                if it.source_path is None:
+                if restore_source(it) is None:
                     warnings.append(RecipeIssue(
                         epath, "unrestorable_removal",
                         f"{it.label!r} has no known source file; it cannot be restored once removed."))
 
     return WearingPlan(tuple(take_overs), tuple(unfits), tuple(errors), tuple(conflicts),
                        tuple(warnings), tuple(done_entries))
+
+
+def restore_source(item: FittedItem) -> str | None:
+    """The ``.duf`` a removed item can be reloaded from, or None (spec 8.7).
+
+    Only an item carrying a recipe record knows its source: the record's
+    ``source.resolved.path`` (else ``source.path``).  Hand content has none; its
+    live ``getAssetUriForNode`` value is a ``.dsf`` data file and is never used."""
+    src = (item.record.source if item.record else None) or {}
+    path = (src.get("resolved") or {}).get("path") or src.get("path")
+    return str(path) if path and not is_data_file(str(path)) else None
 
 
 def _describe(selector) -> str:

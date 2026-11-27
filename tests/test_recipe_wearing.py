@@ -81,8 +81,9 @@ class WearingTests(unittest.TestCase):
         self.assertEqual(len(p.unfits), 1)
         self.assertEqual(p.unfits[0].node_names, ("H1", "H2"))
         self.assertEqual(p.unfits[0].entry, "k")
+        # hand content: the live .dsf URI is never a restore source (spec 8.7)
         self.assertEqual(p.unfits[0].removed[0],
-                         {"label": "H1", "type": "Follower/Hair", "source_path": "/data/x.dsf"})
+                         {"label": "H1", "type": "Follower/Hair", "source_path": None})
 
     def test_replace_by_label_exact(self):
         f = fig("Abby", [item("H1", label="Bob"), item("H2", label="bob")])
@@ -151,6 +152,33 @@ class WearingTests(unittest.TestCase):
         lv = live(**{"actors.abby": owned(r, group_nodes=("Abby", "Mine"))})
         p = plan_wearing(recipe(replace(HAIR)), {"Abby": [f]}, lv)
         self.assertEqual(p.conflicts, ())
+
+    def test_removed_item_with_a_record_restores_from_its_source_duf(self):
+        other = dataclasses.replace(rec("r2", "actors.x.wearing.hair"), source={
+            "requested": {"find": "Bob"}, "path": "/People/G9/Hair/Bob.duf",
+            "resolved": {"path": "/People/G9/Hair/Bob Resolved.duf"}})
+        f = fig("Abby", [item("H1", source="/data/DAZ%203D/Bob/Bob.dsf", record=other)])
+        p = plan_wearing(recipe(remove(HAIR)), {"Abby": [f]}, live())
+        self.assertEqual(p.unfits[0].removed[0]["source_path"], "/People/G9/Hair/Bob Resolved.duf")
+        self.assertEqual(p.warnings, ())
+        no_pin = dataclasses.replace(other, source={"path": "/People/G9/Hair/Bob.duf"})
+        f = fig("Abby", [item("H1", record=no_pin)])
+        p = plan_wearing(recipe(remove(HAIR)), {"Abby": [f]}, live())
+        self.assertEqual(p.unfits[0].removed[0]["source_path"], "/People/G9/Hair/Bob.duf")
+
+    def test_hand_content_is_unrestorable_even_with_a_live_uri(self):
+        f = fig("Abby", [item("H1", source="/data/DAZ%203D/Bob/Bob.dsf")])
+        p = plan_wearing(recipe(remove(HAIR)), {"Abby": [f]}, live())
+        self.assertEqual([w.code for w in p.warnings], ["unrestorable_removal"])
+        self.assertIsNone(p.unfits[0].removed[0]["source_path"])
+
+    def test_record_source_that_is_a_data_file_is_unrestorable(self):
+        odd = dataclasses.replace(rec("r2", "actors.x.wearing.hair"),
+                                  source={"path": "/data/DAZ 3D/Bob/Bob.dsf"})
+        f = fig("Abby", [item("H1", record=odd)])
+        p = plan_wearing(recipe(remove(HAIR)), {"Abby": [f]}, live())
+        self.assertEqual([w.code for w in p.warnings], ["unrestorable_removal"])
+        self.assertIsNone(p.unfits[0].removed[0]["source_path"])
 
     def test_unrestorable_warning(self):
         f = fig("Abby", [item("H1", source=None)])

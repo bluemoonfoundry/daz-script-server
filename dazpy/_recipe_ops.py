@@ -34,6 +34,7 @@ int, written back with ``setValue(int)`` for rollback).
 from __future__ import annotations
 
 import os
+import time
 from typing import TYPE_CHECKING, Protocol
 from collections.abc import Callable, Iterable
 
@@ -50,7 +51,8 @@ from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest, owned_
 from ._render import DazRenderSettings
 from ._script_builder import ScriptBuilder
 from ._skeleton import DazSkeleton
-from .exceptions import DazError, NodeNotFoundError
+from ._recipe_fitted import is_data_file
+from .exceptions import DazError, NodeNotFoundError, StudioBusyError
 from .lighting import HDRIEnvironment, apply_hdri_environment
 from .poses import apply_pose
 
@@ -150,7 +152,7 @@ _AFTER_LOAD_BUSY_WAIT_S = 120.0
 _KEY_JS = """
 function _key(n) {
     if (typeof n.getElementID === "function") return String(n.getElementID());
-    if (n.elementID !== undefined) return String(n.elementID);
+    if (typeof n.elementID === "number") return String(n.elementID);
     return n.getName();
 }"""
 
@@ -563,9 +565,22 @@ class DazSceneOps:
         return list(names)
 
     def _busy_execute(self, script: str):
-        """Execute a call that follows a load or fit, waiting out Studio's busy replies."""
-        return self._client.execute(script, retry_on_busy=True,
-                                    max_wait=_AFTER_LOAD_BUSY_WAIT_S).value
+        """Execute a call that follows a load or fit, waiting out Studio's busy replies.
+
+        Retries on ``StudioBusyError`` only (503: the script did not run), never on
+        other retryable server errors: claim and fit are not idempotent after a
+        partial run.  Waits at least the server's ``Retry-After``."""
+        deadline = time.monotonic() + _AFTER_LOAD_BUSY_WAIT_S
+        backoff = 1.0
+        while True:
+            try:
+                return self._client.execute(script).value
+            except StudioBusyError as e:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(max(backoff, float(getattr(e, "retry_after", 0) or 0)), remaining))
+                backoff = min(backoff + 1.0, 5.0)
 
     def _remove_added(self, before: list[str], path: str, cause: Exception) -> None:
         """Remove every node added since *before* (a create that cannot be owned)."""
@@ -807,9 +822,14 @@ class DazSceneOps:
                       where: str) -> list[str]:
         """Load with nothing selected, then fit every added root to the figure.
 
-        Anything not fitted (or any failure after the snapshot) removes all
-        the nodes the load added.
+        Anything not fitted (or any failure after the snapshot, including Studio
+        staying busy after the fit) removes all the nodes the load added.  A Daz
+        data file (``.dsf``, e.g. a ``getAssetUriForNode`` value) is refused before
+        anything is resolved or loaded.
         """
+        if is_data_file(asset_path):
+            raise DazError(f"{where}: {asset_path} is a Daz data file, not a loadable asset; "
+                           "nothing was loaded")
         path = self._resolve_asset(asset_path)
         before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
         try:
@@ -829,10 +849,12 @@ class DazSceneOps:
             if stray:
                 raise DazError(f"{asset_path}: loading it added nodes that are not fitted to "
                                f"{figure_name}: {', '.join(stray)}; every node it added was removed")
+            # Studio keeps answering busy for a while after the fit returns (DS4,
+            # spec 15.1); wait that out so the caller's next call does not fail.
+            # Inside the try: if it never settles, the fitted nodes are removed
+            # rather than left in the scene unowned.
+            self._busy_execute(_SETTLE_SCRIPT)
         except Exception as e:
             self._remove_added(before, where, e)
             raise
-        # Studio keeps answering busy for a while after the fit returns (DS4, spec
-        # 15.1); wait that out here so the caller's next call does not fail.
-        self._busy_execute(_SETTLE_SCRIPT)
         return list(names)

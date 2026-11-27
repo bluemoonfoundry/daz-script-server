@@ -153,6 +153,9 @@ class AssetFinder(Protocol):
   ContentBrowserFinder if configured and reachable, else StudioFinder. An
   unreachable configured content browser falls back to StudioFinder with a
   warning; the report always names the finder that answered.
+- **Incomplete search:** `StudioFinder` waits a bounded time for Studio's
+  asynchronous search (§15.2). When the bound is hit, the partial result is
+  still used and the reference gets the warning `search_incomplete`.
 - **Picking a match:** a search result is accepted only when it is a clear
   single winner. Exact (case-insensitive) product-name match wins outright;
   otherwise one candidate after filtering by `type` and target figure
@@ -249,7 +252,11 @@ has no `Follower/Wardrobe/Top`, `.../Pants`, `.../Shoe` or `.../Hat`. `hat` no
 longer includes `Follower/Accessory/Head`, which covers ear, eye (glasses), nose
 and mouth accessories, not hats. `outerwear` also covers `Outerwear/Top` and
 `Outerwear/Bottom`, so it can overlap `top`/`bottom`. A wearables preset file's
-own type is `Preset/Wearables` (§15.3). Items whose
+own type is `Preset/Wearables` (§15.3). When filtering *files*, `Preset/Wearables`
+matches only the wardrobe family, friendly `wardrobe` or raw `Follower/Wardrobe`,
+never a narrow name (`hat`, `shoes`, `top`, `bottom`, `dress`, `outerwear`): an
+outfit preset loads several garments, so a `hat` reference must not resolve to
+it. Scene nodes never have that type. Items whose
 presentation type is empty never match a `type` selector (they can still be
 targeted by name).
 
@@ -365,11 +372,14 @@ Items made for another figure that Studio could auto-fit are errors (§2).
 7. A failure before the remove phase rolls back everything done in step 6;
    the removed-items list is still untouched, so a replaced hand-loaded hair
    is simply still there. A failure *during* the remove phase reloads items
-   already removed from the file they came from (`getAssetUriForNode` /
-   record) and refits them; this loses hand material/morph edits on those
-   items, which is accepted. If a to-be-removed item's source file cannot be
-   determined, the **dry run** warns ("cannot be restored if removal fails")
-   before any apply.
+   already removed from the file they came from and refits them; this loses
+   hand material/morph edits on those items, which is accepted. The source
+   file is the `.duf` in the removed item's recipe record (`source.resolved.path`,
+   else `source.path`), resolved with `resolve_files`. `getAssetUriForNode`
+   is never a source: it names the node's `.dsf` data file (§15.2), and a `.dsf`
+   is never loaded. A removed item with no recipe record (hand-loaded content)
+   is unrestorable: the **dry run** warns `unrestorable_removal` ("cannot be
+   restored once removed") before any apply, and rollback skips it.
 
 `validate()` covers 1, 2 and 4 where possible without a scene; `plan()` covers
 1–5 and changes nothing.
@@ -390,10 +400,13 @@ Every recipe-owned node's `EntityRecord` gains:
 }
 ```
 
-Taken-over actors get `adopted_from_scene: true` plus `source.resolved` from
-`getAssetUriForNode` where available. `observe()` reports a fitted item whose
-live node no longer matches its recorded source (e.g. swapped by hand) as a
-drift entry. Removed (non-owned) items are recorded in the manifest's apply log
+Taken-over actors get `adopted_from_scene: true` plus the resolved asset
+reference as `source` (not `getAssetUriForNode`, which is a `.dsf` data URI,
+§15.2). Each fitted node's record also stores `asset_uri`: its
+`getAssetUriForNode` file part at fit time. `observe()` reports a fitted item
+whose live `getAssetUriForNode` differs from that recorded `asset_uri` (e.g.
+swapped by hand) as `source_changed` drift; a record without `asset_uri` is
+never drift. Removed (non-owned) items are recorded in the manifest's apply log
 with their source, for rollback and audit.
 
 ## 10. Versioning
@@ -520,7 +533,7 @@ never loaded).
 | `DzAssetMgr.searchForProductAssets(product, ...)` | Async; same 592 as the product's direct `getNumAssets()`. |
 | `DzAssetMgr.getTypeForContentFile(abs)` | Same string as the CMS `contentType`. |
 | `DzAssetMgr.getCompatibilityBasePathForNode(figure)` | `/Genesis 9/Base`. For an item node: the item's own base (`/dForce Detective Outfit for Genesis 9/Detective Shoes`). |
-| `DzAssetMgr.getAssetUriForNode(node)` | The node's **data (`.dsf`) URI**, URL-encoded, with `#id`: figure `/data/Daz%203D/Genesis%209/Base/Genesis9.dsf#Genesis9`, hair `/data/DAZ%203D/Kara%20Ponytail/Kara%20Ponytail%20Scalp/Scalp_1085.dsf#Scalp_1085`. It is **not** the `.duf` the user loaded, so it cannot be compared with a recorded `.duf` path. |
+| `DzAssetMgr.getAssetUriForNode(node)` | The node's **data (`.dsf`) URI**, URL-encoded, with `#id`: figure `/data/Daz%203D/Genesis%209/Base/Genesis9.dsf#Genesis9`, hair `/data/DAZ%203D/Kara%20Ponytail/Kara%20Ponytail%20Scalp/Scalp_1085.dsf#Scalp_1085`. It is **not** the `.duf` the user loaded, so it cannot be compared with a recorded `.duf` path, and it is never a restore source (§8.7). |
 | `DzAssetMgr.getTypeForNode(node)` | Same as `node.getPresentation().type`. |
 | `node.getPresentation().type` | Figure `Actor` (not `Actor/Character`); items: the garment's own type (see 15.3); G9's own followers `Follower/Attachment/Head/Face/{Eyelashes,Tears,Eyes,Mouth}`, `Follower/Attachment/Head/Forehead/Eyebrows`. |
 | `.preferredBase` | Items: `/Genesis 9/Base` (the figure they are for). Figure: `""`. |
@@ -551,8 +564,8 @@ Consequences:
 - A wearables preset *file* has type `Preset/Wearables`, not a
   `Follower/Wardrobe/...` type, so a `find` filtered by `wardrobe`/`top`/...
   on the CMS `contentType` never returns an outfit preset. File type filtering
-  must treat `Preset/Wearables` as matching any wardrobe friendly name (or skip
-  the type filter for it and check node types after load).
+  therefore treats `Preset/Wearables` as matching the wardrobe family
+  (`wardrobe` / raw `Follower/Wardrobe`) only (§6.3).
 - A raw prefix `Follower` matches the figure's own eyes, mouth, eyebrows,
   eyelashes and tear (`Follower/Attachment/...`); no friendly name does.
 

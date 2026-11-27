@@ -75,6 +75,7 @@ from ._recipe_desired import DesiredEntity
 from ._recipe_diff import (CREATE_KEY, ENVIRONMENT_PATH, PRESETS_CHANNEL, Conflict, RecipePlan,
                            Step)
 from ._recipe_json import to_jsonable
+from ._recipe_fitted import is_data_file
 from ._recipe_ops import SceneOps
 from ._recipe_store import EntityRecord, LiveState, Manifest
 from ._recipe_validate import RecipeIssue
@@ -227,15 +228,14 @@ class _Run:
             figure, names = self.node_for(u["actor"]), list(u["names"])
             ops.unfit(names)
             self.deleted_nodes.update(names)
-            sources = [r["source_path"] for r in u["removed"] if r.get("source_path")]
-            lost = [r.get("label") for r in u["removed"] if not r.get("source_path")]
+            # Items with no known .duf were warned about at plan time
+            # (unrestorable_removal) and are skipped on rollback; a .dsf data URI is
+            # never a restore source (spec 8.7, 15.2).
+            sources = [r["source_path"] for r in u["removed"]
+                       if r.get("source_path") and not is_data_file(r["source_path"])]
             if sources:
                 self.undo(f"restore removed items {sources} onto {figure!r}",
                           partial(ops.restore, sources, figure))
-            if lost:
-                self.undo(f"restore removed items {lost}", partial(
-                    _cannot_undo, f"{', '.join(map(repr, lost))} removed from {figure!r} "
-                                  "cannot be restored: no known source file"))
         elif step.op == "release":
             entity = self.live.entities[step.path]
             node = step.node

@@ -48,13 +48,13 @@ def type_matches(t: str, presentation_type: Optional[str]) -> bool:
 def file_type_matches(t: str, content_type: Optional[str]) -> bool:
     """:func:`type_matches` for a content *file*'s CMS ``contentType``.
 
-    A wearables preset file is ``Preset/Wearables`` whatever garments it loads,
-    so it matches every wardrobe type (friendly or raw ``Follower/Wardrobe...``);
-    which garments it holds is only known after loading."""
+    A wearables preset file is ``Preset/Wearables`` whatever garments it loads
+    (an outfit), so it matches only the wardrobe family: friendly ``wardrobe`` or
+    raw ``Follower/Wardrobe`` (spec 6.3).  Narrow names (``hat``, ``top``, ...)
+    never pick an outfit preset."""
     if type_matches(t, content_type):
         return True
-    return content_type == WEARABLES_PRESET_TYPE and all(
-        _under(p, _WARDROBE) for p in type_prefixes(t))
+    return content_type == WEARABLES_PRESET_TYPE and type_prefixes(t) == (_WARDROBE,)
 
 
 def is_known_type(t: str) -> bool:

@@ -51,11 +51,12 @@ class ContentTypeTests(unittest.TestCase):
     def test_nodes_never_match_wearables_preset_type(self):
         self.assertFalse(type_matches("wardrobe", "Preset/Wearables"))
 
-    def test_file_type_accepts_wearables_preset_for_wardrobe_names(self):
-        for t in ("wardrobe", "top", "bottom", "dress", "outerwear", "shoes", "hat",
-                  "Follower/Wardrobe", "Follower/Wardrobe/Shirt"):
+    def test_file_type_accepts_wearables_preset_only_for_wardrobe(self):
+        # spec 6.3: an outfit preset file matches only the wardrobe family name
+        for t in ("wardrobe", "Follower/Wardrobe", "Preset/Wearables"):
             self.assertTrue(file_type_matches(t, "Preset/Wearables"), t)
-        for t in ("hair", "accessory", "Follower/Hair", "Follower"):
+        for t in ("top", "bottom", "dress", "outerwear", "shoes", "hat", "hair", "accessory",
+                  "Follower/Wardrobe/Shirt", "Follower/Hair", "Follower"):
             self.assertFalse(file_type_matches(t, "Preset/Wearables"), t)
         self.assertTrue(file_type_matches("hair", "Follower/Hair"))
         self.assertFalse(file_type_matches("wardrobe", "Preset/Materials/MDL"))

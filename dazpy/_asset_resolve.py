@@ -132,6 +132,11 @@ def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: As
         try:
             if ref.kind == "find":
                 c = _pick_find(p, ref, finder, errors)
+                if getattr(finder, "timed_out", False):
+                    warnings.append(RecipeIssue(
+                        p, "search_incomplete",
+                        f"the {finder.name} search for {ref.find!r} hit its time bound; "
+                        "the result may be partial"))
             else:
                 c = _pick_product(p, ref, finder, errors)
         except FinderUnavailable as e:

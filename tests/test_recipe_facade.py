@@ -737,8 +737,13 @@ class TestV2Facade(FacadeCase):
         self.assertNotIn("source_changed", [i.code for i in rep.drift])
 
     def test_live_dsf_uri_never_compared_with_the_duf_source(self):
-        # the record's source path is the .duf; the live URI is a .dsf: not drift
+        # the record's source names the .duf, the live URI is the node's .dsf: they
+        # differ as strings, and that alone must never be drift
         r, scene = self._applied_with_hair("/data/DAZ%203D/Bob/Bob.dsf")
+        rec = next(e.record for e in scene.live.entities.values()
+                   if e.record.path == "actors.abby.wearing.hair")
+        self.assertTrue(rec.source["path"].endswith(".duf"), rec.source)
+        self.assertNotEqual(rec.source["path"], "/data/DAZ%203D/Bob/Bob.dsf")
         self.assertNotIn("source_changed", [i.code for i in observe(r, scene).drift])
 
     def test_no_recorded_uri_is_never_drift(self):

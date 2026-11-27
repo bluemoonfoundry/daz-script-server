@@ -78,6 +78,21 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(r.resolved["a"].path, "/outfit.duf")
         self.assertFalse(r.errors)
 
+    def test_find_wearables_preset_not_a_hat(self):
+        f = Finder(search=[cand("/outfit.duf", "Summer Outfit Set", type="Preset/Wearables")])
+        r = run([("a", AssetRef(find="Summer", type="hat"))], f)
+        self.assertEqual([e.code for e in r.errors], ["asset_not_found"])
+
+    def test_incomplete_search_warns_on_the_ref(self):
+        f = Finder(search=[cand("/hair.duf", "Updo")])
+        f.timed_out = True
+        r = run([("a", AssetRef(find="Updo"))], f)
+        self.assertEqual(r.resolved["a"].path, "/hair.duf")
+        self.assertEqual([(w.path, w.code) for w in r.warnings], [("a", "search_incomplete")])
+        f.timed_out = False
+        r = run([("a", AssetRef(find="Updo"))], f)
+        self.assertEqual(r.warnings, ())
+
     def test_sku_multi_file_needs_file(self):
         f = Finder(files=[cand("/P/Updo.duf"), cand("/P/Other.duf")])
         r = run([("a", AssetRef(sku="1"))], f)

@@ -18,8 +18,10 @@ Figures are every ``DzFigure`` whose label equals one of the requested labels
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 from ._recipe_store import DATA_ITEM_NAME, _RECORD_KEY, EntityRecord
 from ._script_builder import ScriptBuilder
@@ -28,12 +30,23 @@ if TYPE_CHECKING:
     from ._client import DazClient
 
 
+def is_data_file(path: str | None) -> bool:
+    """True for a Daz *data* file (``.dsf``, or under ``/data/``), the kind
+    ``getAssetUriForNode`` reports (spec 15.2).  Never a loadable asset: loading
+    one is untested and may prompt."""
+    if not path:
+        return False
+    p = unquote(path.split("#", 1)[0]).replace("\\", "/").strip().casefold()
+    return posixpath.splitext(p)[1] == ".dsf" or p.startswith("/data/")
+
+
 @dataclass(frozen=True)
 class FittedItem:
     name: str
     label: str
     type: str | None
-    source_path: str | None  # getAssetUriForNode file part
+    # getAssetUriForNode file part: the node's .dsf data file, never a restore source
+    source_path: str | None
     record: EntityRecord | None
     foreign_children: tuple[str, ...]
 
