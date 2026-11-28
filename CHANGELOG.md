@@ -4,6 +4,21 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `DazScene.run_dforce_simulation` reported every run as failed with
+  "dForce simulation failed: [object Object]": `simulate()` and
+  `customSimulate()` return a `DzError` object, which is truthy even on
+  success. It now reads the error code (0 = success) and reports failures as
+  `getErrorMessage` text with the code. A whole-scene run with no
+  dForce-enabled node fails up front with "no dForce-enabled nodes in the
+  scene" instead of DAZ Studio's "Operation failed (code 98)". Verified live
+  on DS4 4.24.
+- `DazScene.clear_dforce_simulation` no longer pops DAZ Studio's modal "No
+  objects to clear dForce simulation data from" (which blocks the main
+  thread until someone clicks OK) on a scene without dForce: it returns
+  `False` and leaves the engine alone. It returns `True` after clearing.
+
 ## [2.17.0] - 2026-11-27
 
 Plugin, dazpy and daz-ts release: plugin and dazpy 2.17.0, daz-ts 0.3.0.

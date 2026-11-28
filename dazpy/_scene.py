@@ -131,6 +131,34 @@ class BatchPropertyResult:
     error: str | None = None
 
 
+# simulate()/customSimulate() return a DzError object: truthy even on success
+# (code 0, "No error"), and String() of it is "[object Object]". Read the code.
+_DZ_ERROR_RESULT_JS = """
+    function dzErrorResult(e) {
+        var code = (e && typeof e.valueOf === "function") ? e.valueOf() : (e || 0);
+        if (!code) return {"error": null, "code": 0};
+        var msg = (typeof getErrorMessage === "function") ? getErrorMessage(e) : "error";
+        return {"error": msg + " (code " + code + ")", "code": code};
+    }
+"""
+
+# True when any node carries a dForce modifier (cloth, or strand-hair
+# generation/follow). Guards calls that pop a modal on an empty simulation.
+_HAS_DFORCE_JS = """
+    function hasDForceNodes() {
+        for (var i = 0; i < Scene.getNumNodes(); i++) {
+            var o = Scene.getNode(i).getObject();
+            if (!o || typeof o.getNumModifiers !== "function") continue;
+            for (var m = 0; m < o.getNumModifiers(); m++) {
+                var md = o.getModifier(m);
+                if (md && /DForce/.test(md.className())) return true;
+            }
+        }
+        return false;
+    }
+"""
+
+
 class DazScene:
     """High-level proxy for the active DAZ Studio scene (``Scene`` global).
 
@@ -1606,10 +1634,19 @@ class DazScene:
         script = ScriptBuilder.iife("return App.getSimulationMgr().isSimulating();")
         return bool(self._client.execute(script).value)
 
-    def clear_dforce_simulation(self) -> None:
-        """Discard all cached dForce simulation data for the active engine."""
-        script = ScriptBuilder.iife("App.getSimulationMgr().clearSimulation();")
-        self._client.execute(script)
+    def clear_dforce_simulation(self) -> bool:
+        """Discard all cached dForce simulation data for the active engine.
+
+        Returns ``False`` without touching the engine when no node in the scene
+        has a dForce modifier: ``clearSimulation()`` then pops a modal "No
+        objects to clear" dialog that blocks DAZ Studio until a human clicks OK.
+        """
+        script = ScriptBuilder.iife(_HAS_DFORCE_JS + """
+            if (!hasDForceNodes()) return false;
+            App.getSimulationMgr().clearSimulation();
+            return true;
+        """)
+        return bool(self._client.execute(script).value)
 
     def run_dforce_simulation(
         self,
@@ -1658,8 +1695,7 @@ class DazScene:
                 var engine = mgr.getActiveSimulationEngine();
                 if (!engine) return {{"error": "no_active_engine"}};
                 engine.getGlobalSimulationSettings().startFromMemorizedPose = {memorized_flag};
-                var err = engine.customSimulate([{node_exprs}]);
-                return {{"error": err ? String(err) : null}};
+                return dzErrorResult(engine.customSimulate([{node_exprs}]));
             """
         else:
             body = f"""
@@ -1667,10 +1703,10 @@ class DazScene:
                 var engine = mgr.getActiveSimulationEngine();
                 if (!engine) return {{"error": "no_active_engine"}};
                 engine.getGlobalSimulationSettings().startFromMemorizedPose = {memorized_flag};
-                var err = mgr.simulate();
-                return {{"error": err ? String(err) : null}};
+                if (!hasDForceNodes()) return {{"error": "no dForce-enabled nodes in the scene", "code": -1}};
+                return dzErrorResult(mgr.simulate());
             """
-        script = ScriptBuilder.iife(body)
+        script = ScriptBuilder.iife(_HAS_DFORCE_JS + _DZ_ERROR_RESULT_JS + body)
 
         if not wait:
             return self._client.execute_async_submit(script)

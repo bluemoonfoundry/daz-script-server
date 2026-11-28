@@ -517,11 +517,38 @@ class TestDazSceneDForceSimulation(unittest.TestCase):
         self.assertFalse(scene.is_simulating())
 
     def test_clear_dforce_simulation_calls_clearSimulation(self):
-        scene = self._scene(None)
-        scene.clear_dforce_simulation()
+        scene = self._scene(True)
+        self.assertTrue(scene.clear_dforce_simulation())
         script = scene._client.execute.call_args[0][0]
         self.assertIn("getSimulationMgr", script)
         self.assertIn("clearSimulation", script)
+
+    def test_clear_dforce_simulation_skips_scene_without_dforce(self):
+        """clearSimulation() pops a modal when no node has dForce (42c8): the script
+        must check for a dForce modifier first and return false instead."""
+        scene = self._scene(False)
+        self.assertFalse(scene.clear_dforce_simulation())
+        script = scene._client.execute.call_args[0][0]
+        self.assertIn("DForce", script)
+        self.assertLess(script.index("return false"), script.index("clearSimulation"))
+
+    def test_run_dforce_simulation_reads_the_dzerror_code(self):
+        """simulate() returns a DzError object, truthy even on success (42c8)."""
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-code"
+        scene.run_dforce_simulation(wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("valueOf", script)
+        self.assertIn("getErrorMessage", script)
+        self.assertNotIn("err ? String(err)", script)
+
+    def test_run_dforce_simulation_whole_scene_checks_for_dforce_nodes(self):
+        scene = self._scene()
+        scene._client.execute_async_submit.return_value = "req-none"
+        scene.run_dforce_simulation(wait=False)
+        script = scene._client.execute_async_submit.call_args[0][0]
+        self.assertIn("no dForce-enabled nodes", script)
+        self.assertLess(script.index("no dForce-enabled nodes"), script.index("mgr.simulate()"))
 
     def test_run_dforce_simulation_wait_false_submits_async(self):
         scene = self._scene()
