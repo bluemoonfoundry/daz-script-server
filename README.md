@@ -82,7 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.16.0](#whats-new-in-v2160)
+- [What's New in v2.17.0](#whats-new-in-v2170)
 - [Earlier Releases](#earlier-releases)
 - [Requirements](#requirements)
 - [Getting the Plugin](#getting-the-plugin)

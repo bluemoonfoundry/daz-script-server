@@ -209,6 +209,11 @@ easing and per-key interpolation and rejects non-finite numbers.
 
 ### Fixed
 
+- **`python tests.py unit` no longer touches a running DAZ Studio.**
+  `tests/test_scene_check_live.py` was missing from the live-file list, so
+  every unit run against a reachable Studio cleared its scene, loaded a
+  Genesis 9 figure and rendered with Iray. It is now excluded like the other
+  live files (and the unit run takes about a third of the time).
 - **dazpy recipe rollback restores every entity's ownership record.** When
   `apply_recipe` failed after writing records for several existing entities,
   rollback restored the last entity's record onto the last node once per
