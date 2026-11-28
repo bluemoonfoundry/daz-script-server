@@ -10,7 +10,7 @@ from dazpy._asset_ref import AssetRef
 from dazpy._recipe_fitted import FigureInfo, FittedItem
 from dazpy._recipe_model import ActorSpec, SceneRecipe, TypeSelector, WearingEntry
 from dazpy._recipe_store import LiveEntity, LiveState
-from dazpy._recipe_wearing import TakeOver, plan_wearing
+from dazpy._recipe_wearing import TakeOver, entry_id, plan_wearing
 from recipe_fakes import rec
 
 BASE = AssetRef(path="/People/Genesis 9/Genesis 9.duf")
@@ -109,7 +109,7 @@ class WearingTests(unittest.TestCase):
     def test_remove_missing_errors_and_ignore(self):
         p = plan_wearing(recipe(remove(HAIR)), {"Abby": [fig("Abby")]}, live())
         self.assertEqual([(e.code, e.path) for e in p.errors],
-                         [("remove_target_missing", "actors.abby.wearing.remove.0")])
+                         [("remove_target_missing", "actors.abby.wearing.remove.type=hair")])
         p = plan_wearing(recipe(remove(HAIR, if_missing="ignore")), {"Abby": [fig("Abby")]}, live())
         self.assertEqual((p.errors, p.unfits), ((), ()))
 
@@ -136,6 +136,33 @@ class WearingTests(unittest.TestCase):
         r = dataclasses.replace(rec("r1", "actors.abby"), done=({"entry": "remove.0"},))
         p = plan_wearing(recipe(remove(HAIR)), {"Abby": [fig("Abby")]}, live(**{"actors.abby": owned(r)}))
         self.assertEqual(p.errors, ())
+
+    def test_remove_id_survives_reordering(self):
+        # final review I5: inserting an entry above an applied remove must not re-arm it
+        hat = TypeSelector("hat")
+        first = plan_wearing(recipe(remove(hat)), {"Abby": [fig("Abby", [item("Hat", "Follower/Wardrobe/Headwear")])]},
+                             live())
+        eid = first.unfits[0].entry
+        self.assertEqual(eid, "remove.type=hat")
+        r = dataclasses.replace(rec("r1", "actors.abby"), done=({"entry": eid, "op": "remove", "removed": []},))
+        hand_hat = fig("Abby", [item("Hat2", "Follower/Wardrobe/Headwear")])
+        again = plan_wearing(recipe(replace(HAIR, key="new", if_missing="add"), remove(hat)),
+                             {"Abby": [hand_hat]}, live(**{"actors.abby": owned(r)}))
+        self.assertEqual((again.unfits, again.errors), ((), ()))
+        self.assertEqual(entry_id(remove("Old Jacket"), 3), "remove.label=Old Jacket")
+
+    def test_legacy_positional_remove_id_still_counts_as_done(self):
+        r = dataclasses.replace(rec("r1", "actors.abby"), done=({"entry": "remove.1"},))
+        f = fig("Abby", [item("Hat", "Follower/Wardrobe/Headwear")])
+        p = plan_wearing(recipe(replace(HAIR, if_missing="add"), remove(TypeSelector("hat"))),
+                         {"Abby": [f]}, live(**{"actors.abby": owned(r)}))
+        self.assertEqual((p.unfits, p.errors), ((), ()))
+
+    def test_duplicate_remove_entry_runs_once(self):
+        f = fig("Abby", [item("Hat", "Follower/Wardrobe/Headwear")])
+        hat = TypeSelector("hat")
+        p = plan_wearing(recipe(remove(hat), remove(hat)), {"Abby": [f]}, live())
+        self.assertEqual((len(p.unfits), p.errors), (1, ()))
 
     def test_foreign_children_conflict(self):
         f = fig("Abby", [item("H1", foreign=("Cap",))])
@@ -224,7 +251,7 @@ class WearingTests(unittest.TestCase):
     def test_ignore_and_add_fallback_mark_done(self):
         r = recipe(remove(HAIR, if_missing="ignore"), replace(HAIR, key="k2", if_missing="add"))
         p = plan_wearing(r, {"Abby": [fig("Abby")]}, live())
-        self.assertEqual(p.done_entries, (("actors.abby", "remove.0"), ("actors.abby", "k2")))
+        self.assertEqual(p.done_entries, (("actors.abby", "remove.type=hair"), ("actors.abby", "k2")))
         self.assertEqual((p.unfits, p.errors), ((), ()))
 
     def test_done_fallback_blocks_later_hand_loaded_match(self):

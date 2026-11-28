@@ -670,7 +670,7 @@ class _Planner:
 
 
 def _entry_op(entry: str) -> str:
-    """The done-log ``op`` for a wearing entry id (``remove.<i>`` or a key)."""
+    """The done-log ``op`` for a wearing entry id (``remove.<selector>`` or a key)."""
     return "remove" if entry.startswith("remove.") else "replace"
 
 

@@ -43,10 +43,18 @@ class WearingPlan:
 
 
 def entry_id(entry: WearingEntry, index: int) -> str:
-    """The id recorded in an actor's ``done`` log: the key, or ``remove.<index>``."""
+    """The id recorded in an actor's ``done`` log: the key, or for a ``remove``
+    its selector (``remove.type=<T>`` / ``remove.label=<label>``), so the id
+    survives reordering the ``wearing`` list (final review I5)."""
     if entry.op == "remove":
-        return f"remove.{index}"
+        t = entry.target
+        return f"remove.type={t.type}" if isinstance(t, TypeSelector) else f"remove.label={t}"
     return entry.key or f"{entry.op}.{index}"
+
+
+def _legacy_id(entry: WearingEntry, index: int) -> str | None:
+    """The positional ``remove.<index>`` id done logs written before I5 hold."""
+    return f"remove.{index}" if entry.op == "remove" else None
 
 
 def _matches(selector, item: FittedItem) -> bool:
@@ -123,12 +131,14 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
         items = [it for it in (figure.items if figure else ())
                  if not (it.record is not None and it.record.recipe_id == recipe.id)]
 
+        seen: set[str] = set()
         for index, entry in enumerate(actor.wearing):
             if skip_entries or entry.op == "add":
                 continue
             eid = entry_id(entry, index)
-            if eid in done:
-                continue
+            if eid in done or eid in seen or _legacy_id(entry, index) in done:
+                continue  # a repeated identical remove is the same one-shot
+            seen.add(eid)
             epath = f"{path}.wearing.{eid}"
             hit = [it for it in items if _matches(entry.target, it)]
             if not hit:
