@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.17.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.18.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -82,7 +82,7 @@ Categories: fundamentals, character, animation, rendering, geometry, export, ml_
 ### Getting Started
 - [Quick Start](#-quick-start)
 - [Why This Exists](#why-this-exists)
-- [What's New in v2.17.0](#whats-new-in-v2170)
+- [What's New in v2.18.0](#whats-new-in-v2180)
 - [Earlier Releases](#earlier-releases)
 - [Requirements](#requirements)
 - [Getting the Plugin](#getting-the-plugin)
@@ -160,45 +160,47 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
-## What's New in v2.17.0
+## What's New in v2.18.0
 
-### 🧥 Scene recipes v2: find content, check it fits, dress actors in layers
+### 🧵 dForce simulations report success again
 
-**Name content the way you think about it.** A recipe asset can be a file
-path, a product name, a SKU, or a `find` search, answered by Studio's content
-database or by daz-content-browser (`DAZ_BROWSER_URL`). Anything ambiguous
-stops with the candidates listed; `recipe.pin()` records the answers so later
-applies reuse them.
+**`run_dforce_simulation` works.** Studio's `simulate()` returns a `DzError`
+object, which dazpy tested for truthiness, so every simulation, successful or
+not, failed with "dForce simulation failed: [object Object]". dazpy now reads
+the error code: success returns, a real failure carries Studio's message and
+code, and a whole-scene run with no dForce-enabled node says so up front.
 
-**Compatibility is checked before anything loads.** Hair or clothing made for
-another figure (a Genesis 8 hair on a Genesis 9 actor) is rejected from asset
-metadata, so it can't pop Studio's version dialog.
+```python
+from dazpy import DazScene
 
-**Actors in layers.** Take over a figure you built by hand (`node`), apply
-shape and material presets in order, then `add`, `replace` or `remove` what
-they wear, by label or by type (`"replace": {"type": "hair"}`). Multi-node
-hair and outfit presets are one entry. A recipe changes only what it
-mentions, never deletes content you added, and rolls back on failure.
-
-```json
-{"recipe_version": 2, "id": "abby",
- "actors": {"abby": {"node": "Abby", "asset": "/People/Genesis 9/Genesis 9.duf",
-   "wearing": [{"key": "hair", "replace": {"type": "hair"},
-                "with": {"find": "Flirty Casual Ponytail", "type": "hair"}}]}}}
+scene = DazScene()
+scene.run_dforce_simulation()          # waits; raises only on a real failure
+if scene.clear_dforce_simulation():    # False: nothing to clear, no dialog
+    print("cleared")
 ```
 
-Every recipe-loaded node records where it came from, and `observe` reports
-items swapped by hand. Verified live on DS4 4.24 and DS6 6.26. See
-[Scene recipes](docs/scene_recipes.rst).
+**No more stuck dialog on clear.** On a scene without dForce,
+`clear_dforce_simulation()` used to make Studio pop "No objects to clear
+dForce simulation data from", which blocks Studio until someone clicks OK.
+It now checks first and returns `False`; `True` means it cleared.
 
-Plugin and dazpy 2.17.0 release with daz-ts 0.3.0 (camera-move easing). daz-mcp-server's recipe tools need
-dazpy 2.17.0. Full list: [`CHANGELOG.md`](CHANGELOG.md#2170---2026-11-27).
+daz-ts 0.3.1 has the same fixes (`runDforceSimulation()`,
+`clearDforceSimulation(): Promise<boolean>`). Verified live on DS4 4.24 and
+DS6 6.26.
+
+Also in this release: live test files are opt-in (`DAZ_LIVE_TESTS=1`), and
+tests that clear the scene refuse one with your content unless
+`DAZ_LIVE_ALLOW_CLEAR=1`.
+
+Plugin and dazpy 2.18.0 release with daz-ts 0.3.1. The plugin is unchanged
+apart from its version. Full list:
+[`CHANGELOG.md`](CHANGELOG.md#2180---2026-11-28).
 
 ---
 
 ## Earlier Releases
 
-Notes for v2.16.0 and earlier are in [`CHANGELOG.md`](CHANGELOG.md).
+Notes for v2.17.0 (scene recipes v2: asset references, compatibility checks, fitting) and earlier are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 

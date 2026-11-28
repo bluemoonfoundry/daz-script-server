@@ -4,6 +4,13 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.18.0] - 2026-11-28
+
+Plugin, dazpy and daz-ts release: plugin and dazpy 2.18.0, daz-ts 0.3.1. A
+fix release for dForce in both SDKs. The plugin is unchanged apart from its
+version; upgrading it is optional. Live smoke results for this release are in
+[`docs/smoke-results/`](docs/smoke-results/README.md).
+
 ### Fixed
 
 - `DazScene.run_dforce_simulation` reported every run as failed with
@@ -13,11 +20,28 @@ All notable changes to DazScript Server are documented here.
   `getErrorMessage` text with the code. A whole-scene run with no
   dForce-enabled node fails up front with "no dForce-enabled nodes in the
   scene" instead of DAZ Studio's "Operation failed (code 98)". Verified live
-  on DS4 4.24.
+  on DS4 4.24 (a 21.5 s whole-scene run returns success); daz-mcp-server ran
+  the same script on DS4 4.24 and DS6 6.26.
 - `DazScene.clear_dforce_simulation` no longer pops DAZ Studio's modal "No
   objects to clear dForce simulation data from" (which blocks the main
   thread until someone clicks OK) on a scene without dForce: it returns
   `False` and leaves the engine alone. It returns `True` after clearing.
+- daz-ts 0.3.1: the same two fixes. `DazScene.runDforceSimulation()` reads
+  the `DzError` code instead of its truthiness (every `wait: true` run threw
+  "dForce simulation failed: [object Object]") and fails up front with "no
+  dForce-enabled nodes in the scene"; `clearDforceSimulation()` returns
+  `Promise<boolean>` and skips `clearSimulation()` (and its blocking modal)
+  when no node has dForce. Both SDKs share the same scripts. Verified live on
+  DS6 6.26: a 33 s whole-scene run resolves and the clear returns `true`.
+
+### Changed
+
+- Live test files are opt-in (#75). Every live test module skips unless
+  `DAZ_LIVE_TESTS=1` (running a file directly, or `tests.py api|integration`,
+  counts as opting in), so `pytest tests/` no longer drives a running Studio.
+  Tests that clear the scene refuse one with your content unless
+  `DAZ_LIVE_ALLOW_CLEAR=1` (`tests/live_gate.py`; `tests/test_live_gate.py`
+  enforces both). Same opt-in variable as daz-mcp-server.
 
 ## [2.17.0] - 2026-11-27
 
