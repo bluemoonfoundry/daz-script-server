@@ -73,8 +73,9 @@ class SceneOps(Protocol):
         """Read the node's observed channels (the shapes ``read_live`` reports)."""
 
     def native_descendants(self, node_name: str) -> tuple[str, ...]:
-        """Names of the node's non-bone descendants (called right after create, so
-        everything below a fresh node came with its asset)."""
+        """Names of the node's non-bone descendants (called right after create,
+        before any preset or fit, so everything below a fresh node came with its
+        asset)."""
 
     def set_environment(self, values: dict) -> None:
         """Write a desired- or observed-shaped environment."""

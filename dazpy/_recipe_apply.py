@@ -146,6 +146,7 @@ class _Run:
         self.journal: list[tuple[str, Callable[[], object]]] = []
         self.created: dict[str, list[str]] = {}   # created or fitted nodes, primary first
         self.taken: dict[str, str] = {}           # taken-over figure per actor path
+        self.native: dict[str, tuple[str, ...]] = {}  # created node's native descendants
         self.done_for: dict[str, list[dict]] = {}
         for actor, entry in plan.done_log:
             self.done_for.setdefault(actor, []).append(entry)
@@ -181,6 +182,10 @@ class _Run:
                 self.undo(f"delete created node {name!r} ({step.path})",
                           partial(ops.delete, name))
             self.created[step.path] = list(names)
+            # Captured now, before presets and fits of this run add children
+            # (fitted items are parented under the figure): only what the asset
+            # loaded with is native (final review I6).
+            self.native[step.path] = tuple(ops.native_descendants(names[0]))
             ops.set_channels(names[0], d.kind, step.channels)
         elif step.op == "modify":
             node, kind = step.node, self.desired[step.path].kind
@@ -328,8 +333,7 @@ class _Run:
         if d.kind == "item":
             self.write_group(path, d, names, desired)
             return
-        rec = self.record(path, desired, self.ops.observe(node, d.kind),
-                          self.ops.native_descendants(node))
+        rec = self.record(path, desired, self.ops.observe(node, d.kind), self.native[path])
         old = self.live.entities.get(path)
         if old is not None:  # a replace: one-shot entries already done stay done (spec 6.4)
             rec = dataclasses.replace(rec, done=tuple(copy.deepcopy(old.record.done)))

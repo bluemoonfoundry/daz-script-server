@@ -1154,5 +1154,34 @@ class V2ExecuteTests(unittest.TestCase):
         self.assertNotIn("presets", written_records(ok)["Abby"].observed)
 
 
+class FinalReviewNativeTests(unittest.TestCase):
+    """Final review I6: a created actor's native list predates its fitted items."""
+
+    def test_created_actor_native_is_captured_before_items_are_fitted(self):
+        class Ops(FakeOps):
+            fitted = False
+
+            def fit(self, entity, figure_name):
+                self.fitted = True
+                return super().fit(entity, figure_name)
+
+            def native_descendants(self, node_name):
+                self._call("native_descendants", node_name)
+                if node_name == "r1:abby":
+                    return ("Eyes", "Hair") if self.fitted else ("Eyes",)
+                return ()
+
+        ops = Ops(fit_names={HAIR.path: ["Hair"]})
+        _, r = run_v2(ds(d_actor("abby"), HAIR), EMPTY, ops)
+        self.assertTrue(r.applied, r.error)
+        self.assertEqual(written_records(ops)["r1:abby"].native, ("Eyes",))
+
+    def test_v1_create_record_native_unchanged(self):
+        ops = FakeOps(create_names=NAMES, native={"cam_new": ("Eyes", "Mouth")})
+        run(D_CREATE_MODIFY, L_OLD, ops)
+        self.assertEqual(written_records(ops)["cam_new"].native, ("Eyes", "Mouth"))
+        self.assertEqual(ops.methods().count("native_descendants"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
