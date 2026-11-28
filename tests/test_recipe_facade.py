@@ -941,5 +941,22 @@ class TestV2FixRound1(FacadeCase):
         self.assertEqual(vo.call_count, 1)
 
 
+class TestFinalReviewFinder(FacadeCase):
+    """Final review I1: the facade's lazy finder forwards ``timed_out``."""
+
+    def test_search_incomplete_reaches_validate_and_plan(self):
+        finder = FakeFinder(search=[cand(HAIR, "Bob Hair")])
+        finder.timed_out = True
+        r = v2_recipe({"add": {"find": "Bob Hair"}, "key": "hair"})
+        rep = validate(r, fake_scene(compat=COMPAT), finder=finder)
+        self.assertTrue(rep.ok, rep.errors)
+        self.assertIn(("actors.abby.wearing.hair", "search_incomplete"), codes(rep.warnings))
+        p = plan(r, fake_scene(compat=COMPAT), finder=finder)
+        self.assertIn(("actors.abby.wearing.hair", "search_incomplete"), codes(p.warnings))
+        finder.timed_out = False
+        rep = validate(r, fake_scene(compat=COMPAT), finder=finder)
+        self.assertNotIn("search_incomplete", {w.code for w in rep.warnings})
+
+
 if __name__ == "__main__":
     unittest.main()

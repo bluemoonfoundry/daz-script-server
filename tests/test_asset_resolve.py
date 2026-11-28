@@ -187,5 +187,50 @@ class RecipeRefsTests(unittest.TestCase):
         self.assertEqual(got["actors.abby.asset"].path, "/G9.duf")
 
 
+class TruncatedSearchTests(unittest.TestCase):
+    """Final review I2: a truncated search never yields a silent single pick."""
+
+    def test_find_asks_for_many_candidates_before_narrowing(self):
+        seen = []
+
+        class F(Finder):
+            def search(self, phrase, *, type, limit=10):
+                seen.append(limit)
+                return super().search(phrase, type=type, limit=limit)
+
+        run([("a", AssetRef(find="Updo"))], F(search=[cand("/a.duf", "Updo")]))
+        self.assertGreaterEqual(seen[0], 100)
+
+    def test_truncated_result_narrowed_to_one_is_ambiguous(self):
+        from dazpy._asset_resolve import _FIND_LIMIT
+        many = [cand(f"/g8/{i}.duf", f"G8 Hair {i}", str(i)) for i in range(_FIND_LIMIT - 1)]
+        f = Finder(search=many + [cand("/g9.duf", "G9 Hair", "999")])
+
+        def narrow(p, cands, known):
+            kept = [c for c in cands if c.path == "/g9.duf"]
+            return kept, [(c, ("/Genesis 8/Female",)) for c in cands if c not in kept], "/Genesis 9"
+
+        paths = {c.path: c.path for c in f._search}
+        r = resolve_refs(fake_resolve_client(paths), [("a", AssetRef(find="hair"))], f, None,
+                         narrow=narrow)
+        self.assertEqual([(e.path, e.code) for e in r.errors], [("a", "ambiguous_asset")])
+        self.assertNotIn("a", r.resolved)
+
+    def test_finder_reporting_truncation_is_ambiguous_even_with_an_exact_name(self):
+        f = Finder(search=[cand("/a.duf", "Updo"), cand("/b.duf", "Updo Two")])
+        f.truncated = True
+        r = run([("a", AssetRef(find="Updo"))], f)
+        self.assertEqual([e.code for e in r.errors], ["ambiguous_asset"])
+        f.truncated = False
+        r = run([("a", AssetRef(find="Updo"))], f)
+        self.assertEqual(r.resolved["a"].path, "/a.duf")
+
+    def test_truncated_single_typed_candidate_is_still_picked(self):
+        f = Finder(search=[cand("/a.duf", "Updo")])
+        f.truncated = True
+        r = run([("a", AssetRef(find="Updo"))], f)
+        self.assertEqual(r.resolved["a"].path, "/a.duf")
+
+
 if __name__ == "__main__":
     unittest.main()

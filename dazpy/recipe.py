@@ -177,6 +177,16 @@ class _LazyFinder:
     def name(self) -> str:
         return self._finder.name if self._finder is not None else "path"
 
+    # Per-search state of the real finder, read by resolution after each search
+    # (``search_incomplete``, truncated results); False until one is picked.
+    @property
+    def timed_out(self) -> bool:
+        return bool(getattr(self._finder, "timed_out", False))
+
+    @property
+    def truncated(self) -> bool:
+        return bool(getattr(self._finder, "truncated", False))
+
     def _get(self) -> AssetFinder:
         if self._finder is None:
             self._finder, issues = select_finder(self._client, self._explicit)

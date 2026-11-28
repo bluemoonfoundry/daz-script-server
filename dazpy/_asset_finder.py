@@ -130,6 +130,9 @@ class StudioFinder:
         self._client = client
         # True when the last query hit the search time bound (partial result).
         self.timed_out = False
+        # True when the last search was cut at a cap (Studio's 1200, or *limit*):
+        # more matches may exist than were returned (final review I2).
+        self.truncated = False
 
     def _run(self, script: str) -> list[AssetCandidate]:
         value = self._client.execute(script, timeout=30).value
@@ -145,10 +148,12 @@ class StudioFinder:
 
     def search(self, phrase: str, *, type: str | None, limit: int = 10) -> list[AssetCandidate]:
         # The type filter runs here (friendly names and prefixes), not in the script.
-        found = self._run(_studio_script("search", phrase, None, _STUDIO_SEARCH_CAP if type else limit,
-                                         None, None))
+        cap = _STUDIO_SEARCH_CAP if type else limit
+        found = self._run(_studio_script("search", phrase, None, cap, None, None))
+        truncated = len(found) >= cap
         if type:
             found = [c for c in found if file_type_matches(type, c.type)]
+        self.truncated = truncated or len(found) > limit
         return found[:limit]
 
     def product_files(self, *, sku: str | None = None,
@@ -165,6 +170,8 @@ class ContentBrowserFinder:
         self._url = url.rstrip("/")
         self._token = token
         self._timeout = timeout
+        # True when the last search was cut at its limit (final review I2).
+        self.truncated = False
 
     def _request(self, path: str, body: dict | None = None) -> Any:
         headers = {"Accept": "application/json"}
@@ -209,10 +216,11 @@ class ContentBrowserFinder:
                               type=_opt(f.get("content_type")), score=score)
 
     def search(self, phrase: str, *, type: str | None, limit: int = 10) -> list[AssetCandidate]:
-        data = self._request("/api/v1/query", {"prompt": phrase,
-                                                   "limit": min(limit * 3, 100) if type else limit})
+        asked = min(limit * 3, 100) if type else limit
+        data = self._request("/api/v1/query", {"prompt": phrase, "limit": asked})
         out: list[AssetCandidate] = []
-        for hit in data.get("results") or []:
+        hits = data.get("results") or []
+        for hit in hits:
             meta = hit.get("metadata") or {}
             sku = meta.get("sku") or hit.get("id")
             if not sku:
@@ -227,6 +235,7 @@ class ContentBrowserFinder:
                     continue
                 out.append(self._file(f, str(sku), meta.get("name"),
                                       float(hit.get("relevance_score") or 0.0)))
+        self.truncated = len(hits) >= asked or len(out) > limit
         return out[:limit]
 
 

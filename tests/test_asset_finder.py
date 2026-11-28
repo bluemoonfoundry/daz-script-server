@@ -137,6 +137,19 @@ class StudioFinderTests(unittest.TestCase):
         StudioFinder(c).search("ponytail", type=None, limit=5)
         self.assertIn('"limit": 5', c.scripts[1])
 
+    def test_studio_search_reports_truncation(self):
+        # final review I2: a result cut at a cap may hide better matches
+        raw = [{"path": f"/{i}.duf", "type": "Follower/Hair"} for i in range(1200)]
+        f = StudioFinder(_client({"cms": True, "assets": raw}))
+        self.assertEqual(len(f.search("x", type="hair", limit=100)), 100)
+        self.assertTrue(f.truncated)
+        f = StudioFinder(_client({"cms": True, "assets": raw[:5]}))
+        f.search("x", type="hair", limit=100)
+        self.assertFalse(f.truncated)
+        f = StudioFinder(_client({"cms": True, "assets": raw[:5]}))
+        f.search("x", type=None, limit=5)   # the script stopped at the limit
+        self.assertTrue(f.truncated)
+
     def test_studio_cms_off_raises(self):
         with self.assertRaises(FinderUnavailable) as cm:
             StudioFinder(_client({"cms": False})).search("x", type=None)

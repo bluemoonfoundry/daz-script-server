@@ -18,6 +18,10 @@ if TYPE_CHECKING:
     from ._recipe_model import SceneRecipe
 
 _MAX_LISTED = 10
+# How many candidates a ``find`` asks for before compatibility narrowing.  A
+# result at this size (or one the finder reports ``truncated``) may hide more
+# matches, so it never yields a single pick out of several (final review I2).
+_FIND_LIMIT = 100
 
 
 @dataclass(frozen=True)
@@ -195,7 +199,17 @@ def _pick_product(p: str, ref: AssetRef, finder: AssetFinder,
 def _pick_find(p: str, ref: AssetRef, finder: AssetFinder, errors: list[RecipeIssue],
                narrow: Narrower | None = None,
                known: Mapping[str, str] | None = None) -> AssetCandidate | None:
-    cands = _typed(ref, finder.search(ref.find, type=ref.type))  # type: ignore[arg-type]
+    raw = finder.search(ref.find, type=ref.type, limit=_FIND_LIMIT)  # type: ignore[arg-type]
+    cands = _typed(ref, raw)
+    if len(cands) > 1 and (getattr(finder, "truncated", False) or len(raw) >= _FIND_LIMIT):
+        # spec 5 "err toward ambiguity": narrowing a cut-off result could pick
+        # one survivor while better matches lie beyond the cut
+        errors.append(RecipeIssue(
+            p, "ambiguous_asset",
+            f"the search for {ref.find!r} returned too many matches to choose from (the result "
+            "was cut off); be more specific, add 'type', or use 'product' / 'sku'",
+            allowed=tuple(f"{c.product} ({c.sku}): {c.path}" for c in cands[:_MAX_LISTED])))
+        return None
     dropped: Sequence[tuple[AssetCandidate, tuple[str, ...]]] = ()
     target = None
     if cands and narrow is not None:
