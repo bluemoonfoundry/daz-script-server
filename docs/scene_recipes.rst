@@ -575,27 +575,44 @@ Fitted items
   ``remove_target_missing``. ``"if_missing": "add"`` turns a replace into a
   plain add, and ``"if_missing": "ignore"`` skips a remove. The selector part is
   **one-shot**: it runs once, is logged on the actor's record and is inert
-  after that. The ``with`` item is owned under ``key`` like an ``add``.
+  after that. The ``with`` item is owned under ``key`` like an ``add``. A
+  ``remove`` is logged by its selector (``remove.type=hat``,
+  ``remove.label=Old Jacket``), so reordering the ``wearing`` list never
+  re-arms it.
 - Only items following this actor's figure are candidates; never the figure,
   never another actor's items, never items this recipe owns. Removing them is
   not a conflict under ``ask`` (the recipe asked for it), except for an item
-  carrying another node you parented to it (``has_foreign_children``). Entries
-  are planned in list order, each seeing the scene as the earlier ones leave it.
+  carrying another node you parented to it, with or without a record
+  (``has_foreign_children``; only the item's own bones, fitted sub-parts and
+  outfit helper nodes do not count). Entries are planned in list order, each
+  seeing the scene as the earlier ones leave it.
+- Figures and items the recipe did not create are addressed by Studio's
+  element ID, not their internal name (a file loaded twice repeats every
+  name), so a plan's ``take_over`` / ``unfit`` steps name them as
+  ``elementID:<id>``. Each removed item must still follow the actor's figure
+  when the removal runs.
 - **Multi-node items.** A hair with a separate cap, or an outfit preset that
   loads six garments, is one entry: every node the load added belongs to it
   (records share ``group`` = ``"<actor>.<key>"``) and is fitted, swapped and
   removed together. A load that adds anything not fitted to the actor (a light,
   a stray figure) is removed again and fails.
-- Fitting loads the file with nothing selected, then makes each new figure
-  follow the actor and parents it to her. Items for another figure are never
-  auto-fitted.
+- Fitting loads the file with a temporary empty null node selected as the
+  only (primary) selection: some items name the selection in their file, and
+  with nothing selected Studio can pop its modal "Choose Content to Replace"
+  dialog. Each new figure is then made to follow the actor and parented to her,
+  and the null is deleted. Items for another figure are never auto-fitted.
 
 Apply order is: creates, presets, fits, channels, then removals **last**. A
 failure before the removals rolls everything back, so a hand-loaded hair being
-replaced is simply still there. A failure *during* the removals reloads the
+replaced is simply still there. The exception is presets: a preset applied to
+a figure the recipe did not create in this apply (an existing or taken-over
+actor) cannot be undone, and the rollback reports it in ``rollback_errors``. A failure *during* the removals reloads the
 items already removed from their recorded source file and fits them again
 (their hand edits are lost). Hand-loaded content has no record, so it cannot
-be reloaded. The dry run warns ``unrestorable_removal`` for it, and rollback skips it.
+be reloaded. The dry run warns ``unrestorable_removal`` for it, and rollback skips it;
+after a rollback, every removed item that was not brought back (no source, or
+the reload failed) is reported again as ``unrestorable_removal``, and its
+``unfit`` step stays in ``ApplyResult.steps``.
 
 Plan steps for v2: ``take_over``, ``preset``, ``fit`` and ``unfit`` (the
 one-shot removal), next to v1's ``create`` / ``modify`` / ``delete`` / ``release``.
@@ -636,29 +653,38 @@ with each removed item's label, type and source file.
 Codes
 ~~~~~
 
-Errors (``validate`` reports them; ``plan`` / ``apply`` raise
-:class:`~dazpy.exceptions.RecipeValidationError` before any change):
+Errors (``plan`` / ``apply`` raise :class:`~dazpy.exceptions.RecipeValidationError`
+before any change). ``validate`` with a scene reports the reference and
+compatibility errors; ``ambiguous_node``, ``node_not_found``,
+``take_over_asset_changed``, ``replace_target_missing`` and
+``remove_target_missing`` need the scene's figures and fitted items, so only
+``plan`` / ``apply`` report them:
 
 =================================  ===================================================================
 Code                               Meaning
 =================================  ===================================================================
 ``invalid_asset_ref``              A reference names none of ``path`` / ``product`` / ``sku`` /
-                                   ``find``, or has a ``resolved`` pin without ``path``.
+                                   ``find``, or has a ``resolved`` pin without ``path``. Also a
+                                   preset whose file is a figure, hair / clothing, outfit preset or
+                                   prop (by its CMS content type): use ``asset`` / ``wearing``.
 ``asset_not_found``                The path does not exist on the Studio host, the search found
                                    nothing, or the product has no matching file.
 ``ambiguous_asset``                Several files match. ``allowed`` lists them (``find``:
                                    ``"<product> (<sku>): <path>"``; ``product`` / ``sku``: paths).
-                                   Add ``file`` / ``type`` or pin one.
+                                   Add ``file`` / ``type`` or pin one. A ``find`` whose search
+                                   was cut off (100 candidates, or Studio's cap) never picks one
+                                   of several, even after compatibility narrowing.
 ``content_database_unavailable``   A ``find`` / ``product`` / ``sku`` needs Studio's content
                                    database (CMS) and it is not running. Paths still work.
 ``incompatible_asset``             A preset or fitted item is made for another figure; the message
                                    names its bases and the actor's base. Also when every ``find``
                                    candidate is made for another figure (``allowed`` lists them).
-``ambiguous_node``                 Several figures carry the actor's ``node`` label.
+``ambiguous_node``                 Several figures carry the actor's ``node`` label (even when they
+                                   also share an internal name).
 ``node_not_found``                 No figure has the ``node`` label and the actor has no ``asset`` to
                                    create it from (``suggestion``: a near label).
 ``take_over_asset_changed``        The ``asset`` of a taken-over actor changed; the base figure is
-                                   never replaced.
+                                   never replaced. Adding a ``resolved`` pin is not a change.
 ``replace_target_missing``         A ``replace`` selector matches nothing on its first apply.
 ``remove_target_missing``          A ``remove`` selector matches nothing on its first apply.
 =================================  ===================================================================
@@ -669,7 +695,8 @@ Warnings (never block):
 Code                       Meaning
 =========================  =========================================================================
 ``compatibility_unknown``  No metadata to check an item against the figure (or the actor's base is
-                           unknown); it is loaded unchecked.
+                           unknown, or a preset's file has no content type); it is loaded
+                           unchecked.
 ``pin_mismatch``           A ``resolved`` pin's SKU or product differs from the reference's; the pin
                            is used.
 ``pin_file_missing``       The pinned file is gone; the reference was resolved again.
@@ -680,7 +707,8 @@ Code                       Meaning
 ``similar_node_label``     No figure has the ``node`` label but one is close (``suggestion``); the
                            actor will be created. Labels match exactly.
 ``unrestorable_removal``   An item a ``replace`` / ``remove`` will delete has no recorded source
-                           (hand-loaded), so a failure during removal cannot bring it back.
+                           (hand-loaded), so a failure during removal cannot bring it back. After a
+                           rollback: an item that was removed and not restored.
 ``preset_dropped``         A preset was removed from the list; its effect stays on the figure.
 =========================  =========================================================================
 
