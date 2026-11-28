@@ -18,7 +18,7 @@ class DazBone(DazNode):
     """
 
     @classmethod
-    def _from_locator(cls, client: "DazClient", locator: str, name: str) -> "DazBone":
+    def _from_locator(cls, client: DazClient, locator: str, name: str) -> DazBone:
         """Construct a DazBone from a pre-built skeleton-relative locator."""
         bone = object.__new__(cls)
         DazElement.__init__(bone, client, locator)
@@ -63,9 +63,9 @@ class DazBone(DazNode):
             z: Rotation around the local Z axis.
         """
         self._client.execute(self._nb(
-            f"_node.getXRotControl().setValue({float(x)}); "
-            f"_node.getYRotControl().setValue({float(y)}); "
-            f"_node.getZRotControl().setValue({float(z)});"
+            f"_node.getXRotControl().setValue({ScriptBuilder.js_num(x)}); "
+            f"_node.getYRotControl().setValue({ScriptBuilder.js_num(y)}); "
+            f"_node.getZRotControl().setValue({ScriptBuilder.js_num(z)});"
         ))
 
     @property
@@ -82,7 +82,7 @@ class DazBone(DazNode):
             "return _node.getRotationOrder().toString();"
         )).value
 
-    def get_skeleton(self) -> "DazSkeleton | None":
+    def get_skeleton(self) -> DazSkeleton | None:
         """Return the parent :class:`~dazpy.DazSkeleton`, or ``None``."""
         from ._skeleton import DazSkeleton
         name = self._client.execute(self._nb(

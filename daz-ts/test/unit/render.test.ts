@@ -91,6 +91,17 @@ describe("DazRenderSettings resolution/output/gamma/doubleSided", () => {
     );
   });
 
+  it("setResolution()/setGamma() reject non-finite numbers without a request (yau7.6.5)", async () => {
+    const fetchMock = stubSeq(null);
+    const rs = new DazRenderSettings(new DazClient({ token: "" }));
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      await expect(rs.setResolution(bad, 1080)).rejects.toThrow(RangeError);
+      await expect(rs.setResolution(1920, bad)).rejects.toThrow(RangeError);
+      await expect(rs.setGamma(bad)).rejects.toThrow(RangeError);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("outputPath()/setOutputPath() read/write renderImgFilename", async () => {
     const fetchMock = stubSeq("C:\\out.png", null);
     const rs = new DazRenderSettings(new DazClient({ token: "" }));

@@ -10,7 +10,7 @@ import threading
 import warnings
 from dataclasses import dataclass
 from types import FrameType
-from typing import Callable
+from collections.abc import Callable
 
 from .exceptions import ServerVersionWarning
 
@@ -31,6 +31,18 @@ def parse_version(value: object) -> tuple[int, int] | None:
         return None
     m = re.match(r"\s*v?(\d+)\.(\d+)", value)
     return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+# First plugin version whose POST /render/batch is all-or-nothing: a queue-full
+# 503 enqueued no variants, so an identical resubmit is safe (9qph). Older
+# plugins could queue some variants before failing.
+ATOMIC_RENDER_BATCH_VERSION = (2, 17)
+
+
+def server_at_least(check: VersionCheck | None, version: tuple[int, int]) -> bool:
+    """True when *check* reports a plugin at or above *version*; False if unknown."""
+    parsed = parse_version(check.server_version) if check is not None else None
+    return parsed is not None and parsed >= version
 
 
 def client_version() -> str:

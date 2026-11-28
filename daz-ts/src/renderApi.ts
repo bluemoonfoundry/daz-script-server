@@ -2,6 +2,7 @@
 
 import { DazClient, parseSseStream } from "./client.js";
 import { AuthenticationError, DazTimeoutError, RenderError } from "./exceptions.js";
+import { sleep } from "./sleep.js";
 
 /** A figure and the morph values to apply before rendering. */
 export interface FigureMorphs {
@@ -40,10 +41,6 @@ export interface RenderResult {
   durationMs: number;
   error: string;
   requestId: string;
-}
-
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function figuresToPayload(figures: FigureMorphs[]): Array<{ name: string | null; morphs: Record<string, number> }> {
@@ -165,7 +162,7 @@ async function waitRenderSse(
     if (status === "cancelled") {
       throw new RenderError("Render was cancelled", requestId);
     }
-    await sleepMs(500);
+    await sleep(500);
   }
 
   throw new DazTimeoutError(`Render timed out after ${timeoutMs / 1000}s (requestId=${JSON.stringify(requestId)})`);

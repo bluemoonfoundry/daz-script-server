@@ -1,5 +1,6 @@
 #pragma once
 #include <QtCore/qstring.h>
+#include "ServerConfig.h"
 #include <QtCore/qmap.h>
 #include <QtCore/qqueue.h>
 #include <QtCore/qmutex.h>
@@ -7,8 +8,10 @@
 #include <QtCore/qpair.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qstringlist.h>
+#include <QtCore/qvector.h>
 #include <QtCore/qbytearray.h>
 #include <string>
+#include <functional>
 #include <utility>
 
 // Forward declaration — AsyncRequestManager calls back into the pane via
@@ -33,18 +36,16 @@ class QObject;
 
 class AsyncRequestManager {
 public:
-    static const int DEFAULT_MAX_QUEUE_DEPTH      = 100;
-    static const int DEFAULT_MAX_TRACKED_REQUESTS = 1000;
-    static const int DEFAULT_LOG_TAIL_LINES       = 100;
-    static const int RESULT_POLL_INTERVAL_MS      = 500; // Long-poll sleep interval in getResultJson()
+    static const int DEFAULT_MAX_QUEUE_DEPTH      = ServerConfig::ASYNC_MAX_QUEUE_DEPTH;
+    static const int DEFAULT_MAX_TRACKED_REQUESTS = ServerConfig::ASYNC_MAX_TRACKED_REQUESTS;
+    static const int DEFAULT_LOG_TAIL_LINES       = ServerConfig::ASYNC_LOG_TAIL_LINES;
+    static const int RESULT_POLL_INTERVAL_MS      = ServerConfig::ASYNC_RESULT_POLL_INTERVAL_MS;
 
     // notifyTarget must be a DzScriptServerPane* (QObject subclass).
     // Stored as QObject* to avoid the DAZ header dependency here.
     explicit AsyncRequestManager(QObject* notifyTarget);
 
-    // Config — call before starting server; not guarded (write-once at init).
-    void setMaxQueueDepth(int n)      { m_maxQueueDepth = n; }
-    void setMaxTrackedRequests(int n) { m_maxTrackedRequests = n; }
+    // Limits (fixed at the DEFAULT_* values above).
     int  maxQueueDepth() const        { return m_maxQueueDepth; }
     int  maxTrackedRequests() const   { return m_maxTrackedRequests; }
 
@@ -81,14 +82,31 @@ public:
                                      const QString& correlationId,
                                      const QString& frameReportFile = QString());
 
+    // Enqueue several render jobs all-or-nothing: capacity for every script
+    // is checked and they are enqueued under one lock, so a full queue
+    // rejects the whole batch and enqueues none (9qph). An identical retry
+    // of a rejected batch is therefore safe. On success the returned vector
+    // has one accepted result per script, in order; on failure it holds a
+    // single rejected result carrying the error.
+    QVector<SubmitResult> submitRenderBatch(const QStringList& scriptTexts,
+                                            const QString& idPrefix,
+                                            const QString& correlationId);
+
     // All five methods below are safe to call from HTTP threads. Studio 6 may
     // ingest report JSON here because QJsonDocument is reentrant. Studio 4
     // leaves report parsing to the main-thread completion path because its
     // JsonStd parser constructs a thread-affine QScriptEngine.
     std::pair<int, std::string> getStatusJson(const std::string& requestId);
-    std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec);
-    std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP);
-    std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP);
+    // With doWait, polls until the job is final, timeoutSec passes, or
+    // isClientGone() reports the client disconnected (then stops waiting).
+    std::pair<int, std::string> getResultJson(const std::string& requestId, bool doWait, int timeoutSec,
+                                              const std::function<bool()>& isClientGone = std::function<bool()>());
+    // *cancelledQueuedRender (optional) is set when a render was cancelled
+    // before it started, so the caller can end its progress stream.
+    std::pair<int, std::string> cancelJson(const std::string& requestId, const std::string& clientIP,
+                                           bool* cancelledQueuedRender = nullptr);
+    std::pair<int, std::string> cancelRenderJson(const std::string& requestId, const std::string& clientIP,
+                                                 bool* cancelledQueuedRender = nullptr);
     std::string                 listJson(const std::string& statusFilter);
 
     // ── Artifacts (GET /artifacts/...) — HTTP threads ─────────────────────
@@ -104,10 +122,6 @@ public:
     // Copy of the job's manifest entries and status; false if the job is unknown.
     bool artifactManifest(const std::string& requestId, QVariantList& outEntries,
                           QString& outStatus);
-
-    // Live counters — acquire mutex.
-    int getQueueDepth()   const;
-    int getTotalTracked() const;
 
     // ── Main-thread API ────────────────────────────────────────────────────
 
@@ -141,9 +155,12 @@ public:
     // stale timeout that happened mid-run selects the *_after_* variants (or
     // CANCELLED when a render was actually aborted) instead of discarding the
     // outcome. outWasCancelled is true only when the final status is CANCELLED.
+    // A render whose script ran but reported success:false without a client
+    // cancel (figure gone, render stopped in Studio's UI) is FAILED (rzp1);
+    // outRenderError then holds its error, and is empty otherwise.
     void markCompleted(const QString& id, bool executed, const QVariant& result,
                        const QStringList& output, const QString& error,
-                       bool& outWasCancelled);
+                       bool& outWasCancelled, QString& outRenderError);
 
     // Mark a request CANCELLED (used for queued requests cancelled before
     // they were dequeued, or for immediate queue removal).
@@ -157,7 +174,7 @@ public:
 
     // Remove completed/failed/cancelled entries older than ttlMs.
     // Called from cleanup timer on the main thread. Returns count removed.
-    int cleanupExpired(qint64 ttlMs = 60LL * 60LL * 1000LL);
+    int cleanupExpired(qint64 ttlMs = ServerConfig::ASYNC_RESULT_TTL_SEC * 1000LL);
 
     // Mark any request stuck in RUNNING/CANCEL_REQUESTED for longer than
     // staleMs as STALE. Covers the case where the underlying DazScript call
@@ -248,17 +265,32 @@ private:
     };
 
     std::string statusToString(RequestStatus s) const;
-    std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly);
+    std::pair<int, std::string> cancelImpl(const std::string& requestId, bool renderOnly,
+                                           bool* cancelledQueuedRender);
     static std::string lifecycleTimesJson(const AsyncRequest& req);
     static std::string identityJson(const AsyncRequest& req);
     static std::string activityJson(const AsyncRequest& req);
     static void touchLocked(AsyncRequest& req, qint64 at);
-    void ingestReportFromWorkerLocked(AsyncRequest& req);
+    // HTTP worker, m_mutex NOT held (Studio 6; no-op on Studio 4): reads the
+    // job report's new bytes without the lock, then applies them under it
+    // unless another reader already consumed them (yau7.2.6).
+    void prefetchReport(const QString& id);
+    void prefetchAllReports();
+    // MAIN THREAD (final ingestion in markCompleted), m_mutex held.
     void ingestReportLocked(AsyncRequest& req, bool final = false);
+    // m_mutex held. Applies bytes read from req.reportFile starting at
+    // req.reportOffset (or at 0 when the file was rewritten).
+    void applyReportBytesLocked(AsyncRequest& req, bool rewritten, const QByteArray& data,
+                                const QDateTime& modified, bool final);
     void applyReportEventLocked(AsyncRequest& req, const QVariantMap& event);
     void declareRenderOutputsLocked(AsyncRequest& req, const QVariant& result);
     void appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry);
     std::string observationJson(const AsyncRequest& req) const;
+    // m_mutex held: room for n more queued/tracked jobs? Fills *error if not.
+    bool hasCapacityLocked(int n, QString* error) const;
+    // Takes m_mutex: checks capacity, stamps id/server instance/submit time,
+    // queues req and wakes the main thread. submit() and submitRender().
+    SubmitResult enqueue(AsyncRequest req, const QString& idPrefix);
 
     QObject* m_notifyTarget; // DzScriptServerPane*
 
@@ -268,6 +300,6 @@ private:
     QString                     m_serverInstanceId;
     mutable QMutex              m_mutex;
 
-    int m_maxQueueDepth;
-    int m_maxTrackedRequests;
+    const int m_maxQueueDepth;
+    const int m_maxTrackedRequests;
 };

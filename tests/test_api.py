@@ -14,6 +14,7 @@ Notes:
   - Auth tests are skipped when authentication is disabled in the plugin.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -976,6 +977,39 @@ class TestArtifacts(unittest.TestCase):
         with open(out, "rb") as f:
             self.assertEqual(dl.content, f.read())
 
+    @unittest.skipUnless(os.environ.get("DSS_LIVE_RENDER"),
+                         "set DSS_LIVE_RENDER=1 to run a real viewport render")
+    @unittest.skipUnless(sys.platform == "win32", "needs an unmapped drive letter")
+    def test_render_that_writes_no_file_fails(self):
+        # alaz: a render to an unwritable path (unmapped drive) used to report
+        # "completed" with file_size_bytes 0. It must fail instead.
+        drive = next((c for c in "RQPONMLKJIHGFEDCBA" if not os.path.exists(f"{c}:/")), None)
+        if drive is None:
+            self.skipTest("no unmapped drive letter")
+        out = f"{drive}:/dss_no_such_dir_alaz/x.png"
+        r = requests.post(f"{BASE_URL}/render", headers=auth_headers(), json={
+            "output_path": out, "engine": "viewport", "width": 64, "height": 64,
+        }, timeout=10)
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["request_id"]
+        body = get_result(rid, wait=True, timeout=120).json()
+        self.assertEqual(body.get("status"), "failed", body)
+        self.assertEqual(body.get("error_code"), "SCRIPT_ERROR", body)
+        self.assertIn("no file", body.get("error", ""), body)
+        self.assertEqual(body["observation"]["output_manifest"]["count"], 0, body)
+        # The progress stream keeps its terminal event for late subscribers.
+        sse = requests.get(f"{BASE_URL}/render/{rid}/progress", headers=auth_headers(),
+                           stream=True, timeout=10)
+        # Read to EOF: the stream must end cleanly after its terminal event
+        # (7qv4: it used to abort the connection -> ChunkedEncodingError).
+        try:
+            events = [line for line in sse.iter_lines(decode_unicode=True)
+                      if line.startswith("event:")]
+        finally:
+            sse.close()
+        self.assertEqual(events[-1:], ["event: error"], events)
+        self.assertNotIn("event: complete", events)
+
 
 class TestArtifactRoots(unittest.TestCase):
     """Artifact trust boundary (x7ul.33): GET /artifacts serves a declared
@@ -1687,7 +1721,7 @@ class TestConcurrency(unittest.TestCase):
         busy_ms = 8000
         blocker_result = {}
         blocker = threading.Thread(target=lambda: blocker_result.update(r=execute(script=iife(
-            "var t = Date.now(); while (Date.now() - t < %d) {} return 'done';" % busy_ms))))
+            f"var t = Date.now(); while (Date.now() - t < {busy_ms}) {{}} return 'done';"))))
         blocker.start()
         # Let the blocker be accepted (and so reach the main thread first).
         _, started = poll_until(active, lambda n: n >= 1, timeout=5.0)
@@ -1699,8 +1733,8 @@ class TestConcurrency(unittest.TestCase):
         def queued(i):
             # Writes a marker file if it ever runs; it must not.
             path = os.path.join(marker_dir, f"ran_{i}.txt").replace("\\", "/")
-            script = iife("var f = new DzFile(%r); f.open(DzFile.WriteOnly); "
-                          "f.write('x'); f.close(); return %d;" % (path, i))
+            script = iife(f"var f = new DzFile({path!r}); f.open(DzFile.WriteOnly); "
+                          f"f.write('x'); f.close(); return {i};")
             try:
                 requests.post(f"{BASE_URL}/execute", headers=auth_headers(),
                               json={"script": script}, timeout=1.5)
@@ -1798,6 +1832,273 @@ class TestStress(unittest.TestCase):
         self.assertIn(r.status_code, (400, 200))
         if r.status_code == 200:
             self.assertFalse(r.json().get("success"))
+
+
+# ─── Scene event stream ?filter= ─────────────────────────────────────────────
+
+class _EventStream:
+    """GET /scene/events in a background thread, collecting event types."""
+
+    def __init__(self, query):
+        self.types = []
+        self._resp = requests.get(f"{BASE_URL}/scene/events{query}", headers=auth_headers(),
+                                  stream=True, timeout=(5, 30))
+        self.status = self._resp.status_code
+        self._thread = threading.Thread(target=self._read, daemon=True)
+        self._thread.start()
+
+    def _read(self):
+        try:
+            for line in self._resp.iter_lines(decode_unicode=True):
+                if line and line.startswith("data:"):
+                    try:
+                        self.types.append(json.loads(line[5:]).get("type"))
+                    except ValueError:
+                        pass
+        except Exception:  # noqa: BLE001 - the stream is closed under us on purpose
+            pass
+
+    def close(self):
+        self._resp.close()
+
+
+class TestSceneEventFilter(unittest.TestCase):
+    """The ?filter= value picks the categories a subscriber receives
+    (SceneEventFilter::parse). Moving the playhead one frame (and back) is the
+    trigger: it fires time.changed and leaves the scene as it was."""
+
+    def _stream_while_moving_frame(self, query):
+        stream = _EventStream(query)
+        self.assertEqual(stream.status, 200)
+        try:
+            time.sleep(0.5)  # subscriber registered before the trigger
+            r = execute(script=iife(
+                "var f = Scene.getFrame(); Scene.setFrame(f + 1); Scene.setFrame(f); return f;"))
+            self.assertTrue(r.json().get("success"), r.text)
+            time.sleep(2.0)
+        finally:
+            stream.close()
+        return stream.types
+
+    def test_time_filter_delivers_time_events(self):
+        self.assertIn("time.changed", self._stream_while_moving_frame("?filter=time"))
+
+    def test_other_category_filter_drops_time_events(self):
+        types = self._stream_while_moving_frame("?filter=selection,camera")
+        self.assertNotIn("time.changed", types)
+
+    def test_unknown_or_empty_filter_means_all(self):
+        for query in ("?filter=bogus", "?filter=", ""):
+            with self.subTest(query=query):
+                self.assertIn("time.changed", self._stream_while_moving_frame(query))
+
+
+# ─── Scene save-copy ─────────────────────────────────────────────────────────
+
+class TestSaveCopy(unittest.TestCase):
+    """POST /scene/save-copy. Only the clean-scene path is exercised live: it is
+    a plain file copy. With unsaved changes the handler re-saves over the
+    scene's own file, so the test skips rather than touch the user's scene."""
+
+    def test_missing_path_is_400(self):
+        r = requests.post(f"{BASE_URL}/scene/save-copy", headers=auth_headers(),
+                          json={}, timeout=10)
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(r.json().get("error_code"), "MISSING_FIELD")
+
+    def test_clean_saved_scene_is_copied(self):
+        state = execute(script=iife(
+            "return {file: Scene.getFilename(), dirty: Scene.needsSave()};")).json()
+        self.assertTrue(state.get("success"), state)
+        if not state["result"]["file"] or state["result"]["dirty"]:
+            self.skipTest("needs a saved scene with no unsaved changes")
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "copy.duf").replace("\\", "/")
+            r = requests.post(f"{BASE_URL}/scene/save-copy", headers=auth_headers(),
+                              json={"path": dest}, timeout=60)
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual(body.get("method"), "copy", body)
+            self.assertEqual(body.get("path"), dest)
+            with open(state["result"]["file"], "rb") as a, open(dest, "rb") as b:
+                self.assertEqual(a.read(), b.read())
+
+
+# ─── Geometry frames ─────────────────────────────────────────────────────────
+
+class TestGeometryFrames(unittest.TestCase):
+
+    def test_missing_frames_is_400(self):
+        r = requests.post(f"{BASE_URL}/geometry/frames", headers=auth_headers(),
+                          json={}, timeout=10)
+        self.assertEqual(r.status_code, 400, r.text)
+
+    def test_current_frame_returns_dzgf_payload(self):
+        state = execute(script=iife(
+            "return {frame: Scene.getFrame(), figures: Scene.getNumSkeletons()};")).json()
+        self.assertTrue(state.get("success"), state)
+        if state["result"]["figures"] == 0:
+            self.skipTest("needs a figure in the scene")
+        frame = state["result"]["frame"]
+        r = requests.post(f"{BASE_URL}/geometry/frames", headers=auth_headers(),
+                          json={"frames": [frame], "indices": [0, 1, 2]}, timeout=60)
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        self.assertEqual(r.content[:4], b"DZGF")
+        after = execute(script=iife("return Scene.getFrame();")).json()
+        self.assertEqual(after.get("result"), frame, "playhead must be restored")
+
+
+# ─── Render batch ────────────────────────────────────────────────────────────
+
+class TestRenderBatch(unittest.TestCase):
+    """Two 64x64 viewport variants through POST /render/batch."""
+
+    def test_viewport_batch_completes_each_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outs = [os.path.join(tmp, f"v{i}.png").replace("\\", "/") for i in range(2)]
+            r = requests.post(f"{BASE_URL}/render/batch", headers=auth_headers(), json={
+                "base": {"engine": "viewport", "width": 64, "height": 64},
+                "variants": [{"label": f"v{i}", "output_path": out}
+                             for i, out in enumerate(outs)],
+            }, timeout=10)
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual(body.get("total"), 2, body)
+            self.assertTrue(body.get("batch_id"), body)
+            for rid, out in zip(body["request_ids"], outs):
+                with self.subTest(request_id=rid):
+                    res = get_result(rid, wait=True, timeout=120).json()
+                    self.assertEqual(res.get("status"), "completed", res)
+                    self.assertGreater(os.path.getsize(out), 0)
+
+
+def _set_plugin_route_self_test(enabled):
+    """Toggle the pane's built-in /_selftest/ plugin routes via POST /execute.
+    Returns the script result: true/false, or None when the running plugin
+    predates setPluginRouteSelfTest()."""
+    script = (
+        "(function(){var p = MainWindow.getPaneMgr().findPane('DzScriptServerPane');"
+        " if (!p || typeof p.setPluginRouteSelfTest !== 'function') return null;"
+        " return p.setPluginRouteSelfTest(%s);})()" % ("true" if enabled else "false"))
+    r = requests.post(f"{BASE_URL}/execute", headers=auth_headers(),
+                      json={"script": script}, timeout=10)
+    r.raise_for_status()
+    return r.json().get("result")
+
+
+class TestPluginRoutes(unittest.TestCase):
+    """Companion-plugin routes end to end (ih7u): registerPluginRoute(), the
+    catch-all dispatch in PluginRouteBridge.cpp, the read/write chain's auth,
+    and the slot call on the main thread. A companion plugin is a separate
+    Studio plugin, so this uses the pane's built-in receiver
+    (PluginRouteSelfTest.h), registered through the same public API."""
+
+    PREFIX = "/_selftest/plugin-route"
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            enabled = _set_plugin_route_self_test(True)
+        except requests.exceptions.RequestException as e:
+            raise unittest.SkipTest(f"server unreachable: {e}") from e
+        if enabled is None:
+            raise unittest.SkipTest("plugin predates setPluginRouteSelfTest()")
+        if enabled is not True:
+            raise AssertionError(f"setPluginRouteSelfTest(true) returned {enabled!r}")
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            _set_plugin_route_self_test(False)
+        except requests.exceptions.RequestException:
+            pass
+
+    def call(self, method, path, auth=True, headers=None, **kwargs):
+        headers = {**(auth_headers() if auth else {}), **(headers or {})}
+        return requests.request(method, f"{BASE_URL}{path}", headers=headers,
+                                timeout=10, **kwargs)
+
+    def echo(self, r):
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["slot"], "echo")
+        self.assertTrue(body["ip"], "slot should receive the client IP")
+        return body["body"]
+
+    def test_get_with_path_param_gets_envelope(self):
+        received = json.loads(self.echo(self.call("GET", f"{self.PREFIX}/abc123")))
+        self.assertEqual(received, {"_pathParams": {"id": "abc123"}, "_body": None})
+
+    def test_path_param_with_quote_stays_valid_json(self):
+        # W10: a '"' or '\' in a segment must not break the envelope.
+        received = json.loads(self.echo(self.call("GET", f"{self.PREFIX}/a%22b%5Cc")))
+        self.assertEqual(received["_pathParams"], {"id": 'a"b\\c'})
+
+    def test_post_without_params_gets_raw_body(self):
+        raw = '{"hello": "world", "n": 3}'
+        received = self.echo(self.call("POST", self.PREFIX, data=raw,
+                                       headers={"Content-Type": "application/json"}))
+        self.assertEqual(received, raw)
+
+    def test_put_with_params_wraps_body(self):
+        received = json.loads(self.echo(self.call("PUT", f"{self.PREFIX}/k9",
+                                                  json={"value": [1, 2]})))
+        self.assertEqual(received, {"_pathParams": {"id": "k9"}, "_body": {"value": [1, 2]}})
+
+    @unittest.skipUnless(AUTH_ENABLED, "Authentication is disabled in the running plugin")
+    def test_read_and_write_routes_require_auth(self):
+        for method, path in (("GET", f"{self.PREFIX}/x"), ("POST", self.PREFIX),
+                             ("PUT", f"{self.PREFIX}/x")):
+            with self.subTest(method=method):
+                r = self.call(method, path, auth=False, json={})
+                self.assertEqual(r.status_code, 401, r.text)
+                self.assertEqual(r.json()["error_code"], "AUTH_MISSING_TOKEN")
+
+    @unittest.skipUnless(AUTH_ENABLED, "Authentication is disabled in the running plugin")
+    def test_unknown_path_is_404_before_auth(self):
+        r = self.call("GET", f"{self.PREFIX}/x/extra", auth=False)
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertEqual(r.json()["error_code"], "ROUTE_NOT_FOUND")
+
+    def test_unregistered_method_is_404(self):
+        r = self.call("DELETE", f"{self.PREFIX}/x")
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertEqual(r.json()["error_code"], "ROUTE_NOT_FOUND")
+
+    def test_invalid_status_from_slot_is_500(self):
+        r = self.call("GET", "/_selftest/plugin-route-bad")
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["error_code"], "INTERNAL_ERROR")
+        self.assertIn("invalid HTTP status", r.json()["error"] + r.json().get("detail", ""))
+
+    def test_missing_slot_is_500(self):
+        r = self.call("GET", "/_selftest/plugin-route-noslot")
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["error_code"], "INTERNAL_ERROR")
+
+    def test_deleted_receiver_is_503(self):
+        r = self.call("GET", "/_selftest/plugin-route-gone")
+        self.assertEqual(r.status_code, 503, r.text)
+        self.assertEqual(r.json()["error_code"], "SERVER_UNAVAILABLE")
+
+    def test_capabilities_lists_routes(self):
+        caps = self.call("GET", "/capabilities").json()
+        routes = {(r["method"], r["path"]): r for r in caps["plugin_routes"]}
+        self.assertEqual(routes[("GET", f"{self.PREFIX}/:id")]["owner"], "PluginRouteSelfTest")
+        self.assertIn(("POST", self.PREFIX), routes)
+        self.assertTrue(caps["features"]["companion_plugins"])
+
+    def test_disable_removes_routes(self):
+        try:
+            self.assertIs(_set_plugin_route_self_test(False), True)
+            r = self.call("GET", f"{self.PREFIX}/abc")
+            self.assertEqual(r.status_code, 404, r.text)
+            caps = self.call("GET", "/capabilities").json()
+            self.assertFalse(any(p["path"].startswith("/_selftest/")
+                                 for p in caps["plugin_routes"]))
+        finally:
+            self.assertIs(_set_plugin_route_self_test(True), True)
 
 
 if __name__ == "__main__":

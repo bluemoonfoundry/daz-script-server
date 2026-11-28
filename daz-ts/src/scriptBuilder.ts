@@ -20,18 +20,34 @@ export class ScriptBuilder {
   }
 
   /**
+   * Return a finite number as a DazScript literal. Use this for every number
+   * interpolated into a script: `NaN`/`Infinity` would write garbage into the
+   * scene, so they throw a `RangeError` before any request is sent.
+   */
+  static jsNum(value: number): string {
+    if (!Number.isFinite(value)) {
+      throw new RangeError(`expected a finite number, got ${String(value)}`);
+    }
+    return String(value);
+  }
+
+  /**
    * Serialize an arbitrary argument value for embedding in generated
    * DazScript source. Booleans and numbers become bare literals; strings
-   * and everything else are JSON-encoded.
+   * and everything else are JSON-encoded. Non-finite numbers, bare or
+   * nested, throw a `RangeError` (JSON.stringify would silently emit `null`).
    */
   static serializeArg(value: unknown): string {
     if (typeof value === "boolean") {
       return value ? "true" : "false";
     }
     if (typeof value === "number") {
-      return String(value);
+      return ScriptBuilder.jsNum(value);
     }
-    return JSON.stringify(value);
+    return JSON.stringify(value, (_key, v: unknown) => {
+      if (typeof v === "number") ScriptBuilder.jsNum(v);
+      return v;
+    });
   }
 
   /** DazScript expression that resolves `identifier` via `Scene.findNode`/`.findNodeByLabel`. */

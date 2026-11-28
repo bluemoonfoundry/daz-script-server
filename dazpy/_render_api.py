@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from ._client import DazClient
+from ._sse import iter_sse_events
 from .exceptions import RenderError, TimeoutError
 
 
@@ -99,24 +100,7 @@ def _base_to_dict(b: RenderBase) -> dict:
 
 def _parse_sse_events(response: Any):
     """Yield ``(event_type, data_dict)`` pairs from a streaming SSE response."""
-    event_type = "message"
-    data_lines: list[str] = []
-
-    for raw_line in response.iter_lines():
-        line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
-        if not line:
-            if data_lines:
-                data_str = "\n".join(data_lines)
-                try:
-                    yield event_type, json.loads(data_str)
-                except json.JSONDecodeError:
-                    yield event_type, {"_raw": data_str}
-            event_type = "message"
-            data_lines = []
-        elif line.startswith("event:"):
-            event_type = line[6:].strip()
-        elif line.startswith("data:"):
-            data_lines.append(line[5:].strip())
+    return iter_sse_events(response.iter_lines())
 
 
 def _wait_render_sse(
@@ -136,29 +120,41 @@ def _wait_render_sse(
     when the render starts — the DAZ SDK exposes no intra-frame percent signal).
     """
     deadline = time.monotonic() + timeout
+    # An exception from on_progress is the caller's bug: re-raise it after the
+    # stream is closed rather than treating it as "SSE unavailable".
+    progress_error: BaseException | None = None
 
     # Try SSE first — it delivers the complete event with file_size_bytes.
     try:
         resp = client.stream_render_progress(request_id, stream_timeout=timeout + 5.0)
         if resp is not None:
-            for event_type, data in _parse_sse_events(resp):
-                if time.monotonic() > deadline:
-                    break
-                if event_type == "complete":
-                    return RenderResult(
-                        success=True,
-                        output_path=data.get("output_path", ""),
-                        file_size_bytes=int(data.get("file_size_bytes", -1)),
-                        duration_ms=int(data.get("duration_ms", 0)),
-                    )
-                if event_type == "error":
-                    raise RenderError(data.get("error", "Render failed"), request_id=request_id)
-                if event_type == "progress" and on_progress is not None:
-                    on_progress(data)
+            try:
+                for event_type, data in _parse_sse_events(resp):
+                    if time.monotonic() > deadline:
+                        break
+                    if event_type == "complete":
+                        return RenderResult(
+                            success=True,
+                            output_path=data.get("output_path", ""),
+                            file_size_bytes=int(data.get("file_size_bytes", -1)),
+                            duration_ms=int(data.get("duration_ms", 0)),
+                        )
+                    if event_type == "error":
+                        raise RenderError(data.get("error", "Render failed"), request_id=request_id)
+                    if event_type == "progress" and on_progress is not None:
+                        try:
+                            on_progress(data)
+                        except Exception as exc:
+                            progress_error = exc
+                            break
+            finally:
+                resp.close()
     except (RenderError, TimeoutError):
         raise
     except Exception:
         pass  # SSE unavailable — fall through to polling
+    if progress_error is not None:
+        raise progress_error
 
     # Polling fallback
     while time.monotonic() < deadline:

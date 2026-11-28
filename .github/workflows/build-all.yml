@@ -1,0 +1,146 @@
+name: Build All
+
+# The plugin / wheel / package build set shared by release-tagged.yml,
+# release-nightly.yml and test-build.yml. Releases call it with the defaults
+# (everything, Release); test-build narrows it with platform / sdk-version.
+# Artifact names come from the per-platform workflows and are unchanged.
+
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        description: 'Release or Debug'
+        required: false
+        type: string
+        default: 'Release'
+      platform:
+        description: 'all, windows, macos-intel, macos-arm, dazpy or daz-ts'
+        required: false
+        type: string
+        default: 'all'
+      sdk-version:
+        description: "both, '4' or '6' (plugin builds only)"
+        required: false
+        type: string
+        default: 'both'
+    secrets:
+      sdk-repo-token:
+        description: 'Token for accessing private SDK repository'
+        required: true
+
+# Read-only. A reusable workflow can't exceed this even when its caller
+# grants a job more.
+permissions:
+  contents: read
+
+jobs:
+  build-windows-ds4:
+    name: Windows (DS4)
+    if: (inputs.platform == 'all' || inputs.platform == 'windows') && inputs.sdk-version != '6'
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '4'
+    secrets:
+      sdk-repo-token: ${{ secrets.sdk-repo-token }}
+
+  build-windows-ds6:
+    name: Windows (DS6)
+    if: (inputs.platform == 'all' || inputs.platform == 'windows') && inputs.sdk-version != '4'
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '6'
+    secrets:
+      sdk-repo-token: ${{ secrets.sdk-repo-token }}
+
+  build-macos-intel-ds4:
+    name: macOS Intel (DS4)
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-intel') && inputs.sdk-version != '6'
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: x86_64
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '4'
+    secrets:
+      sdk-repo-token: ${{ secrets.sdk-repo-token }}
+
+  build-macos-arm-ds4:
+    name: macOS Apple Silicon (DS4)
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-arm') && inputs.sdk-version != '6'
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: arm64
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '4'
+    secrets:
+      sdk-repo-token: ${{ secrets.sdk-repo-token }}
+
+  build-macos-ds6:
+    name: macOS (DS6)
+    # One x86_64 build serves Intel and Apple Silicon alike: the 6.26 macOS
+    # SDK's libdzcore.dylib is x86_64-only and DAZ Studio 6 runs under
+    # Rosetta 2 on Apple Silicon (see build-macos.yml).
+    if: (inputs.platform == 'all' || inputs.platform == 'macos-intel' || inputs.platform == 'macos-arm') && inputs.sdk-version != '4'
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      architecture: x86_64
+      configuration: ${{ inputs.configuration }}
+      sdk-version: '6'
+    secrets:
+      sdk-repo-token: ${{ secrets.sdk-repo-token }}
+
+  build-dazpy:
+    name: dazpy wheel
+    if: inputs.platform == 'all' || inputs.platform == 'dazpy'
+    uses: ./.github/workflows/build-dazpy.yml
+
+  build-daz-ts:
+    name: daz-ts package
+    if: inputs.platform == 'all' || inputs.platform == 'daz-ts'
+    uses: ./.github/workflows/build-daz-ts.yml
+
+  # Fails when any requested build failed (skipped ones are fine), so callers
+  # can depend on this one job.
+  summary:
+    name: Build summary
+    needs:
+      - build-windows-ds4
+      - build-windows-ds6
+      - build-macos-intel-ds4
+      - build-macos-arm-ds4
+      - build-macos-ds6
+      - build-dazpy
+      - build-daz-ts
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report results
+        shell: bash
+        env:
+          RESULTS: |
+            Windows (DS4)=${{ needs.build-windows-ds4.result }}
+            Windows (DS6)=${{ needs.build-windows-ds6.result }}
+            macOS Intel (DS4)=${{ needs.build-macos-intel-ds4.result }}
+            macOS Apple Silicon (DS4)=${{ needs.build-macos-arm-ds4.result }}
+            macOS (DS6)=${{ needs.build-macos-ds6.result }}
+            dazpy=${{ needs.build-dazpy.result }}
+            daz-ts=${{ needs.build-daz-ts.result }}
+          PLATFORM: ${{ inputs.platform }}
+          SDK_VERSION: ${{ inputs.sdk-version }}
+          CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          {
+            echo "## Build Summary"
+            echo
+            echo "Platform: $PLATFORM · SDK version: $SDK_VERSION · Configuration: $CONFIGURATION"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          while IFS='=' read -r name result; do
+            [ -z "$name" ] && continue
+            [ "$result" = "skipped" ] && continue
+            echo "- $name: $result" >> "$GITHUB_STEP_SUMMARY"
+            [ "$result" = "success" ] || failed=1
+          done <<< "$RESULTS"
+          exit $failed

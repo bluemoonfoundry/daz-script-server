@@ -42,7 +42,10 @@ public:
     QStringList effectiveRoots() const { return m_aEffective; }
 
     // Folder whose contents are never served. Main thread, server stopped.
-    void setDeniedDir(const QString& dir);
+    // Returns false when the folder's real path can't be resolved now; the
+    // denial still holds (allows() re-resolves per request and refuses every
+    // file while the folder exists but stays unresolvable).
+    bool setDeniedDir(const QString& dir);
 
     // True when the open file may be served. Any thread.
     bool allows(FILE* f) const;
@@ -54,10 +57,12 @@ public:
 
 private:
     static bool isUnder(const QString& path, const QString& root);
+    bool deniedDirAllows(const QString& realFilePath) const;
 
     std::atomic<bool> m_bEnabled;
     QString           m_sRawList;     // main thread only
     QStringList       m_aEffective;   // main thread writes while stopped
     QStringList       m_aResolved;    // read by worker threads
-    QString           m_sDenied;      // resolved; read by worker threads
+    QString           m_sDeniedRaw;   // as given (cleaned); read by worker threads
+    QString           m_sDenied;      // resolved, or empty; read by worker threads
 };

@@ -49,6 +49,27 @@ from dazpy._render_api import _parse_sse_events  # noqa: E402
 from dazpy._script_builder import ScriptBuilder  # noqa: E402
 
 REPORT_SCHEMA = 1
+
+
+def mcp_subprocess_env(base_env, host, port) -> dict:
+    """Env for the mcp stage subprocess. `uv run --project <mcp_dir>` uses the
+    MCP venv, whose dazpy is the last released wheel; put this checkout first
+    on PYTHONPATH so the stage exercises the dazpy under test (k3b0)."""
+    env = dict(base_env, DAZ_HOST=host, DAZ_PORT=str(port))
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT)] + ([existing] if existing else []))
+    return env
+
+
+def is_checkout_dazpy(dazpy_file) -> bool:
+    """True when the dazpy module file the subprocess imported lives in this checkout."""
+    if not dazpy_file:
+        return False
+    try:
+        return Path(dazpy_file).resolve().is_relative_to((ROOT / "dazpy").resolve())
+    except (OSError, ValueError):
+        return False
+
 ALL_STAGES = ("api", "async", "render", "mcp")
 ALL_ENGINES = ("iray", "filament", "viewport")
 RESULTS_DIR = ROOT / "docs" / "smoke-results"
@@ -117,6 +138,10 @@ class Smoke:
             if entry["detail"] is not None:
                 line += f"  -- {_short(entry['detail'])}"
         print(line, flush=True)
+        if entry["status"] == "skip" and os.environ.get("GITHUB_ACTIONS") == "true":
+            # A skip (e.g. an engine that isn't registered) keeps the run green;
+            # annotate it so the workflow summary still shows the gap.
+            print(f"::warning title=live smoke skip::{stage}/{name}: {_short(skip)}", flush=True)
         return entry
 
     def _headers(self, token: str | None = None) -> dict:
@@ -315,7 +340,7 @@ class Smoke:
             if resp is not None:
                 def _watch():
                     try:
-                        for ev_type, data in _parse_sse_events(resp):
+                        for _ev_type, data in _parse_sse_events(resp):
                             t = data.get("type") if isinstance(data, dict) else None
                             if t:
                                 scene_events.append(t)
@@ -514,6 +539,7 @@ class Smoke:
             return
         snippet = r"""
 import asyncio, json, sys
+import dazpy
 from dazpy.aio import AsyncDazClient
 from daz_mcp_server._client import DAZ_API_TOKEN, DAZ_HOST, DAZ_PORT, DAZ_TIMEOUT, set_async_daz_client
 from daz_mcp_server._registry import _REGISTRY, _register_scripts
@@ -522,7 +548,7 @@ from daz_mcp_server.tools.scene import daz_scene_info
 from daz_mcp_server.tools.render import daz_get_render_settings
 
 async def main():
-    out = {}
+    out = {"dazpy_file": dazpy.__file__}
     client = AsyncDazClient(host=DAZ_HOST, port=DAZ_PORT, token=DAZ_API_TOKEN, timeout=DAZ_TIMEOUT)
     set_async_daz_client(client)
     try:
@@ -542,7 +568,7 @@ async def main():
 
 asyncio.run(main())
 """
-        env = dict(os.environ, DAZ_HOST=self.args.host, DAZ_PORT=str(self.args.port))
+        env = mcp_subprocess_env(os.environ, self.args.host, self.args.port)
         state: dict = {}
 
         def launch():
@@ -552,8 +578,10 @@ asyncio.run(main())
             check(line is not None,
                   f"exit {proc.returncode}; stderr tail: {proc.stderr.strip()[-400:]}")
             state.update(json.loads(line[len("SMOKE_JSON "):]))
+            check(is_checkout_dazpy(state.get("dazpy_file")),
+                  f"MCP imported dazpy from {state.get('dazpy_file')}, not this checkout")
             check(state.get("registered", 0) > 0, "MCP registered no scripts")
-            return {"registered": state["registered"]}
+            return {"registered": state["registered"], "dazpy_file": state["dazpy_file"]}
 
         self.run("mcp", "register_scripts", launch)
         for tool in ("daz_status", "daz_scene_info", "daz_get_render_settings"):
@@ -640,7 +668,7 @@ def write_index() -> Path:
                 if order[c["status"]] > order[cur]:
                     cur = c["status"]
                 engines[eng] = cur
-        def cell(stage_or_engine, is_engine=False):
+        def cell(stage_or_engine, is_engine=False, engines=engines, rep=rep):
             if is_engine:
                 return engines.get(stage_or_engine, "-")
             stat = [c["status"] for c in rep.get("checks", []) if c["stage"] == stage_or_engine]

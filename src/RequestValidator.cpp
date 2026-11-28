@@ -1,11 +1,7 @@
 #include "RequestValidator.h"
 #include "JsonStd.h"
 #include <QtCore/qfileinfo.h>
-#if DAZ_SDK_MAJOR_VERSION >= 6
-#include <QtCore/qregularexpression.h>
-#else
-#include <QtCore/qregexp.h>
-#endif
+#include "QtCompat.h"
 
 ValidationResult RequestValidator::validateExecuteFields(
     const QString& scriptFile,
@@ -17,10 +13,12 @@ ValidationResult RequestValidator::validateExecuteFields(
             "Request must include either 'script' (inline code) or 'scriptFile' (absolute path)");
 
     if (!scriptText.isEmpty()) {
-        int maxBytes = maxScriptLengthKB * 1024;
-        if (scriptText.length() > maxBytes) {
+        const int maxBytes = maxScriptLengthKB * 1024;
+        // The limit is in bytes: length() counts UTF-16 units, so measure UTF-8.
+        const int scriptBytes = scriptText.toUtf8().size();
+        if (scriptBytes > maxBytes) {
             std::string detail =
-                "Script is "    + std::to_string(scriptText.length()) +
+                "Script is "    + std::to_string(scriptBytes) +
                 " bytes; maximum is " + std::to_string(maxScriptLengthKB) +
                 " KB (" + std::to_string(maxBytes) + " bytes)";
             return ValidationResult::fail(ErrorCode::SCRIPT_TOO_LARGE, detail);
@@ -47,13 +45,8 @@ ValidationResult RequestValidator::validateScriptName(const QString& name)
     if (name.isEmpty())
         return ValidationResult::fail(ErrorCode::MISSING_FIELD, "Field 'name' is required");
 
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    static const QRegularExpression valid("^[A-Za-z0-9_-]{1,64}$");
-    bool matches = valid.match(name).hasMatch();
-#else
-    QRegExp valid("^[A-Za-z0-9_-]{1,64}$");
-    bool matches = valid.exactMatch(name);
-#endif
+    static const QtCompat::WholeMatch valid("[A-Za-z0-9_-]{1,64}");
+    const bool matches = valid.matches(name);
     if (!matches)
         return ValidationResult::fail(ErrorCode::INVALID_FIELD,
             "Field 'name' must be 1-64 characters: letters, digits, hyphens, underscores only");

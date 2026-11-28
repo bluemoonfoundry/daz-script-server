@@ -5,6 +5,8 @@
 #include <QtCore/qstring.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qatomic.h>
+#include <QtCore/qbytearray.h>
+#include <QtCore/qpointer.h>
 
 // Forward declarations — full definitions in DzScriptServerPane.h
 class AuthenticationService;
@@ -50,6 +52,10 @@ struct HttpContext {
         responseStatus = status;
         responseBody   = body;
     }
+    void respond(int status, const QByteArray& body) {
+        responseStatus = status;
+        responseBody.assign(body.constData(), static_cast<size_t>(body.size()));
+    }
     void setHeader(const std::string& name, const std::string& value) {
         responseHeaders[name] = value;
     }
@@ -71,6 +77,15 @@ public:
 };
 
 // ─── Middleware Chain ─────────────────────────────────────────────────────────
+class DzScriptServerPane;
+
+// WORKER THREAD. Runs a companion plugin's route slot on the main thread
+// through the shared bounded crossing (busy check, queue timeout, receiver
+// checked on the main thread) and answers ctx. Defined in RequestHandlers.cpp.
+void callPluginRouteOnMainThread(DzScriptServerPane* pane, HttpContext& ctx, int queueTimeoutSec,
+                                 const QPointer<QObject>& receiver, const QByteArray& slot,
+                                 const QByteArray& body, const QByteArray& ip);
+
 class MiddlewareChain {
 public:
     ~MiddlewareChain();

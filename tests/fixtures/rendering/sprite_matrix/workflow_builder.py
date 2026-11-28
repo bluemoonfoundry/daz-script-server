@@ -12,7 +12,7 @@ def stable_seed(base_seed: int, combo_id: str, camera: str) -> int:
     """Deterministic per-combo seed so identical inputs reproduce identical
     output on rerun -- keeps the resume-by-file-existence contract coherent
     (a skipped combo would have produced the same image anyway)."""
-    digest = hashlib.sha256(f"{base_seed}:{combo_id}:{camera}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{base_seed}:{combo_id}:{camera}".encode()).hexdigest()
     return (base_seed + int(digest[:8], 16)) % (2**32)
 
 

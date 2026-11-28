@@ -23,7 +23,7 @@ class DazCamera(DazNode):
     def focal_length(self, value: float) -> None:
         script = ScriptBuilder.node_body(
             self._identifier,
-            f"_node.focalLength = {float(value)};"
+            f"_node.focalLength = {ScriptBuilder.js_num(value)};"
         )
         self._client.execute(script)
 
@@ -145,7 +145,7 @@ class DazCamera(DazNode):
     def focal_distance(self, value: float) -> None:
         script = ScriptBuilder.node_body(
             self._identifier,
-            f"_node.focalDistance = {float(value)};"
+            f"_node.focalDistance = {ScriptBuilder.js_num(value)};"
         )
         self._client.execute(script)
 
@@ -159,7 +159,7 @@ class DazCamera(DazNode):
         script = ScriptBuilder.node_body(
             self._identifier,
             f"var _tm = {int(frame)} * Scene.getTimeStep(); "
-            f"_node.getFocalDistanceControl().setDoubleValue(_tm, {float(value)});"
+            f"_node.getFocalDistanceControl().setDoubleValue(_tm, {ScriptBuilder.js_num(value)});"
         )
         self._client.execute(script)
 
@@ -184,7 +184,7 @@ class DazCamera(DazNode):
     def aspect_width(self, value: float) -> None:
         script = ScriptBuilder.node_body(
             self._identifier,
-            f"_node.aspectWidth = {float(value)};"
+            f"_node.aspectWidth = {ScriptBuilder.js_num(value)};"
         )
         self._client.execute(script)
 
@@ -201,7 +201,7 @@ class DazCamera(DazNode):
     def aspect_height(self, value: float) -> None:
         script = ScriptBuilder.node_body(
             self._identifier,
-            f"_node.aspectHeight = {float(value)};"
+            f"_node.aspectHeight = {ScriptBuilder.js_num(value)};"
         )
         self._client.execute(script)
 
@@ -267,7 +267,7 @@ class DazCamera(DazNode):
         """
         script = ScriptBuilder.node_body(
             self._identifier,
-            f"_node.aimAt(new DzVec3({float(x)}, {float(y)}, {float(z)}));"
+            f"_node.aimAt(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         )
         self._client.execute(script)
 

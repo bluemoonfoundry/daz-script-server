@@ -1,23 +1,26 @@
 """Offline (no Studio) validation of scene-recipe documents.
 
-Hand-written walker that mirrors schemas/scene-recipe.v1.schema.json and adds
+Hand-written walker that mirrors schemas/scene-recipe.v{1,2}.schema.json and adds
 cross-reference checks the schema cannot express. Collects every error in one
 pass. Issues are written to be read by an LLM: precise dotted paths
 (``shots[1].camera``), stable codes, the allowed values, and a closest-match
 suggestion for typos.
 
 Actor and prop keys share one namespace (``duplicate_key``).  Reference
-namespaces: ``actor.asset``/``prop.asset`` name an entry in ``assets``; ``shots[].camera`` names a ``cameras`` entry; ``rig.target``,
+namespaces: ``actor.asset``/``prop.asset`` name an entry in ``assets`` (in v2 a string
+that names none is a path reference); ``shots[].camera`` names a ``cameras`` entry; ``rig.target``,
 ``facing``, ``look_at`` and camera ``frame`` name an actor or prop.
 """
 
 from __future__ import annotations
 
-import difflib
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
+from ._asset_ref import ref_issues
+from ._content_types import FRIENDLY_TYPES, is_known_type
+from ._recipe_issue import RecipeIssue, _closest, _join
 from ._recipe_json import to_jsonable
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -30,22 +33,10 @@ _COMPOSITIONS = ("center", "left_third", "right_third")
 
 
 @dataclass(frozen=True)
-class RecipeIssue:
-    path: str
-    code: str
-    message: str
-    allowed: Optional[Tuple[str, ...]] = None
-    suggestion: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        return to_jsonable(self)
-
-
-@dataclass(frozen=True)
 class ValidationReport:
     ok: bool
-    errors: Tuple[RecipeIssue, ...]
-    warnings: Tuple[RecipeIssue, ...]
+    errors: tuple[RecipeIssue, ...]
+    warnings: tuple[RecipeIssue, ...]
 
     def to_dict(self) -> dict:
         return to_jsonable(self)
@@ -58,13 +49,6 @@ def file_not_found(path: str, file: str) -> RecipeIssue:
                        "up in every Daz content directory; other paths must be absolute and exist.")
 
 
-def _closest(name: Any, candidates: Iterable[str]) -> Optional[str]:
-    if not isinstance(name, str):
-        return None
-    m = difflib.get_close_matches(name, list(candidates), n=1, cutoff=0.6)
-    return m[0] if m else None
-
-
 def _is_num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
@@ -74,15 +58,13 @@ def _is_int(v: Any) -> bool:
         isinstance(v, float) and v.is_integer())
 
 
-def _join(base: str, name: str) -> str:
-    return f"{base}.{name}" if base else name
-
-
 class _Validator:
     def __init__(self, data: Any):
         self.data = data
-        self.errors: List[RecipeIssue] = []
-        self.refs: List[Tuple[str, Any, str]] = []  # (path, value, namespace)
+        self.version = 1
+        self.asset_keys: frozenset[str] = frozenset()
+        self.errors: list[RecipeIssue] = []
+        self.refs: list[tuple[str, Any, str]] = []  # (path, value, namespace)
 
     def err(self, path, code, message, allowed=None, suggestion=None):
         self.errors.append(RecipeIssue(
@@ -101,7 +83,7 @@ class _Validator:
             p = _join(path, k)
             if k in reserved:
                 self.err(p, "unsupported_in_version",
-                         f"'{k}' is reserved and not supported in recipe_version 1")
+                         f"'{k}' is reserved and not supported in recipe_version {self.version}")
             else:
                 self.err(p, "unknown_field", f"unknown field '{k}'",
                          allowed=sorted(fields), suggestion=_closest(k, fields))
@@ -174,7 +156,7 @@ class _Validator:
         else:
             self.err(path, "invalid_type", "must be an entity key (string) or [x, y, z]")
 
-    def entities(self, v, path, check) -> Dict[str, Any]:
+    def entities(self, v, path, check) -> dict[str, Any]:
         if not isinstance(v, dict):
             self.err(path, "invalid_type", "must be an object")
             return {}
@@ -202,15 +184,25 @@ class _Validator:
             self.integer(v["iray_samples"], f"{path}.iray_samples", 1)
 
     def asset(self, v, p) -> None:
-        if self.obj(v, p, ("path",), ("path",), ("ref",)) and "path" in v:
+        if self.version >= 2:
+            self.errors.extend(ref_issues(v, p))
+        elif self.obj(v, p, ("path",), ("path",), ("ref",)) and "path" in v:
             self.string(v["path"], f"{p}.path")
 
-    def placed(self, v, p, extra=(), reserved=()) -> bool:
+    def asset_value(self, v, p, ns) -> None:
+        """A placed entity's ``asset``: a key into ``assets`` (v1; v2 when it names one) or,
+        in v2, an inline reference (a string that names no key is a path reference)."""
+        if self.version == 1 or (isinstance(v, str) and v in self.asset_keys):
+            self.ref(v, p, ns)
+        else:
+            self.errors.extend(ref_issues(v, p))
+
+    def placed(self, v, p, extra=(), reserved=(), required=("asset",)) -> bool:
         fields = ("asset", "position", "rotation") + tuple(extra)
-        if not self.obj(v, p, fields, ("asset",), reserved):
+        if not self.obj(v, p, fields, required, reserved):
             return False
         if "asset" in v:
-            self.ref(v["asset"], f"{p}.asset", "asset")
+            self.asset_value(v["asset"], f"{p}.asset", "asset")
         if "position" in v:
             self.vec3(v["position"], f"{p}.position")
         if "rotation" in v:
@@ -218,7 +210,13 @@ class _Validator:
         return True
 
     def actor(self, v, p) -> None:
-        if not self.placed(v, p, ("facing", "pose"), ("blocking", "interaction")):
+        extra = ("facing", "pose") + (("node", "presets", "wearing") if self.version >= 2 else ())
+        required: tuple[str, ...] = ("asset",)
+        if self.version >= 2:
+            required = ()
+            if isinstance(v, dict) and "asset" not in v and "node" not in v:
+                self.err(p, "missing_field", "an actor needs 'asset' or 'node'")
+        if not self.placed(v, p, extra, ("blocking", "interaction"), required):
             return
         if "facing" in v:
             self.ref_or_vec3(v["facing"], f"{p}.facing")
@@ -227,6 +225,90 @@ class _Validator:
         if "facing" in v and "rotation" in v:
             self.err(f"{p}.rotation", "mutually_exclusive",
                      "'facing' and 'rotation' are mutually exclusive; remove one")
+        if "node" in v:
+            self.string(v["node"], f"{p}.node")
+        if "presets" in v:
+            self.presets(v["presets"], f"{p}.presets")
+        if "wearing" in v:
+            self.wearing(v["wearing"], f"{p}.wearing")
+
+    def presets(self, v, p) -> None:
+        if not isinstance(v, list):
+            self.err(p, "invalid_type", "must be an array")
+            return
+        for i, r in enumerate(v):
+            self.errors.extend(ref_issues(r, f"{p}[{i}]"))
+
+    def selector(self, v, p) -> None:
+        if isinstance(v, str):
+            self.string(v, p)
+        elif isinstance(v, dict):
+            if self.obj(v, p, ("type",), ("type",)) and "type" in v:
+                t, tp = v["type"], f"{p}.type"
+                self.string(t, tp)
+                if isinstance(t, str) and t and not is_known_type(t):
+                    self.err(tp, "invalid_value",
+                             f"unknown content type {t!r}; use one of the friendly names or a "
+                             "raw Daz type such as 'Follower/Wardrobe/Belt'",
+                             allowed=sorted(FRIENDLY_TYPES),
+                             suggestion=_closest(t, FRIENDLY_TYPES))
+        else:
+            self.err(p, "invalid_type", "must be a label (string) or {\"type\": T}")
+
+    def wearing(self, v, p) -> None:
+        if not isinstance(v, list):
+            self.err(p, "invalid_type", "must be an array")
+            return
+        seen: dict[str, int] = {}
+        for i, e in enumerate(v):
+            ep = f"{p}[{i}]"
+            if not isinstance(e, dict):
+                self.err(ep, "invalid_type", "must be an object")
+                continue
+            ops = [k for k in ("add", "replace", "remove") if k in e]
+            if not ops:
+                self.err(ep, "missing_field", "needs one of 'add', 'replace', 'remove'",
+                         allowed=("add", "replace", "remove"))
+            elif len(ops) > 1:
+                self.err(ep, "mutually_exclusive",
+                         f"{' and '.join(repr(o) for o in ops)} are mutually exclusive; "
+                         "use one operation per entry")
+            op = ops[0] if len(ops) == 1 else None
+            fields = {"add": ("add", "key", "if_missing"),
+                      "replace": ("replace", "with", "key", "if_missing"),
+                      "remove": ("remove", "if_missing"),
+                      None: ("add", "replace", "remove", "with", "key", "if_missing")}[op]
+            required = {"add": ("key",), "replace": ("with", "key")}.get(op or "", ())
+            self.obj(e, ep, fields, required)
+            if "add" in e:
+                self.errors.extend(ref_issues(e["add"], f"{ep}.add"))
+            if "with" in e:
+                self.errors.extend(ref_issues(e["with"], f"{ep}.with"))
+            if "replace" in e:
+                self.selector(e["replace"], f"{ep}.replace")
+            if "remove" in e:
+                self.selector(e["remove"], f"{ep}.remove")
+            if "key" in e:
+                self.wearing_key(e["key"], f"{ep}.key", i, seen)
+            if "if_missing" in e and op is not None:
+                ok = {"add": (), "replace": ("add", "error"), "remove": ("ignore", "error")}[op]
+                if e["if_missing"] not in ok:
+                    self.err(f"{ep}.if_missing", "invalid_value",
+                             f"'if_missing' on {op!r} must be one of {list(ok)}" if ok else
+                             "'if_missing' is not allowed on 'add'",
+                             allowed=ok, suggestion=_closest(e["if_missing"], ok))
+
+    def wearing_key(self, k, p, i, seen) -> None:
+        if not isinstance(k, str):
+            self.err(p, "invalid_type", "must be a string")
+        elif not _KEY_RE.match(k):
+            self.err(p, "invalid_id", "must match ^[A-Za-z0-9_-]{1,64}$")
+        elif k in seen:
+            self.err(p, "duplicate_key",
+                     f"wearing key '{k}' is already used by wearing[{seen[k]}]; keys are "
+                     "unique within an actor")
+        else:
+            seen[k] = i
 
     def prop(self, v, p) -> None:
         self.placed(v, p)
@@ -360,11 +442,11 @@ class _Validator:
                      "camera needs 'frame' (auto-framing) or 'position' plus "
                      "'look_at'/'rotation' (explicit)")
 
-    def shots(self, v, path) -> List[Any]:
+    def shots(self, v, path) -> list[Any]:
         if not isinstance(v, list):
             self.err(path, "invalid_type", "must be an array")
             return []
-        seen: Dict[str, int] = {}
+        seen: dict[str, int] = {}
         for i, s in enumerate(v):
             p = f"{path}[{i}]"
             if not self.obj(s, p, ("id", "camera", "output", "render", "allow_crop"),
@@ -400,18 +482,21 @@ class _Validator:
         if "recipe_version" in d:
             rv = d["recipe_version"]
             if isinstance(rv, bool) or not isinstance(rv, int):
-                self.err("recipe_version", "invalid_type", "must be the integer 1")
+                self.err("recipe_version", "invalid_type", "must be the integer 1 or 2")
                 return
-            if rv != 1:
+            if rv not in (1, 2):
                 self.err("recipe_version", "unsupported_version",
-                         f"recipe_version {rv} is not supported; this dazpy reads version 1",
-                         allowed=("1",))
+                         f"recipe_version {rv} is not supported; this dazpy reads versions 1 and 2",
+                         allowed=("1", "2"))
                 return
+            self.version = rv
         top = ("recipe_version", "id", "assets", "actors", "props", "lighting", "cameras",
                "shots", "render")
         self.obj(d, "", top, ("recipe_version", "id"), ("checks",))
         if "id" in d:
             self.string(d["id"], "id")
+        if isinstance(d.get("assets"), dict):
+            self.asset_keys = frozenset(d["assets"])
         assets = self.entities(d["assets"], "assets", self.asset) if "assets" in d else {}
         actors = self.entities(d["actors"], "actors", self.actor) if "actors" in d else {}
         props = self.entities(d["props"], "props", self.prop) if "props" in d else {}

@@ -7,80 +7,31 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+# Read-only by default, so the build jobs (reusable workflows) get no write
+# scopes. Only create-nightly-release is granted more.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-windows-ds4:
-    name: Build Windows Plugin (DS4)
-    uses: ./.github/workflows/build-windows.yml
-    with:
-      configuration: Release
-      sdk-version: '4'
+  build:
+    name: Build plugins, dazpy and daz-ts
+    uses: ./.github/workflows/build-all.yml
     secrets:
       sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-windows-ds6:
-    name: Build Windows Plugin (DS6)
-    uses: ./.github/workflows/build-windows.yml
-    with:
-      configuration: Release
-      sdk-version: '6'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-intel-ds4:
-    name: Build macOS Intel Plugin (DS4)
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: x86_64
-      configuration: Release
-      sdk-version: '4'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-arm-ds4:
-    name: Build macOS Apple Silicon Plugin (DS4)
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: arm64
-      configuration: Release
-      sdk-version: '4'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-macos-ds6:
-    name: Build macOS Plugin (DS6)
-    # One x86_64 build serves Intel and Apple Silicon alike: the 6.26 macOS
-    # SDK's libdzcore.dylib is x86_64-only and DAZ Studio 6 runs under
-    # Rosetta 2 on Apple Silicon (see build-macos.yml).
-    uses: ./.github/workflows/build-macos.yml
-    with:
-      architecture: x86_64
-      configuration: Release
-      sdk-version: '6'
-    secrets:
-      sdk-repo-token: ${{ secrets.SDK_REPO_TOKEN }}
-
-  build-dazpy:
-    name: Build dazpy Wheel
-    uses: ./.github/workflows/build-dazpy.yml
-
-  build-daz-ts:
-    name: Build daz-ts Package
-    uses: ./.github/workflows/build-daz-ts.yml
 
   create-nightly-release:
     name: Create Nightly Release
     needs:
-      - build-windows-ds4
-      - build-windows-ds6
-      - build-macos-intel-ds4
-      - build-macos-arm-ds4
-      - build-macos-ds6
-      - build-dazpy
-      - build-daz-ts
+      - build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # delete the previous nightly, create the new release
+    # An explicit `shell: bash` runs steps with -eo pipefail (the implicit
+    # default is plain `bash -e`), so a failing command mid-pipeline fails
+    # the step instead of being masked by the last command's exit status.
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
@@ -91,9 +42,15 @@ jobs:
       - name: Get previous nightly date
         id: prev-nightly
         run: |
-          # Try to get the previous nightly release
-          PREV_NIGHTLY=$(gh release list --limit 100 --json tagName,createdAt --jq '.[] | select(.tagName | startswith("nightly-")) | .tagName' | head -1 || echo "")
-          echo "prev-nightly=$PREV_NIGHTLY" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          # Newest nightly tag, or empty when there is none. A gh failure
+          # (auth, API outage) fails the step rather than reading as "no
+          # previous nightly", which would leave the old release undeleted.
+          # jq picks the first match itself: piping to `head -1` under
+          # pipefail could fail on SIGPIPE.
+          PREV_NIGHTLY=$(gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | reverse | (first // {}) | .tagName // ""')
+          echo "prev-nightly=$PREV_NIGHTLY" >> "$GITHUB_OUTPUT"
 
           if [ -z "$PREV_NIGHTLY" ]; then
             echo "No previous nightly found"
@@ -220,10 +177,12 @@ jobs:
       - name: Delete previous nightly release
         if: steps.commits.outputs.has-commits == 'true' && steps.prev-nightly.outputs.prev-nightly != ''
         run: |
-          echo "Deleting previous nightly release: ${{ steps.prev-nightly.outputs.prev-nightly }}"
-          gh release delete ${{ steps.prev-nightly.outputs.prev-nightly }} --yes --cleanup-tag || true
+          set -euo pipefail
+          echo "Deleting previous nightly release: $PREV_NIGHTLY"
+          gh release delete "$PREV_NIGHTLY" --yes --cleanup-tag
         env:
           GH_TOKEN: ${{ github.token }}
+          PREV_NIGHTLY: ${{ steps.prev-nightly.outputs.prev-nightly }}
 
       - name: Create Nightly Release
         if: steps.commits.outputs.has-commits == 'true'

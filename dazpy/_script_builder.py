@@ -1,4 +1,5 @@
 import json
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,18 +12,47 @@ class ScriptBuilder:
         return json.dumps(value)
 
     @staticmethod
+    def to_js(value: object) -> str:
+        """*value* as a JSON literal to embed in a script.
+
+        Use this, not ``json.dumps``, for every value interpolated into a
+        script: ``json.dumps`` writes nan/inf as ``NaN``/``Infinity``, which
+        DazScript accepts and would write into the scene. Raises
+        ``ValueError`` on a non-finite number anywhere in *value*.
+        """
+        try:
+            return json.dumps(value, allow_nan=False)
+        except ValueError:
+            raise ValueError(f"expected only finite numbers, got {value!r}") from None
+
+    @staticmethod
     def iife(body: str) -> str:
         return f"(function(){{\n{body}\n}})()"
+
+    @staticmethod
+    def js_num(value: object) -> str:
+        """A finite number as a DazScript literal.
+
+        Use this for every number interpolated into a script. ``str(nan)`` is
+        ``nan``, which DazScript reads as an undefined identifier, and
+        ``NaN``/``Infinity`` would write garbage into the scene, so non-finite
+        values raise ``ValueError`` before any request is sent.
+        """
+        number = float(value)  # type: ignore[arg-type]
+        if not math.isfinite(number):
+            raise ValueError(f"expected a finite number, got {value!r}")
+        return repr(number)
 
     @staticmethod
     def serialize_arg(value: object) -> str:
         if isinstance(value, bool):
             return "true" if value else "false"
-        if isinstance(value, (int, float)):
+        if isinstance(value, int):
             return str(value)
-        if isinstance(value, str):
-            return json.dumps(value)
-        return json.dumps(value)
+        if isinstance(value, float):
+            return ScriptBuilder.js_num(value)
+        # allow_nan=False: NaN/Infinity inside a list or dict raise ValueError.
+        return ScriptBuilder.to_js(value)
 
     @staticmethod
     def find_node_expr(identifier: "NodeIdentifier") -> str:

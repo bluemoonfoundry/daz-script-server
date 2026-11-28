@@ -4,9 +4,12 @@ Verifies that the ownership records dazpy.recipe stores in Daz data items
 survive a scene save, clear and reload, plus a few behaviours the recipe
 store depends on.  Kept as a diagnostic.
 
-    python scripts/spikes/recipe_data_item_spike.py --phase write --scene-path C:/temp/recipe_spike.duf
-    python scripts/spikes/recipe_data_item_spike.py --phase read  --scene-path C:/temp/recipe_spike.duf
-    python scripts/spikes/recipe_data_item_spike.py --phase probe   # extra checks, needs Genesis 9 installed
+    python scripts/spikes/recipe_data_item_spike.py --phase write
+    python scripts/spikes/recipe_data_item_spike.py --phase read
+    python scripts/spikes/recipe_data_item_spike.py --phase probe [--figure /People/.../X.duf]
+
+--scene-path defaults to recipe_spike.duf in the system temp dir. --figure is a
+content-library path; the default needs Genesis 9 installed.
 
 ``read`` clears the scene first (Scene.clear(), no save prompt), then loads.
 """
@@ -17,13 +20,14 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 from dazpy import DazClient, DazScene  # noqa: E402
 from dazpy._script_builder import ScriptBuilder  # noqa: E402
 
-G9 = "/People/Genesis 9/Genesis 9.duf"
+DEFAULT_FIGURE = "/People/Genesis 9/Genesis 9.duf"
 
 _WRITE = """
 var node = new DzNode();
@@ -137,13 +141,13 @@ return {copy: copy.name, copy_has_item: !!it,
 """
 
 
-def phase_probe(client: DazClient, duplicate: bool = False) -> None:
+def phase_probe(client: DazClient, duplicate: bool = False, figure: str = DEFAULT_FIGURE) -> None:
     report: dict = {}
-    path = _resolve(client, G9)
-    report["g9_resolved"] = path
+    path = _resolve(client, figure)
+    report["figure_resolved"] = path
     if not path:
         print(json.dumps(report, indent=2))
-        raise SystemExit("Genesis 9 not found in the content library")
+        raise SystemExit(f"{figure} not found in the content library (pass --figure)")
     _clear(client)
     esc = ScriptBuilder.escape_string(path)
     first = _run(client, _LOAD % esc)
@@ -175,7 +179,9 @@ def main() -> None:
     ap.add_argument("--phase", choices=["write", "read", "probe"], required=True)
     ap.add_argument("--duplicate", action="store_true",
                     help="probe: also trigger Duplicate Node(s) on a tagged figure")
-    ap.add_argument("--scene-path", default="C:/temp/recipe_spike.duf")
+    ap.add_argument("--scene-path", default=os.path.join(tempfile.gettempdir(), "recipe_spike.duf"))
+    ap.add_argument("--figure", default=DEFAULT_FIGURE,
+                    help="probe: content-library path of a figure to load")
     a = ap.parse_args()
     kwargs = {}
     if a.token_file:
@@ -188,7 +194,7 @@ def main() -> None:
     elif a.phase == "read":
         phase_read(client, a.scene_path)
     else:
-        phase_probe(client, a.duplicate)
+        phase_probe(client, a.duplicate, a.figure)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ Each builder is a thin adapter over the typed models in :mod:`dazpy.shots`:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .math3 import Vec3
 from .shots import (
@@ -70,7 +70,7 @@ class CinematicStaticShot:
     """
 
     position: Vec3
-    look_at: "Vec3 | DazNode | None" = None
+    look_at: Vec3 | DazNode | None = None
     look_at_offset_cm: float = 0.0
     rotation: tuple[float, float, float] | None = None
     focal_length: float = 50.0
@@ -95,12 +95,12 @@ class CinematicStaticShot:
 
 
 def apply_static_shot(
-    scene: "DazScene",
+    scene: DazScene,
     shot: CinematicStaticShot,
     *,
-    camera: "DazCamera | None" = None,
+    camera: DazCamera | None = None,
     name: str | None = None,
-) -> "DazCamera":
+) -> DazCamera:
     """Place and configure a camera for *shot* in a single HTTP-round-trip set.
 
     Args:
@@ -158,7 +158,7 @@ class OrbitCamera:
             radius aimed straight at it risks clipping the head.
     """
 
-    target: "Vec3 | DazNode"
+    target: Vec3 | DazNode
     radius: float
     elevation_deg: float = 15.0
     start_azimuth_deg: float = 0.0
@@ -186,12 +186,12 @@ class OrbitCamera:
 
 
 def apply_orbit_camera(
-    scene: "DazScene",
+    scene: DazScene,
     orbit: OrbitCamera,
     *,
-    camera: "DazCamera | None" = None,
+    camera: DazCamera | None = None,
     name: str | None = None,
-) -> "DazCamera":
+) -> DazCamera:
     """Sweep a camera around *orbit.target* across its frame range.
 
     Side effects: this widens/sets the scene's animation range to
@@ -250,7 +250,7 @@ class FrameSubject:
             root/hip joint rather than chest/head height).
     """
 
-    subject: "Vec3 | DazNode"
+    subject: Vec3 | DazNode
     shot_type: str = "medium"
     azimuth_deg: float = 0.0
     elevation_deg: float = 10.0
@@ -283,12 +283,12 @@ class FrameSubject:
 
 
 def apply_frame_subject(
-    scene: "DazScene",
+    scene: DazScene,
     frame: FrameSubject,
     *,
-    camera: "DazCamera | None" = None,
+    camera: DazCamera | None = None,
     name: str | None = None,
-) -> "DazCamera":
+) -> DazCamera:
     """Place and aim a camera to frame *frame.subject* at its shot distance.
 
     Args:
@@ -342,7 +342,7 @@ class CinematicAnimatedShot:
     focal_length: float = 50.0
     depth_of_field: bool = False
     focal_distance: float | None = None
-    easing: Optional[CameraEasing] = None
+    easing: CameraEasing | None = None
 
     def to_shot(self, shot_id: str = "animated") -> Shot:
         """The equivalent :class:`~dazpy.shots.Shot`.
@@ -361,12 +361,12 @@ class CinematicAnimatedShot:
 
 
 def apply_animated_shot(
-    scene: "DazScene",
+    scene: DazScene,
     shot: CinematicAnimatedShot,
     *,
-    camera: "DazCamera | None" = None,
+    camera: DazCamera | None = None,
     name: str | None = None,
-) -> "DazCamera":
+) -> DazCamera:
     """Write *shot.keyframes* as real DAZ Studio keyframes on a camera.
 
     Side effects: clears any existing keys on the camera's position

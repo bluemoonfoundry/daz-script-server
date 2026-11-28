@@ -724,8 +724,8 @@ export function pullOut(positions: Positions, subject: string, opts: PushInOptio
   return pushIn(positions, subject, { ...opts, fromSize: opts.fromSize ?? "close_up", toSize: opts.toSize ?? "wide" });
 }
 
-/** Python's `round()`: half to even. */
-function roundHalfEven(x: number): number {
+/** Python's `round()`: half to even. @internal */
+export function roundHalfEven(x: number): number {
   const r = Math.round(x);
   return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
 }
@@ -990,7 +990,7 @@ export function checkThirtyDegree(shots: readonly Shot[], positions?: Positions,
       issues.push(new ContinuityIssue(
         "thirty_degree",
         shots[i].id,
-        `cut from '${shots[i - 1].id}' moves the camera only ${angle.toFixed(0)} degrees at a similar size`,
+        `cut from '${shots[i - 1].id}' moves the camera only ${roundHalfEven(angle)} degrees at a similar size`,
         shots[i - 1].id,
       ));
     }

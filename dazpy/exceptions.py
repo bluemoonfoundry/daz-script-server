@@ -1,9 +1,18 @@
+"""dazpy exception hierarchy. Every SDK error derives from :class:`DazError`."""
+
+import builtins
+
+
 class DazError(Exception):
     """Base class for all dazpy exceptions."""
 
 
-class ConnectionError(DazError):
-    """Raised when the SDK cannot reach the DAZ Studio Script Server."""
+class ConnectionError(DazError, builtins.ConnectionError):  # noqa: A001
+    """Raised when the SDK cannot reach the DAZ Studio Script Server.
+
+    Also a :class:`builtins.ConnectionError`, so a plain
+    ``except ConnectionError:`` catches it too.
+    """
 
 
 class AuthenticationError(DazError):
@@ -35,15 +44,18 @@ class ServerResponseError(DazError):
         detail: Optional structured detail from the server response.
         retryable: True when the server says an identical retry may succeed
             (e.g. queue full, ``IDEMPOTENCY_KEY_IN_FLIGHT``).
+        retry_after: Seconds from the response's ``Retry-After`` header, or
+            0.0 when the server sent none.
     """
 
     def __init__(self, message: str, status_code: int, error_code: str = "", detail: str = "",
-                 retryable: bool = False):
+                 retryable: bool = False, retry_after: float = 0.0):
         super().__init__(message)
         self.status_code = status_code
         self.error_code = error_code
         self.detail = detail
         self.retryable = retryable
+        self.retry_after = retry_after
 
 
 class DazBusyError(DazError):
@@ -116,8 +128,12 @@ class ScriptRuntimeError(ScriptError):
     """Raised when a DazScript execution fails at runtime (TypeError, ReferenceError, etc.)."""
 
 
-class TimeoutError(DazError):
-    """Raised when an HTTP request or async poll exceeds its timeout."""
+class TimeoutError(DazError, builtins.TimeoutError):  # noqa: A001
+    """Raised when an HTTP request or async poll exceeds its timeout.
+
+    Also a :class:`builtins.TimeoutError`, so a plain ``except TimeoutError:``
+    catches it too.
+    """
 
 
 class NodeNotFoundError(DazError):

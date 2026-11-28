@@ -49,6 +49,15 @@ bool seek(FILE* f, qint64 offset);
 // MIME type by file extension; "application/octet-stream" when unknown.
 const char* contentTypeFor(const QString& path);
 
+// True for types a browser runs script in when opened as a document under the
+// API origin (svg, xml, xhtml, html). serve() sends kScriptableCsp with them.
+bool isScriptable(const QString& path);
+extern const char* const kScriptableCsp;
+
+// Lower-cased extension of the final path component, without the dot;
+// empty when the name has none ("dir.x/file" has none).
+QString extensionOf(const QString& path);
+
 // Final path component of a '/' or '\' separated path.
 QString baseName(const QString& path);
 

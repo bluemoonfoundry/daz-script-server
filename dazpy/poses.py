@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from ._skeleton import DazSkeleton
 
 
-def apply_pose(skeleton: "DazSkeleton", pose: "DazPose | str | Path") -> None:
+def apply_pose(skeleton: DazSkeleton, pose: DazPose | str | Path) -> None:
     """Apply *pose* to *skeleton* in a single HTTP call.
 
     Args:
@@ -31,7 +31,7 @@ def apply_pose(skeleton: "DazSkeleton", pose: "DazPose | str | Path") -> None:
     pose.apply(skeleton)
 
 
-def reset_transforms(node: "DazNode") -> None:
+def reset_transforms(node: DazNode) -> None:
     """Reset *node*'s local position and rotation to zero, and scale to 1.0.
 
     Works on any :class:`~dazpy.DazNode` — camera, prop, or figure root.
@@ -47,7 +47,7 @@ def reset_transforms(node: "DazNode") -> None:
     )
 
 
-def zero_figure(skeleton: "DazSkeleton", *, include_props: bool = False) -> None:
+def zero_figure(skeleton: DazSkeleton, *, include_props: bool = False) -> None:
     """Drive every bone rotation and morph on *skeleton* to zero.
 
     The default (``include_props=False``) is what guarantees this function

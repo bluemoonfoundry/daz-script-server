@@ -8,7 +8,12 @@ last-observed (``observed``) channel values.  A scene-level data item
 
 This is the data-item backend.  Another backend only has to provide the same
 three script builders and a ``read_live`` returning :class:`LiveState`.
-Nodes are addressed by Daz node name (``getName()``), assumed unique per scene.
+Nodes the recipe created are addressed by Daz node name (``getName()``, made
+unique when they were created).  Nodes it did not create (taken-over figures,
+hand-loaded items) share names whenever a file is loaded twice, so they are
+addressed by a *node ref* ``"elementID:<id>"`` (:func:`eid_ref`), the element ID
+read from the scene; every recipe script resolves a ref by element ID
+(:func:`find_node_js`), never by name (final review C1).
 
 Observed-channel conventions (controller ruling): ``transform.position`` is
 world (``getWSPos``); ``transform.rotation`` is the node's LOCAL X/Y/Z rotation
@@ -75,17 +80,43 @@ class EntityRecord:
     # Names of the non-bone descendants the asset loaded with (Genesis 9's eyes,
     # mouth, lashes...): part of the entity, never the user's foreign children.
     native: tuple[str, ...] = ()
+    # Asset-ref provenance (spec section 9); omitted from JSON while at their defaults.
+    source: dict | None = None
+    group: str | None = None            # the record path when several nodes form one entity
+    primary: bool = True                # the node a group is keyed on
+    adopted_from_scene: bool = False
+    members: tuple[str, ...] = ()       # every node name of the group as created, primary first
+    # One-shot log on actor records: {"entry", "op", "removed": [{"label","type","source_path"}]}
+    done: tuple[dict, ...] = ()
+    # Fitted items: the node's getAssetUriForNode file part (its .dsf data file)
+    # recorded at fit time, for source-change drift (spec 9, 15.2).
+    asset_uri: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
+        d = asdict(self)
+        for key, default in _RECORD_DEFAULTS.items():
+            if d[key] == default or (key in ("done", "members") and not d[key]):
+                del d[key]
+        return json.dumps(d, sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "EntityRecord":
+    def from_json(cls, s: str) -> EntityRecord:
         d = json.loads(s)
         return cls(recipe_id=d["recipe_id"], path=d["path"],
                    recipe_version=int(d["recipe_version"]),
                    desired=d.get("desired") or {}, observed=d.get("observed") or {},
-                   native=tuple(d.get("native") or ()))
+                   native=tuple(d.get("native") or ()),
+                   source=d.get("source") or None, group=d.get("group") or None,
+                   primary=bool(d.get("primary", True)),
+                   adopted_from_scene=bool(d.get("adopted_from_scene", False)),
+                   members=tuple(d.get("members") or ()),
+                   done=tuple(d.get("done") or ()),
+                   asset_uri=d.get("asset_uri") or None)
+
+
+_RECORD_DEFAULTS: dict = {"source": None, "group": None, "primary": True,
+                          "adopted_from_scene": False, "members": (), "done": (),
+                          "asset_uri": None}
 
 
 @dataclass(frozen=True)
@@ -110,7 +141,7 @@ class Manifest:
         }, sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "Manifest":
+    def from_json(cls, s: str) -> Manifest:
         d = json.loads(s)
         env = d.get("environment")
         return cls(recipe_id=d["recipe_id"], entities=tuple(d.get("entities") or ()),
@@ -128,6 +159,10 @@ class LiveEntity:
     foreign_children: tuple[str, ...]
     element_id: int | None = None
     label: str | None = None  # the node's current label (the user may have renamed it)
+    group_nodes: tuple[str, ...] = ()  # surviving nodes of a group, primary first
+    missing_members: tuple[str, ...] = ()  # recorded group members no longer in the scene
+    # groups only: (member, its foreign children) for members that have any
+    foreign_by_node: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -151,13 +186,65 @@ class LiveState:
     duplicates: tuple[DuplicateRecord, ...] = ()
 
 
+# ── node refs ─────────────────────────────────────────────────────────────────
+
+EID_PREFIX = "elementID:"
+
+# The element ID of a node: getElementID() where it exists, else the numeric
+# elementID property (DS4 has no getElementID(), spec 15.2); "" if neither.
+_EID_OF_JS = ('((typeof {n}.getElementID === "function") ? String({n}.getElementID()) : '
+              '(typeof {n}.elementID === "number" ? String({n}.elementID) : ""))')
+
+
+def eid_ref(element_id: object) -> str | None:
+    """The node ref for *element_id* (``"elementID:<id>"``), None when it is not
+    a numeric id (e.g. a name that ``_key`` fell back to)."""
+    text = str(element_id).strip() if element_id is not None else ""
+    return f"{EID_PREFIX}{text}" if text.isdigit() else None
+
+
+def is_eid_ref(ref: str) -> bool:
+    return ref.startswith(EID_PREFIX) and ref[len(EID_PREFIX):].isdigit()
+
+
+def node_ident(ref: str) -> NodeIdentifier:
+    """The dazpy :class:`NodeIdentifier` for a node name or node ref."""
+    if is_eid_ref(ref):
+        return NodeIdentifier(ref[len(EID_PREFIX):], kind="element_id")
+    return NodeIdentifier(ref)
+
+
+def find_node_js(ref: str) -> str:
+    """JS expression finding the node *ref* names: ``Scene.findNode(name)`` for a
+    name (unchanged), a scan comparing element IDs for an ``elementID:`` ref."""
+    if not is_eid_ref(ref):
+        return f"Scene.findNode({ScriptBuilder.escape_string(ref)})"
+    eid = ScriptBuilder.escape_string(ref[len(EID_PREFIX):])
+    return ("(function(_id) { var _l = Scene.getNodeList(); "
+            "for (var _q = 0; _q < _l.length; _q++) "
+            f"if ({_EID_OF_JS.format(n='_l[_q]')} === _id) return _l[_q]; "
+            f"return null; }})({eid})")
+
+
+# JS ``_findRef(ref)``: find_node_js for refs held in a script variable.
+FIND_REF_JS = f"""
+function _findRef(_r) {{
+    var _p = {ScriptBuilder.escape_string(EID_PREFIX)};
+    if (_r.indexOf(_p) !== 0) return Scene.findNode(_r);
+    var _id = _r.substring(_p.length), _l = Scene.getNodeList();
+    for (var _q = 0; _q < _l.length; _q++)
+        if ({_EID_OF_JS.format(n='_l[_q]')} === _id) return _l[_q];
+    return null;
+}}"""
+
+
 # ── script builders ───────────────────────────────────────────────────────────
 
 def write_record_script(node_name: str, record: EntityRecord) -> str:
     """Script attaching *record* to the node, replacing any existing record."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 var _old = _node.findDataItem({esc(DATA_ITEM_NAME)});
 if (_old) _node.removeDataItem(_old);
@@ -171,7 +258,7 @@ def remove_record_script(node_name: str) -> str:
     """Script removing the ownership record from the node (no-op if absent)."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 var _old = _node.findDataItem({esc(DATA_ITEM_NAME)});
 if (!_old) return false;
@@ -240,7 +327,7 @@ function _environment() {{
 def observe_node_script(node_name: str) -> str:
     """Script returning one node's observable channel values (null if missing)."""
     return ScriptBuilder.iife(f"""{_OBSERVE_JS}
-var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _n = {find_node_js(node_name)};
 return _n ? _observe(_n) : null;""")
 
 
@@ -270,7 +357,7 @@ def subtree_script(node_name: str) -> str:
     """Script returning ``{record, children}`` for the node: its own record JSON and
     its descendant tree (null if the node is missing)."""
     return ScriptBuilder.iife(f"""// recipe:subtree{_TREE_JS}
-var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _n = {find_node_js(node_name)};
 return _n ? {{record: _rec(_n), children: _tree(_n)}} : null;""")
 
 
@@ -292,13 +379,14 @@ for (var _i = 0; _i < _nodes.length; _i++) {{
     info.label = n.getLabel();
     info.record = record;
     info.element_id = (typeof n.getElementID === "function") ? n.getElementID() : null;
+    info.key = {_EID_OF_JS.format(n="n")};
     info.children = _tree(n);
     _out.nodes.push(info);
 }}
 return _out;""")
 
 
-def observed_channels(client: "DazClient", node_name: str, kind: str, info: dict) -> dict[str, dict]:
+def observed_channels(client: DazClient, node_name: str, kind: str, info: dict) -> dict[str, dict]:
     """Observed channels for one node from its ``_observe`` payload (+ pose capture for actors)."""
     from ._pose import DazPose
     from ._skeleton import DazSkeleton
@@ -310,7 +398,7 @@ def observed_channels(client: "DazClient", node_name: str, kind: str, info: dict
     if info.get("output") is not None:
         observed["output"] = info["output"]
     if kind == "actor":
-        pose = DazPose.capture(DazSkeleton(client, NodeIdentifier(node_name)))
+        pose = DazPose.capture(DazSkeleton(client, node_ident(node_name)))
         observed["pose"] = {"snapshot": strip_node_transform(pose.to_dict())}
     return observed
 
@@ -332,6 +420,8 @@ _KIND_PREFIXES: tuple[tuple[str, EntityKind], ...] = (("actors.", "actor"), ("pr
 
 
 def _kind_from_path(path: str) -> EntityKind | None:
+    if path.startswith("actors.") and ".wearing." in path:
+        return "item"  # a fitted item: no pose capture
     for prefix, kind in _KIND_PREFIXES:
         if path.startswith(prefix):
             return kind
@@ -358,7 +448,7 @@ def foreign_descendants(children: list, recipe_id: str,
     return out
 
 
-def read_live(client: "DazClient", recipe_id: str) -> LiveState:
+def read_live(client: DazClient, recipe_id: str) -> LiveState:
     """Read every node owned by *recipe_id* in one script call.
 
     Plus one ``DazPose.capture`` per actor with a record.  Nodes whose record
@@ -380,29 +470,45 @@ def read_live(client: "DazClient", recipe_id: str) -> LiveState:
                            f"({scene_item_name(recipe_id)!r}) cannot be read ({e}); refusing to "
                            "plan without it, since accepted hand deletions would be lost") from e
 
-    entities: dict[str, LiveEntity] = {}
-    copies: dict[str, list[dict]] = {}
+    members: dict[str, list[tuple[dict, EntityRecord]]] = {}
     for n in payload.get("nodes") or []:
         rec = owned_by(n.get("record"), recipe_id)
         if rec is None:
             continue
-        kind = _kind_from_path(rec.path)
-        if kind is None:
+        if _kind_from_path(rec.path) is None:
             continue
-        if rec.path in entities:
-            copies.setdefault(rec.path, []).append(n)
-            continue
-        observed = observed_channels(client, n["name"], kind, n)
-        foreign = tuple(foreign_descendants(n.get("children") or [], recipe_id, rec.native))
-        entities[rec.path] = LiveEntity(
-            path=rec.path, node_name=n["name"], kind=kind, record=rec,
-            observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
-            label=n.get("label"))
+        members.setdefault(rec.path, []).append((n, rec))
 
-    duplicates = tuple(
-        DuplicateRecord(path, (entities[path].node_name, *(n["name"] for n in extra)),
-                        (entities[path].element_id, *(n.get("element_id") for n in extra)))
-        for path, extra in copies.items())
+    entities: dict[str, LiveEntity] = {}
+    duplicates: list[DuplicateRecord] = []
+    for path, found in members.items():
+        kind = _kind_from_path(path)
+        assert kind is not None  # members only holds paths with a kind
+        is_group = all(r.group == path for _, r in found)
+        if is_group:  # primary first, otherwise scene order
+            found = sorted(found, key=lambda m: not m[1].primary)
+        n, rec = found[0]
+        live_names = tuple(m["name"] for m, _ in found)
+        # a taken-over figure was not named by the recipe: address it by element ID (C1)
+        node_name = (eid_ref(n.get("key")) or n["name"]) if rec.adopted_from_scene else n["name"]
+        observed = observed_channels(client, node_name, kind, n)
+        # A group's foreign children are those of every member (one delete takes them all).
+        by_node = tuple((m["name"], tuple(foreign_descendants(m.get("children") or [], recipe_id,
+                                                              r.native)))
+                        for m, r in (found if is_group else found[:1]))
+        foreign = tuple(c for _, cs in by_node for c in cs)
+        entities[path] = LiveEntity(
+            path=path, node_name=node_name, kind=kind, record=rec,
+            observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
+            label=n.get("label"),
+            group_nodes=live_names if is_group else (),
+            missing_members=(tuple(x for x in rec.members if x not in live_names)
+                             if is_group else ()),
+            foreign_by_node=tuple((n, cs) for n, cs in by_node if cs) if is_group else ())
+        if len(found) > 1 and not is_group:
+            duplicates.append(DuplicateRecord(
+                path, tuple(m["name"] for m, _ in found),
+                tuple(m.get("element_id") for m, _ in found)))
     env = payload.get("environment") if manifest and manifest.environment else None
     return LiveState(manifest=manifest, entities=entities, environment_observed=env,
-                     duplicates=duplicates)
+                     duplicates=tuple(duplicates))

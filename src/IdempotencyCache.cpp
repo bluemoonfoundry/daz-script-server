@@ -117,9 +117,3 @@ void IdempotencyCache::clear()
     QMutexLocker lock(&m_mutex);
     m_entries.clear();
 }
-
-int IdempotencyCache::size() const
-{
-    QMutexLocker lock(&m_mutex);
-    return m_entries.size();
-}

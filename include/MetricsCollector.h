@@ -5,7 +5,7 @@
 #include <string>
 
 // Thread-safe metrics counter. recordRequest/recordAuthFailure may be called
-// from the main thread or from HTTP threads (via BlockingQueuedConnection).
+// from the main thread or from HTTP threads.
 class MetricsCollector {
 public:
     static const int REQUEST_ID_LENGTH = 8;  // Characters taken from UUID for request/async IDs
@@ -17,7 +17,7 @@ public:
     void recordAuthFailure();
 
     // Records how long a synchronous /execute request waited between the
-    // HTTP thread issuing the BlockingQueuedConnection call and
+    // HTTP thread posting its MainThreadCall and
     // handleExecuteRequest() starting to run on the main thread.
     void recordMainThreadWait(qint64 waitMs);
 
@@ -40,7 +40,6 @@ public:
     int     getFailedRequests()     const;
     int     getAuthFailures()       const;
     qint64  getUptimeSeconds()      const;
-    QDateTime getStartTime()        const;
 
 private:
     int       m_nTotal;

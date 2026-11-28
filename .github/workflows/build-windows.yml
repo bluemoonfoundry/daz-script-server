@@ -22,6 +22,13 @@ on:
         description: 'Name of the uploaded artifact'
         value: ${{ jobs.build.outputs.artifact-name }}
 
+# Read-only. A reusable workflow can't exceed this even when its caller
+# (release-tagged/release-nightly) grants a job more.
+permissions:
+  contents: read
+
+# SDK repo ref, cache keys and Qt6 version: .github/actions/setup-daz-sdk.
+
 jobs:
   build:
     runs-on: windows-2022
@@ -32,76 +39,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up SDK paths
-        id: sdk-paths
-        shell: bash
-        run: |
-          if [ "${{ inputs.sdk-version }}" = "6" ]; then
-            # daz-studio-6-sdk-* always holds the CURRENT DS6 SDK (6.26.2026.27900).
-            # Bump this key whenever that folder is replaced, or CI keeps restoring
-            # the stale cached SDK and builds plugins newer Studio refuses to load.
-            echo "cache-key=daz-sdk-6.26-windows-private-v2" >> $GITHUB_OUTPUT
-            echo "sparse-path=daz-studio-6-sdk-win32" >> $GITHUB_OUTPUT
-            echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
-            echo "dll-name=dsp_DazScriptServer.dll" >> $GITHUB_OUTPUT
-          else
-            echo "cache-key=daz-sdk-4.5-windows-private-v1" >> $GITHUB_OUTPUT
-            echo "sparse-path=daz-studio-45-sdk-win32" >> $GITHUB_OUTPUT
-            echo "sdk-dir=DAZStudio4.5+ SDK" >> $GITHUB_OUTPUT
-            echo "dll-name=DazScriptServer.dll" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Cache DAZ Studio SDK
-        id: cache-sdk
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Set up DAZ Studio SDK (and Qt6 for SDK 6)
+        id: sdk
+        uses: ./.github/actions/setup-daz-sdk
         with:
-          path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
-          key: ${{ steps.sdk-paths.outputs.cache-key }}
-
-      - name: Checkout DAZ Studio SDK repo
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: bluemoonfoundry/daz-studio-sdks
-          token: ${{ secrets.sdk-repo-token }}
-          path: temp-sdk
-          sparse-checkout: |
-            ${{ steps.sdk-paths.outputs.sparse-path }}
-
-      - name: Move SDK to expected location
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          mv "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" "${{ steps.sdk-paths.outputs.sdk-dir }}"
-          rm -rf temp-sdk
-
-      - name: Verify SDK structure (v4)
-        if: inputs.sdk-version != '6'
-        shell: bash
-        run: |
-          if [ ! -d "DAZStudio4.5+ SDK/include" ]; then
-            echo "Error: SDK include directory not found"
-            exit 1
-          fi
-          if [ ! -d "DAZStudio4.5+ SDK/lib" ]; then
-            echo "Error: SDK lib directory not found"
-            exit 1
-          fi
-          echo "SDK structure verified"
-
-      - name: Verify SDK structure (v6)
-        if: inputs.sdk-version == '6'
-        shell: bash
-        run: |
-          if [ ! -d "Daz Studio 6 SDK/include" ]; then
-            echo "Error: SDK include directory not found"
-            exit 1
-          fi
-          if [ ! -f "Daz Studio 6 SDK/x64/lib/dzcore.lib" ]; then
-            echo "Error: dzcore.lib not found under x64/lib"
-            exit 1
-          fi
-          echo "SDK structure verified"
+          sdk-version: ${{ inputs.sdk-version }}
+          os: windows
+          sdk-repo-token: ${{ secrets.sdk-repo-token }}
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
@@ -112,31 +56,32 @@ jobs:
         run: |
           # Qt 4.8 from 2014 likely needs VS 2010 redistributables
           # Download and install VC++ 2010 x64
+          $ErrorActionPreference = 'Stop'
           $vcRedistUrl = "https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x64.exe"
+          # SHA-256 of the 10,277,328-byte installer at that URL (verified 2026-11-26).
+          $expectedSha256 = "F3B7A76D84D23F91957AA18456A14B4E90609E4CE8194C5653384ED38DADA6F3"
           $installerPath = "$env:TEMP\vcredist_x64_2010.exe"
 
           Write-Host "Downloading VC++ 2010 Redistributable..."
           Invoke-WebRequest -Uri $vcRedistUrl -OutFile $installerPath
 
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $installerPath).Hash
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "vcredist_x64.exe SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+          }
+          $sig = Get-AuthenticodeSignature -FilePath $installerPath
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') {
+            throw "vcredist_x64.exe Authenticode check failed: status=$($sig.Status) signer=$($sig.SignerCertificate.Subject)"
+          }
+
           Write-Host "Installing VC++ 2010 Redistributable..."
-          Start-Process -FilePath $installerPath -ArgumentList "/install", "/quiet", "/norestart" -Wait
+          $proc = Start-Process -FilePath $installerPath -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
+          # 0 = installed, 3010 = installed (reboot pending), 1638 = same or newer version already present.
+          if ($proc.ExitCode -notin 0, 3010, 1638) {
+            throw "VC++ 2010 Redistributable installer failed with exit code $($proc.ExitCode)"
+          }
 
-          Write-Host "VC++ 2010 Redistributable installed"
-
-      - name: Cache Qt6
-        if: inputs.sdk-version == '6'
-        id: cache-qt6
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ github.workspace }}/qt6
-          key: qt6-6.10.3-win64_msvc2022_64-qt5compat-v1
-
-      - name: Install Qt6 (aqtinstall)
-        if: inputs.sdk-version == '6' && steps.cache-qt6.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          pip install aqtinstall
-          aqt install-qt windows desktop 6.10.3 win64_msvc2022_64 -m qt5compat --outputdir "${{ github.workspace }}/qt6"
+          Write-Host "VC++ 2010 Redistributable installed (exit code $($proc.ExitCode))"
 
       - name: Configure CMake (v4)
         if: inputs.sdk-version != '6'
@@ -156,7 +101,7 @@ jobs:
           cmake -B build -S . `
             -DDAZ_SDK_DIR="${{ github.workspace }}\Daz Studio 6 SDK" `
             -DDAZ_SDK_VERSION=6 `
-            -DQt6_DIR="${{ github.workspace }}\qt6\6.10.3\msvc2022_64\lib\cmake\Qt6" `
+            -DQt6_DIR="${{ steps.sdk.outputs.qt6-dir }}" `
             -DCMAKE_BUILD_TYPE=${{ inputs.configuration }}
 
       - name: Build with MSBuild
@@ -167,7 +112,7 @@ jobs:
       - name: Verify build output
         shell: bash
         run: |
-          DLL_PATH="build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}"
+          DLL_PATH="build/plugin/${{ inputs.configuration }}/${{ steps.sdk.outputs.binary-name }}"
           if [ ! -f "$DLL_PATH" ]; then
             echo "Error: DLL not found at $DLL_PATH"
             exit 1
@@ -181,12 +126,12 @@ jobs:
         run: |
           # Daz Studio 6.26+ rejects plugins without a DzPluginSDKVersionTag
           # matching its SDK range (issue #45).
-          python scripts/check_sdk_tag.py             "build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}"             "Daz Studio 6 SDK/include"
+          python scripts/check_sdk_tag.py             "build/plugin/${{ inputs.configuration }}/${{ steps.sdk.outputs.binary-name }}"             "Daz Studio 6 SDK/include"
 
       - name: Upload Windows DLL artifact
         id: upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: DazScriptServer-windows-ds${{ inputs.sdk-version }}-${{ inputs.configuration }}
-          path: build/plugin/${{ inputs.configuration }}/${{ steps.sdk-paths.outputs.dll-name }}
+          path: build/plugin/${{ inputs.configuration }}/${{ steps.sdk.outputs.binary-name }}
           if-no-files-found: error

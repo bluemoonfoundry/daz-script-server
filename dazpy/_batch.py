@@ -212,7 +212,7 @@ class Batch:
         for key, _, future in self._ops:
             future._resolve(data.get(key))
 
-    def __enter__(self) -> "Batch":
+    def __enter__(self) -> Batch:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:

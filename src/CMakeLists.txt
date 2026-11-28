@@ -7,6 +7,16 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../i
 add_library(DazScriptServer SHARED
 	pluginmain.cpp
 	DzScriptServerPane.cpp
+	# DzScriptServerPane members split by concern (W21); see the top of
+	# DzScriptServerPane.cpp for the map.
+	PaneUi.cpp
+	HttpJobRoute.cpp
+	PaneRoutes.cpp
+	PluginRouteBridge.cpp
+	PluginRouteSelfTest.cpp
+	ScriptJobs.cpp
+	RenderJobs.cpp
+	RenderScriptBuilder.cpp
 	RenderProgressBroker.cpp
 	AsyncRequestManager.cpp
 	AuthenticationService.cpp
@@ -36,13 +46,17 @@ add_library(DazScriptServer SHARED
 	ZipInstaller.cpp
 	miniz.c
 	PackagePaths.cpp
+	FileSha256.cpp
 	PythonToolchainBootstrapper.cpp
 	PackageDependencyInstaller.cpp
+	PackageManifest.cpp
 	DzPackageInputsDialog.cpp
 	DzPackageImporter.cpp
 	GeometryExport.cpp
 	package_runner.qrc
 	httplib.h
+	PaneInternal.h
+	RenderScriptBuilder.h
 	../include/DzScriptServerPane.h
 	../include/AsyncRequestManager.h
 	../include/AuthenticationService.h
@@ -60,6 +74,8 @@ add_library(DazScriptServer SHARED
 	../include/ArtifactRoots.h
 	../include/ScriptRegistry.h
 	../include/PluginRouteRegistry.h
+	../include/PluginRouteSelfTest.h
+	../include/HttpResult.h
 	../include/ArtifactThumbnail.h
 	../include/RequestValidator.h
 	../include/common_version.h
@@ -71,8 +87,10 @@ add_library(DazScriptServer SHARED
 	../include/ZipInstaller.h
 	../include/PortableFs.h
 	../include/PackagePaths.h
+	../include/FileSha256.h
 	../include/PythonToolchainBootstrapper.h
 	../include/PackageDependencyInstaller.h
+	../include/PackageManifest.h
 	../include/DzPackageInputsDialog.h
 	../include/DzPackageImporter.h
 	../include/GeometryExport.h

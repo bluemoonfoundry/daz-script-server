@@ -3,12 +3,12 @@
 /**
  * Live limb alignment: a damped-least-squares Jacobian IK solver that rotates
  * a bone chain so its effector reaches a resolved interaction target. Ports
- * the solver half of dazpy's `_interaction.py` (batch path only -- every
+ * dazpy's `_interaction_solver.py` (batch path only -- every
  * daz-ts skeleton has `evaluatePoseJacobian`, so dazpy's legacy
  * per-bone-perturbation fallback is not ported).
  *
- * Depends only on `rigProfile.ts`. `interactionPlan.ts` imports this module
- * (for `PreparedInteractionRecipe.alignLimbTargets`), never the reverse, so
+ * Depends only on `rigProfile.ts`. `interactionPlan.ts` and
+ * `interactionFacing.ts` import this module, never the reverse, so
  * `LimbAlignmentResult` lives here and `interactionPlan.ts` imports it as a
  * type.
  */

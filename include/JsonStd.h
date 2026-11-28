@@ -28,6 +28,17 @@
 #include <QtScript/qscriptvalue.h>
 #endif
 
+// std::string <-> QByteArray, byte for byte. Both buffers are allocated in
+// this module, so they are safe to build on httplib worker threads.
+inline QByteArray stdToQBA(const std::string& s)
+{
+    return QByteArray(s.c_str(), static_cast<int>(s.size()));
+}
+inline std::string qbaToStd(const QByteArray& b)
+{
+    return std::string(b.constData(), static_cast<size_t>(b.size()));
+}
+
 namespace JsonStd {
 
 // QString → std::string via UTF-8.

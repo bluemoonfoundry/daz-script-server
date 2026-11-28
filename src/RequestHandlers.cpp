@@ -30,34 +30,40 @@ bool MiddlewareChain::run(HttpContext& ctx) const
 }
 
 // ─── Shared busy-check helper ──────────────────────────────────────────────────
-// Called first by every handler that would otherwise block on
-// Qt::BlockingQueuedConnection with no timeout. Returns true (and has
-// already written the 503 response) if the main thread is currently busy.
+// Used by callOnMainThread() (and by handlers that must check before other
+// work). Returns true, having written the 503, if the main thread is busy.
 static bool respondIfMainThreadBusy(DzScriptServerPane* pane, HttpContext& ctx)
 {
     if (!pane->isMainThreadBusy()) return false;
     ctx.respond(503, ErrorResponse::build(ErrorCode::STUDIO_BUSY, pane->mainThreadBusyMessage()));
-    ctx.setHeader("Retry-After", "2");
+    ctx.setHeader("Retry-After", ServerConfig::RETRY_AFTER_BUSY_SEC);
     return true;
 }
 
-// ─── Sync main-thread crossing (daz-script-server-3w3y) ──────────────────────
-// Sync execute handlers must not use Qt::BlockingQueuedConnection: it has no
-// timeout, so a stuck main thread pins every queued request's ActiveRequestSlot
-// until the concurrent limit is exhausted. Always answers ctx.
-static void crossToMainThread(DzScriptServerPane* pane, HttpContext& ctx,
-                              MainThreadCall::Call* call, int queueTimeoutSec)
+// ─── Main-thread crossing (daz-script-server-3w3y, yau7.2.1) ─────────────────
+// See MainThreadCall.h. Never use Qt::BlockingQueuedConnection from a worker:
+// it has no timeout, so a stuck main thread pins every queued request's
+// ActiveRequestSlot, and a failed invoke leaves the result unset.
+void callOnMainThread(DzScriptServerPane* pane, HttpContext& ctx, int queueTimeoutSec,
+                      const MainThreadCall::FunctionCall::Fn& fn, bool checkBusy)
 {
+    if (checkBusy && respondIfMainThreadBusy(pane, ctx)) return;
     HttpResult result;
-    switch (MainThreadCall::post(pane, call, queueTimeoutSec * 1000, ctx.isClientGone, &result)) {
+    switch (MainThreadCall::post(pane, new MainThreadCall::FunctionCall(fn),
+                                 queueTimeoutSec * 1000, ctx.isClientGone, &result)) {
     case MainThreadCall::Completed:
-        ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+        if (result.first < 100 || result.first > 599) {
+            ctx.respond(500, ErrorResponse::build(ErrorCode::INTERNAL_ERROR,
+                "main-thread handler returned an invalid HTTP status"));
+            return;
+        }
+        ctx.respond(result.first, result.second);
         return;
     case MainThreadCall::GaveUp:
         ctx.respond(503, ErrorResponse::build(ErrorCode::STUDIO_BUSY,
-            "DAZ Studio's main thread did not start this script within "
+            "DAZ Studio's main thread did not start this request within "
             + std::to_string(queueTimeoutSec) + " s (another script is still running); it was not run"));
-        ctx.setHeader("Retry-After", "2");
+        ctx.setHeader("Retry-After", ServerConfig::RETRY_AFTER_BUSY_SEC);
         return;
     case MainThreadCall::PostFailed:
         ctx.respond(500, ErrorResponse::build(ErrorCode::INTERNAL_ERROR, "could not reach the main thread"));
@@ -65,21 +71,35 @@ static void crossToMainThread(DzScriptServerPane* pane, HttpContext& ctx,
     }
 }
 
-namespace {
-struct ExecuteCall : MainThreadCall::Call {
-    QByteArray body, ip;
-    qint64     acceptedAtMs;
-    HttpResult invoke(DzScriptServerPane* pane) override {
-        return pane->handleExecuteRequest(body, ip, acceptedAtMs);
-    }
-};
-struct RegistryExecuteCall : MainThreadCall::Call {
-    QByteArray script, scriptId, body, ip;
-    HttpResult invoke(DzScriptServerPane* pane) override {
-        return pane->handleRegistryExecuteRequest(script, scriptId, body, ip);
-    }
-};
-} // namespace
+
+void callPluginRouteOnMainThread(DzScriptServerPane* pane, HttpContext& ctx, int queueTimeoutSec,
+                                 const QPointer<QObject>& receiver, const QByteArray& slot,
+                                 const QByteArray& body, const QByteArray& ip)
+{
+    callOnMainThread(pane, ctx, queueTimeoutSec, [receiver, slot, body, ip](DzScriptServerPane*) {
+        // Read the QPointer here, on the receiver's thread: on a worker the
+        // object could be deleted between the check and the call.
+        if (!receiver) {
+            const std::string err = ErrorResponse::build(ErrorCode::SERVER_UNAVAILABLE, "plugin handler unloaded");
+            return HttpResult(503, stdToQBA(err));
+        }
+        HttpResult result(0, QByteArray());
+        const bool invoked = QMetaObject::invokeMethod(receiver.data(), slot.constData(),
+            Qt::DirectConnection, Q_RETURN_ARG(HttpResult, result),
+            Q_ARG(QByteArray, body), Q_ARG(QByteArray, ip));
+        if (!invoked) {
+            const std::string err = ErrorResponse::build(ErrorCode::INTERNAL_ERROR,
+                "companion plugin handler could not be called");
+            return HttpResult(500, stdToQBA(err));
+        }
+        if (result.first < 100 || result.first > 599) {
+            const std::string err = ErrorResponse::build(ErrorCode::INTERNAL_ERROR,
+                "companion plugin handler returned an invalid HTTP status");
+            return HttpResult(500, stdToQBA(err));
+        }
+        return result;
+    });
+}
 
 // ─── Concrete Middleware ──────────────────────────────────────────────────────
 
@@ -92,9 +112,7 @@ bool IPWhitelistMiddleware::process(HttpContext& ctx)
 
     ctx.respond(403, ErrorResponse::build(ErrorCode::IP_NOT_WHITELISTED, ctx.remoteAddr));
 
-    std::string logLine = "[" + JsonStd::currentTime() + "] [BLOCKED] " + ctx.remoteAddr + " - IP not whitelisted";
-    QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
-        Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+    m_pPane->postLog("[BLOCKED] " + ctx.remoteAddr + " - IP not whitelisted");
     return false;
 }
 
@@ -109,9 +127,7 @@ bool RateLimitMiddleware::process(HttpContext& ctx)
 
     ctx.respond(429, ErrorResponse::build(ErrorCode::RATE_LIMIT_EXCEEDED, ctx.remoteAddr));
 
-    std::string logLine = "[" + JsonStd::currentTime() + "] [RATE LIMIT] " + ctx.remoteAddr;
-    QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
-        Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+    m_pPane->postLog("[RATE LIMIT] " + ctx.remoteAddr);
     return false;
 }
 
@@ -154,9 +170,7 @@ bool AuthMiddleware::process(HttpContext& ctx)
     ctx.respond(401, ErrorResponse::build(code));
     m_metrics.recordAuthFailure();
 
-    std::string logLine = "[" + JsonStd::currentTime() + "] [AUTH FAILED] " + ctx.remoteAddr;
-    QMetaObject::invokeMethod(m_pPane, "appendLogBytes", Qt::QueuedConnection,
-        Q_ARG(QByteArray, QByteArray(logLine.c_str(), (int)logLine.size())));
+    m_pPane->postLog("[AUTH FAILED] " + ctx.remoteAddr);
     return false;
 }
 
@@ -203,16 +217,13 @@ void CapabilitiesHandler::handle(HttpContext& ctx)
         // last document built on the main thread (render_engines.source = "snapshot").
         QByteArray snapshot = m_pPane->capabilitiesSnapshot();
         if (!snapshot.isEmpty()) {
-            ctx.respond(200, std::string(snapshot.constData(), snapshot.size()));
+            ctx.respond(200, snapshot);
             return;
         }
-        if (respondIfMainThreadBusy(m_pPane, ctx)) return;
     }
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleCapabilitiesRequest",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result));
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(), [](DzScriptServerPane* pane) {
+        return pane->handleCapabilitiesRequest();
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,12 +233,11 @@ ExecuteScriptHandler::ExecuteScriptHandler(DzScriptServerPane* pane, int queueTi
 
 void ExecuteScriptHandler::handle(HttpContext& ctx)
 {
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
-    ExecuteCall* call = new ExecuteCall();
-    call->acceptedAtMs = QDateTime::currentMSecsSinceEpoch();
-    call->body = QByteArray(ctx.body.c_str(), (int)ctx.body.size());
-    call->ip   = QByteArray(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    crossToMainThread(m_pPane, ctx, call, m_queueTimeoutSec);
+    const qint64 acceptedAtMs = QDateTime::currentMSecsSinceEpoch();
+    const QByteArray body = stdToQBA(ctx.body), ip = stdToQBA(ctx.remoteAddr);
+    callOnMainThread(m_pPane, ctx, m_queueTimeoutSec, [body, ip, acceptedAtMs](DzScriptServerPane* pane) {
+        return pane->handleExecuteRequest(body, ip, acceptedAtMs);
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -236,15 +246,10 @@ ScriptRegisterHandler::ScriptRegisterHandler(DzScriptServerPane* pane) : m_pPane
 
 void ScriptRegisterHandler::handle(HttpContext& ctx)
 {
-    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    QByteArray ipBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleRegisterScript",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, ipBytes));
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+    const QByteArray body = stdToQBA(ctx.body), ip = stdToQBA(ctx.remoteAddr);
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(), [body, ip](DzScriptServerPane* pane) {
+        return pane->handleRegisterScript(body, ip);
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,12 +285,11 @@ void ScriptExecuteHandler::handle(HttpContext& ctx)
         return;
     }
 
-    RegistryExecuteCall* call = new RegistryExecuteCall();
-    call->script   = QByteArray(scriptText.c_str(), (int)scriptText.size());
-    call->scriptId = QByteArray(ctx.urlMatch.c_str(), (int)ctx.urlMatch.size());
-    call->body     = QByteArray(ctx.body.c_str(), (int)ctx.body.size());
-    call->ip       = QByteArray(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    crossToMainThread(m_pPane, ctx, call, m_queueTimeoutSec);
+    const QByteArray script = stdToQBA(scriptText), scriptId = stdToQBA(ctx.urlMatch);
+    const QByteArray body = stdToQBA(ctx.body), ip = stdToQBA(ctx.remoteAddr);
+    callOnMainThread(m_pPane, ctx, m_queueTimeoutSec, [script, scriptId, body, ip](DzScriptServerPane* pane) {
+        return pane->handleRegistryExecuteRequest(script, scriptId, body, ip);
+    }, /*checkBusy=*/false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,21 +309,17 @@ void AsyncExecuteHandler::handle(HttpContext& ctx)
     QByteArray clientIPBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
     HttpResult result = m_pPane->handleAsyncExecuteEnqueue(
         bodyBytes, clientIPBytes, m_maxScriptLengthKB, corrBytes);
+    ctx.respond(result.first, result.second);
 #else
     // Qt 4's JsonStd parser uses QScriptEngine, so Studio 4 must retain the
     // main-thread crossing even though Studio 6 can enqueue directly.
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
-    QByteArray clientIPBytes(ctx.remoteAddr.c_str(), (int)ctx.remoteAddr.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncExecuteEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, clientIPBytes),
-        Q_ARG(int, m_maxScriptLengthKB),
-        Q_ARG(QByteArray, corrBytes));
+    const QByteArray clientIPBytes = stdToQBA(ctx.remoteAddr);
+    const int maxKB = m_maxScriptLengthKB;
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(),
+        [bodyBytes, clientIPBytes, maxKB, corrBytes](DzScriptServerPane* pane) {
+            return pane->handleAsyncExecuteEnqueue(bodyBytes, clientIPBytes, maxKB, corrBytes);
+        });
 #endif
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -341,18 +341,13 @@ void AsyncScriptHandler::handle(HttpContext& ctx)
 #if DAZ_SDK_MAJOR_VERSION >= 6
     HttpResult result = m_pPane->handleAsyncScriptEnqueue(
         scriptBytes, scriptIdBytes, bodyBytes, corrBytes);
+    ctx.respond(result.first, result.second);
 #else
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncScriptEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, scriptBytes),
-        Q_ARG(QByteArray, scriptIdBytes),
-        Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, corrBytes));
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(),
+        [scriptBytes, scriptIdBytes, bodyBytes, corrBytes](DzScriptServerPane* pane) {
+            return pane->handleAsyncScriptEnqueue(scriptBytes, scriptIdBytes, bodyBytes, corrBytes);
+        });
 #endif
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -379,7 +374,7 @@ void AsyncResultHandler::handle(HttpContext& ctx)
         long t = std::strtol(ts.c_str(), &end, 10);
         if (end != ts.c_str() && t > 0) timeoutSec = (int)t;
     }
-    std::pair<int, std::string> result = m_pPane->getAsyncResultJson(ctx.urlMatch, doWait, timeoutSec);
+    std::pair<int, std::string> result = m_pPane->getAsyncResultJson(ctx.urlMatch, doWait, timeoutSec, ctx.isClientGone);
     ctx.respond(result.first, result.second);
 }
 
@@ -409,48 +404,30 @@ RenderHandler::RenderHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void RenderHandler::handle(HttpContext& ctx)
 {
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
-    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, corrBytes));
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+    const QByteArray bodyBytes = stdToQBA(ctx.body), corrBytes = stdToQBA(ctx.correlationId);
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(), [bodyBytes, corrBytes](DzScriptServerPane* pane) {
+        return pane->handleAsyncRenderEnqueue(bodyBytes, corrBytes);
+    });
 }
 
 RenderBatchHandler::RenderBatchHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void RenderBatchHandler::handle(HttpContext& ctx)
 {
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
-    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderBatchEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, corrBytes));
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+    const QByteArray bodyBytes = stdToQBA(ctx.body), corrBytes = stdToQBA(ctx.correlationId);
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(), [bodyBytes, corrBytes](DzScriptServerPane* pane) {
+        return pane->handleAsyncRenderBatchEnqueue(bodyBytes, corrBytes);
+    });
 }
 
 RenderAnimationHandler::RenderAnimationHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void RenderAnimationHandler::handle(HttpContext& ctx)
 {
-    if (respondIfMainThreadBusy(m_pPane, ctx)) return;
-    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    QByteArray corrBytes(ctx.correlationId.c_str(), (int)ctx.correlationId.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleAsyncRenderAnimationEnqueue",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes),
-        Q_ARG(QByteArray, corrBytes));
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+    const QByteArray bodyBytes = stdToQBA(ctx.body), corrBytes = stdToQBA(ctx.correlationId);
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(), [bodyBytes, corrBytes](DzScriptServerPane* pane) {
+        return pane->handleAsyncRenderAnimationEnqueue(bodyBytes, corrBytes);
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -469,11 +446,8 @@ SaveCopyHandler::SaveCopyHandler(DzScriptServerPane* pane) : m_pPane(pane) {}
 
 void SaveCopyHandler::handle(HttpContext& ctx)
 {
-    QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-    HttpResult result;
-    QMetaObject::invokeMethod(m_pPane, "handleSaveCopy",
-        Qt::BlockingQueuedConnection,
-        Q_RETURN_ARG(HttpResult, result),
-        Q_ARG(QByteArray, bodyBytes));
-    ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
+    const QByteArray bodyBytes = stdToQBA(ctx.body);
+    callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(), [bodyBytes](DzScriptServerPane* pane) {
+        return pane->handleSaveCopy(bodyBytes);
+    });
 }

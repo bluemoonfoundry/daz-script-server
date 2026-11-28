@@ -379,6 +379,10 @@ describe("continuity", () => {
     expect(sl.checkThirtyDegree([ms(0), sl.single(line(), "alice")], POS)).toEqual([]);
   });
 
+  it("rounds the reported angle half to even, like dazpy's {angle:.0f}", () => {
+    expect([0.5, 1.5, 2.5, 3.5, -2.5, -3.5, 2.4, 2.6].map(sl.roundHalfEven)).toEqual([0, 2, 2, 4, -2, -4, 2, 3]);
+  });
+
   it("combines axis and thirty-degree checks", () => {
     const kinds = sl.checkContinuity([ms(90), ms(95), ms(-90, "close_up")], POS, { line: line() }).map((i) => i.kind).sort();
     expect(kinds).toEqual(["axis", "thirty_degree"]);

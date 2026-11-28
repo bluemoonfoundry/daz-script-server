@@ -1,181 +1,60 @@
 from __future__ import annotations
 
 import os
-import re
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator, Mapping, Protocol, cast
+from typing import cast
+from collections.abc import Callable, Iterator
 
 import requests as _requests
 
-from .exceptions import (
-    AuthenticationError,
-    ConcurrencyLimitError,
-    ConnectionError,
-    DazError,
-    DazBusyError,
-    ScriptRuntimeError,
-    ScriptSyntaxError,
-    StudioBusyError,
-    ServerResponseError,
-    TimeoutError,
-)
+from .exceptions import DazError
 from ._geometry_frames import GeometryFrames, geometry_frames_payload, parse_geometry_frames
 from ._result import ExecutionResult
 from ._version import (
     VersionCheck,
-    VersionTracker,
-    evaluate_server_version,
-    server_instance_id_from_status,
     server_version_from_status,
+    ATOMIC_RENDER_BATCH_VERSION,
+    server_at_least,
+)
+# The response/request helpers live in _client_base (shared with the async
+# client); they are re-exported here for existing importers.
+from ._client_base import (  # noqa: F401
+    _BaseClient,
+    _DEFAULT_HOST,
+    _DEFAULT_PORT,
+    _HTTPResponse,
+    _MAX_BACKOFF,
+    _TOKEN_FILE,
+    _artifact_targets,
+    _authentication_error,
+    _batch_script,
+    _bytes_or_file,
+    _cancel_route,
+    _events_params,
+    _is_artifact_refusal,
+    _job_headers,
+    _json_ok,
+    _json_or_not_found,
+    _load_token,
+    _map_response,
+    _parse_retry_after,
+    _raise_for_error,
+    _range_header,
+    _render_animation_payload,
+    _render_batch_payload,
+    _render_payload,
+    _result_query,
+    _retry_delay,
+    _safe_artifact_filename,
+    _script_payload,
+    _submitted_request_id,
+    _thumbnail_params,
 )
 
 
-_TOKEN_FILE = os.path.expanduser("~/.daz3d/dazscriptserver_token.txt")
-_DEFAULT_HOST = "127.0.0.1"
-_DEFAULT_PORT = 18811
-
-
-def _load_token() -> str:
-    if os.path.exists(_TOKEN_FILE):
-        with open(_TOKEN_FILE) as f:
-            return f.read().strip()
-    return ""
-
-
-class _HTTPResponse(Protocol):
-    """What the error helpers need from a response: satisfied structurally by
-    both ``requests.Response`` (DazClient) and ``httpx.Response`` (AsyncDazClient)."""
-
-    @property
-    def status_code(self) -> int: ...
-    @property
-    def headers(self) -> Mapping[str, str]: ...
-    @property
-    def text(self) -> str: ...
-    def json(self, **kwargs: Any) -> Any: ...
-
-
-def _parse_retry_after(resp: _HTTPResponse) -> float:
-    raw = resp.headers.get("Retry-After", "")
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return 2.0
-
-
-def _job_headers(idempotency_key: str | None, correlation_id: str | None) -> dict:
-    """Optional request-identity headers for job submission routes.
-
-    ``Idempotency-Key`` makes a retried submission (same route, same body)
-    return the original ``request_id`` instead of queueing a second job, for
-    as long as the server keeps the record (``limits.idempotency_ttl_seconds``
-    in :meth:`DazClient.capabilities`; lost on a server restart, which shows
-    as a changed ``server_instance_id``). ``X-Correlation-Id`` is echoed in
-    the response and stored on the job record.
-    """
-    headers = {}
-    if idempotency_key:
-        headers["Idempotency-Key"] = idempotency_key
-    if correlation_id:
-        headers["X-Correlation-Id"] = correlation_id
-    return headers
-
-
-def _safe_artifact_filename(name: str) -> str:
-    """Base name safe to join under a download directory (no separators, no '..')."""
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", os.path.basename(name.replace("\\", "/")))
-    return name if name.strip(". ") else "artifact"
-
-
-def _authentication_error(resp: _HTTPResponse) -> AuthenticationError:
-    """Build an AuthenticationError for a 401/403 response, keeping the server's
-    ``ErrorResponse`` fields (``error_code``, ``detail``, ``retryable``)."""
-    status = resp.status_code
-    try:
-        parsed = resp.json()
-    except (TypeError, ValueError):
-        parsed = {}
-    data = parsed if isinstance(parsed, dict) else {}
-    detail = data.get("detail")
-    return AuthenticationError(
-        f"HTTP {status}: {data.get('error') or resp.text[:200]}",
-        status_code=status,
-        error_code=str(data.get("error_code") or ""),
-        detail="" if detail is None else str(detail),
-        retryable=data.get("retryable") is True,
-    )
-
-
-def _is_artifact_refusal(resp: _HTTPResponse) -> bool:
-    """True for a 403 that refuses an artifact outside the server's allowed
-    folders: not an authentication problem, so it maps to ServerResponseError."""
-    try:
-        data = resp.json()
-    except (TypeError, ValueError):
-        return False
-    return isinstance(data, dict) and data.get("error_code") == "ARTIFACT_OUTSIDE_ROOTS"
-
-
-def _raise_for_error(resp: _HTTPResponse) -> None:
-    """Raise a typed exception for authentication or server-busy responses.
-
-    Leaves 2xx responses (and DazScript's own success:false runtime/syntax
-    errors, which use HTTP 200) for the caller to handle.
-    """
-    status = resp.status_code
-    if status == 401 or (status == 403 and not _is_artifact_refusal(resp)):
-        raise _authentication_error(resp)
-    if status < 400:
-        return
-    try:
-        parsed = resp.json()
-    except (TypeError, ValueError):
-        parsed = {}
-    data = parsed if isinstance(parsed, dict) else {}
-    error_code = data.get("error_code", "")
-    error_msg = data.get("error") or resp.text[:200] or f"HTTP {status}"
-    retry_after = _parse_retry_after(resp)
-    if error_code == "STUDIO_BUSY":
-        raise StudioBusyError(error_msg, reason=str(data.get("detail") or error_msg), retry_after=retry_after)
-    if error_code == "CONCURRENT_LIMIT_EXCEEDED":
-        raise ConcurrencyLimitError(error_msg, reason=error_msg, retry_after=retry_after)
-    raise ServerResponseError(
-        error_msg,
-        status_code=status,
-        error_code=error_code,
-        detail=str(data.get("detail", "")),
-        retryable=bool(data.get("retryable", False)),
-    )
-
-
-def _map_response(resp: _requests.Response, script: str = "") -> ExecutionResult:
-    _raise_for_error(resp)
-
-    data = resp.json()
-    request_id = data.get("request_id", "")
-
-    if not data.get("success", True):
-        error_msg = data.get("error", "Script failed")
-        output = data.get("output", [])
-        # SyntaxError comes from the parser; runtime errors (TypeError, ReferenceError,
-        # Error, etc.) also include "Line N:" but never say "SyntaxError" explicitly.
-        if "SyntaxError" in error_msg:
-            raise ScriptSyntaxError(error_msg, script=script, request_id=request_id, output=output)
-        raise ScriptRuntimeError(error_msg, script=script, request_id=request_id, output=output)
-
-    return ExecutionResult(
-        value=data.get("result"),
-        output=data.get("output", []),
-        request_id=request_id,
-        success=True,
-        error="",
-        duration_ms=data.get("duration_ms", 0.0),
-    )
-
-
-class DazClient:
+class DazClient(_BaseClient):
     """HTTP client for the DAZ Studio Script Server.
 
     Handles authentication, request serialisation, and response mapping for
@@ -209,9 +88,9 @@ class DazClient:
             result = client.execute("1 + 1;")
     """
 
-    # Class defaults keep instances built without __init__ (tests) check-free.
-    _versions: VersionTracker = VersionTracker(enabled=False)
-    _server_version: str | None = None
+    _CONNECT_ERRORS = (_requests.exceptions.ConnectionError,)
+    _TIMEOUT_ERRORS = (_requests.exceptions.Timeout,)
+    _TRANSPORT_ERRORS = (_requests.exceptions.RequestException,)
 
     def __init__(
         self,
@@ -222,14 +101,10 @@ class DazClient:
         check_version: bool = True,
         on_version_check: Callable[[VersionCheck], object] | None = None,
     ):
-        self._base = f"http://{host}:{port}"
-        self._token = token if token is not None else _load_token()
-        self._timeout = timeout
+        super().__init__(host, port, token, timeout, check_version, on_version_check)
         self._session = _requests.Session()
-        self._versions = VersionTracker(enabled=check_version, on_version_check=on_version_check)
-        self._server_version: str | None = None
 
-    def __enter__(self) -> "DazClient":
+    def __enter__(self) -> DazClient:
         return self
 
     def __exit__(self, *exc_info) -> None:
@@ -239,12 +114,19 @@ class DazClient:
         """Close the underlying ``requests.Session``'s pooled connections."""
         self._session.close()
 
-    @property
-    def _headers(self) -> dict:
-        h = {}
-        if self._token:
-            h["X-API-Token"] = self._token
-        return h
+    def _send(self, method: str, path: str, headers: dict | None,
+              timeout: float | None, **kwargs) -> _requests.Response:
+        """Issue one request through the session (``_post``/``_get``/``_delete``)."""
+        self._check_server_version()
+        try:
+            return self._observe(getattr(self._session, method)(
+                f"{self._base}{path}",
+                headers=self._merged_headers(headers),
+                timeout=self._http_timeout(timeout),
+                **kwargs,
+            ))
+        except self._TRANSPORT_ERRORS as e:
+            raise self._transport_error(e, timeout) from e
 
     def _check_server_version(self) -> None:
         """Best-effort plugin version check (see ``check_version``)."""
@@ -252,108 +134,27 @@ class DazClient:
             return
         check = None
         try:
-            resp = self._session.get(
+            check = self._version_check_from_status(self._session.get(
                 f"{self._base}/status", headers=self._headers, timeout=self._timeout
-            )
-            data = resp.json()
-            instance = server_instance_id_from_status(data)
-            if instance is None:
-                header = resp.headers.get("X-Server-Instance-Id")
-                instance = header if isinstance(header, str) and header else None
-            version = server_version_from_status(data)
-            check = evaluate_server_version(self._base, version, instance)
-            if version is not None:
-                self._server_version = version
+            ))
         except Exception:
             check = None  # unreachable/odd server: let the real request report it
         finally:
             self._versions.finish_check(check)
 
-    def _observe(self, resp: _requests.Response) -> _requests.Response:
-        try:
-            self._versions.observe_instance(resp.headers.get("X-Server-Instance-Id"))
-        except Exception:
-            pass
-        return resp
-
-    @property
-    def version_check(self) -> VersionCheck | None:
-        """The latest plugin version check, or ``None`` before one completes."""
-        return self._versions.latest
-
     @property
     def server_version(self) -> str | None:
         """The connected server's version string, or ``None`` if unknown."""
-        latest = self._versions.latest
-        if latest is not None and latest.server_version is not None:
-            return latest.server_version
-        if self._server_version is None:
+        known = self._known_server_version()
+        if known is None:
             try:
-                self._server_version = server_version_from_status(self.status())
+                known = self._server_version = server_version_from_status(self.status())
             except Exception:
                 return None
-        return self._server_version
-
-    def _post(
-        self, path: str, payload: dict, headers: dict | None = None, timeout: float | None = None
-    ) -> _requests.Response:
-        self._check_server_version()
-        try:
-            return self._observe(self._session.post(
-                f"{self._base}{path}",
-                json=payload,
-                headers={**self._headers, **headers} if headers else self._headers,
-                timeout=self._timeout if timeout is None else timeout,
-            ))
-        except _requests.exceptions.ConnectionError as e:
-            self._versions.mark_stale()
-            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
-        except _requests.exceptions.Timeout as e:
-            self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
-        except _requests.exceptions.RequestException as e:
-            self._versions.mark_stale()
-            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
-
-    def _get(
-        self, path: str, params: dict | None = None, timeout: float | None = None
-    ) -> _requests.Response:
-        self._check_server_version()
-        try:
-            return self._observe(self._session.get(
-                f"{self._base}{path}",
-                headers=self._headers,
-                params=params,
-                timeout=self._timeout if timeout is None else timeout,
-            ))
-        except _requests.exceptions.ConnectionError as e:
-            self._versions.mark_stale()
-            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
-        except _requests.exceptions.Timeout as e:
-            self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
-        except _requests.exceptions.RequestException as e:
-            self._versions.mark_stale()
-            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
-
-    def _delete(self, path: str) -> _requests.Response:
-        self._check_server_version()
-        try:
-            return self._observe(self._session.delete(
-                f"{self._base}{path}", headers=self._headers, timeout=self._timeout
-            ))
-        except _requests.exceptions.ConnectionError as e:
-            self._versions.mark_stale()
-            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
-        except _requests.exceptions.Timeout as e:
-            self._versions.mark_stale()
-            raise TimeoutError(f"Request timed out after {self._timeout}s") from e
-        except _requests.exceptions.RequestException as e:
-            self._versions.mark_stale()
-            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
+        return known
 
     @contextmanager
-    def waiting_out_busy(self, max_wait: float) -> Iterator["DazClient"]:
+    def waiting_out_busy(self, max_wait: float) -> Iterator[DazClient]:
         """Within the block, this client's script execution and submission calls
         on this thread (``execute``, ``execute_file``, registered-script and
         async submits, render submits) retry a busy Studio for up to *max_wait*
@@ -375,26 +176,33 @@ class DazClient:
         finally:
             local.max_wait = prev
 
-    def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float):
-        """Run *fn* (a zero-arg callable), retrying on DazBusyError while
-        *retry_on_busy* is true (or inside :meth:`waiting_out_busy`), up to
-        *max_wait* seconds total."""
-        if not retry_on_busy:
-            waiting = getattr(self.__dict__.get("_busy_wait"), "max_wait", None)
-            if waiting is None:
-                return fn()
-            retry_on_busy, max_wait = True, waiting
-        deadline = time.monotonic() + max_wait
+    def _scoped_busy_wait(self) -> float | None:
+        return getattr(self.__dict__.get("_busy_wait"), "max_wait", None)
+
+    def _with_busy_retry(self, fn, retry_on_busy: bool, max_wait: float, *,
+                         retry_server_errors: bool | Callable[[], bool] = True):
+        """Run *fn* (a zero-arg callable), retrying busy and server-marked
+        ``retryable`` errors while *retry_on_busy* is true (or inside
+        :meth:`waiting_out_busy`), up to *max_wait* seconds total. Each wait is
+        at least the server's ``Retry-After``.
+
+        *retry_server_errors* False (or a callable returning False, evaluated
+        at each failure) limits retries to busy errors, for routes where a
+        ``retryable`` server error can follow a partial success.
+        """
+        deadline = self._busy_deadline(retry_on_busy, max_wait)
+        if deadline is None:
+            return fn()
         backoff = 1.0
         while True:
             try:
                 return fn()
-            except DazBusyError:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+            except DazError as exc:
+                pause = self._retry_pause(exc, deadline, backoff, retry_server_errors)
+                if pause is None:
                     raise
-                time.sleep(min(backoff, remaining))
-                backoff = min(backoff + 1.0, 5.0)
+                time.sleep(pause)
+                backoff = min(backoff + 1.0, _MAX_BACKOFF)
 
     def execute(
         self, script: str, args: object = None, *, retry_on_busy: bool = False, max_wait: float = 30.0,
@@ -407,8 +215,10 @@ class DazClient:
             args: Optional value passed into the script as ``getArguments()[0]``.
                 Must be JSON-serialisable.
             retry_on_busy: If ``True``, transparently retry with backoff when
-                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
-                instead of raising immediately.
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``
+                or another error marked ``retryable`` (rate limited, queue
+                full), waiting at least its ``Retry-After``, instead of
+                raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
             timeout: HTTP timeout in seconds for this call only (default: the
@@ -431,13 +241,10 @@ class DazClient:
                 exceeded.
             TimeoutError: If the request exceeds *timeout* seconds.
         """
-        payload: dict = {"script": script}
-        if args is not None:
-            payload["args"] = args
+        payload = _script_payload({"script": script}, args)
 
         def _do():
-            resp = self._post("/execute", payload, timeout=timeout)
-            return _map_response(resp, script=script)
+            return _map_response(self._post("/execute", payload, timeout=timeout), script=script)
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -450,8 +257,10 @@ class DazClient:
             script_file: Absolute path to the ``.dsa`` file on the server host.
             args: Optional argument passed to the script.
             retry_on_busy: If ``True``, transparently retry with backoff when
-                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
-                instead of raising immediately.
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``
+                or another error marked ``retryable`` (rate limited, queue
+                full), waiting at least its ``Retry-After``, instead of
+                raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
 
@@ -470,13 +279,10 @@ class DazClient:
                 exceeded.
             TimeoutError: On HTTP timeout.
         """
-        payload: dict = {"scriptFile": script_file}
-        if args is not None:
-            payload["args"] = args
+        payload = _script_payload({"scriptFile": script_file}, args)
 
         def _do():
-            resp = self._post("/execute", payload)
-            return _map_response(resp)
+            return _map_response(self._post("/execute", payload))
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -493,8 +299,10 @@ class DazClient:
             report_file: Optional host-side JSONL file used by the script to
                 report structured progress, logs, and output artefacts.
             retry_on_busy: If ``True``, transparently retry with backoff when
-                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
-                instead of raising immediately.
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``
+                or another error marked ``retryable`` (rate limited, queue
+                full), waiting at least its ``Retry-After``, instead of
+                raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
             idempotency_key: Optional ``Idempotency-Key``. Resubmitting the
@@ -519,16 +327,11 @@ class DazClient:
                 flight and *retry_on_busy* is ``False`` or *max_wait* is
                 exceeded.
         """
-        payload: dict = {"script": script}
-        if args is not None:
-            payload["args"] = args
-        if report_file is not None:
-            payload["reportFile"] = report_file
+        payload = _script_payload({"script": script}, args, report_file)
 
         def _do():
-            resp = self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
-            _raise_for_error(resp)
-            return resp.json().get("request_id", "")
+            return _submitted_request_id(self._post(
+                "/execute/async", payload, _job_headers(idempotency_key, correlation_id)))
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -544,16 +347,11 @@ class DazClient:
         calls. Returns the server-assigned request id immediately; use the
         request status/result/cancel methods to manage its lifecycle.
         """
-        payload: dict = {"scriptFile": script_file}
-        if args is not None:
-            payload["args"] = args
-        if report_file is not None:
-            payload["reportFile"] = report_file
+        payload = _script_payload({"scriptFile": script_file}, args, report_file)
 
         def _do():
-            resp = self._post("/execute/async", payload, _job_headers(idempotency_key, correlation_id))
-            _raise_for_error(resp)
-            return resp.json().get("request_id", "")
+            return _submitted_request_id(self._post(
+                "/execute/async", payload, _job_headers(idempotency_key, correlation_id)))
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -574,20 +372,15 @@ class DazClient:
             request; the result's ``result`` field is a dict keyed ``"_r0"``,
             ``"_r1"``, ... in submission order.
         """
-        from ._batch import build_operations_script
-
-        pairs = [(op["body_lines"], op["result_expression"]) for op in operations]
-        script = build_operations_script(pairs)
-        return self.execute_async_submit(script, args=args, report_file=report_file)
+        return self.execute_async_submit(
+            _batch_script(operations), args=args, report_file=report_file)
 
     def register_script(self, name: str, script: str, description: str = "") -> dict:
         """Register or replace a named DazScript on the server."""
-        resp = self._post(
+        return _json_ok(self._post(
             "/scripts/register",
             {"name": name, "description": description, "script": script},
-        )
-        _raise_for_error(resp)
-        return resp.json()
+        ))
 
     def list_scripts(self) -> list[dict]:
         """Return the registered scripts.
@@ -597,9 +390,7 @@ class DazClient:
             when given at registration, ``"description"``. The registry is
             in-memory, so it is empty after a server restart.
         """
-        resp = self._get("/scripts")
-        _raise_for_error(resp)
-        return resp.json().get("scripts", [])
+        return _json_ok(self._get("/scripts")).get("scripts", [])
 
     def delete_script(self, name: str, *, missing_ok: bool = False) -> bool:
         """Remove a registered script.
@@ -667,9 +458,7 @@ class DazClient:
         max_wait: float = 30.0,
     ) -> ExecutionResult:
         """Execute a registered script by name."""
-        payload: dict = {}
-        if args is not None:
-            payload["args"] = args
+        payload = _script_payload({}, args)
 
         def _do():
             return _map_response(self._post(f"/scripts/{name}/execute", payload))
@@ -682,16 +471,11 @@ class DazClient:
         idempotency_key: str | None = None, correlation_id: str | None = None,
     ) -> str:
         """Submit a registered script and return its async request id."""
-        payload: dict = {}
-        if args is not None:
-            payload["args"] = args
-        if report_file is not None:
-            payload["reportFile"] = report_file
+        payload = _script_payload({}, args, report_file)
 
         def _do():
-            resp = self._post(f"/scripts/{name}/async", payload, _job_headers(idempotency_key, correlation_id))
-            _raise_for_error(resp)
-            return resp.json().get("request_id", "")
+            return _submitted_request_id(self._post(
+                f"/scripts/{name}/async", payload, _job_headers(idempotency_key, correlation_id)))
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -714,11 +498,7 @@ class DazClient:
             changes to its real outcome. ``cancelled`` means the work
             really stopped (it never started, or a render was aborted).
         """
-        resp = self._get(f"/requests/{request_id}/status")
-        if resp.status_code == 404:
-            return {"status": "not_found"}
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_or_not_found(self._get(f"/requests/{request_id}/status"))
 
     def get_request_result(self, request_id: str, wait: bool = False, wait_timeout: int = 30) -> dict:
         """Fetch the result of a completed async request.
@@ -734,20 +514,9 @@ class DazClient:
             A dict containing ``success``, ``result``, ``output``, ``error``,
             ``duration_ms``, ``status``, and ``observation`` keys.
         """
-        params = {}
-        if wait:
-            params["wait"] = "true"
-            params["timeout"] = str(wait_timeout)
-        request_timeout = wait_timeout + 10.0 if wait else None
-        resp = self._get(
-            f"/requests/{request_id}/result",
-            params=params or None,
-            timeout=request_timeout,
-        )
-        if resp.status_code == 404:
-            return {"status": "not_found"}
-        _raise_for_error(resp)
-        return resp.json()
+        params, request_timeout = _result_query(wait, wait_timeout)
+        return _json_or_not_found(self._get(
+            f"/requests/{request_id}/result", params=params, timeout=request_timeout))
 
     def list_requests(self, status: str | None = None) -> dict:
         """List all tracked async requests (script and render) with their status.
@@ -763,19 +532,12 @@ class DazClient:
             ``status``, ``progress``, ``submitted_at``) plus ``total`` and a
             per-status count for every status value.
         """
-        params = {"status": status} if status else None
-        resp = self._get("/requests", params=params)
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_ok(self._get("/requests", params={"status": status} if status else None))
 
     def cancel_request_detail(self, request_id: str) -> dict:
         """Cancel a script or render request and return the server response."""
-        if request_id.startswith("rnd-"):
-            resp = self._post(f"/render/{request_id}/cancel", {})
-        else:
-            resp = self._delete(f"/requests/{request_id}")
-        _raise_for_error(resp)
-        return resp.json()
+        method, path = _cancel_route(request_id)
+        return _json_ok(self._post(path, {}) if method == "post" else self._delete(path))
 
     def cancel_request(self, request_id: str) -> bool:
         """Cancel a queued or running async request.
@@ -816,20 +578,18 @@ class DazClient:
             ServerResponseError: ``REQUEST_NOT_FOUND`` for an unknown or
                 expired job.
         """
-        resp = self._get(f"/artifacts/{request_id}")
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_ok(self._get(f"/artifacts/{request_id}"))
 
     def download_artifact(
         self,
         request_id: str,
         artifact_id: str | int,
-        dest: "str | os.PathLike[str] | None" = None,
+        dest: str | os.PathLike[str] | None = None,
         *,
-        byte_range: "tuple[int, int | None] | None" = None,
+        byte_range: tuple[int, int | None] | None = None,
         chunk_size: int = 1 << 20,
         timeout: float | None = None,
-    ) -> "bytes | str":
+    ) -> bytes | str:
         """Download one declared artifact (GET /artifacts/{request_id}/{artifact_id}).
 
         Args:
@@ -854,28 +614,8 @@ class DazClient:
                 folders, ``REQUEST_NOT_FOUND`` for an unknown job, or HTTP 416
                 for a range outside the file.
         """
-        headers = dict(self._headers)
-        if byte_range is not None:
-            start, end = byte_range
-            if start < 0 or (end is not None and end < start):
-                raise ValueError(f"invalid byte_range {byte_range!r}")
-            headers["Range"] = f"bytes={start}-{'' if end is None else end}"
-
-        self._check_server_version()
-        try:
-            resp = self._session.get(
-                f"{self._base}/artifacts/{request_id}/{artifact_id}",
-                headers=headers,
-                stream=True,
-                timeout=self._timeout if timeout is None else timeout,
-            )
-        except _requests.exceptions.ConnectionError as e:
-            raise ConnectionError(f"Cannot reach DAZ Studio at {self._base}: {e}") from e
-        except _requests.exceptions.Timeout as e:
-            raise TimeoutError(f"Request timed out after {self._timeout if timeout is None else timeout}s") from e
-        except _requests.exceptions.RequestException as e:
-            raise ConnectionError(f"HTTP transport failure for DAZ Studio: {e}") from e
-
+        resp = self._send("get", f"/artifacts/{request_id}/{artifact_id}",
+                          _range_header(byte_range), timeout, stream=True)
         try:
             _raise_for_error(resp)
             if dest is None:
@@ -896,9 +636,9 @@ class DazClient:
         size: int = 256,
         *,
         format: str = "png",
-        dest: "str | os.PathLike[str] | None" = None,
+        dest: str | os.PathLike[str] | None = None,
         timeout: float | None = None,
-    ) -> "bytes | str":
+    ) -> bytes | str:
         """Fetch a scaled preview of an image artifact
         (GET /artifacts/{request_id}/{artifact_id}?thumbnail=<size>).
 
@@ -930,39 +670,23 @@ class DazClient:
                 a scene, running a long job); retry after ``retry_after``.
                 Cached thumbnails are still served while busy.
         """
-        resp = self._get(
-            f"/artifacts/{request_id}/{artifact_id}",
-            params={"thumbnail": int(size), "format": format},
-            timeout=timeout,
-        )
+        resp = self._get(f"/artifacts/{request_id}/{artifact_id}",
+                         params=_thumbnail_params(size, format), timeout=timeout)
         _raise_for_error(resp)
-        if dest is None:
-            return resp.content
-        path = os.fspath(dest)
-        with open(path, "wb") as f:
-            f.write(resp.content)
-        return path
+        return _bytes_or_file(resp.content, dest)
 
     def download_artifacts(
-        self, request_id: str, dest_dir: "str | os.PathLike[str]"
-    ) -> "list[str]":
+        self, request_id: str, dest_dir: str | os.PathLike[str]
+    ) -> list[str]:
         """Download every available artifact of a job into *dest_dir*.
 
         Files are named ``<artifact_id>_<filename>`` so two outputs with the
         same base name can't overwrite each other. Unavailable entries are
         skipped. Returns the paths written, in manifest order.
         """
-        os.makedirs(dest_dir, exist_ok=True)
-        written: list[str] = []
-        for entry in self.list_artifacts(request_id).get("artifacts", []):
-            if not entry.get("available"):
-                continue
-            aid = str(entry["artifact_id"])
-            name = _safe_artifact_filename(entry.get("filename") or "artifact")
-            # With a dest, download_artifact returns the written path (str).
-            written.append(cast(str, self.download_artifact(
-                request_id, aid, os.path.join(os.fspath(dest_dir), f"{aid}_{name}"))))
-        return written
+        # With a dest, download_artifact returns the written path (str).
+        return [cast(str, self.download_artifact(request_id, aid, path))
+                for aid, path in _artifact_targets(self.list_artifacts(request_id), dest_dir)]
 
     # ── Render ────────────────────────────────────────────────────────────────
 
@@ -997,8 +721,10 @@ class DazClient:
             iray_samples: iRay sample count (0 = use scene default).
             reset_morphs: If ``True``, reset all morphs to defaults before applying.
             retry_on_busy: If ``True``, transparently retry with backoff when
-                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
-                instead of raising immediately.
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``
+                or another error marked ``retryable`` (rate limited, queue
+                full), waiting at least its ``Retry-After``, instead of
+                raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
 
@@ -1015,29 +741,13 @@ class DazClient:
                 flight and *retry_on_busy* is ``False`` or *max_wait* is
                 exceeded.
         """
-        payload: dict = {"output_path": output_path}
-        if width and height:
-            payload["width"] = width
-            payload["height"] = height
-        if camera:
-            payload["camera"] = camera
-        if engine:
-            payload["engine"] = engine
-        if iray_samples:
-            payload["iray_samples"] = iray_samples
-        if reset_morphs:
-            payload["reset_morphs"] = True
-        if figures is not None:
-            payload["figures"] = figures
-        elif figure:
-            payload["figure"] = figure
-            if morphs:
-                payload["morphs"] = morphs
+        payload = _render_payload(
+            output_path, figure=figure, morphs=morphs, figures=figures, width=width,
+            height=height, camera=camera, engine=engine, iray_samples=iray_samples,
+            reset_morphs=reset_morphs)
 
         def _do():
-            resp = self._post("/render", payload, _job_headers(idempotency_key, correlation_id))
-            _raise_for_error(resp)
-            return resp.json()
+            return _json_ok(self._post("/render", payload, _job_headers(idempotency_key, correlation_id)))
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -1052,8 +762,12 @@ class DazClient:
                 Supported keys mirror :meth:`render_submit` optional fields.
             base: Optional shared defaults applied to all variants.
             retry_on_busy: If ``True``, transparently retry with backoff when
-                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
-                instead of raising immediately.
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``
+                or another error marked ``retryable`` (rate limited, queue
+                full), waiting at least its ``Retry-After``, instead of
+                raising immediately. Other ``retryable`` errors are
+                retried only on plugin 2.17+, where a rejected batch queued
+                nothing; older plugins could partially accept it.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
 
@@ -1069,16 +783,16 @@ class DazClient:
                 flight and *retry_on_busy* is ``False`` or *max_wait* is
                 exceeded.
         """
-        payload: dict = {"variants": variants}
-        if base:
-            payload["base"] = base
+        payload = _render_batch_payload(variants, base)
 
         def _do():
-            resp = self._post("/render/batch", payload, _job_headers(idempotency_key, correlation_id))
-            _raise_for_error(resp)
-            return resp.json()
+            return _json_ok(self._post("/render/batch", payload, _job_headers(idempotency_key, correlation_id)))
 
-        return self._with_busy_retry(_do, retry_on_busy, max_wait)
+        # Before plugin 2.17 a queue-full 503 here could follow a partial
+        # accept, and resubmitting would duplicate the queued variants.
+        return self._with_busy_retry(
+            _do, retry_on_busy, max_wait,
+            retry_server_errors=lambda: server_at_least(self.version_check, ATOMIC_RENDER_BATCH_VERSION))
 
     def render_animation_submit(
         self,
@@ -1114,8 +828,10 @@ class DazClient:
             camera: Camera label to render from.
             engine: Render engine (``"iray"``, ``"viewport"``, ``"filament"``).
             retry_on_busy: If ``True``, transparently retry with backoff when
-                the server reports ``StudioBusyError``/``ConcurrencyLimitError``,
-                instead of raising immediately.
+                the server reports ``StudioBusyError``/``ConcurrencyLimitError``
+                or another error marked ``retryable`` (rate limited, queue
+                full), waiting at least its ``Retry-After``, instead of
+                raising immediately.
             max_wait: Maximum total seconds to retry when *retry_on_busy* is
                 ``True``, before re-raising the busy error.
 
@@ -1132,24 +848,12 @@ class DazClient:
                 flight and *retry_on_busy* is ``False`` or *max_wait* is
                 exceeded.
         """
-        payload: dict = {
-            "output_path": output_path,
-            "start_frame": start_frame,
-            "end_frame": end_frame,
-            "frame_padding": frame_padding,
-        }
-        if width and height:
-            payload["width"] = width
-            payload["height"] = height
-        if camera:
-            payload["camera"] = camera
-        if engine:
-            payload["engine"] = engine
+        payload = _render_animation_payload(
+            output_path, start_frame, end_frame, frame_padding=frame_padding,
+            width=width, height=height, camera=camera, engine=engine)
 
         def _do():
-            resp = self._post("/render/animation", payload, _job_headers(idempotency_key, correlation_id))
-            _raise_for_error(resp)
-            return resp.json()
+            return _json_ok(self._post("/render/animation", payload, _job_headers(idempotency_key, correlation_id)))
 
         return self._with_busy_retry(_do, retry_on_busy, max_wait)
 
@@ -1169,7 +873,7 @@ class DazClient:
             return False
         return self.cancel_request(request_id)
 
-    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> "_requests.Response | None":
+    def stream_render_progress(self, request_id: str, stream_timeout: float = 305.0) -> _requests.Response | None:
         """Open the SSE progress stream for a render request.
 
         Returns a streaming :class:`requests.Response` on success, or ``None``
@@ -1182,15 +886,18 @@ class DazClient:
                 stream=True,
                 timeout=stream_timeout,
             )
-            return resp if resp.status_code == 200 else None
         except _requests.exceptions.RequestException:
             return None
+        if resp.status_code != 200:
+            resp.close()
+            return None
+        return resp
 
     def stream_scene_events(
         self,
-        categories: "list[str] | None" = None,
-        stream_timeout: "float | None" = None,
-    ) -> "_requests.Response | None":
+        categories: list[str] | None = None,
+        stream_timeout: float | None = None,
+    ) -> _requests.Response | None:
         """Open the SSE stream for general scene-change events (GET /scene/events).
 
         Args:
@@ -1208,17 +915,19 @@ class DazClient:
             when done (e.g. via a ``with`` statement).
         """
         try:
-            params = {"filter": ",".join(categories)} if categories else None
             resp = self._session.get(
                 f"{self._base}/scene/events",
                 headers=self._headers,
-                params=params,
+                params=_events_params(categories),
                 stream=True,
                 timeout=stream_timeout,
             )
-            return resp if resp.status_code == 200 else None
         except _requests.exceptions.RequestException:
             return None
+        if resp.status_code != 200:
+            resp.close()
+            return None
+        return resp
 
     # ── Server health ─────────────────────────────────────────────────────────
 
@@ -1228,9 +937,7 @@ class DazClient:
         Raises:
             AuthenticationError: On HTTP 401/403.
         """
-        resp = self._get("/status")
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_ok(self._get("/status"))
 
     def health(self) -> dict:
         """Return the health check dict from ``GET /health``.
@@ -1238,9 +945,7 @@ class DazClient:
         Raises:
             AuthenticationError: On HTTP 401/403.
         """
-        resp = self._get("/health")
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_ok(self._get("/health"))
 
     def metrics(self) -> dict:
         """Return the metrics dict from ``GET /metrics``.
@@ -1248,9 +953,7 @@ class DazClient:
         Raises:
             AuthenticationError: On HTTP 401/403.
         """
-        resp = self._get("/metrics")
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_ok(self._get("/metrics"))
 
     def capabilities(self) -> dict:
         """Return the server's capabilities document from ``GET /capabilities``.
@@ -1271,6 +974,4 @@ class DazClient:
                 ``/capabilities`` (``status_code == 404``).
             StudioBusyError: On HTTP 503 before the server has a snapshot.
         """
-        resp = self._get("/capabilities")
-        _raise_for_error(resp)
-        return resp.json()
+        return _json_ok(self._get("/capabilities"))

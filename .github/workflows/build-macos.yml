@@ -26,6 +26,13 @@ on:
         description: 'Name of the uploaded artifact'
         value: ${{ jobs.build.outputs.artifact-name }}
 
+# Read-only. A reusable workflow can't exceed this even when its caller
+# (release-tagged/release-nightly) grants a job more.
+permissions:
+  contents: read
+
+# SDK repo ref, cache keys and Qt6 version: .github/actions/setup-daz-sdk.
+
 jobs:
   build:
     runs-on: ${{ inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
@@ -79,88 +86,17 @@ jobs:
             echo "cmake-arch=x86_64" >> $GITHUB_OUTPUT
           fi
 
-      - name: Set up SDK paths
-        id: sdk-paths
-        run: |
-          if [ "${{ inputs.sdk-version }}" = "6" ]; then
-            # See build-windows.yml: bump whenever daz-studio-6-sdk-macos changes.
-            echo "cache-key=daz-sdk-6.26-macos-private-v2" >> $GITHUB_OUTPUT
-            echo "sparse-path=daz-studio-6-sdk-macos" >> $GITHUB_OUTPUT
-            echo "sdk-dir=Daz Studio 6 SDK" >> $GITHUB_OUTPUT
-            echo "dylib-name=libdsp_DazScriptServer.dylib" >> $GITHUB_OUTPUT
-          else
-            echo "cache-key=daz-sdk-4.5-macos-private-v1" >> $GITHUB_OUTPUT
-            echo "sparse-path=daz-studio-45-sdk-macos" >> $GITHUB_OUTPUT
-            echo "sdk-dir=DAZStudio4.5+ SDK" >> $GITHUB_OUTPUT
-            echo "dylib-name=DazScriptServer.dylib" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Cache DAZ Studio SDK
-        id: cache-sdk
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Set up DAZ Studio SDK (and Qt6 for SDK 6)
+        id: sdk
+        uses: ./.github/actions/setup-daz-sdk
         with:
-          path: ${{ github.workspace }}/${{ steps.sdk-paths.outputs.sdk-dir }}
-          key: ${{ steps.sdk-paths.outputs.cache-key }}
-
-      - name: Checkout DAZ Studio SDK repo
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: bluemoonfoundry/daz-studio-sdks
-          token: ${{ secrets.sdk-repo-token }}
-          path: temp-sdk
-          sparse-checkout: |
-            ${{ steps.sdk-paths.outputs.sparse-path }}
-
-      - name: Move SDK to expected location
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          if [ ! -d "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" ]; then
-            echo "Error: ${{ steps.sdk-paths.outputs.sparse-path }} not found in daz-studio-sdks."
-            exit 1
-          fi
-          mv "temp-sdk/${{ steps.sdk-paths.outputs.sparse-path }}" "${{ steps.sdk-paths.outputs.sdk-dir }}"
-          rm -rf temp-sdk
-
-      - name: Verify SDK structure (v4)
-        if: inputs.sdk-version != '6'
-        run: |
-          if [ ! -d "DAZStudio4.5+ SDK/include" ]; then
-            echo "Error: SDK include directory not found"
-            exit 1
-          fi
-          if [ ! -d "DAZStudio4.5+ SDK/lib" ]; then
-            echo "Error: SDK lib directory not found"
-            exit 1
-          fi
-          echo "SDK structure verified"
-
-      - name: Verify SDK structure (v6)
-        if: inputs.sdk-version == '6'
-        run: |
-          if [ ! -d "Daz Studio 6 SDK/include" ]; then
-            echo "Error: SDK include directory not found"
-            exit 1
-          fi
-          echo "SDK structure verified"
+          sdk-version: ${{ inputs.sdk-version }}
+          os: macos
+          sdk-repo-token: ${{ secrets.sdk-repo-token }}
 
       - name: Select Xcode (v6 needs recent libc++/Clang for Qt6)
         if: inputs.sdk-version == '6'
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-
-      - name: Cache Qt6
-        if: inputs.sdk-version == '6'
-        id: cache-qt6
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ github.workspace }}/qt6
-          key: qt6-6.10.3-clang_64-qt5compat-v1
-
-      - name: Install Qt6 (aqtinstall)
-        if: inputs.sdk-version == '6' && steps.cache-qt6.outputs.cache-hit != 'true'
-        run: |
-          python3 -m pip install --break-system-packages aqtinstall
-          python3 -m aqt install-qt mac desktop 6.10.3 clang_64 -m qt5compat --outputdir "${{ github.workspace }}/qt6"
 
       - name: Configure CMake (v4)
         if: inputs.sdk-version != '6'
@@ -177,7 +113,7 @@ jobs:
           cmake -B build -S . \
             -DDAZ_SDK_DIR="${{ github.workspace }}/Daz Studio 6 SDK" \
             -DDAZ_SDK_VERSION=6 \
-            -DQt6_DIR="${{ github.workspace }}/qt6/6.10.3/macos/lib/cmake/Qt6" \
+            -DQt6_DIR="${{ steps.sdk.outputs.qt6-dir }}" \
             -DCMAKE_BUILD_TYPE=${{ inputs.configuration }} \
             -DCMAKE_OSX_ARCHITECTURES="${{ steps.arch-flags.outputs.cmake-arch }}"
 
@@ -187,7 +123,7 @@ jobs:
 
       - name: Verify build output
         run: |
-          DYLIB_PATH="build/plugin/${{ steps.sdk-paths.outputs.dylib-name }}"
+          DYLIB_PATH="build/plugin/${{ steps.sdk.outputs.binary-name }}"
           if [ ! -f "$DYLIB_PATH" ]; then
             echo "Error: dylib not found at $DYLIB_PATH"
             exit 1
@@ -200,12 +136,12 @@ jobs:
       - name: Verify DS6 SDK version tag
         if: inputs.sdk-version == '6'
         run: |
-          python3 scripts/check_sdk_tag.py             "build/plugin/${{ steps.sdk-paths.outputs.dylib-name }}"             "Daz Studio 6 SDK/include"
+          python3 scripts/check_sdk_tag.py             "build/plugin/${{ steps.sdk.outputs.binary-name }}"             "Daz Studio 6 SDK/include"
 
       - name: Upload macOS dylib artifact
         id: upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: DazScriptServer-macos-${{ steps.arch-flags.outputs.runner-desc }}-ds${{ inputs.sdk-version }}-${{ inputs.configuration }}
-          path: build/plugin/${{ steps.sdk-paths.outputs.dylib-name }}
+          path: build/plugin/${{ steps.sdk.outputs.binary-name }}
           if-no-files-found: error

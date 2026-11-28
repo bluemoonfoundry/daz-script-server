@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import {
   ArtifactError,
   AuthenticationError,
@@ -18,6 +19,7 @@ import {
 import { buildOperationsScript } from "./batch.js";
 import type { ExecutionResult } from "./result.js";
 import { evaluateServerVersion, type VersionCheck } from "./version.js";
+import { sleep } from "./sleep.js";
 
 const TOKEN_FILE = path.join(os.homedir(), ".daz3d", "dazscriptserver_token.txt");
 const DEFAULT_HOST = "127.0.0.1";
@@ -132,7 +134,6 @@ async function throwArtifactError(resp: Response): Promise<void> {
 /** Base name safe to join under a download directory (no separators, no `..`). */
 export function safeArtifactFilename(name: string): string {
   const base = name.replace(/\\/g, "/").split("/").pop() ?? "";
-  // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[:*?"<>|\x00-\x1f]/g, "_");
   return cleaned.replace(/[. ]/g, "") === "" ? "artifact" : cleaned;
 }
@@ -159,10 +160,6 @@ async function mapResponse(resp: Response, script = ""): Promise<ExecutionResult
     error: "",
     durationMs: (data.duration_ms as number) ?? 0,
   };
-}
-
-function sleep(seconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
 /** Parse one SSE event block (lines already split on LF). */
@@ -511,7 +508,7 @@ export class DazClient {
         if (remainingMs <= 0) {
           throw e;
         }
-        await sleep(Math.min(backoff, remainingMs / 1000));
+        await sleep(Math.min(backoff * 1000, remainingMs));
         backoff = Math.min(backoff + 1.0, 5.0);
       }
     }
@@ -1014,8 +1011,10 @@ export class DazClient {
     if (!resp.body) {
       await fs.promises.writeFile(dest, Buffer.alloc(0));
     } else {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await pipeline(Readable.fromWeb(resp.body as any), fs.createWriteStream(dest));
+      // fetch's DOM ReadableStream type and node:stream/web's are the same
+      // object at runtime but distinct in the type libs.
+      const body = resp.body as unknown as NodeWebReadableStream;
+      await pipeline(Readable.fromWeb(body), fs.createWriteStream(dest));
     }
     return dest;
   }

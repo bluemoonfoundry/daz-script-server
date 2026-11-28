@@ -1,5 +1,6 @@
 #pragma once
 #include <QtCore/qbytearray.h>
+#include "ServerConfig.h"
 #include <QtCore/qmap.h>
 #include <QtCore/qmutex.h>
 
@@ -31,9 +32,9 @@ class IdempotencyCache {
 public:
     enum Outcome { PROCEED, IN_FLIGHT, REPLAY, MISMATCH };
 
-    static const int    MAX_KEY_LENGTH = 255;
-    static const int    DEFAULT_MAX_ENTRIES = 1000;
-    static const qint64 DEFAULT_TTL_MS = 60LL * 60LL * 1000LL; // matches async job TTL
+    static const int    MAX_KEY_LENGTH      = ServerConfig::IDEMPOTENCY_MAX_KEY_LENGTH;
+    static const int    DEFAULT_MAX_ENTRIES = ServerConfig::IDEMPOTENCY_MAX_ENTRIES;
+    static const qint64 DEFAULT_TTL_MS      = ServerConfig::IDEMPOTENCY_TTL_MS;
 
     IdempotencyCache();
 
@@ -50,7 +51,6 @@ public:
     void    complete(const QByteArray& scopedKey, int status, const QByteArray& body);
 
     void clear();
-    int  size() const;
     int  ttlSeconds() const { return (int)(m_ttlMs / 1000); }
 
     // Test/config hooks; not guarded (set before the server starts).

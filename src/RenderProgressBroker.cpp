@@ -1,5 +1,6 @@
 #include "RenderProgressBroker.h"
 #include "JsonStd.h"
+#include "ErrorResponse.h"
 
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qmutex.h>
@@ -105,11 +106,15 @@ void RenderProgressBroker::notifyCompleted(const QString& requestId, int duratio
     publishTerminal(requestId, event);
 }
 
-void RenderProgressBroker::notifyFailed(const QString& requestId, const QString& error, int durationMs)
+void RenderProgressBroker::notifyFailed(const QString& requestId, ErrorCode code,
+                                        const QString& error, int durationMs)
 {
-    QString data = "{\"request_id\":\"" + jsonEscape(requestId)
-        + "\",\"error\":\""     + jsonEscape(error)
-        + "\",\"duration_ms\":" + QString::number(durationMs) + "}";
+    // Same error fields as every other failure body (W11): error_code,
+    // error, retryable.
+    const std::string errFields = ErrorResponse::fields(code, JsonStd::qstrToStd(error));
+    QString data = "{\"request_id\":\"" + jsonEscape(requestId) + "\","
+        + QString::fromUtf8(errFields.data(), static_cast<int>(errFields.size()))
+        + ",\"duration_ms\":" + QString::number(durationMs) + "}";
     QString event = makeEvent("error", data);
 
     publishTerminal(requestId, event);

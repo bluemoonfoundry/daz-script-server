@@ -1,6 +1,7 @@
 #include "PackageDependencyInstaller.h"
 
 #include "JsonStd.h"
+#include "PackageManifest.h"
 #include "PackagePaths.h"
 
 #include <QDir>
@@ -10,11 +11,7 @@
 PackageDependencyInstaller::PackageDependencyInstaller(QObject *parent) : QObject(parent) {}
 
 QString PackageDependencyInstaller::venvPythonPath() const {
-#ifdef Q_OS_WIN
-	return QDir(PackagePaths::packageVenvDir(m_packageId)).filePath("Scripts/python.exe");
-#else
-	return QDir(PackagePaths::packageVenvDir(m_packageId)).filePath("bin/python");
-#endif
+	return PackagePaths::packageVenvPythonPath(m_packageId);
 }
 
 QString PackageDependencyInstaller::statusFilePath() const {
@@ -64,7 +61,14 @@ void PackageDependencyInstaller::writeStatusFile(bool success, const QString &st
 
 	QFile statusFile(statusFilePath());
 	if (statusFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		statusFile.write(JsonStd::variantToJsonBytes(status));
+		const QByteArray bytes = JsonStd::variantToJsonBytes(status);
+		const bool written = statusFile.write(bytes) == bytes.size() && statusFile.flush();
+		statusFile.close();
+		// The status file is only a cache; a partial one must not survive
+		// to be trusted, so drop it and let the next import re-resolve.
+		if (!written || statusFile.error() != QFile::NoError) {
+			QFile::remove(statusFile.fileName());
+		}
 	}
 }
 
@@ -129,6 +133,17 @@ void PackageDependencyInstaller::onCreateVenvFinished(int exitCode, QProcess::Ex
 
 void PackageDependencyInstaller::installDeps() {
 	emit stepStarted("install-deps");
+
+	// Defense in depth: DzPackageImporter already validated the manifest,
+	// but a requirement starting with '-' would reach uv as an option. Kept
+	// here rather than in run(): this step runs from a QProcess::finished
+	// slot, so fail()'s finished signal lands after the caller's loop.exec().
+	for (const QString &dep : m_dependencies) {
+		if (!PackageManifest::isValidDependency(dep)) {
+			fail("install-deps", QString::fromLatin1("Refusing invalid dependency requirement: %1").arg(dep));
+			return;
+		}
+	}
 
 	m_process = new QProcess(this);
 	QStringList arguments = QStringList()

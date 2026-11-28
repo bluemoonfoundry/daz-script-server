@@ -8,16 +8,13 @@ import { executeLong } from "./polling.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 import { DazSkeleton } from "./skeleton.js";
 import { withUndo } from "./undo.js";
+import { sleep } from "./sleep.js";
 
 const LIGHT_TYPE_CLASSES: Record<string, string> = {
   spot: "DzSpotLight",
   point: "DzPointLight",
   distant: "DzDistantLight",
 };
-
-function sleep(seconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-}
 
 /**
  * High-level proxy for the active DAZ Studio scene (`Scene` global) — the
@@ -201,7 +198,7 @@ export class DazScene {
         break;
       }
       if (attempt < retryAttempts - 1) {
-        await sleep(retryDelay * (attempt + 1));
+        await sleep(retryDelay * (attempt + 1) * 1000);
       }
     }
     if (!found) {

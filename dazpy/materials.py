@@ -21,7 +21,6 @@ live DAZ Studio instance -- see
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -128,12 +127,12 @@ def _channel_label(channel: str) -> str:
     return _CHANNEL_LABELS.get(channel, channel)
 
 
-def _set_channel_value(material: "DazMaterial", label: str, value: object) -> None:
+def _set_channel_value(material: DazMaterial, label: str, value: object) -> None:
     serialized = ScriptBuilder.serialize_arg(value)
     script = ScriptBuilder.iife(f"""
         var m = {material._locator};
         if (!m) return {{"error": "material_not_found"}};
-        var p = m.findPropertyByLabel({json.dumps(label)});
+        var p = m.findPropertyByLabel({ScriptBuilder.to_js(label)});
         if (!p) return {{"error": "property_not_found"}};
         p.setValue({serialized});
         return {{"success": true}};
@@ -144,11 +143,11 @@ def _set_channel_value(material: "DazMaterial", label: str, value: object) -> No
         raise MaterialError(f"Failed to set Iray channel {label!r}: {error}")
 
 
-def _get_channel_value(material: "DazMaterial", label: str) -> object:
+def _get_channel_value(material: DazMaterial, label: str) -> object:
     script = ScriptBuilder.iife(f"""
         var m = {material._locator};
         if (!m) return {{"error": "material_not_found"}};
-        var p = m.findPropertyByLabel({json.dumps(label)});
+        var p = m.findPropertyByLabel({ScriptBuilder.to_js(label)});
         if (!p) return {{"error": "property_not_found"}};
         return {{"success": true, "value": p.getValue()}};
     """)
@@ -159,7 +158,7 @@ def _get_channel_value(material: "DazMaterial", label: str) -> object:
     return result.get("value")
 
 
-def _set_channel_map(material: "DazMaterial", label: str, path: str) -> None:
+def _set_channel_map(material: DazMaterial, label: str, path: str) -> None:
     if not os.path.isabs(path):
         raise ValueError(f"Texture map path must be absolute: {path}")
     if not os.path.isfile(path):
@@ -167,9 +166,9 @@ def _set_channel_map(material: "DazMaterial", label: str, path: str) -> None:
     script = ScriptBuilder.iife(f"""
         var m = {material._locator};
         if (!m) return {{"error": "material_not_found"}};
-        var p = m.findPropertyByLabel({json.dumps(label)});
+        var p = m.findPropertyByLabel({ScriptBuilder.to_js(label)});
         if (!p) return {{"error": "property_not_found"}};
-        p.setMap({json.dumps(path)});
+        p.setMap({ScriptBuilder.to_js(path)});
         return {{"success": true}};
     """)
     result = material._client.execute(script).value
@@ -178,7 +177,7 @@ def _set_channel_map(material: "DazMaterial", label: str, path: str) -> None:
         raise MaterialError(f"Failed to set texture map on channel {label!r}: {error}")
 
 
-def apply_texture_map(material: "DazMaterial", texture: TextureMap) -> None:
+def apply_texture_map(material: DazMaterial, texture: TextureMap) -> None:
     """Assign *texture* to *material*'s corresponding Iray channel.
 
     Args:
@@ -195,7 +194,7 @@ def apply_texture_map(material: "DazMaterial", texture: TextureMap) -> None:
     _set_channel_map(material, _channel_label(texture.channel), texture.file_path)
 
 
-def get_surface_property(material: "DazMaterial", label: str) -> object:
+def get_surface_property(material: DazMaterial, label: str) -> object:
     """Return the current value of the named Iray surface property.
 
     Args:
@@ -208,7 +207,7 @@ def get_surface_property(material: "DazMaterial", label: str) -> object:
     return _get_channel_value(material, label)
 
 
-def set_surface_property(material: "DazMaterial", prop: SurfaceProperty) -> None:
+def set_surface_property(material: DazMaterial, prop: SurfaceProperty) -> None:
     """Set a single named Iray surface property.
 
     Args:
@@ -232,7 +231,7 @@ _TYPED_FIELDS = (
 )
 
 
-def apply_iray_material(material: "DazMaterial", spec: IrayMaterial) -> None:
+def apply_iray_material(material: DazMaterial, spec: IrayMaterial) -> None:
     """Apply *spec* to *material* in typed-fields -> textures -> properties order.
 
     Args:

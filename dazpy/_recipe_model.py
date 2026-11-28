@@ -8,41 +8,72 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, fields, MISSING
-from typing import Any, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Literal
+from collections.abc import Mapping
 
-Vec3T = Tuple[float, float, float]
+from ._asset_ref import AssetRef, parse_ref
+
+Vec3T = tuple[float, float, float]
 LightKind = Literal["spot", "point", "distant"]
-RefOrVec = Union[str, Vec3T]
+RefOrVec = str | Vec3T
+
+
+@dataclass(frozen=True)
+class TypeSelector:
+    """Selects every fitted item whose content type matches *type* (friendly name or raw prefix)."""
+    type: str
+
+
+Selector = str | TypeSelector  # str = exact Scene-pane label
+
+
+@dataclass(frozen=True)
+class WearingEntry:
+    """One fitted-item operation of an actor (spec 6.4).
+
+    ``add``: *ref* is the item; ``replace``: *ref* is the ``with`` item and *target*
+    the selector; ``remove``: only *target*.
+    """
+    op: Literal["add", "replace", "remove"]
+    key: str | None
+    ref: AssetRef | None
+    target: Selector | None
+    if_missing: Literal["error", "add", "ignore"] = "error"
 
 
 @dataclass(frozen=True)
 class AssetSpec:
-    path: str
+    ref: AssetRef
 
 
 @dataclass(frozen=True)
 class ActorSpec:
-    asset: str
-    position: Vec3T = (0.0, 0.0, 0.0)
-    rotation: Optional[Vec3T] = None
-    facing: Optional[RefOrVec] = None
-    pose: Optional[str] = None
+    # str = key into the top-level ``assets`` when it names one, else a path reference
+    asset: str | AssetRef | None = None
+    # None = "not set"; compute_desired applies the v1 default (0, 0, 0)
+    position: Vec3T | None = None
+    rotation: Vec3T | None = None
+    facing: RefOrVec | None = None
+    pose: str | None = None
+    node: str | None = None
+    presets: tuple[AssetRef, ...] = ()
+    wearing: tuple[WearingEntry, ...] = ()
 
 
 @dataclass(frozen=True)
 class PropSpec:
-    asset: str
+    asset: str | AssetRef
     position: Vec3T = (0.0, 0.0, 0.0)
-    rotation: Optional[Vec3T] = None
+    rotation: Vec3T | None = None
 
 
 @dataclass(frozen=True)
 class RigLightOverride:
-    azimuth_deg: Optional[float] = None
-    elevation_deg: Optional[float] = None
-    distance: Optional[float] = None
-    intensity: Optional[float] = None
-    color: Optional[Tuple[int, int, int]] = None
+    azimuth_deg: float | None = None
+    elevation_deg: float | None = None
+    distance: float | None = None
+    intensity: float | None = None
+    color: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,19 +81,19 @@ class RecipeRig:
     type: Literal["three_point"]
     target: str
     light_type: LightKind = "spot"
-    key: Optional[RigLightOverride] = None
-    fill: Optional[RigLightOverride] = None
-    rim: Optional[RigLightOverride] = None
+    key: RigLightOverride | None = None
+    fill: RigLightOverride | None = None
+    rim: RigLightOverride | None = None
 
 
 @dataclass(frozen=True)
 class RecipeLight:
     type: LightKind
     position: Vec3T
-    look_at: Optional[RefOrVec] = None
-    rotation: Optional[Vec3T] = None
+    look_at: RefOrVec | None = None
+    rotation: Vec3T | None = None
     intensity: float = 100.0
-    color: Tuple[int, int, int] = (255, 255, 255)
+    color: tuple[int, int, int] = (255, 255, 255)
 
 
 @dataclass(frozen=True)
@@ -77,26 +108,26 @@ class RecipeEnvironment:
 
 @dataclass(frozen=True)
 class RecipeCamera:
-    frame: Optional[Union[str, Tuple[str, ...]]] = None
+    frame: str | tuple[str, ...] | None = None
     shot_type: Literal["extreme_wide", "wide", "full_body", "medium_wide", "medium",
                        "medium_close_up", "close_up", "extreme_close_up"] = "medium"
     azimuth_deg: float = 0.0
     elevation_deg: float = 10.0
-    angle: Optional[Literal["eye_level", "high", "low", "birds_eye", "worms_eye"]] = None
+    angle: Literal["eye_level", "high", "low", "birds_eye", "worms_eye"] | None = None
     composition: Literal["center", "left_third", "right_third"] = "center"
-    position: Optional[Vec3T] = None
-    look_at: Optional[RefOrVec] = None
-    rotation: Optional[Vec3T] = None
+    position: Vec3T | None = None
+    look_at: RefOrVec | None = None
+    rotation: Vec3T | None = None
     focal_length: float = 50.0
     depth_of_field: bool = False
-    focal_distance: Optional[float] = None
+    focal_distance: float | None = None
 
 
 @dataclass(frozen=True)
 class RenderSpec:
-    engine: Optional[Literal["iray", "filament", "viewport"]] = None
-    resolution: Optional[Tuple[int, int]] = None
-    iray_samples: Optional[int] = None
+    engine: Literal["iray", "filament", "viewport"] | None = None
+    resolution: tuple[int, int] | None = None
+    iray_samples: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,7 +135,7 @@ class ShotSpec:
     id: str
     camera: str
     output: str
-    render: Optional[RenderSpec] = None
+    render: RenderSpec | None = None
     allow_crop: bool = False
 
 
@@ -129,7 +160,62 @@ def _build(cls: Any, data: Mapping[str, Any], nested: Mapping[str, Any] = {}) ->
     return cls(**kwargs)
 
 
+def _selector_from_json(v: Any) -> Selector:
+    return TypeSelector(v["type"]) if isinstance(v, Mapping) else v
+
+
+def _wearing_from_json(e: Mapping[str, Any]) -> WearingEntry:
+    if "add" in e:
+        return WearingEntry("add", e["key"], parse_ref(e["add"]), None)
+    if "replace" in e:
+        return WearingEntry("replace", e["key"], parse_ref(e["with"]),
+                            _selector_from_json(e["replace"]), e.get("if_missing", "error"))
+    return WearingEntry("remove", None, None, _selector_from_json(e["remove"]),
+                        e.get("if_missing", "error"))
+
+
+def _wearing_to_json(w: WearingEntry) -> dict:
+    sel = {"type": w.target.type} if isinstance(w.target, TypeSelector) else w.target
+    if w.op == "add":
+        return {"add": w.ref.to_dict(), "key": w.key}  # type: ignore[union-attr]
+    out: dict = {w.op: sel}
+    if w.op == "replace":
+        out["with"] = w.ref.to_dict()  # type: ignore[union-attr]
+        out["key"] = w.key
+    if w.if_missing != "error":
+        out["if_missing"] = w.if_missing
+    return out
+
+
+def _asset_value(v: Any) -> str | AssetRef:
+    """An actor/prop ``asset``: a string stays a string, an object becomes an AssetRef."""
+    return parse_ref(v) if isinstance(v, Mapping) else v
+
+
+def _build_actor(data: Mapping[str, Any]) -> ActorSpec:
+    kwargs = {k: _from_value(v) for k, v in data.items()
+              if k not in ("asset", "presets", "wearing")}
+    if "asset" in data:
+        kwargs["asset"] = _asset_value(data["asset"])
+    kwargs["presets"] = tuple(parse_ref(r) for r in data.get("presets") or ())
+    kwargs["wearing"] = tuple(_wearing_from_json(e) for e in data.get("wearing") or ())
+    return ActorSpec(**kwargs)
+
+
+def _build_prop(data: Mapping[str, Any]) -> PropSpec:
+    kwargs = {k: _from_value(v) for k, v in data.items() if k != "asset"}
+    return PropSpec(asset=_asset_value(data["asset"]), **kwargs)
+
+
+def _build_asset(data: Any) -> AssetSpec:
+    return AssetSpec(parse_ref(data))  # v1 {"path": ...} objects are valid asset refs
+
+
 def _to_value(value: Any) -> Any:
+    if isinstance(value, AssetRef):
+        return value.to_dict()
+    if isinstance(value, WearingEntry):
+        return _wearing_to_json(value)
     if isinstance(value, tuple):
         return [_to_value(v) for v in value]
     return value
@@ -142,20 +228,39 @@ def _dump(obj: Any) -> dict:
         value = getattr(obj, f.name)
         if f.default is not MISSING and value == f.default:
             continue
-        out[f.name] = _dump(value) if _is_dc(value) else _to_value(value)
+        out[f.name] = _dump(value) if _is_dc(value) and not isinstance(
+            value, (AssetRef, WearingEntry)) else _to_value(value)
     return out
 
 
 _NESTED: dict[Any, Mapping[str, Any]] = {
-    ActorSpec: {}, PropSpec: {}, AssetSpec: {}, RecipeLight: {},
-    RecipeEnvironment: {}, RecipeCamera: {},
+    RecipeLight: {}, RecipeEnvironment: {}, RecipeCamera: {},
     RecipeRig: {"key": RigLightOverride, "fill": RigLightOverride, "rim": RigLightOverride},
     ShotSpec: {"render": RenderSpec},
 }
 
 
-def _entities(cls: Any, section: Optional[Mapping[str, Any]]) -> dict:
-    return {k: _build(cls, v, _NESTED[cls]) for k, v in (section or {}).items()}
+def _entities(cls: Any, section: Mapping[str, Any] | None) -> dict:
+    build = {ActorSpec: _build_actor, PropSpec: _build_prop, AssetSpec: _build_asset}.get(cls)
+    return {k: build(v) if build else _build(cls, v, _NESTED[cls])
+            for k, v in (section or {}).items()}
+
+
+def _resolve_key(recipe: SceneRecipe, asset: str | AssetRef | None) -> AssetRef | None:
+    if isinstance(asset, str):
+        spec = recipe.assets.get(asset)
+        return spec.ref if spec is not None else AssetRef(path=asset)
+    return asset
+
+
+def actor_ref(recipe: SceneRecipe, key: str) -> AssetRef | None:
+    """The actor's base-figure reference; a key into ``assets`` is resolved through it."""
+    return _resolve_key(recipe, recipe.actors[key].asset)
+
+
+def prop_ref(recipe: SceneRecipe, key: str) -> AssetRef:
+    """The prop's asset reference; a key into ``assets`` is resolved through it."""
+    return _resolve_key(recipe, recipe.props[key].asset)  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)
@@ -167,13 +272,13 @@ class SceneRecipe:
     props: Mapping[str, PropSpec] = field(default_factory=dict)
     rigs: Mapping[str, RecipeRig] = field(default_factory=dict)
     lights: Mapping[str, RecipeLight] = field(default_factory=dict)
-    environment: Optional[RecipeEnvironment] = None
+    environment: RecipeEnvironment | None = None
     cameras: Mapping[str, RecipeCamera] = field(default_factory=dict)
-    shots: Tuple[ShotSpec, ...] = ()
+    shots: tuple[ShotSpec, ...] = ()
     render: RenderSpec = field(default_factory=RenderSpec)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SceneRecipe":
+    def from_dict(cls, data: dict) -> SceneRecipe:
         from ._recipe_validate import validate_offline
         from .exceptions import RecipeValidationError
 
@@ -197,13 +302,17 @@ class SceneRecipe:
         )
 
     @classmethod
-    def from_json(cls, text: str) -> "SceneRecipe":
+    def from_json(cls, text: str) -> SceneRecipe:
         return cls.from_dict(json.loads(text))
 
     def to_dict(self) -> dict:
         """JSON-compatible dict; empty sections and default-valued fields are omitted."""
         out: dict = {"recipe_version": self.recipe_version, "id": self.id}
-        for key, section in (("assets", self.assets), ("actors", self.actors), ("props", self.props)):
+        if self.assets:
+            # v1 assets are {"path": ...} objects; v2 assets are asset references
+            out["assets"] = {k: {"path": v.ref.path} if self.recipe_version == 1 else v.ref.to_dict()
+                             for k, v in self.assets.items()}
+        for key, section in (("actors", self.actors), ("props", self.props)):
             if section:
                 out[key] = {k: _dump(v) for k, v in section.items()}
         lighting: dict = {}

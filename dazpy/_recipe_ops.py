@@ -33,24 +33,27 @@ int, written back with ``setValue(int)`` for rollback).
 
 from __future__ import annotations
 
-import json
 import os
-from typing import TYPE_CHECKING, Callable, Iterable, Protocol
+import time
+import uuid
+from typing import TYPE_CHECKING, Protocol
+from collections.abc import Callable, Iterable
 
 from ._camera import DazCamera
 from ._light import DazLight
 from ._node import DazNode, NodeIdentifier
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity, EntityKind
-from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest, owned_by,
-                            foreign_descendants,
+from ._recipe_store import (FIND_REF_JS, NODE_TRANSFORM_PROPS, EntityRecord, Manifest, owned_by,
+                            find_node_js, foreign_descendants, node_ident,
                             observe_environment_script, observe_node_script, observed_channels,
                             remove_record_script, subtree_script, write_manifest_script,
                             write_record_script)
 from ._render import DazRenderSettings
 from ._script_builder import ScriptBuilder
 from ._skeleton import DazSkeleton
-from .exceptions import DazError, NodeNotFoundError
+from ._recipe_fitted import is_data_file
+from .exceptions import DazError, NodeNotFoundError, StudioBusyError
 from .lighting import HDRIEnvironment, apply_hdri_environment
 from .poses import apply_pose
 
@@ -70,8 +73,9 @@ class SceneOps(Protocol):
         """Read the node's observed channels (the shapes ``read_live`` reports)."""
 
     def native_descendants(self, node_name: str) -> tuple[str, ...]:
-        """Names of the node's non-bone descendants (called right after create, so
-        everything below a fresh node came with its asset)."""
+        """Names of the node's non-bone descendants (called right after create,
+        before any preset or fit, so everything below a fresh node came with its
+        asset)."""
 
     def set_environment(self, values: dict) -> None:
         """Write a desired- or observed-shaped environment."""
@@ -107,18 +111,54 @@ class SceneOps(Protocol):
 
     def write_manifest(self, manifest: Manifest) -> None: ...
 
+    def take_over(self, node_name: str) -> None:
+        """Validate that *node_name* exists; changes nothing in the scene."""
+
+    def apply_presets(self, node_name: str, paths: list[str]) -> None:
+        """Apply Daz pose/preset files to the figure, in order (it is the sole
+        primary selection while each opens; the prior selection is restored)."""
+
+    def fit(self, entity: DesiredEntity, figure_name: str) -> list[str]:
+        """Load ``entity.create["asset_path"]`` and fit every node it adds to the
+        figure; return all added root names, the primary first.  Raises, with
+        everything it added removed, when an added root cannot be fitted."""
+
+    def unfit(self, node_names: list[str], owner_recipe: str | None = None,
+              figure: str | None = None) -> None:
+        """Delete the named nodes (and their subtrees) in one exact-selection delete.
+
+        With *owner_recipe*, first verify that no node has a descendant foreign to
+        that recipe (raise, deleting nothing, instead of deleting a user's node).
+        With *figure*, every node must still follow that figure (hand items are
+        addressed by ``elementID:`` ref; raise, deleting nothing, otherwise).
+        """
+
+    def restore(self, source_paths: list[str], figure_name: str) -> list[str]:
+        """Reload each source file and fit it to the figure (undoes a removal);
+        return the new root names."""
+
+    def asset_uris(self, node_names: list[str]) -> dict[str, str]:
+        """``getAssetUriForNode`` file part (``.dsf``) per node; nodes without one are
+        left out.  Read-only."""
+
 
 # HTTP timeout for a call that opens a content file (asset merge-load, pose
 # preset).  The client default (30s) is too short for the first load after
 # Studio starts: on DS4 a Genesis 9 load takes ~15s warm but 19-32s cold, and a
 # timeout there rolls the whole apply back (y33z).
 ASSET_LOAD_TIMEOUT_S = 300.0
+# How long a call right after a load/fit waits out StudioBusyError (DS4: Studio
+# answered busy for a while after fitting a dForce hair, spec 15.1).
+_AFTER_LOAD_BUSY_WAIT_S = 120.0
 
-# Node keys: element ID when the API exposes it (survives duplicate names),
-# else the node name.
+# Node keys: the element ID, which survives duplicate names (a second load of
+# one file repeats every node name).  DS4 has no getElementID(); it exposes
+# elementID as a numeric property (spec 15.2).  The name is a last resort.
 _KEY_JS = """
 function _key(n) {
-    return (typeof n.getElementID === "function") ? String(n.getElementID()) : n.getName();
+    if (typeof n.getElementID === "function") return String(n.getElementID());
+    if (typeof n.elementID === "number") return String(n.elementID);
+    return n.getName();
 }"""
 
 # Keys of every node in the scene (not just roots), so a create can find and,
@@ -141,6 +181,55 @@ def _load_asset_script(path: str) -> str:
 Scene.selectAllNodes(false);
 Scene.loadScene({ScriptBuilder.escape_string(path)}, DzScene.MergeFile);
 return true;""")
+
+
+# Prefix of the temporary null an item load selects (spec 15.6).
+_ANCHOR_PREFIX = "__dazpy_load_anchor_"
+
+
+def _anchored_load_script(path: str, anchor: str) -> str:
+    """Merge-load the item at *path* with a fresh null *anchor* as the sole and
+    primary selection.
+
+    Wearables whose ``.duf`` targets ``name://@selection:`` (e.g. a smoothing
+    modifier's Collision Item) make Studio fall back to the scene's figure when
+    nothing is selected and pop the modal "Choose Content to Replace" dialog
+    (DS4, spec 15.6).  With the anchor selected the load is dialog-free and the
+    item's roots land under the anchor; ``_fit_script`` then moves them to the
+    figure and ``_release_anchor_script`` removes the anchor.
+    """
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:load-anchored
+var _anchor = new DzNode();
+_anchor.setName({esc(anchor)});
+_anchor.setLabel({esc(anchor)});
+Scene.addNode(_anchor);
+Scene.selectAllNodes(false);
+_anchor.select(true);
+Scene.setPrimarySelection(_anchor);
+Scene.loadScene({esc(path)}, DzScene.MergeFile);
+Scene.selectAllNodes(false);
+return true;""")
+
+
+def _release_anchor_script(anchor: str) -> str:
+    """Remove the load anchor: first move any child still under it to scene root
+    (keeping its world transform), then delete it with DzDeleteAction, never
+    while it has children (the action removes the whole subtree).
+    Returns ``{error, moved, deleted}``."""
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:release-anchor{_DELETE_SELECTED_JS}
+var _a = Scene.findNode({esc(anchor)});
+if (!_a) return {{error: "", moved: [], deleted: false}};
+var _kids = _a.getNodeChildren(false), _moved = [];
+for (var _i = 0; _i < _kids.length; _i++) {{
+    _a.removeNodeChild(_kids[_i], true);
+    _moved.push(_kids[_i].getName());
+}}
+if (_a.getNodeChildren(false).length)
+    return {{error: {esc(anchor)} + ": load anchor still has children; not deleted", moved: _moved, deleted: false}};
+_deleteSelected([_a]);
+return {{error: "", moved: _moved, deleted: !Scene.findNode({esc(anchor)})}};""")
 
 
 # Nodes are removed with Studio's own "Delete Selected Item(s)" action on an
@@ -177,11 +266,28 @@ _deleteSelected([_n]);
 return _count() < _was;""")
 
 
-def _cleanup_script(before: list[str]) -> str:
-    """Remove every node whose key is not in *before*; return how many were removed."""
+def _cleanup_script(before: list[str], anchor: str | None = None) -> str:
+    """Remove every node whose key is not in *before*; return how many were removed.
+
+    With *anchor* (a failed anchored item load), the anchor is deleted with its
+    subtree, which can only hold nodes the load added.  As a guard, any anchor
+    descendant whose key *is* in *before* (should never happen) is first moved
+    back to scene root, keeping its transform and its own children."""
+    anchor_js = ScriptBuilder.escape_string(anchor) if anchor is not None else "null"
     return ScriptBuilder.iife(f"""// recipe:cleanup{_KEY_JS}{_DELETE_SELECTED_JS}
-var _before = {{}}, _keys = {json.dumps(before)};
+var _anchor = {anchor_js};
+var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
+var _an = _anchor !== null ? Scene.findNode(_anchor) : null;
+if (_an) {{
+    var _desc = _an.getNodeChildren(true);
+    for (var _j = 0; _j < _desc.length; _j++) {{
+        var _d = _desc[_j];
+        // the topmost pre-existing node of each branch (its parent is a new node)
+        if (_before[_key(_d)] && !_before[_key(_d.getNodeParent())])
+            _d.getNodeParent().removeNodeChild(_d, true);
+    }}
+}}
 var _nodes = Scene.getNodeList(), _tops = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
     var _n = _nodes[_i], _p = _n.getNodeParent();
@@ -196,7 +302,7 @@ def _pose_preset_script(node_name: str, path: str) -> str:
     then restore the previous primary selection (or deselect the figure)."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return "node_not_found";
 var _prev = Scene.getPrimarySelection();
 Scene.setPrimarySelection(_node);
@@ -208,6 +314,29 @@ try {{
 }}""")
 
 
+def _preset_script(node_name: str, path: str) -> str:
+    """Make *node_name* the only selected node, merge-open the preset at *path*,
+    then restore the previous selection (primary last).
+
+    Unlike the v1 pose path, the selection is cleared first:
+    ``setPrimarySelection`` does not deselect other nodes, and a preset opened
+    with another figure selected can reach it too."""
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:preset
+var _node = {find_node_js(node_name)};
+if (!_node) return "node_not_found";
+var _prev = Scene.getPrimarySelection(), _sel = Scene.getSelectedNodeList();
+Scene.selectAllNodes(false);
+Scene.setPrimarySelection(_node);
+try {{
+    return !!App.getContentMgr().openFile({esc(path)}, true);
+}} finally {{
+    Scene.selectAllNodes(false);
+    for (var _i = 0; _i < _sel.length; _i++) _sel[_i].select(true);
+    if (_prev) Scene.setPrimarySelection(_prev);
+}}""")
+
+
 # The figure node's own transform controls (DzNode.get<X>Control()).
 _NODE_XFORM_CONTROLS = ("XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot",
                         "XScale", "YScale", "ZScale", "Scale")
@@ -216,9 +345,9 @@ _NODE_XFORM_CONTROLS = ("XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot",
 def _read_node_xform_script(node_name: str) -> str:
     """``{control: value}`` for the node's ten transform controls, or null."""
     return ScriptBuilder.iife(f"""// recipe:read-xform
-var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return null;
-var _c = {json.dumps(list(_NODE_XFORM_CONTROLS))}, _out = {{}};
+var _c = {ScriptBuilder.to_js(list(_NODE_XFORM_CONTROLS))}, _out = {{}};
 for (var _i = 0; _i < _c.length; _i++) _out[_c[_i]] = _node["get" + _c[_i] + "Control"]().getValue();
 return _out;""")
 
@@ -226,11 +355,11 @@ return _out;""")
 def _write_node_xform_script(node_name: str, values: dict) -> str:
     """Set the node's transform controls from ``{control: value}``; false if no node."""
     return ScriptBuilder.iife(f"""// recipe:write-xform
-var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 // An array, not for-in over an object: Studio 6's script engine enumerates
 // inherits/className/deleteLater/name on plain objects too.
-var _v = {json.dumps([[c, values[c]] for c in _NODE_XFORM_CONTROLS if c in values])};
+var _v = {ScriptBuilder.to_js([[c, values[c]] for c in _NODE_XFORM_CONTROLS if c in values])};
 for (var _i = 0; _i < _v.length; _i++) _node["get" + _v[_i][0] + "Control"]().setValue(_v[_i][1]);
 return true;""")
 
@@ -247,16 +376,27 @@ def _check_pose_ext(path: str) -> None:
                        f"({', '.join(_POSE_JSON_EXTS)})")
 
 
-def _claim_script(before: list[str], label: str) -> str:
-    """New root nodes since *before*: make their names unique, label the first."""
+def _claim_script(before: list[str], label: str | None, anchor: str | None = None) -> str:
+    """New root nodes since *before*: make their names unique, label the first
+    (no label change when *label* is None).
+
+    With *anchor* (an anchored item load, :func:`_anchored_load_script`), the
+    anchor's new children are the loaded roots too, and the anchor itself is
+    never one."""
     esc = ScriptBuilder.escape_string
+    fallback = label if label is not None else "node"
+    set_label = f"if (_new.length) _new[0].setLabel({esc(label)});" if label is not None else ""
+    anchor_js = esc(anchor) if anchor is not None else "null"
     return ScriptBuilder.iife(f"""// recipe:claim{_KEY_JS}
-var _before = {{}}, _keys = {json.dumps(before)};
+var _anchor = {anchor_js};
+var _before = {{}}, _keys = {ScriptBuilder.to_js(before)};
 for (var _k = 0; _k < _keys.length; _k++) _before[_keys[_k]] = true;
 var _nodes = Scene.getNodeList(), _new = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
-    var n = _nodes[_i];
-    if (!n.getNodeParent() && !_before[_key(n)]) _new.push(n);
+    var n = _nodes[_i], _p = n.getNodeParent();
+    if (_before[_key(n)]) continue;
+    if (_anchor !== null && n.getName() === _anchor) continue;
+    if (!_p || (_anchor !== null && _p.getName() === _anchor)) _new.push(n);
 }}
 function _count(name) {{
     var c = 0;
@@ -268,7 +408,7 @@ for (var _m = 0; _m < _new.length; _m++) {{
     var nm = _new[_m].getName();
     if (!nm) {{
         // DS4 gives a new camera/light a label but no name; later steps find nodes by name.
-        nm = {esc(label)}.replace(/[^A-Za-z0-9_]/g, "_");
+        nm = {esc(fallback)}.replace(/[^A-Za-z0-9_]/g, "_");
         _new[_m].setName(nm);
         _nodes = Scene.getNodeList();
     }}
@@ -279,8 +419,87 @@ for (var _m = 0; _m < _new.length; _m++) {{
     }}
     _names.push(_new[_m].getName());
 }}
-if (_new.length) _new[0].setLabel({esc(label)});
+{set_label}
 return _names;""")
+
+
+# Fitting (spec 15.4, amended by 15.6): the item is loaded under a temporary
+# anchor selection, then follow + parent.  Confirmed on DS4; DS6 pending.
+def _fit_script(names: list[str], figure_name: str) -> str:
+    """Fit each named loaded root (a child of the load anchor, or a scene root)
+    that is a figure to *figure_name*: follow it and parent it under it, which
+    moves it off the anchor.  Returns ``{error, fitted, unfitted}``.
+
+    Added non-figure roots (a prop in an outfit preset) stay unfitted.
+    """
+    esc = ScriptBuilder.escape_string
+    return ScriptBuilder.iife(f"""// recipe:fit
+var _fig = {find_node_js(figure_name)};
+if (!_fig) return {{error: {esc(figure_name)} + ": figure not found", fitted: [], unfitted: []}};
+var _names = {ScriptBuilder.to_js(names)}, _fitted = [], _unfitted = [];
+for (var _i = 0; _i < _names.length; _i++) {{
+    var _n = Scene.findNode(_names[_i]);
+    if (_n && _n.inherits("DzFigure")) {{
+        _n.setFollowTarget(_fig);
+        _fig.addNodeChild(_n, true);
+        _fitted.push(_names[_i]);
+    }} else _unfitted.push(_names[_i]);
+}}
+return {{error: "", fitted: _fitted, unfitted: _unfitted}};""")
+
+
+def _unfit_script(names: list[str], figure: str | None = None) -> str:
+    """Delete the named nodes (names or ``elementID:`` refs) with one
+    exact-selection DzDeleteAction; returns the problems (missing nodes), and
+    deletes nothing unless there are none.
+
+    With *figure* (one-shot removals of hand items, final review C1), each node
+    must still follow that figure, else nothing is deleted."""
+    fig_js = (f"var _fig = {find_node_js(figure)};\n"
+              f"if (!_fig) return [{ScriptBuilder.escape_string(figure)} + \": figure not found\"];"
+              if figure is not None else "var _fig = null;")
+    return ScriptBuilder.iife(f"""// recipe:unfit{_DELETE_SELECTED_JS}{FIND_REF_JS}
+{fig_js}
+var _names = {ScriptBuilder.to_js(names)}, _nodes = [], _missing = [];
+for (var _i = 0; _i < _names.length; _i++) {{
+    var _n = _findRef(_names[_i]);
+    if (!_n) {{ _missing.push(_names[_i]); continue; }}
+    var _f = (typeof _n.getFollowTarget === "function") ? _n.getFollowTarget() : null;
+    // ==, not ===: two wrappers of one node are never === (DS4, spec 15.2)
+    if (_fig && (!_f || _f != _fig)) {{
+        _missing.push(_names[_i] + ": not fitted to " + {ScriptBuilder.escape_string(figure or "")});
+        continue;
+    }}
+    _nodes.push(_n);
+}}
+if (!_missing.length) _deleteSelected(_nodes);
+return _missing;""")
+
+
+# A no-op round trip, retried while Studio reports busy after a load/fit.
+_SETTLE_SCRIPT = ScriptBuilder.iife("""// recipe:settle
+return true;""")
+
+
+def _asset_uris_script(names: list[str]) -> str:
+    """``{name: getAssetUriForNode file part (before "#") or ""}``; read-only.
+
+    The URI is the node's data (``.dsf``) file, not the ``.duf`` that loaded it
+    (spec 15.2)."""
+    return ScriptBuilder.iife(f"""// recipe:asset-uris
+var _names = {ScriptBuilder.to_js(names)}, _mgr = App.getAssetMgr(), _out = {{}};
+for (var _i = 0; _i < _names.length; _i++) {{
+    var _n = Scene.findNode(_names[_i]), _u = "";
+    if (_n && _mgr) _u = String(_mgr.getAssetUriForNode(_n) || "");
+    var _h = _u.indexOf("#");
+    _out[_names[_i]] = _h >= 0 ? _u.substring(0, _h) : _u;
+}}
+return _out;""")
+
+
+def _exists_script(node_name: str) -> str:
+    return ScriptBuilder.iife(f"""// recipe:exists
+return !!{find_node_js(node_name)};""")
 
 
 def is_local_pose_file(path: str) -> bool:
@@ -297,7 +516,7 @@ def resolve_script(paths: list[str]) -> str:
     path must be an existing absolute file (``DzFileInfo``).
     """
     return ScriptBuilder.iife(f"""// recipe:resolve
-var _paths = {json.dumps(paths)}, _out = {{}};
+var _paths = {ScriptBuilder.to_js(paths)}, _out = {{}};
 var _cm = App.getContentMgr();
 function _resolve(_p) {{
     if (_p.charAt(0) === "/") {{
@@ -312,7 +531,7 @@ for (var _i = 0; _i < _paths.length; _i++) _out[_paths[_i]] = _resolve(_paths[_i
 return _out;""")
 
 
-def resolve_files(client: "DazClient", paths: Iterable[str]) -> dict[str, str]:
+def resolve_files(client: DazClient, paths: Iterable[str]) -> dict[str, str]:
     """``{path: absolute file or ""}`` for Studio-side files, in one script call.
 
     The one resolver ``validate`` and :class:`DazSceneOps` share.  Paths are
@@ -341,9 +560,9 @@ def _unparent_script(owner_name: str, child_names: list[str]) -> str:
     """
     owner = ScriptBuilder.escape_string(owner_name)
     return ScriptBuilder.iife(f"""// recipe:unparent{_KEY_JS}
-var _owner = Scene.findNode({owner});
+var _owner = {find_node_js(owner_name)};
 if (!_owner) return {{errors: [{owner} + ": owner not found"], moved: []}};
-var _names = {json.dumps(child_names)}, _all = _owner.getNodeChildren(true);
+var _names = {ScriptBuilder.to_js(child_names)}, _all = _owner.getNodeChildren(true);
 var _picked = {{}}, _nodes = [], _errs = [];
 for (var _i = 0; _i < _names.length; _i++) {{
     var _n = null;
@@ -375,9 +594,9 @@ def _reparent_script(child_keys: list[str], parent_name: str) -> str:
     """
     parent = ScriptBuilder.escape_string(parent_name)
     return ScriptBuilder.iife(f"""// recipe:reparent{_KEY_JS}
-var _parent = Scene.findNode({parent});
+var _parent = {find_node_js(parent_name)};
 if (!_parent) return [{parent} + ": parent not found"];
-var _keys = {json.dumps(child_keys)}, _nodes = Scene.getNodeList(), _found = {{}}, _errs = [];
+var _keys = {ScriptBuilder.to_js(child_keys)}, _nodes = Scene.getNodeList(), _found = {{}}, _errs = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
     var _k = _key(_nodes[_i]);
     if (!_nodes[_i].getNodeParent() && _keys.indexOf(_k) >= 0 && !_found[_k]) _found[_k] = _nodes[_i];
@@ -392,7 +611,7 @@ def _relabel_script(node_name: str, from_label: str, to_label: str) -> str:
     """Relabel the node only while its label is still *from_label*; false if no node."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""// recipe:relabel
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 if (_node.getLabel() === {esc(from_label)}) _node.setLabel({esc(to_label)});
 return true;""")
@@ -401,7 +620,7 @@ return true;""")
 class DazSceneOps:
     """:class:`SceneOps` backed by dazpy primitives on *scene*."""
 
-    def __init__(self, scene: "DazScene") -> None:
+    def __init__(self, scene: DazScene) -> None:
         self._scene = scene
         self._client = scene._client
 
@@ -441,10 +660,30 @@ class DazSceneOps:
             raise err
         return list(names)
 
-    def _remove_added(self, before: list[str], path: str, cause: Exception) -> None:
-        """Remove every node added since *before* (a create that cannot be owned)."""
+    def _busy_execute(self, script: str):
+        """Execute a call that follows a load or fit, waiting out Studio's busy replies.
+
+        Retries on ``StudioBusyError`` only (503: the script did not run), never on
+        other retryable server errors: claim and fit are not idempotent after a
+        partial run.  Waits at least the server's ``Retry-After``."""
+        deadline = time.monotonic() + _AFTER_LOAD_BUSY_WAIT_S
+        backoff = 1.0
+        while True:
+            try:
+                return self._client.execute(script).value
+            except StudioBusyError as e:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(max(backoff, float(getattr(e, "retry_after", 0) or 0)), remaining))
+                backoff = min(backoff + 1.0, 5.0)
+
+    def _remove_added(self, before: list[str], path: str, cause: Exception,
+                      anchor: str | None = None) -> None:
+        """Remove every node added since *before* (a create or fit that cannot be
+        owned), including a load *anchor* and its subtree."""
         try:
-            self._client.execute(_cleanup_script(before))
+            self._busy_execute(_cleanup_script(before, anchor))
         except Exception as e:
             raise DazError(f"{path}: create failed ({cause}) and removing the nodes it added "
                            f"also failed: {e}") from cause
@@ -487,7 +726,7 @@ class DazSceneOps:
     # ── channels ──────────────────────────────────────────────────────────────
 
     def set_channels(self, node_name: str, kind: EntityKind, channels: dict[str, dict]) -> None:
-        ident = NodeIdentifier(node_name)
+        ident = node_ident(node_name)
         # Pose first: a pose preset can carry a root transform, which the
         # recipe's transform must then override.
         for name in sorted(channels, key=lambda ch: ch != "pose"):
@@ -568,7 +807,8 @@ class DazSceneOps:
 
     def _set_transform(self, ident: NodeIdentifier, kind: EntityKind, t: dict) -> None:
         node = DazCamera(self._client, ident) if kind == "camera" else DazNode(self._client, ident)
-        node.set_position(*t["position"])
+        if "position" in t:
+            node.set_position(*t["position"])
         if isinstance(node, DazCamera) and t.get("aim") is not None:
             node.aim_at(*t["aim"])
         elif t.get("rotation") is not None:
@@ -629,3 +869,107 @@ class DazSceneOps:
 
     def write_manifest(self, manifest: Manifest) -> None:
         self._client.execute(write_manifest_script(manifest))
+
+    # ── take over, presets, fitting ───────────────────────────────────────────
+
+    def take_over(self, node_name: str) -> None:
+        if not self._client.execute(_exists_script(node_name)).value:
+            raise NodeNotFoundError(f"Cannot take over, node not found: {node_name!r}")
+
+    def apply_presets(self, node_name: str, paths: list[str]) -> None:
+        for path in paths:
+            resolved = self._resolve_asset(path)
+            result = self._client.execute(_preset_script(node_name, resolved),
+                                          timeout=ASSET_LOAD_TIMEOUT_S).value
+            if result == "node_not_found":
+                raise NodeNotFoundError(f"Cannot apply preset, node not found: {node_name!r}")
+            if result is not True:
+                raise DazError(f"Daz Studio failed to open preset {resolved!r} on {node_name!r}")
+
+    def fit(self, entity: DesiredEntity, figure_name: str) -> list[str]:
+        return self._load_and_fit(entity.create["asset_path"], entity.label, figure_name,
+                                  entity.path)
+
+    def restore(self, source_paths: list[str], figure_name: str) -> list[str]:
+        names: list[str] = []
+        for path in source_paths:
+            names += self._load_and_fit(path, None, figure_name, path)
+        return names
+
+    def asset_uris(self, node_names: list[str]) -> dict[str, str]:
+        out = self._busy_execute(_asset_uris_script(list(node_names))) or {}
+        return {str(k): str(v) for k, v in out.items() if v}
+
+    def unfit(self, node_names: list[str], owner_recipe: str | None = None,
+              figure: str | None = None) -> None:
+        if owner_recipe is not None:
+            for name in node_names:
+                sub = self._client.execute(subtree_script(name)).value
+                if sub is None:
+                    raise NodeNotFoundError(f"Cannot remove, node not found: {name!r}")
+                own = owned_by(sub.get("record"), owner_recipe)
+                foreign = foreign_descendants(sub.get("children") or [], owner_recipe,
+                                              own.native if own else ())
+                if foreign:
+                    raise DazError(f"Refusing to remove {name!r}: it still has descendants the "
+                                   f"recipe does not own ({', '.join(foreign)})")
+        missing = self._client.execute(_unfit_script(list(node_names), figure)).value
+        if missing:
+            raise DazError(f"Cannot remove, node(s) not found: {', '.join(map(str, missing))}")
+
+    def _load_and_fit(self, asset_path: str, label: str | None, figure_name: str,
+                      where: str) -> list[str]:
+        """Load with a temporary null anchor as the sole selection (spec 15.6), fit
+        every loaded root to the figure, then release (delete) the empty anchor.
+
+        Order: ``resolve_files`` → snapshot → anchor + load → claim → fit →
+        release → settle.  Anything not fitted, a root left under the anchor, or
+        any failure after the snapshot (including Studio staying busy after the
+        fit) removes all the nodes the load added, the anchor and its subtree
+        included.  A Daz data file (``.dsf``, e.g. a ``getAssetUriForNode`` value)
+        is refused before anything is resolved or loaded.
+        """
+        if is_data_file(asset_path):
+            raise DazError(f"{where}: {asset_path} is a Daz data file, not a loadable asset; "
+                           "nothing was loaded")
+        path = self._resolve_asset(asset_path)
+        # the snapshot precedes the anchor, so cleanup on failure removes it too
+        before = self._client.execute(_SNAPSHOT_SCRIPT).value or []
+        anchor = _ANCHOR_PREFIX + uuid.uuid4().hex[:12]
+        try:
+            self._client.execute(_anchored_load_script(path, anchor), timeout=ASSET_LOAD_TIMEOUT_S)
+            # Studio can answer busy for a while after a load/fit (DS4, spec 15.1)
+            names = self._busy_execute(_claim_script(before, label, anchor)) or []
+            if not names or not all(names):
+                raise DazError(f"{where}: loading it added no named root node to the scene; "
+                               "every node it added was removed")
+            out = self._busy_execute(_fit_script(list(names), figure_name))
+            if not isinstance(out, dict):
+                raise DazError(f"{where}: Daz Studio returned no result for the fit; "
+                               "every node it added was removed")
+            if out.get("error"):
+                raise DazError(f"{where}: {out['error']}; every node it added was removed")
+            stray = [n for n in names if n not in (out.get("fitted") or [])]
+            if stray:
+                raise DazError(f"{asset_path}: loading it added nodes that are not fitted to "
+                               f"{figure_name}: {', '.join(stray)}; every node it added was removed")
+            released = self._busy_execute(_release_anchor_script(anchor))
+            if not isinstance(released, dict) or released.get("error") or not released.get("deleted"):
+                why = released.get("error") if isinstance(released, dict) else "no result"
+                raise DazError(f"{where}: removing the load anchor {anchor} failed ({why or 'not deleted'}); "
+                               "every node it added was removed")
+            if released.get("moved"):
+                # claim + fit should leave the anchor childless: a root it still held
+                # was not fitted, so the fit fails and everything added is removed
+                raise DazError(f"{where}: loading it left nodes under the load anchor that were not "
+                               f"fitted to {figure_name}: {', '.join(map(str, released['moved']))}; "
+                               "every node it added was removed")
+            # Studio keeps answering busy for a while after the fit returns (DS4,
+            # spec 15.1); wait that out so the caller's next call does not fail.
+            # Inside the try: if it never settles, the fitted nodes are removed
+            # rather than left in the scene unowned.
+            self._busy_execute(_SETTLE_SCRIPT)
+        except Exception as e:
+            self._remove_added(before, where, e, anchor)
+            raise
+        return list(names)

@@ -6,7 +6,17 @@
 #include <cstring>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace ArtifactFile {
@@ -62,14 +72,47 @@ bool isServablePath(const QString& path)
     return !isSep(path[n - 1]);
 }
 
-static FILE* openRaw(const QString& path)
+// Opens path without ever blocking on a non-regular file (W14): a FIFO in an
+// allowed folder would otherwise hang the worker thread inside open() until a
+// writer appeared. *outNotRegular is set when the path exists but is not a
+// regular file. The caller still re-checks the open handle with fstat.
+static FILE* openRaw(const QString& path, bool* outNotRegular)
 {
+    *outNotRegular = false;
 #ifdef _WIN32
     // utf16() is a pointer into the QString itself (no CRT allocation).
-    return _wfopen(reinterpret_cast<const wchar_t*>(path.utf16()), L"rb");
+    const wchar_t* wpath = reinterpret_cast<const wchar_t*>(path.utf16());
+    const DWORD attrs = GetFileAttributesW(wpath);
+    if (attrs == INVALID_FILE_ATTRIBUTES) return 0;
+    if (attrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE)) {
+        *outNotRegular = true;
+        return 0;
+    }
+    return _wfopen(wpath, L"rb");
 #else
     const QByteArray local = path.toUtf8();
-    return std::fopen(local.constData(), "rb");
+    int flags = O_RDONLY | O_NONBLOCK;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    const int fd = ::open(local.constData(), flags);
+    if (fd < 0) return 0;
+    struct stat st;
+    const int rc = fstat(fd, &st);
+    if (rc != 0 || !S_ISREG(st.st_mode)) {
+        *outNotRegular = (rc == 0);
+        ::close(fd);
+        return 0;
+    }
+    // Regular file: back to blocking reads for fread().
+    const int fl = fcntl(fd, F_GETFL);
+    if (fl == -1 || fcntl(fd, F_SETFL, fl & ~O_NONBLOCK) == -1) {
+        ::close(fd);
+        return 0;
+    }
+    FILE* f = fdopen(fd, "rb");
+    if (!f) ::close(fd);
+    return f;
 #endif
 }
 
@@ -81,8 +124,9 @@ OpenStatus openForRead(const QString& path, FILE** outFile, qint64* outSize,
     if (outMtime) *outMtime = 0;
     if (!isServablePath(path)) return OPEN_PATH_REJECTED;
 
-    FILE* f = openRaw(path);
-    if (!f) return OPEN_MISSING;
+    bool notRegular = false;
+    FILE* f = openRaw(path, &notRegular);
+    if (!f) return notRegular ? OPEN_NOT_REGULAR : OPEN_MISSING;
 
 #ifdef _WIN32
     struct _stat64 st;
@@ -125,12 +169,30 @@ bool seek(FILE* f, qint64 offset)
 #endif
 }
 
-const char* contentTypeFor(const QString& path)
+QString extensionOf(const QString& path)
 {
     const int dot = path.lastIndexOf(QChar('.'));
     const int sep = qMax(path.lastIndexOf(QChar('/')), path.lastIndexOf(QChar('\\')));
-    if (dot < 0 || dot < sep) return "application/octet-stream";
-    const QString ext = path.mid(dot + 1).toLower();
+    if (dot < 0 || dot < sep) return QString();
+    return path.mid(dot + 1).toLower();
+}
+
+// Sandboxed with no allow-scripts: an SVG/XML artifact opened directly can't
+// run script against the API origin, but inline styles still render.
+const char* const kScriptableCsp = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
+
+bool isScriptable(const QString& path)
+{
+    const QString ext = extensionOf(path);
+    return ext == QLatin1String("svg") || ext == QLatin1String("svgz")
+        || ext == QLatin1String("xml") || ext == QLatin1String("xhtml")
+        || ext == QLatin1String("html") || ext == QLatin1String("htm");
+}
+
+const char* contentTypeFor(const QString& path)
+{
+    const QString ext = extensionOf(path);
+    if (ext.isEmpty()) return "application/octet-stream";
 
     struct Entry { const char* ext; const char* type; };
     static const Entry kTypes[] = {

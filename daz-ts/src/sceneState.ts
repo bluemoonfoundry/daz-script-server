@@ -8,16 +8,13 @@ import { DazPose, type DazPoseDict } from "./pose.js";
 import { ScriptBuilder } from "./scriptBuilder.js";
 import type { DazScene } from "./scene.js";
 import type { DazSkeleton } from "./skeleton.js";
+import { sleep } from "./sleep.js";
 
 const TRANSFORM_KEYS = ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate", "Scale"];
 const LIGHT_EXTRA_KEYS = ["Flux", "Shadow Softness", "Spread Angle"];
 const DEFAULT_VERIFY_TOLERANCE = 0.05;
 const DEFAULT_MAX_VERIFY_RETRIES = 2;
 const FOLLOW_TARGET_RETRY_MAX_WAIT = 30.0;
-
-function sleep(seconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-}
 
 /**
  * Run `fn`, retrying with backoff on {@link DazBusyError}.
@@ -45,7 +42,7 @@ async function retryOnBusy<T>(fn: () => Promise<T>, maxWait = FOLLOW_TARGET_RETR
       if (remainingMs <= 0) {
         throw e;
       }
-      await sleep(Math.min(backoff, remainingMs / 1000));
+      await sleep(Math.min(backoff * 1000, remainingMs));
       backoff = Math.min(backoff + 1.0, 5.0);
     }
   }

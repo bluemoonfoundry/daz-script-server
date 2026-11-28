@@ -12,6 +12,35 @@
 
 #include <QtCore/qdatetime.h>
 
+// ─── SceneEventFilter ─────────────────────────────────────────────────────────
+
+int SceneEventFilter::parse(const std::string& csv)
+{
+    if (csv.empty())
+        return All;
+    int mask = None;
+    // Split on commas and map each token to its bitmask.
+    std::string token;
+    const std::string s = csv + ','; // sentinel
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == ',') {
+            if      (token == "node")      mask |= Node;
+            else if (token == "skeleton")  mask |= Skeleton;
+            else if (token == "light")     mask |= Light;
+            else if (token == "camera")    mask |= Camera;
+            else if (token == "selection") mask |= Selection;
+            else if (token == "scene")     mask |= Scene;
+            else if (token == "time")      mask |= Time;
+            else if (token == "render")    mask |= Render;
+            token.clear();
+        } else {
+            token += c;
+        }
+    }
+    return mask == None ? All : mask; // unknown tokens → default to all
+}
+
 // ─── SubscriberQueue ──────────────────────────────────────────────────────────
 
 SubscriberQueue::SubscriberQueue(int filterMask)

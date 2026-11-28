@@ -42,7 +42,7 @@ graph TD
     DAZ["DAZ Studio<br/>(DzScript engine, scene graph)"]
 
     Client -->|HTTP POST /execute| SLT
-    SLT -->|sync + DS4 async submit:<br/>BlockingQueuedConnection| Pane
+    SLT -->|sync + DS4 async submit:<br/>MainThreadCall (queued, bounded)| Pane
     SLT -->|DS6 async: validate + enqueue| ARM
     Pane --> Auth
     Pane --> Rate
@@ -72,7 +72,7 @@ sequenceDiagram
 
     C->>H: POST /execute (JSON body)
     Note over H: Parse body, validate auth header
-    H->>M: emit signal (BlockingQueuedConnection)
+    H->>M: post MainThreadCall (QueuedConnection, bounded wait)
     Note over M: handleExecuteRequest()
     M->>M: Check concurrent limit
     M->>M: Check IP whitelist
@@ -87,12 +87,18 @@ sequenceDiagram
 **Rules that must never be broken:**
 
 1. `DzScript`, `QScriptEngine`, and all DAZ API calls on the **main thread only**.
-2. Synchronous execution crosses from HTTP workers with a bounded,
-   cancellable queued call (`MainThreadCall`), never a bare
-   `Qt::BlockingQueuedConnection` (which cannot time out). On Studio 6, async script submission uses
-   only local, reentrant Qt Core values and mutex-protected services so it can
-   enqueue while the main thread is busy. Studio 4 retains the blocking crossing
-   for submission because its JSON parser uses `QScriptEngine`.
+2. Every HTTP-worker crossing to the main thread (execute, register, render
+   submit, save-copy, capabilities, Studio 4 async submit, companion-plugin
+   routes) goes through `callOnMainThread()` in `RequestHandlers.cpp`: a
+   bounded, cancellable queued call (`MainThreadCall`), never a bare
+   `Qt::BlockingQueuedConnection` (which cannot time out and leaves the result
+   unset if the invoke fails). It answers 503 `STUDIO_BUSY` when Studio is busy
+   or the call isn't started within the request timeout, and 500
+   `INTERNAL_ERROR` if the call can't be posted, throws, or returns an invalid
+   status. On Studio 6, async script submission uses only local, reentrant Qt
+   Core values and mutex-protected services so it can enqueue while the main
+   thread is busy. Studio 4 keeps the main-thread crossing for submission
+   because its JSON parser uses `QScriptEngine`.
 3. `DzScript` objects must be created **and** destroyed on the main thread.
 4. `killRender()` must be invoked via a signal on the main thread, not from
    the HTTP thread.
@@ -217,8 +223,10 @@ Client JSON body
 | macOS    | `~/Library/Preferences/com.daz3d.DazScriptServer.plist` |
 | Linux    | `~/.config/DAZ 3D/DazScriptServer.conf` |
 
-All settings are accessed through `ServerSettings`, which wraps `QSettings`
-and provides typed getters with range clamping from `ServerConfig` constants.
+Settings are a plain `ServerSettings` struct; `SettingsService` reads and
+writes it through `QSettings`, validating and clamping each value against
+the ranges in `include/ServerConfig.h` (the same ranges the settings pane
+spin boxes use).
 
 ---
 

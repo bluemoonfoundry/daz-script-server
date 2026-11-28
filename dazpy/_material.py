@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -86,7 +85,7 @@ class DazMaterial(DazElement):
     :meth:`DazNode.find_material`.
     """
 
-    def __init__(self, client: "DazClient", locator: str):
+    def __init__(self, client: DazClient, locator: str):
         super().__init__(client, locator)
 
     @property
@@ -136,7 +135,7 @@ class DazMaterial(DazElement):
     @opacity.setter
     def opacity(self, value: float) -> None:
         script = ScriptBuilder.iife(
-            f"var m = {self._locator}; if (m) m.setBaseOpacity({float(value)});"
+            f"var m = {self._locator}; if (m) m.setBaseOpacity({ScriptBuilder.js_num(value)});"
         )
         self._client.execute(script)
 
@@ -168,7 +167,7 @@ class DazMaterial(DazElement):
     @smoothing_angle.setter
     def smoothing_angle(self, value: float) -> None:
         script = ScriptBuilder.iife(
-            f"var m = {self._locator}; if (m) m.setSmoothingAngle({float(value)});"
+            f"var m = {self._locator}; if (m) m.setSmoothingAngle({ScriptBuilder.js_num(value)});"
         )
         self._client.execute(script)
 
@@ -254,7 +253,7 @@ class DazMaterial(DazElement):
                     raise ValueError(f"Color values must be '#RRGGBB', got {value!r}") from None
             else:
                 h = value.strip().lstrip("#")
-                rgb = json.dumps([int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)])
+                rgb = ScriptBuilder.to_js([int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)])
         num = "null"
         if not isinstance(value, str) or rgb == "null":
             try:
@@ -264,7 +263,7 @@ class DazMaterial(DazElement):
         script = ScriptBuilder.iife(_MATERIAL_JS + f"""
             var m = {self._locator};
             if (!m) return {{status: "no_material"}};
-            var want = {json.dumps(name)};
+            var want = {ScriptBuilder.to_js(name)};
             var p = m.findProperty(want) || m.findPropertyByLabel(want);
             if (!p) return {{status: "missing"}};
             var rgb = {rgb}, num = {num};
@@ -293,7 +292,7 @@ class DazMaterial(DazElement):
         }
         raise MaterialError(messages.get(status, f"Failed to set {name!r}"))
 
-    def copy_from(self, source: "DazMaterial") -> tuple[int, int]:
+    def copy_from(self, source: DazMaterial) -> tuple[int, int]:
         """Copy every property value from *source* onto matching properties here.
 
         Properties are matched by internal name. Returns ``(copied, skipped)``,

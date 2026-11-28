@@ -23,7 +23,9 @@ Requires DAZ Studio 4.5+ SDK (or the current Daz Studio 6 SDK — 6.26.2026.2790
 ./build.sh build --sdk-version 6 --clean
 ```
 
-Set `DAZ_STUDIO_EXE_DIR` in `.env` for automatic installation. Default: `C:\Program Files (x86)\DAZ\Studio4\plugins\`
+Set `DAZ_STUDIO_EXE_DIR` (Studio 4) or `DAZ_STUDIO_EXE_DIR_V6` (Studio 6, used with
+`--sdk-version 6`) in `.env` to the DAZ Studio executable folder; `install` fails
+without it. `CMAKE` in `.env` picks a cmake that isn't on PATH.
 
 ### DAZ Studio 6 (Qt6) builds
 
@@ -87,11 +89,12 @@ HTTP handler → validation/auth → emit signal → `handleExecuteRequest()` (m
 
 | Class | Location | Purpose |
 |---|---|---|
-| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` | Main pane: GUI + server + request handling |
+| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` + `Pane*.cpp`, `HttpJobRoute.cpp`, `PluginRouteBridge.cpp`, `ScriptJobs.cpp`, `RenderJobs.cpp` | Main pane: GUI + server + request handling (file map at the top of `DzScriptServerPane.cpp`; route table in `PaneRoutes.cpp`) |
+| `RenderScriptBuilder` | `src/RenderScriptBuilder.cpp` | DazScript generated for render jobs |
 | `ServerListenThread` | `src/DzScriptServerPane.cpp` | QThread wrapper for httplib |
 | `SecureRandom` | `src/SecureRandom.cpp` | Crypto-secure RNG (OS APIs) |
 | `JsonBuilder` | `src/JsonBuilder.cpp` | Type-safe JSON with auto-escaping |
-| `ServerConfig` | `include/DzScriptServerPane.h` | Centralized config constants |
+| `ServerConfig` | `include/ServerConfig.h` | Qt-free config constants, defaults and setting ranges |
 | `ArtifactRoutes` | `src/ArtifactRoutes.cpp` | `GET /artifacts` list/download handlers |
 | `ArtifactRoots` | `src/ArtifactRoots.cpp` | Artifact trust boundary (allowed folders) |
 | `Capabilities` | `src/Capabilities.cpp` | `GET /capabilities` document + route table |

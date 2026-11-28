@@ -4,8 +4,69 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-11-27
+
+Plugin, dazpy and daz-ts release: plugin and dazpy 2.17.0, daz-ts 0.3.0.
+Upgrade the plugin. It carries the server fixes from the 2026-11-25 repo
+review (start/stop teardown, one bounded main-thread crossing per request,
+Package Runner hardening). dazpy 2.17.0 adds scene recipe v2 (asset
+references, compatibility checks, fitting); daz-ts 0.3.0 adds camera-move
+easing and per-key interpolation and rejects non-finite numbers.
+
 ### Added
 
+- **dazpy scene recipe v2: asset references, compatibility and fitting**
+  (5d6f.21). With `"recipe_version": 2` (schema
+  `schemas/scene-recipe.v2.schema.json`, shared reference schema
+  `schemas/asset-ref.v1.schema.json`):
+  - Any asset can be an asset reference: `path`, `product`, `sku` or `find`,
+    plus `file` / `type` to narrow and a `resolved` pin. `find` / `product` /
+    `sku` are answered by `StudioFinder` (Studio's content database) or
+    `ContentBrowserFinder` (daz-content-browser, `DAZ_BROWSER_URL`). A
+    `find`'s candidates are narrowed by type and by the target figure's
+    compatibility. Only a clear single match is accepted; anything else is
+    `ambiguous_asset` listing the candidates (`incompatible_asset` when every
+    candidate is made for another figure). `dazpy.recipe.pin()` fills in every `resolved` pin, and
+    recorded resolutions are reused on later applies.
+  - Before the scene changes, every preset and fitted item is checked against
+    its actor's figure from asset metadata (`incompatible_asset`;
+    `compatibility_unknown` warning when there is none). Nothing is loaded to
+    find out, so an incompatible item can't pop Studio's modal.
+  - Actors in layers: `node` takes over a figure by Scene-pane label (or
+    creates and labels it), `presets` are applied in order, and `wearing`
+    `add` / `replace` / `remove` entries fit and remove hair, clothing and
+    accessories by label or content type (`hair`, `top`, `wardrobe`, ...).
+    Multi-node items (hair plus cap, outfit presets) are one entry. Removals
+    run last; a failed apply leaves replaced hand content in place.
+  - Every loaded node records its `source` (requested reference, resolved
+    file / SKU / product, finder, actor, group). `observe` reports
+    `source_changed` for items swapped by hand.
+  - New codes. Errors: `invalid_asset_ref`, `asset_not_found`,
+    `ambiguous_asset`, `content_database_unavailable`, `incompatible_asset`,
+    `ambiguous_node`, `node_not_found`, `take_over_asset_changed`,
+    `replace_target_missing`, `remove_target_missing`. Warnings:
+    `compatibility_unknown`, `pin_mismatch`, `pin_file_missing`,
+    `finder_fallback`, `search_incomplete`, `similar_node_label`,
+    `unrestorable_removal`, `preset_dropped`.
+  v1 recipes behave exactly as before. Documented in `docs/scene_recipes.rst`
+  (worked "Abby" example). Live acceptance tests:
+  `tests/test_recipe_live.py -k AssetFitting`, with content paths from
+  `DAZ_LIVE_*` env vars. Live acceptance: 9/9 on DS4 4.24 and DS6 6.26.
+  Do not mix dazpy < 2.17 with a scene a v2 recipe was applied to: older
+  dazpy reads fitted-item records as actors and ignores `adopted_from_scene`,
+  so applying the same recipe id as v1 could delete a taken-over figure.
+
+- **Live test for companion-plugin routes** (ih7u): `TestPluginRoutes` in
+  `tests/test_api.py` covers `registerPluginRoute()` and the catch-all
+  dispatch from end to end: the path-param envelope (including a `"` in a
+  segment), raw bodies, auth on GET/POST/PUT, 404 before auth for unknown
+  paths, the 500 replies for an invalid status or a missing slot, the 503 for
+  a deleted receiver, `/capabilities` listing, and unregistering. The tests
+  use a built-in receiver (`PluginRouteSelfTest`). The new `Q_INVOKABLE`
+  `DzScriptServerPane::setPluginRouteSelfTest(bool)` registers it under
+  `/_selftest/`, so a test can turn it on and off through `POST /execute`.
+  It is off by default. `HttpResult` moved to its own header,
+  `include/HttpResult.h`.
 - **dazpy and daz-ts camera-move easing:** `shots.Keyframed` takes
   `easing` (`"linear"`, `"smooth"`, `"ease_in"`, `"ease_out"`) and each
   `CameraKeyframe` an `interpolation` (`"linear"`, `"constant"`, `"smooth"`)
@@ -148,6 +209,127 @@ All notable changes to DazScript Server are documented here.
 
 ### Fixed
 
+- **dazpy recipe rollback restores every entity's ownership record.** When
+  `apply_recipe` failed after writing records for several existing entities,
+  rollback restored the last entity's record onto the last node once per
+  entity (a late-binding closure), leaving the others with the new, unapplied
+  record. Each undo now binds its own node and record. Found by ruff B023.
+- **Studio 6: package dependencies with a trailing newline are rejected.**
+  The `.dzpkg` manifest's dependency check used a PCRE `^...$`, which also
+  matches before a final `"\n"`, so `"requests\n"` passed on Studio 6 (Studio 4
+  already rejected it). It now uses the same whole-string match as the other
+  validators.
+- **A render that writes no file now fails** (alaz). `POST /render` to an
+  unwritable path (e.g. a folder on an unmapped drive) with the viewport
+  engine reported `completed` and an SSE `complete` event with
+  `file_size_bytes: 0`, because Studio's `renderFinished` signal said the
+  render succeeded. The render script now checks for a non-empty output file
+  after a successful render, so the job fails with `SCRIPT_ERROR`
+  ("Render finished but wrote no file to ...") and the progress stream sends
+  an `error` event. `POST /render/animation` checks each frame the same way
+  and now restores the playhead even when a frame fails. Live-verified on
+  Studio 4.24 and 6.26.
+- **A render that doesn't succeed is `failed`, not `completed`** (rzp1). A
+  render job whose script reported `success: false` without a client cancel
+  (stopped from Studio's render window, a figure removed before the job ran)
+  was marked `completed` with job-level `success: true`, and the progress
+  stream sent `complete`. It's now `failed` with `SCRIPT_ERROR` and the
+  script's error (or "Render did not complete (it failed or was stopped in
+  DAZ Studio)"), and the stream sends `error`. A client cancel still gives
+  `cancelled` / `JOB_CANCELLED`. Live-verified on Studio 6.26 by cancelling
+  an Iray render in the UI.
+- **`GET /render/{id}/progress` ends cleanly** (7qv4). After its terminal
+  event the stream aborted the connection instead of sending the final
+  chunk, so clients that read to the end failed with "Response ended
+  prematurely". It could also end before writing a terminal event that was
+  queued behind a progress event. It now ends with the zero-length chunk once
+  every queued event has been sent.
+- **Imported and saved settings use the pane's ranges** (yau7.5.2).
+  `SettingsService` validated and clamped some settings against wider
+  ranges than the settings pane allowed (timeout 1-300 s, concurrent
+  requests 1-50, rate limit 1-10000 requests per 1-3600 s). A value
+  inside the wide range but outside the pane's range was then silently
+  clamped to the nearest bound by the spin box. Both now share the
+  documented ranges in `include/ServerConfig.h`, so an out-of-range value
+  is reported and replaced with the default.
+
+- **`POST /render/batch` is all-or-nothing** (9qph). When the queue ran out
+  of room partway through a batch, the server returned a retryable 503 after
+  some variants were already queued, so an identical retry queued them
+  twice. Capacity for every variant is now checked and the variants are
+  enqueued under one lock: a full queue rejects the whole batch with 503
+  `SERVER_UNAVAILABLE` ("No variants queued: ...") and queues nothing, which
+  makes the retryable flag accurate.
+- **dazpy: every exception is importable from `dazpy` and `dazpy.aio`**
+  (yau7.6.1). `DazError`, `AuthenticationError`, `ServerResponseError`,
+  `StudioBusyError`, `ScriptRuntimeError`, `ScriptSyntaxError` and the rest
+  were only reachable through `dazpy.exceptions`. `ConnectionError` and
+  `TimeoutError` are importable by name but stay out of `__all__`, so
+  `from dazpy import *` never shadows the builtins.
+- **dazpy: `except TimeoutError:` / `except ConnectionError:` now catch SDK
+  errors** (yau7.6.2). `dazpy.TimeoutError` and `dazpy.ConnectionError`
+  subclass the builtins as well as `DazError`; messages are unchanged.
+- **dazpy and daz-ts: NaN/infinity no longer produce invalid or garbage
+  DazScript** (yau7.6.5). A non-finite number passed to a numeric setter
+  (position, rotation, scale, morph value, focal length, gamma, keyframe
+  value, ...) used to reach Studio as `nan` (a ReferenceError) or as
+  `NaN`/`Infinity`, written into the scene. It now raises `ValueError`
+  (dazpy) or `RangeError` (daz-ts) before any request is sent, via the new
+  `ScriptBuilder.js_num` / `ScriptBuilder.jsNum` helpers, which
+  `serialize_arg` / `serializeArg` also use (nested values too). JSON payloads
+  embedded in dazpy scripts (poses, recipe transforms, numeric candidates,
+  dForce weight overrides, ...) go through `ScriptBuilder.to_js`
+  (`json.dumps(..., allow_nan=False)`), so they are checked too (yau7.6.10).
+- **dazpy: render-progress SSE streams are always closed, and `on_progress`
+  errors are raised** (yau7.6.4). `render(..., on_progress=...)` (sync and
+  async) used to treat an exception from the callback as "SSE unavailable"
+  and silently fall back to polling. It now closes the stream and re-raises
+  it. The sync wait closes the stream response on every exit,
+  `AsyncDazClient` closes it as soon as the wait returns rather than at
+  garbage collection, and `DazClient.stream_render_progress()` /
+  `stream_scene_events()` close a non-200 response before returning `None`.
+- **dazpy: `retry_on_busy` honours `Retry-After` and the server's
+  `retryable` flag; `AsyncDazClient.waiting_out_busy()`** (yau7.6.3). Each
+  retry now waits at least the server's `Retry-After` (it used to ignore it
+  and back off from 1 s). Errors the server marks `retryable`
+  (`RATE_LIMIT_EXCEEDED`, `SERVER_UNAVAILABLE`, `IDEMPOTENCY_KEY_IN_FLIGHT`)
+  are retried too. `render_batch_submit` retries them only against plugin
+  2.17+, whose batches are all-or-nothing (see below); an older plugin could
+  have queued part of the batch. `ServerResponseError.retry_after` carries the
+  header. `AsyncDazClient` gains `waiting_out_busy(max_wait)`, scoped to the
+  current task, and its retry deadline uses `time.monotonic()` instead of the
+  deprecated `asyncio.get_event_loop()`.
+- **Package Runner: first-run uv install piped an unpinned script into a
+  shell** (yau7.4.6). The toolchain bootstrap ran astral's install script
+  (`irm … | iex` on Windows, `curl … | sh` on macOS) with no version pin or
+  checksum, so a compromised endpoint would run code in the user's session.
+  It now downloads the uv 0.13.7 release archive for the platform with the
+  system `curl` (HTTPS only, no shell), checks its SHA-256 against a digest
+  built into the plugin, and only then extracts the `uv` binary. A mismatch
+  fails the `install-uv` step and deletes the download. An existing
+  `bin/uv` is still reused as before.
+- **Package Runner: `.dzpkg` extraction accepted Windows device names and
+  alternate data streams** (yau7.4.4). An archive entry such as `CON`,
+  `nul.txt`, `sub/COM1.json` or `foo:bar` passed the path check. Each path
+  segment is now rejected if it is a reserved device name (with or without
+  an extension), contains `:` or another character Windows forbids in file
+  names, or ends in a dot or space. A failed write (for example on a full
+  disk) is now reported as an error when extracting an entry or writing
+  `dsp_runner.py`, the package inputs file or the dependency status cache,
+  where before it could leave a truncated file and report success.
+- **Package Runner: a hung package froze DAZ Studio** (yau7.4.3). The
+  importer waited for the package process with no limit, on the main thread
+  that also serves the HTTP API. The process is now killed after the
+  manifest's optional `timeoutSeconds` (default 1800, at most 86400) and the
+  import reports an error.
+- **Package Runner: manifest `dependencies` and `entryPoint` were not
+  validated** (yau7.4.5). A dependency starting with `-` reached
+  `uv pip install` as an option (for example `--index-url` pointing at
+  another index), and `entryPoint` could be an absolute path or climb out
+  of the package with `..`. Dependencies must now be plain requirements
+  (name, optional extras and version specifiers), and `entryPoint` must
+  resolve to a file inside the package. Both are checked before the package
+  replaces an existing install.
 - **dazpy: `fitted_items()` included the figure's bones** (the root bone is
   a direct child of the figure) and returned name-bound proxies. It now
   skips bones and binds by elementID.

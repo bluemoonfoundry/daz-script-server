@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from ._element import DazElement
@@ -26,11 +25,11 @@ class DazProperty(DazElement):
     _owner_locator: str
     _property_label: str
 
-    def __init__(self, client: "DazClient", owner_locator: str, property_label: str):
+    def __init__(self, client: DazClient, owner_locator: str, property_label: str):
         locator = (
             f"(function(){{"
             f"var obj = {owner_locator};"
-            f"return obj ? obj.findPropertyByLabel({json.dumps(property_label)}) : null;"
+            f"return obj ? obj.findPropertyByLabel({ScriptBuilder.to_js(property_label)}) : null;"
             f"}})()"
         )
         super().__init__(client, locator)
@@ -38,7 +37,7 @@ class DazProperty(DazElement):
         object.__setattr__(self, "_property_label", property_label)
 
     @classmethod
-    def _from_locator(cls, client: "DazClient", locator: str) -> "DazProperty":
+    def _from_locator(cls, client: DazClient, locator: str) -> DazProperty:
         """Construct a DazProperty from a pre-built JavaScript locator expression."""
         from ._element import DazElement
         prop = object.__new__(cls)
@@ -142,7 +141,7 @@ class DazProperty(DazElement):
         """
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.setDoubleValue) p.setDoubleValue({time}, {float(value)});
+            if (p && p.setDoubleValue) p.setDoubleValue({ScriptBuilder.serialize_arg(time)}, {ScriptBuilder.js_num(value)});
         """)
         self._client.execute(script)
 
@@ -191,7 +190,7 @@ class DazProperty(DazElement):
         """
         script = ScriptBuilder.iife(f"""
             var p = {self._locator};
-            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange({time}, {time}));
+            if (p && p.deleteKeys) p.deleteKeys(new DzTimeRange({ScriptBuilder.serialize_arg(time)}, {ScriptBuilder.serialize_arg(time)}));
         """)
         self._client.execute(script)
 
@@ -222,7 +221,7 @@ class DazProperty(DazElement):
             var p = {self._locator};
             if (!p || !p.setDoubleValue) return null;
             var _tm = {int(frame)} * Scene.getTimeStep();
-            p.setDoubleValue(_tm, {float(value)!r});
+            p.setDoubleValue(_tm, {ScriptBuilder.js_num(value)});
             return p.getDoubleValue(_tm);
         """)
         return self._client.execute(script).value

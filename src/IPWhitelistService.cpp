@@ -1,6 +1,7 @@
 #include "IPWhitelistService.h"
 #include "JsonStd.h"
 #include <QtCore/qstringlist.h>
+#include "QtCompat.h"
 
 IPWhitelistService::IPWhitelistService()
     : m_bEnabled(false)
@@ -15,11 +16,7 @@ void IPWhitelistService::setWhitelist(const QString& csvIPs)
     if (csvIPs.isEmpty())
         return;
 
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    QStringList raw = csvIPs.split(',', Qt::SkipEmptyParts);
-#else
-    QStringList raw = csvIPs.split(',', QString::SkipEmptyParts);
-#endif
+    QStringList raw = csvIPs.split(',', QtCompat::SkipEmptyParts);
     for (const QString& ip : raw) {
         QString trimmed = ip.trimmed();
         if (!trimmed.isEmpty())

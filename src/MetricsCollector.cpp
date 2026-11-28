@@ -128,44 +128,38 @@ qint64 MetricsCollector::getUptimeSeconds() const
     return m_startTime.secsTo(QDateTime::currentDateTime());
 }
 
-QDateTime MetricsCollector::getStartTime() const
-{
-    QMutexLocker lock(&m_mutex);
-    return m_startTime;
-}
-
 std::string MetricsCollector::toJson(int activeRequests) const
 {
-	// Build with std::string only — called from httplib worker threads where Qt string ops are unsafe.
-	int total      = getTotalRequests();
-	int successful = getSuccessfulRequests();
-	int failed     = getFailedRequests();
-	int authFail   = getAuthFailures();
-	int active     = activeRequests;
-	long long uptime = (long long)getUptimeSeconds();
-	double rate    = total > 0 ? (double)successful / total * 100.0 : 0.0;
+    // Build with std::string only — called from httplib worker threads where Qt string ops are unsafe.
+    int total      = getTotalRequests();
+    int successful = getSuccessfulRequests();
+    int failed     = getFailedRequests();
+    int authFail   = getAuthFailures();
+    int active     = activeRequests;
+    long long uptime = (long long)getUptimeSeconds();
+    double rate    = total > 0 ? (double)successful / total * 100.0 : 0.0;
 
-	char rateBuf[32];
-	std::snprintf(rateBuf, sizeof(rateBuf), "%.15g", rate);
+    char rateBuf[32];
+    std::snprintf(rateBuf, sizeof(rateBuf), "%.15g", rate);
 
-	std::string s = "{\"total_requests\":";
-	s += std::to_string(total);
-	s += ",\"successful_requests\":";
-	s += std::to_string(successful);
-	s += ",\"failed_requests\":";
-	s += std::to_string(failed);
-	s += ",\"auth_failures\":";
-	s += std::to_string(authFail);
-	s += ",\"active_requests\":";
-	s += std::to_string(active);
-	s += ",\"uptime_seconds\":";
-	s += std::to_string(uptime);
-	s += ",\"success_rate_percent\":";
-	s += rateBuf;
-	s += ",\"avg_main_thread_wait_ms\":";
-	s += std::to_string((long long)getAvgMainThreadWaitMs());
-	s += ",\"max_main_thread_wait_ms\":";
-	s += std::to_string((long long)getMaxMainThreadWaitMs());
-	s += "}";
-	return s;
+    std::string s = "{\"total_requests\":";
+    s += std::to_string(total);
+    s += ",\"successful_requests\":";
+    s += std::to_string(successful);
+    s += ",\"failed_requests\":";
+    s += std::to_string(failed);
+    s += ",\"auth_failures\":";
+    s += std::to_string(authFail);
+    s += ",\"active_requests\":";
+    s += std::to_string(active);
+    s += ",\"uptime_seconds\":";
+    s += std::to_string(uptime);
+    s += ",\"success_rate_percent\":";
+    s += rateBuf;
+    s += ",\"avg_main_thread_wait_ms\":";
+    s += std::to_string((long long)getAvgMainThreadWaitMs());
+    s += ",\"max_main_thread_wait_ms\":";
+    s += std::to_string((long long)getMaxMainThreadWaitMs());
+    s += "}";
+    return s;
 }

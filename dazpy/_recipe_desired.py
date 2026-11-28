@@ -9,15 +9,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal
 
-from ._recipe_model import RecipeCamera, RecipeLight, SceneRecipe
+from ._asset_ref import AssetRef
+from ._recipe_model import RecipeCamera, RecipeLight, SceneRecipe, actor_ref, prop_ref
 from ._shot_geometry import look_at_euler
 from .shots import DEFAULT_ASPECT, DEFAULT_FRAME_WIDTH_MM, SHOT_SIZES, Framing, framing_transform
 from .lighting import _DEFAULT_FILL, _DEFAULT_KEY, _DEFAULT_RIM, _resolve_light_position
 from .math3 import Vec3
 
-EntityKind = Literal["actor", "prop", "camera", "light", "environment"]
+if TYPE_CHECKING:  # _asset_resolve imports _recipe_ops, which imports this module
+    from ._asset_resolve import ResolvedAsset
+
+EntityKind = Literal["actor", "prop", "item", "camera", "light", "environment"]
 
 _RIG_DEFAULTS = (("key", _DEFAULT_KEY), ("fill", _DEFAULT_FILL), ("rim", _DEFAULT_RIM))
 
@@ -39,11 +44,16 @@ def _v(v: Any) -> Vec3:
     return Vec3(*(float(x) for x in v))
 
 
+def _spec_position(spec: Any) -> Vec3:
+    """An actor or prop position; an unset actor position is the origin (v1 default)."""
+    return _v(spec.position if spec.position is not None else (0.0, 0.0, 0.0))
+
+
 def _recipe_position(recipe: SceneRecipe, key: str) -> Vec3:
     spec = recipe.actors.get(key) or recipe.props.get(key)
     if spec is None:
         raise KeyError(f"recipe has no actor or prop {key!r}")
-    return _v(spec.position)
+    return _spec_position(spec)
 
 
 # Framing.  An actor's recipe position is its root, on the floor, so framing aims
@@ -85,8 +95,77 @@ def _resolve(recipe: SceneRecipe, ref: Any) -> Vec3:
     return _v(ref) if not isinstance(ref, str) else _recipe_position(recipe, ref)
 
 
-def _asset_path(recipe: SceneRecipe, key: str) -> str:
-    return recipe.assets[key].path
+def _asset_path(ref: AssetRef | None) -> str | None:
+    if ref is not None and ref.kind != "path":
+        raise ValueError(f"asset reference {ref.to_dict()!r} is not a path; resolving "
+                         "product/sku/find references is not supported yet")
+    return ref.path if ref is not None else None
+
+
+def _path_for(ref: AssetRef | None, recipe_path: str,
+              resolved: Mapping[str, ResolvedAsset] | None) -> str | None:
+    """The file a reference stands for: the resolved path when *resolved* is given
+    (a missing entry is an error naming *recipe_path*), else the path reference's path."""
+    if resolved is None:
+        return _asset_path(ref)
+    if ref is None:
+        return None
+    if recipe_path not in resolved:
+        raise ValueError(f"asset reference at {recipe_path} was not resolved")
+    return resolved[recipe_path].path
+
+
+def _actor_entities(recipe: SceneRecipe, name: str,
+                    resolved: Mapping[str, ResolvedAsset] | None) -> list[DesiredEntity]:
+    a = recipe.actors[name]
+    create: dict = {"asset_path": _path_for(actor_ref(recipe, name), f"actors.{name}.asset",
+                                            resolved)}
+    if a.node is not None:
+        create["take_over"] = a.node
+        create["label"] = a.node
+    if resolved is not None:
+        # provenance for the record (source.requested, re-used by later resolutions);
+        # never a replace trigger.  Preset resolutions ride along by index.
+        rp = f"actors.{name}.asset"
+        source = resolved[rp].to_dict() if rp in resolved else {}
+        if a.presets:
+            source["presets"] = [resolved[f"actors.{name}.presets[{i}]"].to_dict()
+                                 for i in range(len(a.presets))
+                                 if f"actors.{name}.presets[{i}]" in resolved]
+        if source:
+            create["source"] = source
+    channels: dict = {}
+    if a.node is None:
+        pos = _spec_position(a)
+        channels["transform"] = {"position": _t((pos.x, pos.y, pos.z)),
+                                 "rotation": _actor_rotation(recipe, name)}
+    elif any(v is not None for v in (a.position, a.rotation, a.facing)):
+        # A taken-over actor is moved only where the recipe says so: no implicit origin.
+        if a.position is None and a.facing is not None:
+            raise ValueError(f"actors.{name}: facing needs an explicit position on a "
+                             "taken-over actor")
+        t = {"rotation": _actor_rotation(recipe, name)}
+        if a.position is not None:
+            t = {"position": _t(a.position), **t}
+        channels["transform"] = t
+    channels["pose"] = {"pose_path": a.pose}
+    if a.presets:
+        channels["presets"] = {"paths": [
+            _path_for(ref, f"actors.{name}.presets[{i}]", resolved)
+            for i, ref in enumerate(a.presets)]}
+    label = a.node if a.node is not None else f"{recipe.id}:{name}"
+    out = [DesiredEntity(f"actors.{name}", "actor", label, create, channels)]
+    for w in a.wearing:
+        if w.op == "remove":
+            continue
+        rp = f"actors.{name}.wearing.{w.key}"
+        if resolved is None or rp not in resolved:
+            raise ValueError(f"asset reference at {rp} was not resolved")
+        r = resolved[rp]
+        out.append(DesiredEntity(rp, "item", f"{recipe.id}:{name}.{w.key}",
+                                 {"asset_path": r.path, "fit_to": f"actors.{name}",
+                                  "source": r.to_dict()}, {}))
+    return out
 
 
 def _actor_rotation(recipe: SceneRecipe, key: str) -> tuple:
@@ -94,7 +173,7 @@ def _actor_rotation(recipe: SceneRecipe, key: str) -> tuple:
     if spec.rotation is not None:
         return _t(spec.rotation)
     if spec.facing is not None:
-        pos, tgt = _v(spec.position), _resolve(recipe, spec.facing)
+        pos, tgt = _spec_position(spec), _resolve(recipe, spec.facing)
         yaw = math.degrees(math.atan2(tgt.x - pos.x, tgt.z - pos.z))
         return (0.0, yaw, 0.0)
     return (0.0, 0.0, 0.0)
@@ -141,23 +220,24 @@ def _recipe_light(recipe: SceneRecipe, name: str, spec: RecipeLight) -> DesiredE
                   spec.intensity, spec.color)
 
 
-def compute_desired(recipe: SceneRecipe) -> "dict[str, DesiredEntity]":
+def compute_desired(recipe: SceneRecipe,
+                    resolved: Mapping[str, ResolvedAsset] | None = None) -> dict[str, DesiredEntity]:
     """Compute every entity's desired channels, keyed by ``DesiredEntity.path``."""
     out: dict = {}
 
     def add(e: DesiredEntity) -> None:
         out[e.path] = e
 
-    for name, a in recipe.actors.items():
-        add(DesiredEntity(
-            f"actors.{name}", "actor", f"{recipe.id}:{name}",
-            {"asset_path": _asset_path(recipe, a.asset)},
-            {"transform": {"position": _t(a.position), "rotation": _actor_rotation(recipe, name)},
-             "pose": {"pose_path": a.pose}}))
+    for name in recipe.actors:
+        for e in _actor_entities(recipe, name, resolved):
+            add(e)
     for name, p in recipe.props.items():
+        rp = f"props.{name}.asset"
+        create: dict[str, Any] = {"asset_path": _path_for(prop_ref(recipe, name), rp, resolved)}
+        if resolved is not None:
+            create["source"] = resolved[rp].to_dict()  # provenance, as for actors
         add(DesiredEntity(
-            f"props.{name}", "prop", f"{recipe.id}:{name}",
-            {"asset_path": _asset_path(recipe, p.asset)},
+            f"props.{name}", "prop", f"{recipe.id}:{name}", create,
             {"transform": {"position": _t(p.position),
                            "rotation": _t(p.rotation) if p.rotation is not None else (0.0, 0.0, 0.0)}}))
     for name, cam in recipe.cameras.items():
@@ -169,7 +249,7 @@ def compute_desired(recipe: SceneRecipe) -> "dict[str, DesiredEntity]":
         for role, default in _RIG_DEFAULTS:
             ov = getattr(rig, role)
 
-            def pick(field: str):
+            def pick(field: str, ov=ov, default=default):
                 val = getattr(ov, field, None) if ov is not None else None
                 return getattr(default, field) if val is None else val
 
@@ -180,10 +260,10 @@ def compute_desired(recipe: SceneRecipe) -> "dict[str, DesiredEntity]":
             add(_light(f"lighting.rigs.{name}.{role}", f"{recipe.id}:{name}.{role}", rig.light_type,
                        pos, _t(look_at_euler(pos, target)), spec.intensity, spec.color))
     if recipe.environment is not None:
-        e = recipe.environment
+        env = recipe.environment
         add(DesiredEntity("lighting.environment", "environment", f"{recipe.id}:environment", {},
-                          {"environment": {"type": e.type, "image_path": e.image_path,
-                                           "intensity": float(e.intensity),
-                                           "rotation_deg": float(e.rotation_deg),
-                                           "mode": e.mode, "draw_dome": bool(e.draw_dome)}}))
+                          {"environment": {"type": env.type, "image_path": env.image_path,
+                                           "intensity": float(env.intensity),
+                                           "rotation_deg": float(env.rotation_deg),
+                                           "mode": env.mode, "draw_dome": bool(env.draw_dome)}}))
     return out

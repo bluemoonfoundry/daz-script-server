@@ -4,7 +4,7 @@ import fnmatch
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent
 from watchdog.observers import Observer

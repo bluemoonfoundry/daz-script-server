@@ -2,6 +2,7 @@
 
 #include "JsonStd.h"
 #include "PackageDependencyInstaller.h"
+#include "PackageManifest.h"
 #include "PackagePaths.h"
 #include "PortableFs.h"
 #include "PythonToolchainBootstrapper.h"
@@ -25,6 +26,7 @@
 #include <QFile>
 #include <QProcess>
 #include <QTemporaryFile>
+#include <QTimer>
 
 // Small QObject helpers to bridge PythonToolchainBootstrapper's and
 // PackageDependencyInstaller's async QProcess-driven signals back into
@@ -32,15 +34,24 @@
 // (SDK4 build) has no PMF/lambda connect() overload -- only the string-based
 // SIGNAL()/SLOT() form -- so real slots are used here rather than lambdas,
 // same as every other Qt4/Qt6-dual-build class in this plugin.
+//
+// Each waiter records that its signal arrived, and callers skip loop.exec()
+// when it already has: QEventLoop::exec() clears the exit flag on entry, so a
+// quit() delivered before exec() is lost and exec() never returns. That
+// happens when the signal is emitted inside the starting call -- run() on an
+// already-resolved package (re-import), or ensureReady() failing to create
+// the base dir (daz-script-server-yau7.4.2).
 class ToolchainWaiter : public QObject {
 	Q_OBJECT
 public:
 	bool ok = false;
+	bool done = false;
 	QString errorMessage;
 public slots:
-	void onReady() { ok = true; }
+	void onReady() { ok = true; done = true; }
 	void onStepFailed(const QString &step, const QString &message) {
 		errorMessage = QString::fromLatin1("%1: %2").arg(step).arg(message);
+		done = true;
 	}
 };
 
@@ -48,11 +59,13 @@ class DependencyWaiter : public QObject {
 	Q_OBJECT
 public:
 	bool ok = false;
+	bool done = false;
 	QString errorMessage;
 public slots:
 	void onFinished(const QString & /*packageId*/, bool success, const QString &message) {
 		ok = success;
 		errorMessage = message;
+		done = true;
 	}
 };
 
@@ -66,12 +79,17 @@ public slots:
 // from within DzPackageImporter::read() until now). A local QEventLoop
 // driven by QProcess::finished(), same pattern as ToolchainWaiter/
 // DependencyWaiter above, keeps the event loop alive while waiting.
+//
+// A single-shot QTimer bounds that wait (daz-script-server-yau7.4.3): a hung
+// package would otherwise block read() forever, and with it the HTTP API.
 class ProcessWaiter : public QObject {
 	Q_OBJECT
 public:
 	bool finished = false;
+	bool timedOut = false;
 public slots:
 	void onFinished(int /*exitCode*/, QProcess::ExitStatus /*status*/) { finished = true; }
+	void onTimeout() { timedOut = true; }
 };
 
 #include "DzPackageImporter.moc"
@@ -97,6 +115,17 @@ bool readManifest(const QString &stagingDir, QVariantMap &manifest, QString &err
 	if (manifest.value("id").toString().isEmpty() ||
 		manifest.value("entryPoint").toString().isEmpty()) {
 		errorMessage = QString::fromLatin1("%1 must declare \"id\" and \"entryPoint\"").arg(kManifestFileName);
+		return false;
+	}
+
+	// dependencies go to `uv pip install` and entryPoint to the runner
+	// subprocess: reject option-like requirements and paths that leave the
+	// package (yau7.4.5). Checked on the staged copy, before commit().
+	QStringList dependencies;
+	int timeoutSeconds = 0;
+	if (!PackageManifest::readDependencies(manifest.value("dependencies"), dependencies, errorMessage) ||
+		!PackageManifest::validateEntryPoint(stagingDir, manifest.value("entryPoint").toString(), errorMessage) ||
+		!PackageManifest::readTimeoutSeconds(manifest.value("timeoutSeconds"), timeoutSeconds, errorMessage)) {
 		return false;
 	}
 
@@ -146,7 +175,9 @@ bool DzPackageImporter::ensureToolchainReady(QString &errorMessage) const {
 	connect(&bootstrapper, SIGNAL(stepFailed(QString, QString)), &loop, SLOT(quit()));
 
 	bootstrapper.ensureReady();
-	loop.exec();
+	if (!waiter.done) {
+		loop.exec();
+	}
 
 	errorMessage = waiter.errorMessage;
 	return waiter.ok;
@@ -162,7 +193,9 @@ bool DzPackageImporter::ensureDependencies(const QString &packageId, const QStri
 	connect(&installer, SIGNAL(finished(QString, bool, QString)), &loop, SLOT(quit()));
 
 	installer.run(packageId, packageDir, dependencies);
-	loop.exec();
+	if (!waiter.done) {
+		loop.exec();
+	}
 
 	errorMessage = waiter.errorMessage;
 	return waiter.ok;
@@ -203,14 +236,18 @@ QString DzPackageImporter::writeDspRunner(QString &errorMessage) const {
 		errorMessage = QString::fromLatin1("Could not write %1").arg(outPath);
 		return QString();
 	}
-	out.write(contents);
+	const bool written = out.write(contents) == contents.size() && out.flush();
 	out.close();
+	if (!written || out.error() != QFile::NoError) {
+		errorMessage = QString::fromLatin1("Could not write %1: %2").arg(outPath, out.errorString());
+		return QString();
+	}
 
 	return outPath;
 }
 
 QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, const QString &dspRunnerPath,
-	const QString &entryPointPath, const QVariantMap &inputs,
+	const QString &entryPointPath, const QVariantMap &inputs, int timeoutSeconds,
 	bool &success, QString &errorMessage) const {
 	success = false;
 
@@ -220,8 +257,11 @@ QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, cons
 		errorMessage = QString::fromLatin1("Could not create a temp file for package inputs");
 		return QVariantMap();
 	}
-	inputsFile.write(JsonStd::variantToJsonBytes(inputs));
-	inputsFile.flush();
+	const QByteArray inputsBytes = JsonStd::variantToJsonBytes(inputs);
+	if (inputsFile.write(inputsBytes) != inputsBytes.size() || !inputsFile.flush()) {
+		errorMessage = QString::fromLatin1("Could not write package inputs: %1").arg(inputsFile.errorString());
+		return QVariantMap();
+	}
 	const QString inputsPath = inputsFile.fileName();
 
 	QProcess process;
@@ -229,13 +269,30 @@ QVariantMap DzPackageImporter::runPackage(const QString &packageVenvPython, cons
 	QEventLoop loop;
 	connect(&process, SIGNAL(finished(int, QProcess::ExitStatus)), &waiter, SLOT(onFinished(int, QProcess::ExitStatus)));
 	connect(&process, SIGNAL(finished(int, QProcess::ExitStatus)), &loop, SLOT(quit()));
+	QTimer timeout;
+	timeout.setSingleShot(true);
+	connect(&timeout, SIGNAL(timeout()), &waiter, SLOT(onTimeout()));
+	connect(&timeout, SIGNAL(timeout()), &loop, SLOT(quit()));
 
 	process.start(packageVenvPython, QStringList() << dspRunnerPath << entryPointPath << inputsPath);
 	if (!process.waitForStarted(10000)) {
 		errorMessage = QString::fromLatin1("Could not launch the package's Python interpreter");
 		return QVariantMap();
 	}
-	loop.exec();
+	timeout.start(timeoutSeconds * 1000);
+	if (!waiter.finished) {
+		loop.exec();
+	}
+	timeout.stop();
+	if (waiter.timedOut && !waiter.finished) {
+		// kill() is asynchronous; reap briefly so ~QProcess doesn't block
+		// on a process that ignores the signal.
+		process.kill();
+		process.waitForFinished(5000);
+		errorMessage = QString::fromLatin1("Package did not finish within %1 seconds and was stopped "
+			"(raise \"timeoutSeconds\" in manifest.json if it needs longer)").arg(timeoutSeconds);
+		return QVariantMap();
+	}
 	if (!waiter.finished) {
 		errorMessage = QString::fromLatin1("Package process did not exit cleanly");
 		return QVariantMap();
@@ -289,17 +346,22 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 		return DZ_FILE_FORMAT_ERROR;
 	}
 
+	// Ask for inputs before commit(): commit() replaces any existing install of
+	// this package id, so a Cancel after it would leave the old version
+	// overwritten by a package the user chose not to run. Cancelling here only
+	// discards the staging dir.
+	bool cancelled = false;
+	QVariantMap inputs = collectInputs(manifest, cancelled);
+	if (cancelled) {
+		PortableFs::removeRecursively(stage.stagingDir);
+		return DZ_USER_CANCELLED_OPERATION;
+	}
+
 	ZipInstaller::CommitResult commitResult = installer.commit(stage.packageId, stage.stagingDir);
 	if (!commitResult.success) {
 		PortableFs::removeRecursively(stage.stagingDir);
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"), commitResult.errorMessage);
 		return DZ_OPERATION_FAILED_ERROR;
-	}
-
-	bool cancelled = false;
-	QVariantMap inputs = collectInputs(manifest, cancelled);
-	if (cancelled) {
-		return DZ_USER_CANCELLED_OPERATION;
 	}
 
 	QProgressDialog progress(QString::fromLatin1("Preparing %1...").arg(manifest.value("displayName").toString()),
@@ -314,7 +376,8 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 		return DZ_OPERATION_FAILED_ERROR;
 	}
 
-	const QStringList dependencies = manifest.value("dependencies").toStringList();
+	QStringList dependencies;
+	PackageManifest::readDependencies(manifest.value("dependencies"), dependencies, errorMessage); // validated in readManifest()
 	if (!ensureDependencies(stage.packageId, commitResult.finalPackageDir, dependencies, errorMessage)) {
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"),
 			QString::fromLatin1("Could not prepare %1's Python environment: %2")
@@ -334,8 +397,12 @@ DzError DzPackageImporter::read(const QString &filename, const DzFileIOSettings 
 
 	progress.close();
 
+	int timeoutSeconds = PackageManifest::kDefaultTimeoutSeconds;
+	PackageManifest::readTimeoutSeconds(manifest.value("timeoutSeconds"), timeoutSeconds, errorMessage); // validated in readManifest()
+
 	bool ranOk = false;
-	QVariantMap envelope = runPackage(venvPython, dspRunnerPath, entryPointPath, inputs, ranOk, errorMessage);
+	QVariantMap envelope = runPackage(venvPython, dspRunnerPath, entryPointPath, inputs, timeoutSeconds,
+		ranOk, errorMessage);
 	if (!ranOk) {
 		QMessageBox::critical(nullptr, QString::fromLatin1("Package Error"), errorMessage);
 		return DZ_OPERATION_FAILED_ERROR;

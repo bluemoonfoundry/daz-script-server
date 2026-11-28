@@ -8,7 +8,7 @@
  * `DazSkeleton` always has `boneMetadata()`, so the per-bone-property
  * fallback dazpy needs for non-batch skeletons is not ported.
  *
- * This module and `interactionPlan.ts` never import `skeleton.ts`/
+ * This module and the `interaction*.ts` modules never import `skeleton.ts`/
  * `scene.ts` directly -- they describe what they need from a live figure/
  * scene via the structural interfaces below (`RigSkeletonSource`,
  * `RigSceneSource`), which `DazSkeleton`/`DazScene` satisfy without either
@@ -478,7 +478,7 @@ export class ResolvedInteractionTarget {
   }
 }
 
-/** Structural shape of a `HandTarget`/`FootTarget` (defined in `interactionPlan.ts`) as consumed by {@link FigureRigProfile.resolveAnchorTarget}. */
+/** Structural shape of a `HandTarget`/`FootTarget` (defined in `interactionTargets.ts`) as consumed by {@link FigureRigProfile.resolveAnchorTarget}. */
 export interface AnchorTargetLike {
   figureLabel: string;
   anchorName: string;

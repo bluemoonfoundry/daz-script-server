@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from typing import TYPE_CHECKING
 
@@ -160,7 +159,7 @@ class DazSceneState:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def capture(cls, scene: "DazScene", *, backup_path: str | None = None) -> "DazSceneState":
+    def capture(cls, scene: DazScene, *, backup_path: str | None = None) -> DazSceneState:
         """Capture the current state of every skeleton, camera, and light in *scene*.
 
         Args:
@@ -188,7 +187,7 @@ class DazSceneState:
             follow_targets[name] = target._identifier.value if target is not None else None
 
         cam_script = ScriptBuilder.iife(f"""
-            var _keys = {json.dumps(_TRANSFORM_KEYS)};
+            var _keys = {ScriptBuilder.to_js(_TRANSFORM_KEYS)};
             {_RAW_READ_JS}
             function _captureTransforms(node) {{
                 var t = {{}};
@@ -208,8 +207,8 @@ class DazSceneState:
         camera_transforms = scene._client.execute(cam_script).value or {}
 
         light_script = ScriptBuilder.iife(f"""
-            var _keys = {json.dumps(_TRANSFORM_KEYS)};
-            var _extraKeys = {json.dumps(_LIGHT_EXTRA_KEYS)};
+            var _keys = {ScriptBuilder.to_js(_TRANSFORM_KEYS)};
+            var _extraKeys = {ScriptBuilder.to_js(_LIGHT_EXTRA_KEYS)};
             {_RAW_READ_JS}
             function _captureTransforms(node) {{
                 var t = {{}};
@@ -258,7 +257,7 @@ class DazSceneState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "DazSceneState":
+    def from_dict(cls, data: dict) -> DazSceneState:
         """Reconstruct a snapshot from :meth:`to_dict`'s output."""
         skeletons = {
             name: DazPose(figure=name, bones=p.get("bones", {}), morphs=p.get("morphs", {}), props=p.get("props", {}))
@@ -278,7 +277,7 @@ class DazSceneState:
 
     def apply(
         self,
-        scene: "DazScene",
+        scene: DazScene,
         *,
         max_verify_retries: int = _DEFAULT_MAX_VERIFY_RETRIES,
         verify_tolerance: float = _DEFAULT_VERIFY_TOLERANCE,
@@ -335,7 +334,7 @@ class DazSceneState:
         restored: list[str] = []
         skipped: list[dict] = []
         errors: list[str] = []
-        resolved_skeletons: dict[str, "DazSkeleton"] = {}
+        resolved_skeletons: dict[str, DazSkeleton] = {}
 
         def _skip(kind: str, name: str, message: str) -> None:
             skipped.append({"kind": kind, "name": name, "reason": "not_found"})
@@ -414,14 +413,14 @@ class DazSceneState:
                                 f"Follow-target {target_name} of skeleton {name} not found; fit not restored",
                             )
                             continue
-                    _retry_on_busy(lambda: skel.fit_to(target_skel))
+                    _retry_on_busy(lambda skel=skel, target_skel=target_skel: skel.fit_to(target_skel))
             except Exception as exc:
                 errors.append(f"Failed to restore follow-target for skeleton {name}: {exc}")
 
         restore_script = ScriptBuilder.iife(f"""
-            var _camTransforms = {json.dumps(self.camera_transforms)};
-            var _lightTransforms = {json.dumps(self.light_transforms)};
-            var _lightExtra = {json.dumps(self.light_extra)};
+            var _camTransforms = {ScriptBuilder.to_js(self.camera_transforms)};
+            var _lightTransforms = {ScriptBuilder.to_js(self.light_transforms)};
+            var _lightExtra = {ScriptBuilder.to_js(self.light_extra)};
             {_RAW_WRITE_JS}
             function _applyTransforms(node, transforms) {{
                 for (var key in transforms) {{

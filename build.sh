@@ -45,7 +45,10 @@ Required environment variables (loaded from .env if present):
                        (--sdk-version 6 only; see CLAUDE.md for the aqtinstall command)
 
 Optional environment variables:
-  DAZ_STUDIO_EXE_DIR   Path to DAZ Studio executable folder (required for install)
+  DAZ_STUDIO_EXE_DIR   Path to the DAZ Studio 4 executable folder (required for install)
+  DAZ_STUDIO_EXE_DIR_V6
+                       Path to the DAZ Studio 6 executable folder (install with --sdk-version 6)
+  CMAKE                cmake executable to use when cmake is not on PATH
 EOF
 }
 
@@ -137,8 +140,9 @@ echo "DAZ_STUDIO_EXE_DIR: ${DAZ_STUDIO_EXE_DIR:-<not set>}"
 
 # Detect platform (auto, then allow --platform override)
 case "$(uname -s)" in
-    Darwin*) PLATFORM=mac ;;
-    *)       PLATFORM=win ;;
+    Darwin*)                       PLATFORM=mac ;;
+    MINGW*|MSYS*|CYGWIN*|Windows*) PLATFORM=win ;;
+    *)                             PLATFORM="" ;;
 esac
 if [ -n "$OPT_PLATFORM" ]; then
     case "$OPT_PLATFORM" in
@@ -149,15 +153,22 @@ if [ -n "$OPT_PLATFORM" ]; then
             ;;
     esac
 fi
+if [ -z "$PLATFORM" ]; then
+    echo "Error: unsupported host '$(uname -s)'. DAZ Studio plugins build on Windows (Git Bash/MSYS) or macOS; pass --platform to override." >&2
+    exit 1
+fi
 echo "Platform: $PLATFORM"
 
-# Locate cmake — check PATH first, then known Windows location
-if command -v cmake &>/dev/null; then
+# Locate cmake: $CMAKE (env or .env) first, then PATH.
+if [ -n "$CMAKE" ]; then
+    if ! command -v "$CMAKE" &>/dev/null; then
+        echo "Error: CMAKE is set to '$CMAKE', which is not an executable." >&2
+        exit 1
+    fi
+elif command -v cmake &>/dev/null; then
     CMAKE=cmake
-elif [ "$PLATFORM" = "win" ] && [ -f "/x/apps/CMake/bin/cmake.exe" ]; then
-    CMAKE="/x/apps/CMake/bin/cmake"
 else
-    echo "Error: cmake not found. Add it to PATH or install it." >&2
+    echo "Error: cmake not found. Add it to PATH or set CMAKE in .env." >&2
     exit 1
 fi
 
@@ -213,6 +224,13 @@ fi
 # a previous `install` can't leave build/release linking into the DAZ plugins
 # folder (LNK1104 while Studio is running, missing $ARTIFACT for release).
 if [ "$COMMAND" = "install" ]; then
+    # src/CMakeLists.txt silently skips the install step without this.
+    if [ -z "$DAZ_STUDIO_EXE_DIR" ]; then
+        EXE_VAR=DAZ_STUDIO_EXE_DIR
+        [ "$OPT_SDK_VERSION" = "6" ] && EXE_VAR=DAZ_STUDIO_EXE_DIR_V6
+        echo "Error: install needs $EXE_VAR (the DAZ Studio executable folder). Set it in .env or the environment." >&2
+        exit 1
+    fi
     CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=ON")
 else
     CMAKE_FLAGS+=("-DINSTALL_TO_DAZ=OFF")
@@ -310,12 +328,19 @@ if [ "$COMMAND" = "release" ]; then
         fi
 
         WHEEL_DIST="$SCRIPT_DIR/dist"
-        echo "Building dazpy wheel..."
+        # Pick the wheel for the version being built, not whatever sorts last
+        # in dist/ (a stale wheel from another version could win otherwise).
+        DAZPY_VERSION=$(sed -n 's/^__version__ *= *"\([^"]*\)".*/\1/p' "$SCRIPT_DIR/dazpy/__init__.py")
+        if [ -z "$DAZPY_VERSION" ]; then
+            echo "Error: could not read __version__ from dazpy/__init__.py." >&2
+            exit 1
+        fi
+        echo "Building dazpy $DAZPY_VERSION wheel..."
         "$PYTHON" -m build --wheel --outdir "$WHEEL_DIST" "$SCRIPT_DIR"
 
-        WHEEL_FILE=$(ls "$WHEEL_DIST"/dazpy-*.whl 2>/dev/null | sort -V | tail -1)
-        if [ -z "$WHEEL_FILE" ]; then
-            echo "Error: wheel not found in $WHEEL_DIST after build." >&2
+        WHEEL_FILE="$WHEEL_DIST/dazpy-$DAZPY_VERSION-py3-none-any.whl"
+        if [ ! -f "$WHEEL_FILE" ]; then
+            echo "Error: $WHEEL_FILE not found after build." >&2
             exit 1
         fi
         echo "Wheel: $WHEEL_FILE"

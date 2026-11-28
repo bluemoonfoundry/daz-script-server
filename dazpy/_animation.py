@@ -67,7 +67,7 @@ class DazAnimation:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def capture(cls, skeleton: "DazSkeleton", include_morphs: bool = False) -> "DazAnimation":
+    def capture(cls, skeleton: DazSkeleton, include_morphs: bool = False) -> DazAnimation:
         """Capture the full animation of *skeleton* in a single HTTP call.
 
         Scrubs every frame in the scene's play range server-side (no Python
@@ -183,7 +183,7 @@ class DazAnimation:
         )
 
     @classmethod
-    def load(cls, path: str | Path) -> "DazAnimation":
+    def load(cls, path: str | Path) -> DazAnimation:
         """Load an animation from a JSON file.
 
         Accepts files produced by :meth:`save` and by the original
@@ -226,7 +226,7 @@ class DazAnimation:
 
     # ── clip operations ───────────────────────────────────────────────────────
 
-    def clip(self, start: int, end: int) -> "DazAnimation":
+    def clip(self, start: int, end: int) -> DazAnimation:
         """Return a new animation containing only frames in [start, end].
 
         *start* and *end* are scene frame numbers (the ``"frame"`` value stored
@@ -249,7 +249,7 @@ class DazAnimation:
             frames=frames,
         )
 
-    def blend(self, other: "DazAnimation", t: float) -> "DazAnimation":
+    def blend(self, other: DazAnimation, t: float) -> DazAnimation:
         """Blend this animation with *other* frame by frame.
 
         Each frame's bone rotations and morph values are linearly interpolated
@@ -296,7 +296,7 @@ class DazAnimation:
             frames=frames,
         )
 
-    def as_pose(self, frame_index: int = 0) -> "DazPose":
+    def as_pose(self, frame_index: int = 0) -> DazPose:
         """Extract a single frame as a :class:`~dazpy.DazPose`.
 
         Bone rotations are stored sparsely — only bones with at least one
@@ -324,7 +324,7 @@ class DazAnimation:
             props={},
         )
 
-    def apply(self, skeleton: "DazSkeleton", frame_index: int = 0) -> None:
+    def apply(self, skeleton: DazSkeleton, frame_index: int = 0) -> None:
         """Apply a single frame of this animation to *skeleton*.
 
         Equivalent to ``anim.as_pose(frame_index).apply(skeleton)`` — one HTTP
@@ -336,7 +336,7 @@ class DazAnimation:
         """
         self.as_pose(frame_index).apply(skeleton)
 
-    def append(self, other: "DazAnimation") -> "DazAnimation":
+    def append(self, other: DazAnimation) -> DazAnimation:
         """Concatenate *other* immediately after this animation.
 
         The other clip's frame numbers are shifted so it starts on the frame

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 from ._client import DazClient
 from ._node import _FIND_NUMERIC_JS, _NODE_INFO_JS, DazNode, NodeIdentifier, NodeInfo
@@ -34,7 +34,7 @@ class ViewportCamera:
     name: str
     in_scene: bool
     position: tuple[float, float, float]
-    camera: "DazCamera | None" = None
+    camera: DazCamera | None = None
 
 
 # JS: resolve a node reference (elementID, Parent/Label path, or a unique
@@ -229,9 +229,9 @@ class DazScene:
         if not text:
             raise ValueError("resolve_node: a node reference is required")
         script = ScriptBuilder.iife(_NODE_INFO_JS + _RESOLVE_JS + f"""
-            var r = _resolve({json.dumps(text)});
+            var r = _resolve({ScriptBuilder.to_js(text)});
             if (r.node) {{
-                var t = "DzNode", kinds = {json.dumps(list(self._NODE_CLASSES))};
+                var t = "DzNode", kinds = {ScriptBuilder.to_js(list(self._NODE_CLASSES))};
                 for (var c = 0; c < kinds.length; c++) if (r.node.inherits(kinds[c])) {{ t = kinds[c]; break; }}
                 return {{status: "ok", element_id: r.node.elementID, type: t}};
             }}
@@ -266,7 +266,7 @@ class DazScene:
         if not ops:
             return []
         script = ScriptBuilder.iife(_NODE_INFO_JS + _RESOLVE_JS + _FIND_NUMERIC_JS + f"""
-            var _ops = {json.dumps(ops)}, _out = [];
+            var _ops = {ScriptBuilder.to_js(ops)}, _out = [];
             for (var i = 0; i < _ops.length; i++) {{
                 var op = _ops[i];
                 try {{
@@ -361,7 +361,7 @@ class DazScene:
     def content_categories(self, parent: str = "") -> list[ContentCategory]:
         """Sub-folders of *parent* (content-relative) across every content
         directory, merged by name, with their ``.duf`` counts."""
-        rel = json.dumps(parent.strip("/"))
+        rel = ScriptBuilder.to_js(parent.strip("/"))
         script = ScriptBuilder.iife(f"""
             var cm = App.getContentMgr(), rel = {rel}, seen = {{}}, out = [];
             for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
@@ -387,7 +387,7 @@ class DazScene:
     def content_files(self, category: str = "") -> list[ContentFile]:
         """``.duf`` files in *category* (content-relative) across every
         content directory; a name found in several directories is listed once."""
-        rel = json.dumps(category.strip("/"))
+        rel = ScriptBuilder.to_js(category.strip("/"))
         script = ScriptBuilder.iife(f"""
             var cm = App.getContentMgr(), rel = {rel}, seen = {{}}, out = [];
             for (var i = 0; i < cm.getNumContentDirectories(); i++) {{
@@ -437,7 +437,7 @@ class DazScene:
         :attr:`NodeInfo.element_id`.
         """
         script = ScriptBuilder.iife(_NODE_INFO_JS + f"""
-            var q = {json.dumps(query)}, out = [];
+            var q = {ScriptBuilder.to_js(query)}, out = [];
             for (var i = 0; i < Scene.getNumNodes(); i++) {{
                 var n = Scene.getNode(i);
                 if (n && (n.getLabel() === q || n.getName() === q)) out.push(_nodeInfo(n));
@@ -456,7 +456,7 @@ class DazScene:
             The absolute path, or ``None`` if no content directory has it.
         """
         script = ScriptBuilder.iife(
-            f"return App.getContentMgr().getAbsolutePath({json.dumps(relative)}, false, \"\") || \"\";"
+            f"return App.getContentMgr().getAbsolutePath({ScriptBuilder.to_js(relative)}, false, \"\") || \"\";"
         )
         return self._client.execute(script).value or None
 
@@ -513,7 +513,7 @@ class DazScene:
 
     def check(self, camera: str | None = None, *, engine: str | None = None,
               resolution: tuple[int, int] | None = None,
-              allow_crop: bool = False) -> "CheckReport":
+              allow_crop: bool = False) -> CheckReport:
         """Pre-render checks for a render from *camera* (one Studio script).
 
         Checks that each visible figure (top-level, not fitted to another) is
@@ -545,7 +545,7 @@ class DazScene:
         return check_scene(self._client, camera, engine=engine, resolution=resolution,
                            allow_crop=allow_crop)
 
-    def cameras(self) -> list["DazCamera"]:
+    def cameras(self) -> list[DazCamera]:
         """Return all camera nodes in the scene."""
         from ._camera import DazCamera
         script = ScriptBuilder.iife("""
@@ -558,7 +558,7 @@ class DazScene:
         names = self._client.execute(script).value or []
         return [DazCamera(self._client, NodeIdentifier(n)) for n in names]
 
-    def lights(self) -> list["DazLight"]:
+    def lights(self) -> list[DazLight]:
         """Return all light nodes in the scene."""
         from ._light import DazLight
         script = ScriptBuilder.iife("""
@@ -606,7 +606,7 @@ class DazScene:
             camera=DazCamera(self._client, NodeIdentifier(raw["name"])) if in_scene else None,
         )
 
-    def set_viewport_camera(self, camera: "DazCamera | str") -> str | None:
+    def set_viewport_camera(self, camera: DazCamera | str) -> str | None:
         """Look through *camera* in the active 3D viewport.
 
         *camera* is a :class:`~dazpy.DazCamera`, or a label: a scene camera's,
@@ -623,7 +623,7 @@ class DazScene:
         """
         from .exceptions import NodeNotFoundError
         if isinstance(camera, str):
-            label = json.dumps(camera)
+            label = ScriptBuilder.to_js(camera)
             locator = f"""(function(){{
                 for (var i = 0; i < Scene.getNumCameras(); i++)
                     if (Scene.getCamera(i).getLabel() === {label}) return Scene.getCamera(i);
@@ -690,7 +690,7 @@ class DazScene:
                           bool(r.get("on", True)))
                 for r in self._client.execute(script).value or []]
 
-    def find_camera_by_label(self, label: str) -> "DazCamera":
+    def find_camera_by_label(self, label: str) -> DazCamera:
         """Find a camera by its user-visible label.
 
         Args:
@@ -719,7 +719,7 @@ class DazScene:
         "distant": "DzDistantLight",
     }
 
-    def create_camera(self, name: str | None = None) -> "DazCamera":
+    def create_camera(self, name: str | None = None) -> DazCamera:
         """Create a new basic camera node and add it to the scene.
 
         Args:
@@ -743,7 +743,7 @@ class DazScene:
         element_id = self._client.execute(script).value
         return DazCamera(self._client, NodeIdentifier(str(int(element_id)), kind="element_id"))
 
-    def create_light(self, light_type: str, name: str | None = None) -> "DazLight":
+    def create_light(self, light_type: str, name: str | None = None) -> DazLight:
         """Create a new light node and add it to the scene.
 
         Args:
@@ -806,7 +806,7 @@ class DazScene:
         place = ""
         if position is not None:
             x, y, z = (float(v) for v in position)
-            place = f"g.setWSPos(new DzVec3({x}, {y}, {z}));"
+            place = f"g.setWSPos(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         script = ScriptBuilder.iife(f"""
             var g = new DzGroupNode();
             g.setName({name_js});
@@ -818,7 +818,7 @@ class DazScene:
         created_name = self._client.execute(script).value
         return DazNode(self._client, NodeIdentifier(created_name))
 
-    def find_light_by_label(self, label: str) -> "DazLight":
+    def find_light_by_label(self, label: str) -> DazLight:
         """Find a light by its user-visible label.
 
         Args:
@@ -839,7 +839,7 @@ class DazScene:
             raise NodeNotFoundError(f"Light with label not found: {label!r}")
         return DazLight(self._client, NodeIdentifier(label, kind="label"))
 
-    def skeletons(self) -> list["DazSkeleton"]:
+    def skeletons(self) -> list[DazSkeleton]:
         """Return all skeleton (figure) nodes in the scene."""
         from ._skeleton import DazSkeleton
         script = ScriptBuilder.iife("""
@@ -855,7 +855,7 @@ class DazScene:
 
     def find_skeleton(
         self, name: str, *, retry_attempts: int = 3, retry_delay: float = 0.15
-    ) -> "DazSkeleton":
+    ) -> DazSkeleton:
         """Find a skeleton by its internal name.
 
         Args:
@@ -920,7 +920,7 @@ class DazScene:
             raise NodeNotFoundError(f"Skeleton not found: {name!r} (no skeletons in scene).")
         return DazSkeleton(self._client, NodeIdentifier(name))
 
-    def find_skeleton_by_label(self, label: str) -> "DazSkeleton":
+    def find_skeleton_by_label(self, label: str) -> DazSkeleton:
         """Find a skeleton by its user-visible label.
 
         Args:
@@ -973,7 +973,7 @@ class DazScene:
         Returns:
             List of skeleton snapshot dicts, one per matching skeleton.
         """
-        filter_js = json.dumps(skeleton_labels) if skeleton_labels is not None else "null"
+        filter_js = ScriptBuilder.to_js(skeleton_labels) if skeleton_labels is not None else "null"
         script = ScriptBuilder.iife(f"""
             var _filter = {filter_js};
             var _skels = Scene.getSkeletonList();
@@ -1122,7 +1122,7 @@ class DazScene:
             NodeNotFoundError: If *root* cannot be found.
         """
         from .exceptions import NodeNotFoundError
-        root_json = json.dumps(root)
+        root_json = ScriptBuilder.to_js(root)
         depth_js = str(int(max_depth)) if max_depth else "0"
         script = ScriptBuilder.iife(f"""
             var _rootLabel = {root_json};
@@ -1237,15 +1237,15 @@ class DazScene:
 
     def apply_interaction_recipe(
         self,
-        recipe: "InteractionRecipe",
+        recipe: InteractionRecipe,
         *,
-        rig_profiles: dict[str, "FigureRigProfile"] | None = None,
+        rig_profiles: dict[str, FigureRigProfile] | None = None,
         align_limb_targets: bool = False,
         max_iterations: int | None = None,
         step_degrees: float = 1.0,
         damping: float = 0.25,
         tolerance: float = 0.15,
-    ) -> "PreparedInteractionResult":
+    ) -> PreparedInteractionResult:
         """Prepare and apply an interaction recipe against the current scene."""
 
         from ._interaction import apply_interaction_recipe_to_scene
@@ -1271,7 +1271,7 @@ class DazScene:
         script = ScriptBuilder.iife(f"Scene.selectAllNodes({flag});")
         self._client.execute(script)
 
-    def undo(self, label: str) -> "UndoGroup":
+    def undo(self, label: str) -> UndoGroup:
         """Return a context manager that groups all enclosed changes into a single undo step.
 
         Args:
@@ -1390,24 +1390,24 @@ class DazScene:
         """
         settings_calls = []
         for key, value in overrides.items():
-            js_key = json.dumps(key)
+            js_key = ScriptBuilder.to_js(key)
             if isinstance(value, bool):
                 settings_calls.append(f"settings.setBoolValue({js_key}, {'true' if value else 'false'});")
             elif isinstance(value, int):
                 settings_calls.append(f"settings.setIntValue({js_key}, {value});")
             elif isinstance(value, float):
-                settings_calls.append(f"settings.setFloatValue({js_key}, {value});")
+                settings_calls.append(f"settings.setFloatValue({js_key}, {ScriptBuilder.js_num(value)});")
             else:
-                settings_calls.append(f"settings.setStringValue({js_key}, {json.dumps(str(value))});")
+                settings_calls.append(f"settings.setStringValue({js_key}, {ScriptBuilder.to_js(str(value))});")
 
         script = ScriptBuilder.iife(f"""
             var mgr = App.getExportMgr();
-            var exp = mgr.findExporterByClassName({json.dumps(exporter_class)});
+            var exp = mgr.findExporterByClassName({ScriptBuilder.to_js(exporter_class)});
             if (!exp) return {{status: "no_exporter"}};
             var settings = new DzFileIOSettings();
             exp.getDefaultOptions(settings);
             {' '.join(settings_calls)}
-            var err = exp.writeFile({json.dumps(path)}, settings);
+            var err = exp.writeFile({ScriptBuilder.to_js(path)}, settings);
             var code = (err && typeof err.valueOf === "function") ? err.valueOf() : (err || 0);
             return code ? {{status: "error", code: code}} : {{status: "ok"}};
         """)

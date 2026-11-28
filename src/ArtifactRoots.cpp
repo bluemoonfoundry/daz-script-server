@@ -4,11 +4,7 @@
 #include <QtCore/qfileinfo.h>
 #include <vector>
 
-#if DAZ_SDK_MAJOR_VERSION >= 6
-#include <QtCore/qstandardpaths.h>
-#else
-#include <QtGui/qdesktopservices.h>
-#endif
+#include "QtCompat.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -36,17 +32,10 @@ QStringList ArtifactRoots::defaultRoots()
 {
     QStringList roots;
     roots << QDir::tempPath();
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    roots << QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-          << QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
-          << QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)
-          << QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
-#else
-    roots << QDesktopServices::storageLocation(QDesktopServices::DocumentsLocation)
-          << QDesktopServices::storageLocation(QDesktopServices::PicturesLocation)
-          << QDesktopServices::storageLocation(QDesktopServices::DesktopLocation)
-          << QDir::homePath() + "/Downloads";   // Qt 4 has no DownloadLocation
-#endif
+    roots << QtCompat::writableLocation(QtCompat::Documents)
+          << QtCompat::writableLocation(QtCompat::Pictures)
+          << QtCompat::writableLocation(QtCompat::Desktop)
+          << QtCompat::writableLocation(QtCompat::Downloads);
     QStringList out;
     const QString home = QDir::cleanPath(QDir::homePath());
     for (int i = 0; i < roots.size(); ++i) {
@@ -90,16 +79,33 @@ void ArtifactRoots::configure(const QString& rawList, QStringList* outWarnings)
     m_aResolved  = resolved;
 }
 
-void ArtifactRoots::setDeniedDir(const QString& dir)
+bool ArtifactRoots::setDeniedDir(const QString& dir)
 {
-    m_sDenied = realPathOfDir(dir);
+    m_sDeniedRaw = QDir::cleanPath(dir);
+    m_sDenied    = realPathOfDir(m_sDeniedRaw);
+    return !m_sDenied.isEmpty();
+}
+
+bool ArtifactRoots::deniedDirAllows(const QString& real) const
+{
+    if (m_sDeniedRaw.isEmpty()) return true;   // nothing to deny
+    QString denied = m_sDenied;
+    if (denied.isEmpty()) {
+        // Unresolved at start (W13): the folder may have been created since,
+        // so resolve it now. If it exists but still can't be resolved, we
+        // can't tell whether the file is inside it: fail closed.
+        denied = realPathOfDir(m_sDeniedRaw);
+        if (denied.isEmpty())
+            return !QFileInfo(m_sDeniedRaw).exists();
+    }
+    return !isUnder(real, denied);
 }
 
 bool ArtifactRoots::allows(FILE* f) const
 {
     const QString real = realPathOf(f);
     if (real.isEmpty()) return false;   // can't tell where it is: refuse
-    if (!m_sDenied.isEmpty() && isUnder(real, m_sDenied)) return false;
+    if (!deniedDirAllows(real)) return false;
     if (!m_bEnabled) return true;
     for (int i = 0; i < m_aResolved.size(); ++i) {
         if (isUnder(real, m_aResolved.at(i))) return true;
@@ -125,17 +131,7 @@ bool ArtifactRoots::isUnder(const QString& path, const QString& root)
 
 #ifdef _WIN32
 
-// Studio 4's Qt 4.8 was built with wchar_t as unsigned short, so its
-// QString::fromWCharArray(const wchar_t*) export doesn't link against our
-// native-wchar_t build; read the UTF-16 directly there.
-static QString fromWide(const wchar_t* s, int n)
-{
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    return QString::fromWCharArray(s, n);
-#else
-    return QString::fromUtf16(reinterpret_cast<const ushort*>(s), n);
-#endif
-}
+using QtCompat::fromWide;
 
 static QString finalPathOfHandle(HANDLE h)
 {

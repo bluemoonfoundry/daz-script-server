@@ -5,7 +5,6 @@ Used by :meth:`dazpy.DazNode.load_morph`. The loader runs silently
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -110,7 +109,7 @@ _LOADER_JS = """
 """
 
 
-def load_morph(node: "DazNode", obj_path: str, *, control_node: "DazNode | None" = None,
+def load_morph(node: DazNode, obj_path: str, *, control_node: DazNode | None = None,
                **options: Any) -> MorphLoadResult:
     """See :meth:`dazpy.DazNode.load_morph`."""
     from .exceptions import DazError, NodeNotFoundError
@@ -120,7 +119,7 @@ def load_morph(node: "DazNode", obj_path: str, *, control_node: "DazNode | None"
                "mirroring": "DoNotMirror", "scale": 1.0, "onlyErrorsOrWarnings": True, **camel}
     control = control_node._locator if control_node is not None else "null"
     script = ScriptBuilder.node_body_from_locator(
-        node._locator, f"var o = {json.dumps(payload)}; var _control = {control};" + _LOADER_JS)
+        node._locator, f"var o = {ScriptBuilder.to_js(payload)}; var _control = {control};" + _LOADER_JS)
     raw = node._client.execute(script).value
     if raw is None:
         raise NodeNotFoundError(f"Node not found: {node._identifier.value!r}")

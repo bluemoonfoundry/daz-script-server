@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Literal
 
 from ._client import DazClient
@@ -27,14 +26,14 @@ class UndoGroup:
         self._client = client
         self._label = label
 
-    def __enter__(self) -> "UndoGroup":
+    def __enter__(self) -> UndoGroup:
         script = ScriptBuilder.iife("beginUndo();")
         self._client.execute(script)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         if exc_type is None:
-            script = ScriptBuilder.iife(f"acceptUndo({json.dumps(self._label)});")
+            script = ScriptBuilder.iife(f"acceptUndo({ScriptBuilder.to_js(self._label)});")
         else:
             script = ScriptBuilder.iife("cancelUndo();")
         self._client.execute(script)

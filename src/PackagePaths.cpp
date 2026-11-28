@@ -2,14 +2,7 @@
 
 #include <QDir>
 
-// QStandardPaths is Qt5+; Qt 4.8 (SDK4 build) only has
-// QDesktopServices::storageLocation() for this, in QtGui rather than
-// QtCore -- already linked into this plugin regardless of SDK version.
-#if DAZ_SDK_MAJOR_VERSION >= 6
-#include <QStandardPaths>
-#else
-#include <QDesktopServices>
-#endif
+#include "QtCompat.h"
 
 #ifdef Q_OS_WIN
 static const char *kUvBinaryName = "uv.exe";
@@ -18,11 +11,7 @@ static const char *kUvBinaryName = "uv";
 #endif
 
 QString PackagePaths::baseDir() {
-#if DAZ_SDK_MAJOR_VERSION >= 6
-	const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-#else
-	const QString appData = QDesktopServices::storageLocation(QDesktopServices::DataLocation);
-#endif
+	const QString appData = QtCompat::writableLocation(QtCompat::AppData);
 	return QDir(appData).filePath("DazScriptServer");
 }
 

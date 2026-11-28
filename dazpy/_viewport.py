@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 
 from ._client import DazClient
@@ -65,7 +64,7 @@ class DazViewport:
             var vp = {_VIEWPORT_EXPR};
             if (!vp) return null;
             var before = vp.getUserDrawStyle();
-            vp.setUserDrawStyle({json.dumps(resolved)});
+            vp.setUserDrawStyle({ScriptBuilder.to_js(resolved)});
             return {{before: before, after: vp.getUserDrawStyle()}};
         """)
         result = self._client.execute(script).value
@@ -148,7 +147,7 @@ class DazViewport:
         cheap early-sample pass, or *hide_overlays* is False and you aren't
         invalidating anything that matters for your use case).
         """
-        js_path = json.dumps(path)
+        js_path = ScriptBuilder.to_js(path)
 
         # prevBg is captured and restored via prev_state/prep_result (round-tripped
         # through Python as plain {r,g,b,a} JSON) rather than a JS variable, since
@@ -158,7 +157,7 @@ class DazViewport:
         bg_apply_js = ""
         if backdrop_color is not None:
             r, g, b = int(backdrop_color[0]), int(backdrop_color[1]), int(backdrop_color[2])
-            js_hex = json.dumps(f"#{r:02x}{g:02x}{b:02x}")
+            js_hex = ScriptBuilder.to_js(f"#{r:02x}{g:02x}{b:02x}")
             bg_apply_js = f"vp.background = new QColor({js_hex});"
         bg_return_field = ", bg: prevBg" if backdrop_color is not None else ""
 
@@ -232,7 +231,7 @@ class DazViewport:
             # (no image) rather than leaving any restorable state stuck.
             finish_script = ScriptBuilder.iife(f"""
                 var vp = {_VIEWPORT_EXPR};
-                var prev = {json.dumps(prev_state)};
+                var prev = {ScriptBuilder.to_js(prev_state)};
                 var img = null;
 
                 if (vp) {{

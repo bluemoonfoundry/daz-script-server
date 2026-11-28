@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dazpy"
-version = "2.16.0"
+# Single source: dazpy/__init__.py __version__ (see [tool.setuptools.dynamic]).
+dynamic = ["version"]
 description = "Python SDK for the DAZ Studio Script Server"
 readme = "dazpy/README.md"
 requires-python = ">=3.10"
@@ -35,6 +36,7 @@ test = [
     "opencv-python-headless>=4.8",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "pyyaml>=6.0",
     "respx>=0.20",
     "watchdog>=3.0",
 ]
@@ -43,6 +45,10 @@ test = [
 # Ship only dazpy's MIT license. Without this, setuptools' default glob also
 # picks up the repo-root LICENSE (AGPL, covers the plugin, not dazpy).
 license-files = ["dazpy/LICENSE"]
+
+[tool.setuptools.dynamic]
+# setuptools reads the literal statically; dazpy is not imported at build time.
+version = {attr = "dazpy.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["dazpy*"]
@@ -56,10 +62,17 @@ dazpy = ["py.typed", "schemas/*.json"]
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["F"]
+# F pyflakes, E9 syntax/IO errors, B bugbear, UP pyupgrade (py310 target).
+select = ["F", "E9", "B", "UP"]
+# B905: zip(strict=) changes runtime behaviour (raises on length mismatch);
+# opt in per call site instead of mass-adding it.
+ignore = ["B905"]
 
-# Advisory only: CI runs `mypy dazpy` with continue-on-error until the
-# existing backlog is worked down.
+[tool.ruff.lint.per-file-ignores]
+# Tests assert broad exceptions and touch properties for their side effects.
+"tests/**" = ["B017", "B018"]
+
+# Blocking in CI (`mypy dazpy`, ci.yml).
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true

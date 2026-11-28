@@ -359,6 +359,22 @@ class RollbackTests(unittest.TestCase):
         self.assertNotIn("reparent", ops.methods())
         self.assertEqual(r.rollback_errors, ())
 
+    def test_rollback_restores_each_entitys_own_record(self):
+        # The record-restore undo for every modified entity must capture that
+        # entity's node and prior record, not the loop's last ones (B023).
+        D_old = ds(d_camera("one"), d_camera("two"))
+        L = live_matching(D_old)
+        D_new = ds(d_camera("one", focal_length=85.0), d_camera("two", focal_length=24.0))
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        plan, r = run(D_new, L, ops)
+        self.assertTrue(r.rolled_back)
+        writes = [c for c in ops.calls_with_args if c[0] == "write_record"]
+        restores = writes[len(writes) // 2:]
+        expected = {L.entities[p].node_name: L.entities[p].record
+                    for p in ("cameras.one", "cameras.two")}
+        self.assertEqual(len(restores), 2)
+        self.assertEqual({c[1]: c[2] for c in restores}, expected)
+
     def test_rollback_error_is_reported_not_raised(self):
         ops = FakeOps(fail_on=[("set_channels", 2), ("delete", 1)], create_names=NAMES)
         plan, r = run(D_CREATE_MODIFY, L_OLD, ops)
@@ -914,6 +930,292 @@ class DazSceneOpsObserveTests(unittest.TestCase):
         env = {"intensity": 1.0, "rotation_deg": 0.0, "mode": 0, "draw_dome": True, "image_path": ""}
         ops = DazSceneOps(DazScene(scripted_client(("_environment()", env))))
         self.assertEqual(ops.observe_environment(), env)
+
+
+# ── v2: take-over, presets, fit / unfit and their rollback (Task 12) ─────────
+
+from dazpy._recipe_wearing import TakeOver, Unfit, WearingPlan  # noqa: E402
+from recipe_fakes import d_item, d_taken, live_entity_for, live_of  # noqa: E402
+
+V2_SOURCE = {"requested": {"path": "/g9.duf"}, "path": "/g9.duf", "finder": "path"}
+HAIR = d_item("abby", "hair", "/hair/a.duf")
+HAND = ({"label": "Hand Hair", "type": "Follower/Hair", "source_path": "/hand/hair.duf"},)
+HAND2 = ({"label": "Hand Hat", "type": "Follower/Wardrobe/Hat", "source_path": "/hand/hat.duf"},
+         {"label": "Hand Cap", "type": "Follower/Wardrobe/Hat", "source_path": None})
+
+
+def run_v2(D, L, ops, wearing=None, **kw):
+    plan = diff(D, L, wearing=wearing, **kw)
+    return plan, execute(plan, D, L, ops, recipe_id=RID, recipe_version=2)
+
+
+def records_for(ops, node) -> list:
+    return [c[2] for c in ops.calls_with_args if c[0] == "write_record" and c[1] == node]
+
+
+class V2ExecuteTests(unittest.TestCase):
+    def test_take_over_record_adopted(self):
+        actor = d_taken("abby", pose_path="/p/stand.duf", presets=("/m/skin.duf",),
+                        source=V2_SOURCE)
+        w = WearingPlan(take_overs=(TakeOver("actors.abby", "Genesis 9"),),
+                        done_entries=(("actors.abby", "remove.0"),))
+        ops = FakeOps()
+        plan, r = run_v2(ds(actor), EMPTY, ops, wearing=w)
+        self.assertTrue(r.applied, r.error)
+        self.assertNotIn("create", ops.methods())
+        self.assertIn(("take_over", "Genesis 9"), ops.calls)
+        self.assertIn(("set_channels", "Genesis 9", "actor", {"pose": {"pose_path": "/p/stand.duf"}}),
+                      ops.calls_with_args)
+        self.assertIn(("apply_presets", "Genesis 9", ["/m/skin.duf"]), ops.calls_with_args)
+        rec = written_records(ops)["Genesis 9"]
+        self.assertTrue(rec.adopted_from_scene)
+        self.assertEqual(rec.source, V2_SOURCE)
+        self.assertEqual(rec.desired["presets"], {"paths": ["/m/skin.duf"]})
+        self.assertEqual(rec.done, ({"entry": "remove.0", "op": "remove", "removed": []},))
+        self.assertEqual(written_manifest(ops).entities, ("actors.abby",))
+
+    def test_take_over_rollback_removes_record_and_restores_channels(self):
+        actor = d_taken("abby", pose_path="/p/stand.duf")
+        w = WearingPlan(take_overs=(TakeOver("actors.abby", "Genesis 9"),))
+        ops = FakeOps(fail_on=("write_manifest", 1),
+                      observed={"Genesis 9": {"transform": FAKE_OBSERVED["transform"],
+                                              "pose": {"snapshot": {"bones": {}}}}})
+        _, r = run_v2(ds(actor), EMPTY, ops, wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertNotIn("delete", ops.methods())  # never deletes the user's figure
+        self.assertIn(("remove_record", "Genesis 9"), ops.calls)
+        self.assertEqual(ops.calls_with_args[-1][0], "set_channels")
+        self.assertEqual(ops.calls_with_args[-1][3], {"pose": {"snapshot": {"bones": {}}}})
+
+    def test_fit_writes_group_records_with_source(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        ops = FakeOps(fit_names={HAIR.path: ["Hair", "Cap"]})
+        _, r = run_v2(ds(d_taken("abby"), HAIR), L, ops)
+        self.assertTrue(r.applied, r.error)
+        self.assertIn(("fit", HAIR.path, "Abby"), ops.calls_with_args)
+        recs = written_records(ops)
+        for name, primary in (("Hair", True), ("Cap", False)):
+            rec = recs[name]
+            self.assertEqual((rec.path, rec.group, rec.primary, rec.members),
+                             (HAIR.path, HAIR.path, primary, ("Hair", "Cap")))
+            self.assertEqual(rec.source, dict(HAIR.create["source"], fitted_to="abby",
+                                              group=HAIR.path, primary=primary))
+            self.assertEqual(rec.desired, {"_create": HAIR.create})
+        self.assertIn(HAIR.path, written_manifest(ops).entities)
+
+    def test_fit_uses_actor_created_in_same_run(self):
+        anna = d_actor("anna")
+        hair = d_item("anna", "hair")
+        ops = FakeOps(create_names={anna.path: ["Genesis 9 (2)"]})
+        _, r = run_v2(ds(anna, hair), EMPTY, ops)
+        self.assertTrue(r.applied, r.error)
+        self.assertIn(("fit", hair.path, "Genesis 9 (2)"), ops.calls_with_args)
+
+    def test_fit_failure_leaves_hand_hair(self):
+        anna = d_actor("anna")
+        hair = d_item("anna", "hair")
+        w = WearingPlan(unfits=(Unfit("actors.anna", "hair", ("HandHair",), HAND),))
+        L = live_of(live_entity_for(anna, node_name="Anna"))
+        bob = d_actor("bob")
+        ops = FakeOps(fail_on=("fit", 1), create_names={bob.path: ["Bob"]})
+        _, r = run_v2(ds(anna, hair, bob), L, ops, wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertEqual(r.failed_step.op, "fit")
+        self.assertNotIn("unfit", ops.methods())
+        self.assertNotIn("restore", ops.methods())
+        self.assertIn(("delete", "Bob"), ops.calls)  # the created actor is rolled back
+
+    def test_fit_rollback_removes_the_group(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        ops = FakeOps(fit_names={HAIR.path: ["Hair", "Cap"]}, fail_on=("write_manifest", 1))
+        _, r = run_v2(ds(d_taken("abby"), HAIR), L, ops)
+        self.assertTrue(r.rolled_back)
+        self.assertIn(("unfit", ["Hair", "Cap"]), ops.calls_with_args)
+
+    def test_unfit_appends_done_log(self):
+        prior = {"entry": "old", "op": "remove", "removed": []}
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True,
+                                    done=(prior,)))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "hair", ("HandHair",), HAND),))
+        ops = FakeOps()
+        _, r = run_v2(ds(d_taken("abby"), HAIR), L, ops, wearing=w)
+        self.assertTrue(r.applied, r.error)
+        self.assertIn(("unfit", ["HandHair"]), ops.calls_with_args)
+        m = ops.methods()
+        self.assertLess(m.index("fit"), m.index("unfit"))
+        rec = records_for(ops, "Abby")[-1]
+        self.assertEqual(rec.done, (prior, {"entry": "hair", "op": "replace",
+                                            "removed": list(HAND)}))
+        self.assertTrue(rec.adopted_from_scene)
+
+    def test_unfit_failure_restores_removed(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "hair", ("HandHair",), HAND),
+                                Unfit("actors.abby", "remove.1", ("Hat", "Cap"), HAND2)))
+        ops = FakeOps(fail_on=("unfit", 2))
+        _, r = run_v2(ds(d_taken("abby")), L, ops, wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertEqual(r.failed_step.op, "unfit")
+        self.assertEqual([c for c in ops.calls_with_args if c[0] == "restore"],
+                         [("restore", ["/hand/hair.duf"], "Abby")])
+        # the actor record is restored to its pre-apply value
+        self.assertEqual(records_for(ops, "Abby")[-1], L.entities["actors.abby"].record)
+
+    def test_unrestorable_removal_skipped_on_rollback(self):
+        # warned at plan time (unrestorable_removal); rollback restores the rest and skips it
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "remove.1", ("Hat", "Cap"), HAND2),))
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        _, r = run_v2(ds(d_taken("abby")), L, ops, wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertEqual([c for c in ops.calls_with_args if c[0] == "restore"],
+                         [("restore", ["/hand/hat.duf"], "Abby")])
+        self.assertFalse(any("Hand Cap" in e for e in r.rollback_errors), r.rollback_errors)
+
+    def test_group_delete_is_one_unfit_call(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True),
+                    live_entity_for(HAIR, group_nodes=("Hair", "Cap")))
+        ops = FakeOps()
+        _, r = run_v2(ds(d_taken("abby")), L, ops)
+        self.assertTrue(r.applied, r.error)
+        self.assertIn(("unfit", ["Hair", "Cap"], RID), ops.calls_with_args)
+        self.assertNotIn("delete", ops.methods())
+        self.assertNotIn(HAIR.path, written_manifest(ops).entities)
+
+    def test_release_taken_over_actor_and_items(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True),
+                    live_entity_for(HAIR, group_nodes=("Hair", "Cap")))
+        ops = FakeOps()
+        _, r = run_v2({}, L, ops)
+        self.assertTrue(r.applied, r.error)
+        self.assertEqual([c for c in ops.calls if c[0] == "remove_record"],
+                         [("remove_record", "Abby"), ("remove_record", "Hair"),
+                          ("remove_record", "Cap")])
+        self.assertNotIn("delete", ops.methods())
+        self.assertNotIn("unfit", ops.methods())
+        self.assertEqual(written_manifest(ops).entities, ())
+
+    def test_release_group_rollback_rewrites_member_records(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True),
+                    live_entity_for(HAIR, group_nodes=("Hair", "Cap")))
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        _, r = run_v2({}, L, ops)
+        self.assertTrue(r.rolled_back)
+        cap = records_for(ops, "Cap")[-1]
+        self.assertEqual((cap.path, cap.group, cap.primary), (HAIR.path, HAIR.path, False))
+        self.assertTrue(records_for(ops, "Hair")[-1].primary)
+
+    def test_replaced_actor_keeps_done_log(self):
+        done = ({"entry": "hair", "op": "replace", "removed": []},)
+        anna = d_actor("anna")
+        L = live_of(live_entity_for(anna, node_name="Anna", done=done))
+        anna2 = d_actor("anna")
+        anna2.create["asset_path"] = "/g8.duf"
+        ops = FakeOps(create_names={anna.path: ["Anna 2"]})
+        _, r = run_v2(ds(anna2), L, ops,
+                      wearing=WearingPlan(done_entries=(("actors.anna", "remove.1"),)))
+        self.assertTrue(r.applied, r.error)
+        self.assertEqual(written_records(ops)["Anna 2"].done,
+                         done + ({"entry": "remove.1", "op": "remove", "removed": []},))
+
+    def test_take_over_record_undo_registered_before_write(self):
+        w = WearingPlan(take_overs=(TakeOver("actors.abby", "Genesis 9"),))
+        ops = FakeOps(fail_on=("write_record", 1))
+        _, r = run_v2(ds(d_taken("abby")), EMPTY, ops, wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertIn(("remove_record", "Genesis 9"), ops.calls)
+
+    def test_group_delete_is_checked(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True),
+                    live_entity_for(HAIR, group_nodes=("Hair", "Cap")))
+        ops = FakeOps()
+        run_v2(ds(d_taken("abby")), L, ops)
+        self.assertIn(("unfit", ["Hair", "Cap"], RID), ops.calls_with_args)
+
+    def test_fitted_records_list_native_descendants(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        ops = FakeOps(fit_names={HAIR.path: ["Hair", "Cap"]}, native={"Hair": ("HairMesh",)})
+        run_v2(ds(d_taken("abby"), HAIR), L, ops)
+        self.assertEqual(written_records(ops)["Hair"].native, ("HairMesh",))
+        self.assertEqual(written_records(ops)["Cap"].native, ())
+
+    def test_preset_on_existing_actor_cannot_be_undone(self):
+        old = d_taken("abby", presets=("/m/a.duf",))
+        new = d_taken("abby", presets=("/m/a.duf", "/m/b.duf"))
+        L = live_of(live_entity_for(old, node_name="Abby", adopted=True))
+        ops = FakeOps(fail_on=("write_manifest", 1))
+        _, r = run_v2(ds(new), L, ops)
+        self.assertTrue(r.rolled_back)
+        self.assertTrue(any("preset" in e for e in r.rollback_errors), r.rollback_errors)
+        ok = FakeOps()
+        _, r = run_v2(ds(new), L, ok)
+        self.assertEqual(written_records(ok)["Abby"].desired["presets"],
+                         {"paths": ["/m/a.duf", "/m/b.duf"]})
+        self.assertNotIn("presets", written_records(ok)["Abby"].observed)
+
+
+class FinalReviewNativeTests(unittest.TestCase):
+    """Final review I6: a created actor's native list predates its fitted items."""
+
+    def test_created_actor_native_is_captured_before_items_are_fitted(self):
+        class Ops(FakeOps):
+            fitted = False
+
+            def fit(self, entity, figure_name):
+                self.fitted = True
+                return super().fit(entity, figure_name)
+
+            def native_descendants(self, node_name):
+                self._call("native_descendants", node_name)
+                if node_name == "r1:abby":
+                    return ("Eyes", "Hair") if self.fitted else ("Eyes",)
+                return ()
+
+        ops = Ops(fit_names={HAIR.path: ["Hair"]})
+        _, r = run_v2(ds(d_actor("abby"), HAIR), EMPTY, ops)
+        self.assertTrue(r.applied, r.error)
+        self.assertEqual(written_records(ops)["r1:abby"].native, ("Eyes",))
+
+    def test_v1_create_record_native_unchanged(self):
+        ops = FakeOps(create_names=NAMES, native={"cam_new": ("Eyes", "Mouth")})
+        run(D_CREATE_MODIFY, L_OLD, ops)
+        self.assertEqual(written_records(ops)["cam_new"].native, ("Eyes", "Mouth"))
+        self.assertEqual(ops.methods().count("native_descendants"), 1)
+
+
+class FinalReviewRollbackTests(unittest.TestCase):
+    """Final review I8: hand items removed and not restored are reported."""
+
+    def _run(self, fail_on):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "remove.type=hat", ("Hat", "Cap"), HAND2),))
+        ops = FakeOps(fail_on=fail_on)
+        return run_v2(ds(d_taken("abby")), L, ops, wearing=w)
+
+    def test_unrestorable_item_reported_after_rollback(self):
+        _, r = self._run(("write_manifest", 1))
+        self.assertTrue(r.rolled_back)
+        self.assertEqual([s.op for s in r.steps], ["unfit"])
+        gone = [w for w in r.warnings if w.code == "unrestorable_removal"]
+        self.assertEqual(len(gone), 1)
+        self.assertEqual(gone[0].path, "actors.abby.wearing.remove.type=hat")
+        self.assertIn("Hand Cap", gone[0].message)
+        self.assertNotIn("Hand Hat", gone[0].message)
+
+    def test_failed_restore_is_reported_too(self):
+        _, r = self._run([("write_manifest", 1), ("restore", 1)])
+        gone = " ".join(w.message for w in r.warnings if w.code == "unrestorable_removal")
+        self.assertIn("Hand Hat", gone)
+        self.assertIn("Hand Cap", gone)
+        self.assertTrue(any("restore" in e for e in r.rollback_errors), r.rollback_errors)
+
+    def test_fully_restored_unfit_is_not_reported(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "hair", ("HandHair",), HAND),))
+        _, r = run_v2(ds(d_taken("abby")), L, FakeOps(fail_on=("write_manifest", 1)), wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertEqual(r.steps, ())
+        self.assertNotIn("unrestorable_removal", {x.code for x in r.warnings})
 
 
 if __name__ == "__main__":

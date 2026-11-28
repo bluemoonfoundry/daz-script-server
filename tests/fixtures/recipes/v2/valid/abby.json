@@ -1,0 +1,31 @@
+{
+  "recipe_version": 2,
+  "id": "abby-scene",
+  "assets": {
+    "g9f": {"product": "Genesis 9 Female"}
+  },
+  "actors": {
+    "abby": {
+      "node": "Abby",
+      "asset": {"product": "Genesis 9 Female"},
+      "presets": [
+        "X:/Development/VisualNovelA/shapes/AbbyYoungShape.duf"
+      ],
+      "wearing": [
+        {"replace": {"type": "hair"}, "key": "hair", "with": {"find": "Bunched Hair Updo"}},
+        {"add": {"find": "Summer Outfit", "type": "wardrobe"}, "key": "outfit"},
+        {"remove": {"type": "hat"}, "if_missing": "ignore"}
+      ],
+      "position": [0, 0, 0]
+    },
+    "ben": {
+      "asset": "g9f",
+      "wearing": [
+        {"replace": "Old Jacket", "key": "jacket", "with": {"sku": "12345"}, "if_missing": "add"}
+      ]
+    }
+  },
+  "props": {
+    "chair": {"asset": "/Props/Chair.duf"}
+  }
+}

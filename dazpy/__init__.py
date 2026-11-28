@@ -13,7 +13,7 @@ Typical usage::
     figure.find_bone("r_forearm").set_local_rotation(0, 0, 45)
 """
 
-__version__ = "2.16.0"
+__version__ = "2.17.0"
 
 from ._client import DazClient
 from ._scene import (
@@ -141,15 +141,39 @@ from ._render_api import (
     render,
     render_variants,
 )
-from .exceptions import (RenderError, MaterialError, RecipeValidationError, RecipeNotAppliedError,
-                         SceneCheckError)
+from .exceptions import (
+    AmbiguousNodeError,
+    AsyncExecutionError,
+    AuthenticationError,
+    BatchLimitExceededError,
+    ConcurrencyLimitError,
+    ConnectionError as ConnectionError,  # re-export; not in __all__
+    DazBusyError,
+    DazError,
+    MaterialError,
+    NodeNotFoundError,
+    PropertyNotFoundError,
+    RecipeNotAppliedError,
+    RecipeValidationError,
+    RenderError,
+    SceneCheckError,
+    ScriptError,
+    ScriptRuntimeError,
+    ScriptSyntaxError,
+    ServerResponseError,
+    ServerVersionWarning,
+    StudioBusyError,
+    TimeoutError as TimeoutError,  # re-export; not in __all__
+)
 from ._scene_check import CheckFinding, CheckReport
 from ._version import MIN_SERVER_VERSION, VersionCheck
 from ._recipe_model import SceneRecipe
 from ._recipe_validate import RecipeIssue, ValidationReport
 from ._recipe_diff import Conflict, RecipePlan
 from ._recipe_apply import ApplyResult
-from .recipe import ObserveReport, ShotRender
+from .recipe import ObserveReport, ShotRender, pin
+from ._asset_ref import AssetRef
+from ._asset_finder import AssetFinder, ContentBrowserFinder, StudioFinder
 from ._scene_events import SceneEvent, watch_scene_events, wait_for_scene_event
 from . import exceptions
 
@@ -283,9 +307,6 @@ __all__ = [
     "RenderVariant",
     "RenderBase",
     "RenderResult",
-    "RenderError",
-    "MaterialError",
-    "RecipeValidationError",
     "SceneRecipe",
     "RecipeIssue",
     "ValidationReport",
@@ -294,8 +315,11 @@ __all__ = [
     "ApplyResult",
     "ObserveReport",
     "ShotRender",
-    "RecipeNotAppliedError",
-    "SceneCheckError",
+    "pin",
+    "AssetRef",
+    "AssetFinder",
+    "StudioFinder",
+    "ContentBrowserFinder",
     "CheckFinding",
     "CheckReport",
     "render",
@@ -304,4 +328,27 @@ __all__ = [
     "watch_scene_events",
     "wait_for_scene_event",
     "exceptions",
+    # Every dazpy exception. ConnectionError and TimeoutError are importable as
+    # dazpy.<name> but stay out of __all__ so a star import never shadows the
+    # builtins of the same name.
+    "AmbiguousNodeError",
+    "AsyncExecutionError",
+    "AuthenticationError",
+    "BatchLimitExceededError",
+    "ConcurrencyLimitError",
+    "DazBusyError",
+    "DazError",
+    "MaterialError",
+    "NodeNotFoundError",
+    "PropertyNotFoundError",
+    "RecipeNotAppliedError",
+    "RecipeValidationError",
+    "RenderError",
+    "SceneCheckError",
+    "ScriptError",
+    "ScriptRuntimeError",
+    "ScriptSyntaxError",
+    "ServerResponseError",
+    "ServerVersionWarning",
+    "StudioBusyError",
 ]

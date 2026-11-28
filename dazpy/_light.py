@@ -53,7 +53,7 @@ class DazLight(DazNode):
         """Point the light at a world-space coordinate (``DzLight`` inherits
         ``aimAt`` from ``DzCamera``; spot, distant and point lights all have it)."""
         script = ScriptBuilder.node_body_from_locator(
-            self._locator, f"_node.aimAt(new DzVec3({float(x)}, {float(y)}, {float(z)}));"
+            self._locator, f"_node.aimAt(new DzVec3({ScriptBuilder.js_num(x)}, {ScriptBuilder.js_num(y)}, {ScriptBuilder.js_num(z)}));"
         )
         self._client.execute(script)
 

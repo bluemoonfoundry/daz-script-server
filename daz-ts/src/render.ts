@@ -20,7 +20,7 @@ import { ScriptBuilder } from "./scriptBuilder.js";
 const RENDER_MGR = "App.getRenderMgr()";
 
 /**
- * Mirrors the engineMap in DzScriptServerPane.cpp's render script builder --
+ * Mirrors the engineMap in src/RenderScriptBuilder.cpp's render script builder --
  * keep in sync. 3Delight is no longer supported by DAZ Studio and excluded.
  */
 const ENGINE_CLASS_TO_NAME: Record<string, string> = {
@@ -604,8 +604,8 @@ export class DazRenderSettings {
    * are not coerced, so `new QSize(w, h)` is required.
    */
   async setResolution(width: number, height: number): Promise<void> {
-    const w = Math.trunc(width);
-    const h = Math.trunc(height);
+    const w = ScriptBuilder.jsNum(Math.trunc(width));
+    const h = ScriptBuilder.jsNum(Math.trunc(height));
     const script = ScriptBuilder.iife(`
             var mgr = ${RENDER_MGR};
             if (!mgr) return;
@@ -653,7 +653,7 @@ export class DazRenderSettings {
             var mgr = ${RENDER_MGR};
             if (!mgr) return;
             var opts = mgr.getRenderOptions();
-            opts.gamma = ${Number(value)};
+            opts.gamma = ${ScriptBuilder.jsNum(Number(value))};
             opts.applyChanges();
         `);
     await this.client.execute(script);

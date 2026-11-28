@@ -1,5 +1,6 @@
 """
-Static checks on the route table in src/DzScriptServerPane.cpp.
+Static checks on the route table (setupRoutes() in src/PaneRoutes.cpp) and the
+route plumbing around it (src/HttpJobRoute.cpp, src/PluginRouteBridge.cpp).
 
 No running server needed (runs in `python tests.py unit` / CI). It guards
 against two regressions from docs/archive/ASSESSMENT.md:
@@ -18,7 +19,11 @@ import re
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PANE_CPP = os.path.join(ROOT, "src", "DzScriptServerPane.cpp")
+# DzScriptServerPane's member definitions, split by concern (W21). Checks find
+# functions by signature, so they don't depend on which file holds which.
+PANE_SOURCES = [os.path.join(ROOT, "src", name) for name in (
+    "DzScriptServerPane.cpp", "PaneUi.cpp", "HttpJobRoute.cpp", "PaneRoutes.cpp",
+    "PluginRouteBridge.cpp", "ScriptJobs.cpp", "RenderJobs.cpp")]
 ARTIFACT_ROUTES_CPP = os.path.join(ROOT, "src", "ArtifactRoutes.cpp")
 CAPABILITIES_CPP = os.path.join(ROOT, "src", "Capabilities.cpp")
 
@@ -32,15 +37,22 @@ ROUTE_RE = re.compile(r'm_pServer->(Get|Post|Put|Delete|Patch)\s*\(\s*"([^"]+)"'
 
 
 def _read_source():
-    with open(PANE_CPP, encoding="utf-8") as f:
-        return f.read()
+    parts = []
+    for path in PANE_SOURCES:
+        with open(path, encoding="utf-8") as f:
+            parts.append(f.read())
+    return "\n".join(parts)
+
+
+def _function_body(src, signature):
+    """Source of the definition starting at `signature`, up to its closing
+    brace at column 0."""
+    start = src.index(signature)
+    return src[start:src.index("\n}\n", start)]
 
 
 def _setup_routes_body(src):
-    start = src.index("void DzScriptServerPane::setupRoutes()")
-    end = src.index("void DzScriptServerPane::applyPluginRoutes()", start)
-    # applyPluginRoutes() is defined after setupRoutes(); only the catch-alls live there.
-    return src[start:end]
+    return _function_body(src, "void DzScriptServerPane::setupRoutes()")
 
 
 def _routes(body):
@@ -52,12 +64,16 @@ def _routes(body):
 
 
 # Job routes delegate to runJobRoute(), which runs the write chain itself
-# (test_run_job_route_runs_write_chain_first checks that).
+# (test_run_job_route_runs_write_chain_first checks that). Sync job routes go
+# through runSyncJobRoute(), which calls runJobRoute(..., false)
+# (test_sync_job_route_takes_slot_then_runs_job_route checks that).
 JOB_ROUTE_RE = re.compile(r"runJobRoute\(req, res, \w+\.get\(\), (true|false)\)")
+SYNC_JOB_ROUTE_RE = re.compile(r"runSyncJobRoute\(req, res, \w+\.get\(\)\)")
 
 
 def _runs_write_chain(handler):
-    return "m_pWriteChain->run(ctx)" in handler or bool(JOB_ROUTE_RE.search(handler))
+    return ("m_pWriteChain->run(ctx)" in handler or bool(JOB_ROUTE_RE.search(handler))
+            or bool(SYNC_JOB_ROUTE_RE.search(handler)))
 
 
 def _chain_middleware(body, chain):
@@ -110,9 +126,7 @@ class TestRouteSecurity(unittest.TestCase):
                 self.assertNotIn("m_pReadChain->run(ctx)", handler)
 
     def test_run_job_route_runs_write_chain_first(self):
-        start = self.src.index("void DzScriptServerPane::runJobRoute(")
-        end = self.src.index("void DzScriptServerPane::setupRoutes()", start)
-        body = self.src[start:end]
+        body = _function_body(self.src, "void DzScriptServerPane::runJobRoute(")
         chain = body.index("m_pWriteChain->run(ctx)")
         self.assertNotIn("m_pReadChain", body)
         # Nothing request-specific (headers, idempotency replay, handler) may
@@ -120,6 +134,18 @@ class TestRouteSecurity(unittest.TestCase):
         for later in ("x-correlation-id", "m_idempotency.begin(", "handler->handle(ctx)"):
             with self.subTest(step=later):
                 self.assertLess(chain, body.index(later))
+
+    def test_sync_job_route_takes_slot_then_runs_job_route(self):
+        body = _function_body(self.src, "void DzScriptServerPane::runSyncJobRoute(")
+        slot = body.index("ActiveRequestSlot slot(m_nActiveRequests, m_nMaxConcurrentRequests)")
+        refused = body.index("ErrorCode::CONCURRENT_LIMIT_EXCEEDED")
+        run = body.index("runJobRoute(req, res, handler, false);")
+        self.assertLess(slot, refused)
+        self.assertLess(refused, run)
+        found = {(m, p): h for m, p, h in self.routes}
+        for key in (("POST", "/execute"), ("POST", "/scripts/([^/]+)/execute")):
+            with self.subTest(route=key):
+                self.assertRegex(found[key], SYNC_JOB_ROUTE_RE)
 
     def test_job_submission_routes_are_idempotent(self):
         found = {(m, p): h for m, p, h in self.routes}
@@ -149,7 +175,8 @@ class TestRouteSecurity(unittest.TestCase):
         # and before the plugin slot is invoked.
         not_found = dispatch.index("ErrorCode::ROUTE_NOT_FOUND")
         chain_run = dispatch.index("chain.run(ctx)")
-        invoke = dispatch.index("QMetaObject::invokeMethod(receiver.data()")
+        # The slot is invoked by callPluginRouteOnMainThread (RequestHandlers.cpp).
+        invoke = dispatch.index("callPluginRouteOnMainThread(")
         self.assertLess(not_found, chain_run)
         self.assertLess(chain_run, invoke)
 
@@ -201,6 +228,20 @@ class TestRouteSecurity(unittest.TestCase):
         self.assertNotIn("ArtifactFile::openForRead(", serve)
         # httplib only answers Range with 206 when the handler leaves status unset.
         self.assertNotIn("res.status", serve[serve.index("const QByteArray disposition"):])
+        # S7: SVG/XML/HTML served inline get a script-blocking sandbox CSP.
+        self.assertIn("X-Content-Type-Options", serve)
+        self.assertRegex(serve, r"if \(ArtifactFile::isScriptable\(path\)\)\s*"
+                                r"res\.set_header\(\"Content-Security-Policy\", ArtifactFile::kScriptableCsp\)")
+        with open(os.path.join(os.path.dirname(ARTIFACT_ROUTES_CPP), "ArtifactFile.cpp"),
+                  encoding="utf-8") as f:
+            file_src = f.read()
+        csp = re.search(r'kScriptableCsp = "([^"]+)"', file_src).group(1)
+        self.assertTrue(csp.startswith("sandbox;"), csp)
+        self.assertNotIn("allow-scripts", csp)
+        self.assertNotIn("script-src", csp)
+        scriptable = body("bool isScriptable(", file_src)
+        for ext in ("svg", "svgz", "xml", "xhtml", "html", "htm"):
+            self.assertIn(f'QLatin1String("{ext}")', scriptable)
 
         # ?thumbnail: same lookup, IDs checked before anything else, and the
         # worker never touches QtGui or blocks on the main thread unbounded.
@@ -218,6 +259,12 @@ class TestRouteSecurity(unittest.TestCase):
     def test_capabilities_route_uses_read_chain(self):
         found = {(m, p): h for m, p, h in self.routes}
         self.assertIn("m_pReadChain->run(ctx)", found[("GET", "/capabilities")])
+
+    def test_read_timeout_is_fixed_not_the_queue_timeout(self):
+        # S5 (yau7.9.5): the user's queue timeout (up to 300 s) must not also
+        # become how long httplib waits on a slow client.
+        self.assertRegex(self.src, r"set_read_timeout\(\s*ServerConfig::HTTP_READ_TIMEOUT_SEC\s*,\s*0\s*\)")
+        self.assertNotRegex(self.src, r"set_read_timeout\([^)]*QueueTimeout")
 
     def test_httplib_payload_limit_set_from_config(self):
         self.assertRegex(

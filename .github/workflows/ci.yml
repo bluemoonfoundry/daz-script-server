@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master, main]
 
+# Read-only by default.
+permissions:
+  contents: read
+
 jobs:
   version-consistency:
     name: Release version consistency
@@ -43,8 +47,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # Pinned so a new ruff/mypy release can't turn CI red on its own; bump
+      # together with a local run of both.
       - name: Install dazpy, ruff and mypy
-        run: pip install -e ".[aio]" ruff mypy types-requests
+        run: pip install -e ".[aio]" ruff==0.17.6 mypy==1.18.2 types-requests==2.32.4.20250913
       # Rule selection lives in pyproject.toml [tool.ruff.lint].
       - name: ruff check
         run: ruff check --output-format=github dazpy scripts tests

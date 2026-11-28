@@ -46,53 +46,74 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submit(
     r.accepted    = false;
     r.submittedAt = 0;
 
+    // The report file is an explicit per-job event stream. Own its
+    // lifecycle from submission so stale events from an earlier run can
+    // never appear in this request's observation record. Done before taking
+    // m_mutex: file I/O must not block status polls (yau7.2.6). A request
+    // rejected below (queue full) has still had its report file emptied.
+    if (!reportFile.isEmpty()) {
+        if (!scriptFile.isEmpty() &&
+            comparablePath(reportFile).compare(
+                comparablePath(scriptFile), Qt::CaseInsensitive) == 0) {
+            r.error = "reportFile must not be the scriptFile";
+            return r;
+        }
+        QFile report(reportFile);
+        if (!report.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            r.error = QString("Cannot initialize reportFile: %1").arg(reportFile);
+            return r;
+        }
+        report.close();
+    }
+
+    AsyncRequest req;
+    req.correlationId = correlationId;
+    req.scriptText    = scriptText;
+    req.scriptFile    = scriptFile;
+    req.reportFile    = reportFile;
+    req.args          = args;
+    if (!reportFile.isEmpty()) {
+        req.args.insert("__dssReportFile", reportFile);
+        req.progressSource = PROGRESS_REPORT;
+    }
+    return enqueue(req, idPrefix);
+}
+
+bool AsyncRequestManager::hasCapacityLocked(int n, QString* error) const
+{
+    const bool batch = n > 1;
+    if (m_queue.size() + n > m_maxQueueDepth) {
+        *error = batch
+            ? QString("Queue full: %1 requests pending, batch of %2 needs %2 free slots (max %3)")
+                  .arg(m_queue.size()).arg(n).arg(m_maxQueueDepth)
+            : QString("Queue full: %1 requests pending (max %2)")
+                  .arg(m_queue.size()).arg(m_maxQueueDepth);
+        return false;
+    }
+    if (m_requests.size() + n > m_maxTrackedRequests) {
+        *error = batch
+            ? QString("Too many tracked requests: %1, batch of %2 (max %3)")
+                  .arg(m_requests.size()).arg(n).arg(m_maxTrackedRequests)
+            : QString("Too many tracked requests: %1 (max %2)")
+                  .arg(m_requests.size()).arg(m_maxTrackedRequests);
+        return false;
+    }
+    return true;
+}
+
+AsyncRequestManager::SubmitResult AsyncRequestManager::enqueue(AsyncRequest req,
+                                                               const QString& idPrefix)
+{
+    SubmitResult r;
+    r.accepted    = false;
+    r.submittedAt = 0;
     {
         QMutexLocker locker(&m_mutex);
+        if (!hasCapacityLocked(1, &r.error)) return r;
 
-        // Enforce resource bounds before accepting the request.
-        if (m_queue.size() >= m_maxQueueDepth) {
-            r.error = QString("Queue full: %1 requests pending (max %2)")
-                      .arg(m_queue.size()).arg(m_maxQueueDepth);
-            return r;
-        }
-        if (m_requests.size() >= m_maxTrackedRequests) {
-            r.error = QString("Too many tracked requests: %1 (max %2)")
-                      .arg(m_requests.size()).arg(m_maxTrackedRequests);
-            return r;
-        }
-
-        // The report file is an explicit per-job event stream. Own its
-        // lifecycle from submission so stale events from an earlier run can
-        // never appear in this request's observation record.
-        if (!reportFile.isEmpty()) {
-            if (!scriptFile.isEmpty() &&
-                comparablePath(reportFile).compare(
-                    comparablePath(scriptFile), Qt::CaseInsensitive) == 0) {
-                r.error = "reportFile must not be the scriptFile";
-                return r;
-            }
-            QFile report(reportFile);
-            if (!report.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                r.error = QString("Cannot initialize reportFile: %1").arg(reportFile);
-                return r;
-            }
-            report.close();
-        }
-
-        AsyncRequest req;
-        req.id          = MetricsCollector::generateAsyncId(idPrefix);
-        req.correlationId    = correlationId;
+        req.id               = MetricsCollector::generateAsyncId(idPrefix);
         req.serverInstanceId = m_serverInstanceId;
-        req.scriptText  = scriptText;
-        req.scriptFile  = scriptFile;
-        req.reportFile  = reportFile;
-        req.args        = args;
-        if (!reportFile.isEmpty()) {
-            req.args.insert("__dssReportFile", reportFile);
-            req.progressSource = PROGRESS_REPORT;
-        }
-        req.submittedAt = QDateTime::currentMSecsSinceEpoch();
-
+        req.submittedAt      = QDateTime::currentMSecsSinceEpoch();
         m_requests.insert(req.id, req);
         m_queue.enqueue(req.id);
 
@@ -111,60 +132,73 @@ AsyncRequestManager::SubmitResult AsyncRequestManager::submitRender(
     const QString& scriptText, const QString& idPrefix, const QString& correlationId,
     const QString& frameReportFile)
 {
-    SubmitResult r;
-    r.accepted    = false;
-    r.submittedAt = 0;
+    // Start the frame report empty so the job never sees another run's
+    // events. If it can't be created the render still runs; Studio 4's
+    // print marker still reports frames, Studio 6 just reports none. Done
+    // before taking m_mutex (yau7.2.6).
+    bool frameReportReady = false;
+    if (!frameReportFile.isEmpty()) {
+        QFile report(frameReportFile);
+        frameReportReady = report.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        report.close();
+    }
 
+    AsyncRequest req;
+    req.requestType = REQUEST_TYPE_RENDER;
+    if (!frameReportFile.isEmpty()) {
+        req.progressSource = PROGRESS_FRAMES;
+        if (frameReportReady) {
+            req.reportFile     = frameReportFile;
+            req.ownsReportFile = true;
+        }
+    }
+    req.correlationId = correlationId;
+    req.scriptText    = scriptText;
+    return enqueue(req, idPrefix);
+}
+
+QVector<AsyncRequestManager::SubmitResult> AsyncRequestManager::submitRenderBatch(
+    const QStringList& scriptTexts, const QString& idPrefix, const QString& correlationId)
+{
+    QVector<SubmitResult> results;
+    const int n = scriptTexts.size();
     {
         QMutexLocker locker(&m_mutex);
 
-        if (m_queue.size() >= m_maxQueueDepth) {
-            r.error = QString("Queue full: %1 requests pending (max %2)")
-                      .arg(m_queue.size()).arg(m_maxQueueDepth);
-            return r;
-        }
-        if (m_requests.size() >= m_maxTrackedRequests) {
-            r.error = QString("Too many tracked requests: %1 (max %2)")
-                      .arg(m_requests.size()).arg(m_maxTrackedRequests);
-            return r;
+        // Check room for the whole batch before enqueueing any of it.
+        SubmitResult rejected;
+        rejected.accepted    = false;
+        rejected.submittedAt = 0;
+        if (!hasCapacityLocked(n, &rejected.error)) {
+            results.append(rejected);
+            return results;
         }
 
-        // Start the frame report empty so the job never sees another run's
-        // events. If it can't be created the render still runs; Studio 4's
-        // print marker still reports frames, Studio 6 just reports none.
-        bool frameReportReady = false;
-        if (!frameReportFile.isEmpty()) {
-            QFile report(frameReportFile);
-            frameReportReady = report.open(QIODevice::WriteOnly | QIODevice::Truncate);
-            report.close();
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        results.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            AsyncRequest req;
+            req.id               = MetricsCollector::generateAsyncId(idPrefix);
+            req.requestType      = REQUEST_TYPE_RENDER;
+            req.correlationId    = correlationId;
+            req.serverInstanceId = m_serverInstanceId;
+            req.scriptText       = scriptTexts[i];
+            req.submittedAt      = now;
+
+            m_requests.insert(req.id, req);
+            m_queue.enqueue(req.id);
+
+            SubmitResult r;
+            r.accepted    = true;
+            r.id          = req.id;
+            r.submittedAt = now;
+            results.append(r);
         }
-
-        AsyncRequest req;
-        req.id          = MetricsCollector::generateAsyncId(idPrefix);
-        req.requestType = REQUEST_TYPE_RENDER;
-        if (!frameReportFile.isEmpty()) {
-            req.progressSource = PROGRESS_FRAMES;
-            if (frameReportReady) {
-                req.reportFile     = frameReportFile;
-                req.ownsReportFile = true;
-            }
-        }
-        req.correlationId    = correlationId;
-        req.serverInstanceId = m_serverInstanceId;
-        req.scriptText  = scriptText;
-        req.submittedAt = QDateTime::currentMSecsSinceEpoch();
-
-        m_requests.insert(req.id, req);
-        m_queue.enqueue(req.id);
-
-        r.accepted    = true;
-        r.id          = req.id;
-        r.submittedAt = req.submittedAt;
     }
 
     QMetaObject::invokeMethod(m_notifyTarget, "processNextAsyncRequest",
                               Qt::QueuedConnection);
-    return r;
+    return results;
 }
 
 void AsyncRequestManager::appendLogLocked(AsyncRequest& req, const QVariantMap& logEntry)
@@ -264,16 +298,79 @@ void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
 {
 #if DAZ_SDK_MAJOR_VERSION < 6
     // Qt 4's JsonStd::parseObject() constructs a QScriptEngine. This method is
-    // therefore main-thread-only on Studio 4; worker-facing callers go through
-    // ingestReportFromWorkerLocked(), which deliberately no-ops there.
+    // therefore main-thread-only on Studio 4; workers use prefetchReport(),
+    // which deliberately no-ops there.
     Q_ASSERT(!m_notifyTarget || QThread::currentThread() == m_notifyTarget->thread());
 #endif
     if (req.reportFile.isEmpty()) return;
 
     QFile report(req.reportFile);
     if (!report.open(QIODevice::ReadOnly)) return;
+    const bool rewritten = report.size() < req.reportOffset;
+    if (!report.seek(rewritten ? 0 : req.reportOffset)) return;
+    const QByteArray data = report.readAll();
+    applyReportBytesLocked(req, rewritten, data, QFileInfo(req.reportFile).lastModified(), final);
+}
 
-    if (report.size() < req.reportOffset) {
+void AsyncRequestManager::prefetchReport(const QString& id)
+{
+#if DAZ_SDK_MAJOR_VERSION >= 6
+    QString path;
+    qint64  offset = 0;
+    {
+        QMutexLocker locker(&m_mutex);
+        QMap<QString, AsyncRequest>::const_iterator it = m_requests.constFind(id);
+        if (it == m_requests.constEnd() || it->reportFile.isEmpty()) return;
+        path   = it->reportFile;
+        offset = it->reportOffset;
+    }
+
+    // File I/O without the lock, so status polls never stall markCompleted()
+    // or other requests behind a slow or large report file.
+    QFile report(path);
+    if (!report.open(QIODevice::ReadOnly)) return;
+    const qint64 size = report.size();
+    const bool rewritten = size < offset;
+    if (!rewritten && size == offset) return;
+    if (!report.seek(rewritten ? 0 : offset)) return;
+    const QByteArray data = report.readAll();
+    report.close();
+    const QDateTime modified = QFileInfo(path).lastModified();
+
+    QMutexLocker locker(&m_mutex);
+    QMap<QString, AsyncRequest>::iterator it = m_requests.find(id);
+    // Another reader applied these bytes (or the file changed hands) since we
+    // sampled the offset: applying them again would duplicate events.
+    if (it == m_requests.end() || it->reportFile != path || it->reportOffset != offset) return;
+    applyReportBytesLocked(*it, rewritten, data, modified, false);
+#else
+    // Studio 4 cannot parse report JSON on a raw httplib worker because its
+    // JsonStd fallback uses QScriptEngine. markCompleted() performs the final
+    // ingestion on Daz's main thread after script execution returns.
+    (void)id;
+#endif
+}
+
+void AsyncRequestManager::prefetchAllReports()
+{
+#if DAZ_SDK_MAJOR_VERSION >= 6
+    QStringList ids;
+    {
+        QMutexLocker locker(&m_mutex);
+        for (QMap<QString, AsyncRequest>::const_iterator it = m_requests.constBegin();
+             it != m_requests.constEnd(); ++it)
+            if (!it->reportFile.isEmpty()) ids.append(it.key());
+    }
+    for (int i = 0; i < ids.size(); ++i)
+        prefetchReport(ids[i]);
+#endif
+}
+
+void AsyncRequestManager::applyReportBytesLocked(AsyncRequest& req, bool rewritten,
+                                                 const QByteArray& data,
+                                                 const QDateTime& modified, bool final)
+{
+    if (rewritten) {
         // The file was rewritten (scripts commonly rewrite the whole event
         // list each time). Replay it from the start. Progress is kept rather
         // than cleared: a poll that lands between the truncate and the write
@@ -284,21 +381,17 @@ void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
         req.logTotal = 0;
         req.outputManifest.clear();
     }
-    if (!report.seek(req.reportOffset)) return;
-    if (!report.atEnd()) {
+    if (!data.isEmpty()) {
         // New events mean the job wrote recently. Use the file's mtime, not
         // the time of this poll, since ingestion happens lazily on request.
-        const QDateTime modified = QFileInfo(req.reportFile).lastModified();
         if (modified.isValid())
             touchLocked(req, modified.toMSecsSinceEpoch());
     }
 
-    while (!report.atEnd()) {
-        QByteArray chunk = report.read(64 * 1024);
-        if (chunk.isEmpty()) break;
+    for (int pos = 0; pos < data.size(); pos += 64 * 1024) {
+        const QByteArray chunk = data.mid(pos, 64 * 1024);
         req.reportOffset += chunk.size();
         req.reportRemainder.append(chunk);
-
         int newline = -1;
         while ((newline = req.reportRemainder.indexOf('\n')) >= 0) {
             QByteArray line = req.reportRemainder.left(newline).trimmed();
@@ -346,17 +439,6 @@ void AsyncRequestManager::ingestReportLocked(AsyncRequest& req, bool final)
     }
 }
 
-void AsyncRequestManager::ingestReportFromWorkerLocked(AsyncRequest& req)
-{
-#if DAZ_SDK_MAJOR_VERSION >= 6
-    ingestReportLocked(req);
-#else
-    // Studio 4 cannot parse report JSON on a raw httplib worker because its
-    // JsonStd fallback uses QScriptEngine. markCompleted() performs the final
-    // ingestion on Daz's main thread after script execution returns.
-    (void)req;
-#endif
-}
 
 // Render jobs don't write a report file; the paths their generated script
 // returns (output_path for /render, output_paths for /render/animation) are
@@ -396,10 +478,10 @@ AsyncRequestManager::ArtifactLookup AsyncRequestManager::findArtifact(
 {
     const QString qid = QString::fromStdString(requestId);
     const QString aid = QString::fromStdString(artifactId);
+    prefetchReport(qid);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid)) return ARTIFACT_JOB_NOT_FOUND;
     AsyncRequest& req = m_requests[qid];
-    ingestReportFromWorkerLocked(req);
     for (int i = 0; i < req.outputManifest.size(); ++i) {
         const QVariantMap entry = req.outputManifest[i].toMap();
         if (entry.value("artifact_id").toString() == aid) {
@@ -414,10 +496,10 @@ bool AsyncRequestManager::artifactManifest(const std::string& requestId,
                                            QVariantList& outEntries, QString& outStatus)
 {
     const QString qid = QString::fromStdString(requestId);
+    prefetchReport(qid);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid)) return false;
     AsyncRequest& req = m_requests[qid];
-    ingestReportFromWorkerLocked(req);
     outEntries = req.outputManifest;
     outStatus  = QString::fromStdString(statusToString(req.status));
     return true;
@@ -450,12 +532,12 @@ std::string AsyncRequestManager::observationJson(const AsyncRequest& req) const
 std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string& requestId)
 {
     QString qid = QString::fromStdString(requestId);
+    prefetchReport(qid);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid))
         return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
     AsyncRequest& req = m_requests[qid];
-    ingestReportFromWorkerLocked(req);
     std::string status = statusToString(req.status);
 
     char progBuf[32];
@@ -489,7 +571,8 @@ std::pair<int, std::string> AsyncRequestManager::getStatusJson(const std::string
 }
 
 std::pair<int, std::string> AsyncRequestManager::getResultJson(
-    const std::string& requestId, bool doWait, int timeoutSec)
+    const std::string& requestId, bool doWait, int timeoutSec,
+    const std::function<bool()>& isClientGone)
 {
     QString qid = QString::fromStdString(requestId);
 
@@ -507,16 +590,19 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
             // so long-pollers get its success:false answer instead of hanging.
             if (isTerminal(s) || s == REQUEST_STALE)
                 break;
+            // Don't hold a worker for a client that has gone.
+            if (isClientGone && isClientGone())
+                break;
             SleepThread::msleep(RESULT_POLL_INTERVAL_MS);
         }
     }
 
+    prefetchReport(qid);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(qid))
         return {404, ErrorResponse::build(ErrorCode::REQUEST_NOT_FOUND, requestId)};
 
     AsyncRequest& mutableReq = m_requests[qid];
-    ingestReportFromWorkerLocked(mutableReq);
     const AsyncRequest& observedReq = mutableReq;
     std::string status = statusToString(observedReq.status);
 
@@ -572,17 +658,17 @@ std::pair<int, std::string> AsyncRequestManager::getResultJson(
 }
 
 std::pair<int, std::string> AsyncRequestManager::cancelJson(
-    const std::string& requestId, const std::string& clientIP)
+    const std::string& requestId, const std::string& clientIP, bool* cancelledQueuedRender)
 {
     (void)clientIP;
-    return cancelImpl(requestId, false);
+    return cancelImpl(requestId, false, cancelledQueuedRender);
 }
 
 std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
-    const std::string& requestId, const std::string& clientIP)
+    const std::string& requestId, const std::string& clientIP, bool* cancelledQueuedRender)
 {
     (void)clientIP;
-    return cancelImpl(requestId, true);
+    return cancelImpl(requestId, true, cancelledQueuedRender);
 }
 
 // QUEUED requests are removed from the queue and become CANCELLED at once.
@@ -590,8 +676,9 @@ std::pair<int, std::string> AsyncRequestManager::cancelRenderJson(
 // becomes CANCEL_REQUESTED (STALE stays STALE), render jobs get a best-effort
 // killRender(), and markCompleted() later records what really happened.
 std::pair<int, std::string> AsyncRequestManager::cancelImpl(
-    const std::string& requestId, bool renderOnly)
+    const std::string& requestId, bool renderOnly, bool* cancelledQueuedRender)
 {
+    if (cancelledQueuedRender) *cancelledQueuedRender = false;
     QString qid = QString::fromStdString(requestId);
 
     bool needKillRender = false;
@@ -627,6 +714,8 @@ std::pair<int, std::string> AsyncRequestManager::cancelImpl(
             req.status      = REQUEST_CANCELLED;
             req.error       = "Cancelled by client before it started";
             req.completedAt = now;
+            if (cancelledQueuedRender && req.requestType == REQUEST_TYPE_RENDER)
+                *cancelledQueuedRender = true;
         } else {
             if (req.status == REQUEST_RUNNING)
                 req.status = REQUEST_CANCEL_REQUESTED;
@@ -660,6 +749,7 @@ std::pair<int, std::string> AsyncRequestManager::cancelImpl(
 
 std::string AsyncRequestManager::listJson(const std::string& statusFilter)
 {
+    prefetchAllReports();
     QMutexLocker locker(&m_mutex);
 
     int nQueued = 0, nRunning = 0, nCompleted = 0, nFailed = 0, nCancelled = 0;
@@ -669,7 +759,6 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
     for (QMap<QString, AsyncRequest>::iterator it = m_requests.begin();
          it != m_requests.end(); ++it) {
         AsyncRequest& req = it.value();
-        ingestReportFromWorkerLocked(req);
         std::string statusStr = statusToString(req.status);
 
         if (!statusFilter.empty() && statusStr != statusFilter)
@@ -722,18 +811,6 @@ std::string AsyncRequestManager::listJson(const std::string& statusFilter)
     s += ",\"completed_after_stale\":" + std::to_string(nCompletedAfterStale);
     s += "}";
     return s;
-}
-
-int AsyncRequestManager::getQueueDepth() const
-{
-    QMutexLocker locker(&m_mutex);
-    return m_queue.size();
-}
-
-int AsyncRequestManager::getTotalTracked() const
-{
-    QMutexLocker locker(&m_mutex);
-    return m_requests.size();
 }
 
 // ─── Main-thread API ──────────────────────────────────────────────────────────
@@ -792,11 +869,11 @@ void AsyncRequestManager::updateFrameProgress(const QString& id, int frame, int 
 
 bool AsyncRequestManager::frameProgress(const QString& id, int* frame, int* total)
 {
+    prefetchReport(id);
     QMutexLocker locker(&m_mutex);
     if (!m_requests.contains(id)) return false;
     AsyncRequest& req = m_requests[id];
     if (req.progressSource != PROGRESS_FRAMES) return false;
-    ingestReportFromWorkerLocked(req);
     const int f = req.progressDetail.value("frame").toInt();
     const int t = req.progressDetail.value("total").toInt();
     if (f < 1 || t < 1) return false;
@@ -824,10 +901,12 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
                                         const QVariant& result,
                                         const QStringList& output,
                                         const QString& error,
-                                        bool& outWasCancelled)
+                                        bool& outWasCancelled,
+                                        QString& outRenderError)
 {
     QMutexLocker locker(&m_mutex);
     outWasCancelled = false;
+    outRenderError.clear();
     if (!m_requests.contains(id)) return;
 
     AsyncRequest& req  = m_requests[id];
@@ -884,6 +963,17 @@ void AsyncRequestManager::markCompleted(const QString& id, bool executed,
         req.status      = REQUEST_CANCELLED;
         req.error       = "Cancelled by client";
         outWasCancelled = true;
+    } else if (renderAborted) {
+        // The script ran but the render didn't succeed and no client asked
+        // to cancel: a figure vanished before it ran, or the render was
+        // stopped or failed inside Studio. That's a failure, not "completed"
+        // (rzp1). The result object stays in scriptResult for history.
+        const QString scriptError = result.toMap().value("error").toString();
+        req.status     = REQUEST_FAILED;
+        req.error      = scriptError.isEmpty()
+            ? QString("Render did not complete (it failed or was stopped in DAZ Studio)")
+            : scriptError;
+        outRenderError = req.error;
     } else if (executed) {
         req.status = req.cancelRequested ? REQUEST_COMPLETED_AFTER_CANCEL_REQUEST
                    : wasStale            ? REQUEST_COMPLETED_AFTER_STALE

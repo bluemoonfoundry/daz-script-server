@@ -7,6 +7,7 @@
 
 // Full definition needed for QList<SubscriberQueue*> member
 #include "SceneEventBroker.h"
+#include "ErrorResponse.h"
 
 // Per-render SSE progress broker.
 //
@@ -20,7 +21,8 @@
 //                       handler thread, polling AsyncRequestManager::
 //                       frameProgress() for the job's frame report.
 //   notifyCompleted() — called on main thread after successful render
-//   notifyFailed()    — called on main thread after failed/cancelled render
+//   notifyFailed()    — main thread after a failed/cancelled render; also any
+//                       thread when a render is cancelled before it starts
 //
 // DAZ SDK reality: DzRenderer exposes no renderProgress(int) signal, and
 // live testing confirmed Iray posts no parseable progress text through the
@@ -59,7 +61,9 @@ public:
     // stored by setOutputPath() (-1 if none was stored).
     void notifyCompleted(const QString& requestId, int durationMs,
                          const QStringList& outputFiles);
-    void notifyFailed(const QString& requestId, const QString& error, int durationMs);
+    // code: SCRIPT_ERROR for a failed render, JOB_CANCELLED for a cancelled one.
+    void notifyFailed(const QString& requestId, ErrorCode code, const QString& error,
+                      int durationMs);
 
     // Close all queues on server stop so SSE handler threads can exit.
     void stopAll();

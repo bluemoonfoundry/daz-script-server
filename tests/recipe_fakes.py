@@ -254,7 +254,8 @@ class FakeOps:
     def __init__(self, fail_on=None, exc: Exception | None = None, *,
                  create_names: dict | None = None, observed: dict | None = None,
                  environment: dict | None = None, native: dict | None = None,
-                 moved: dict | None = None) -> None:
+                 moved: dict | None = None, fit_names: dict | None = None,
+                 restore_names: dict | None = None) -> None:
         if fail_on is None:
             fail_on = []
         elif isinstance(fail_on, tuple):
@@ -266,8 +267,12 @@ class FakeOps:
         self.environment = environment
         self.native = native or {}
         self.moved = moved or {}
+        self.fit_names = fit_names or {}          # entity path -> names fit returns
+        self.asset_uri_map: dict = {}             # node name -> asset_uris() answer
+        self.restore_names = restore_names or {}  # source path -> names restore returns
         self.calls: list[tuple] = []
         self.calls_with_args: list[tuple] = []
+        self.unfit_figures: list[tuple] = []
         self._counts: dict[str, int] = {}
 
     def _call(self, method: str, *args):
@@ -325,6 +330,30 @@ class FakeOps:
     def write_manifest(self, manifest):
         self._call("write_manifest", manifest)
 
+    def take_over(self, node_name):
+        self._call("take_over", node_name)
+
+    def apply_presets(self, node_name, paths):
+        self._call("apply_presets", node_name, paths)
+
+    def fit(self, entity, figure_name):
+        self._call("fit", entity.path, figure_name)
+        return list(self.fit_names.get(entity.path, [entity.label]))
+
+    def unfit(self, node_names, owner_recipe=None, figure=None):
+        # calls_with_args carries owner_recipe only when given (checked group deletes)
+        self._call("unfit", *((node_names,) if owner_recipe is None else (node_names, owner_recipe)))
+        if figure is not None:  # one-shot removals: the figure the items must follow
+            self.unfit_figures.append((list(node_names), figure))
+
+    def restore(self, source_paths, figure_name):
+        self._call("restore", source_paths, figure_name)
+        return [n for p in source_paths for n in self.restore_names.get(p, [p])]
+
+    def asset_uris(self, node_names):
+        # read-only, so not logged in ``calls``; ``asset_uri_map``: node -> .dsf URI
+        return {n: self.asset_uri_map[n] for n in node_names if n in self.asset_uri_map}
+
 
 FAKE_OBSERVED = {"transform": {"position": [1.0, 2.0, 3.0], "rotation": [0.0, 0.0, 0.0]}}
 
@@ -370,17 +399,46 @@ class FakeScene:
     :class:`FakeOps`) is what it writes through.
     """
 
-    def __init__(self, live: LiveState, missing_files=(), ops: "FakeOps | None" = None) -> None:
+    def __init__(self, live: LiveState, missing_files=(), ops: FakeOps | None = None, *,
+                 compat: dict | None = None, figures: list | None = None,
+                 cms: list | None = None) -> None:
         self.live = live
         self.ops = ops or FakeOps()
         self.missing = set(missing_files)
-        self._client = scripted_client(("recipe:resolve", self._resolve))
+        # v2 (Task 13): compat {path: {"bases", "known", "provides"}} (absent = unknown),
+        # figures = the recipe:figures payload's "figures" list, cms = Studio content
+        # database assets for asset_finder scripts (None = CMS not running).
+        self.compat = dict(compat or {})
+        self.figures = list(figures or [])
+        self.cms = cms
+        self._client = scripted_client(("recipe:resolve", self._resolve),
+                                       ("recipe:compat", self._compat),
+                                       ("recipe:figure-labels", self._labels),
+                                       ("recipe:figures", lambda s: {"figures": self.figures}),
+                                       ("asset_finder:", self._cms))
         self._client.scene = self
 
-    def _resolve(self, script: str) -> dict:
+    @staticmethod
+    def _paths(script: str) -> list:
         import re
-        paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
-        return {p: ("" if p in self.missing else p) for p in paths}
+        return json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
+
+    def _resolve(self, script: str) -> dict:
+        return {p: ("" if p in self.missing else p) for p in self._paths(script)}
+
+    def _compat(self, script: str) -> dict:
+        return {p: self.compat.get(p, {"bases": [], "known": False, "provides": None})
+                for p in self._paths(script)}
+
+    def _labels(self, script: str) -> list:
+        return [f["label"] for f in self.figures]
+
+    def _cms(self, script: str) -> dict:
+        return {"cms": self.cms is not None, "assets": list(self.cms or [])}
+
+    def scripts_with(self, marker: str) -> list[str]:
+        """The executed scripts containing *marker* (e.g. ``"recipe:compat"``)."""
+        return [s for s in self._client.scripts if marker in s]
 
     def tweak(self, path: str, channel: str) -> None:
         """Hand-edit *path*'s observed *channel* in the live state."""
@@ -388,8 +446,41 @@ class FakeScene:
 
 
 def fake_scene(live: LiveState | None = None, *, missing_files=(),
-               ops: "FakeOps | None" = None) -> FakeScene:
-    return FakeScene(live if live is not None else empty_live(), missing_files, ops)
+               ops: FakeOps | None = None, **v2) -> FakeScene:
+    """A :class:`FakeScene`; *v2* passes ``compat`` / ``figures`` / ``cms`` through."""
+    return FakeScene(live if live is not None else empty_live(), missing_files, ops, **v2)
+
+
+def fig_payload(name: str, label: str | None = None, *, compat_base: str | None = None,
+                record: EntityRecord | None = None, items: list[dict] | None = None) -> dict:
+    """One figure as the ``recipe:figures`` script reports it."""
+    return {"name": name, "label": label or name, "record": record.to_json() if record else None,
+            "compat_base": compat_base, "items": list(items or [])}
+
+
+def item_payload(name: str, *, label: str | None = None, type_: str | None = "Follower/Hair",
+                 source_path: str | None = None, record: EntityRecord | None = None,
+                 foreign=()) -> dict:
+    """One fitted item of a :func:`fig_payload` figure."""
+    return {"name": name, "label": label or name, "type": type_, "source_path": source_path,
+            "record": record.to_json() if record else None, "foreign": list(foreign)}
+
+
+class FakeFinder:
+    """An :class:`~dazpy.AssetFinder` answering canned candidates and counting calls."""
+
+    def __init__(self, search=(), files=(), name: str = "fake") -> None:
+        self.name = name
+        self._search, self._files = list(search), list(files)
+        self.calls: list[str] = []
+
+    def search(self, phrase, *, type, limit=10):
+        self.calls.append(f"search:{phrase}")
+        return list(self._search)[:limit]
+
+    def product_files(self, *, sku=None, product=None):
+        self.calls.append(f"product_files:{sku or product}")
+        return list(self._files)
 
 
 def patch_facade(test) -> None:
@@ -611,3 +702,66 @@ def patch_sim(test) -> None:
     p = patch("dazpy.recipe.DazSceneOps", side_effect=lambda scene: scene)
     p.start()
     test.addCleanup(p.stop)
+
+
+def fake_resolve_client(found: dict[str, str]) -> MagicMock:
+    """A client whose batched ``recipe:resolve`` answers *found* (absent paths -> "")."""
+    import re
+
+    def answer(script: str) -> dict:
+        paths = json.loads(re.search(r"var _paths = (\[.*?\]),", script).group(1))
+        return {p: found.get(p, "") for p in paths}
+
+    return scripted_client(("recipe:resolve", answer))
+
+
+# ── v2 fixtures: taken-over actors, presets, fitted items (Task 12) ──────────
+
+def d_taken(name: str, node: str = "Abby", presets=(), pose_path: str | None = None,
+            source: dict | None = None) -> DesiredEntity:
+    """A v2 actor taken over from the scene figure labelled *node* (no transform)."""
+    create = {"asset_path": "/g9.duf", "take_over": node, "label": node}
+    if source is not None:
+        create["source"] = source
+    channels: dict = {"pose": {"pose_path": pose_path}}
+    if presets:
+        channels["presets"] = {"paths": list(presets)}
+    return DesiredEntity(f"actors.{name}", "actor", node, create, channels)
+
+
+def d_item(actor: str, key: str, asset: str = "/hair/a.duf", finder: str = "path") -> DesiredEntity:
+    """A v2 fitted item ``actors.<actor>.wearing.<key>``."""
+    return DesiredEntity(f"actors.{actor}.wearing.{key}", "item", f"{RID}:{actor}.{key}",
+                         {"asset_path": asset, "fit_to": f"actors.{actor}",
+                          "source": {"requested": {"path": asset}, "path": asset,
+                                     "finder": finder}}, {})
+
+
+def live_entity_for(e: DesiredEntity, *, node_name: str | None = None, adopted: bool = False,
+                    group_nodes: tuple = (), missing: tuple = (), done: tuple = (),
+                    foreign: dict | None = None) -> LiveEntity:
+    """The LiveEntity a faithful earlier apply of *e* leaves (v2-aware).
+
+    *foreign*: ``{group node: [foreign child names]}`` (items only)."""
+    item = e.kind == "item"
+    obs = {} if item else observed_for(e)
+    rdesired = _copy.deepcopy(e.channels)
+    rdesired["_create"] = _copy.deepcopy(e.create)
+    members = tuple(group_nodes) + tuple(missing) if item else ()
+    r = _dc.replace(rec(RID, e.path, rdesired, _copy.deepcopy(obs)),
+                    adopted_from_scene=adopted, done=tuple(done),
+                    group=e.path if item else None, members=members)
+    names = tuple(group_nodes) or (node_name or e.label,)
+    by_node = tuple((n, tuple(c)) for n, c in (foreign or {}).items())
+    return LiveEntity(path=e.path, node_name=node_name or names[0], kind=e.kind, record=r,
+                      observed=_copy.deepcopy(obs),
+                      foreign_children=tuple(c for _, cs in by_node for c in cs),
+                      foreign_by_node=by_node,
+                      group_nodes=tuple(group_nodes) if item else (),
+                      missing_members=tuple(missing) if item else ())
+
+
+def live_of(*entities: LiveEntity, deleted: tuple = ()) -> LiveState:
+    """A LiveState holding *entities* (all listed in the manifest)."""
+    return LiveState(manifest=Manifest(RID, tuple(e.path for e in entities), None, tuple(deleted)),
+                     entities={e.path: e for e in entities}, environment_observed=None)

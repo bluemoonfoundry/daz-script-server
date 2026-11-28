@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import copy
 from dataclasses import MISSING, dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Literal, Mapping, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Union
+from collections.abc import Callable, Iterable, Mapping
 
 from .math3 import Vec3
 from ._shot_geometry import look_at_euler, resolve_target, spherical_offset
@@ -46,7 +47,7 @@ Composition = Literal["center", "left_third", "right_third"]
 #: Per shot size: (cm of subject that fills the frame height, cm above an
 #: actor's root to aim at). Assumes a standing Genesis-scale (~175 cm) figure.
 #: ``full_body`` / ``medium`` / ``close_up`` are the scene-recipe values.
-SHOT_SIZES: Mapping[str, Tuple[float, float]] = {
+SHOT_SIZES: Mapping[str, tuple[float, float]] = {
     "extreme_wide": (600.0, 90.0),
     "wide": (350.0, 90.0),
     "full_body": (210.0, 90.0),
@@ -62,15 +63,15 @@ CAMERA_ANGLES: Mapping[str, float] = {
     "eye_level": 0.0, "high": 30.0, "low": -20.0, "birds_eye": 80.0, "worms_eye": -45.0,
 }
 
-COMPOSITIONS: Tuple[str, ...] = ("center", "left_third", "right_third")
+COMPOSITIONS: tuple[str, ...] = ("center", "left_third", "right_third")
 
 KeyInterpolation = Literal["linear", "constant", "smooth"]
 CameraEasing = Literal["linear", "smooth", "ease_in", "ease_out"]
 
 #: :class:`CameraKeyframe` ``interpolation`` values (the segment to the next key).
-KEY_INTERPOLATIONS: Tuple[str, ...] = ("linear", "constant", "smooth")
+KEY_INTERPOLATIONS: tuple[str, ...] = ("linear", "constant", "smooth")
 #: :class:`Keyframed` ``easing`` values (the whole move).
-CAMERA_EASINGS: Tuple[str, ...] = ("linear", "smooth", "ease_in", "ease_out")
+CAMERA_EASINGS: tuple[str, ...] = ("linear", "smooth", "ease_in", "ease_out")
 
 #: Daz camera "Frame Width" default (mm), and the height/width ratio used when
 #: nothing sets a resolution -- the same defaults scene recipes use. Despite its
@@ -109,10 +110,6 @@ def _vec(v: Any, path: str) -> Vec3:
             isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
         return Vec3(*v)
     raise ValueError(f"{path}: must be [x, y, z]")
-
-
-def _opt_vec(v: Any, path: str) -> Optional[Vec3]:
-    return None if v is None else _vec(v, path)
 
 
 def _target(v: Any, path: str) -> Any:
@@ -161,7 +158,7 @@ class _Model:
     """Mixin: ``to_dict`` / ``from_dict`` driven by a per-class ``_codec``."""
 
     _codec: ClassVar[Mapping[str, Callable[[Any, str], Any]]] = {}
-    _kind: ClassVar[Optional[str]] = None
+    _kind: ClassVar[str | None] = None
 
     def _dump(self, path: str) -> dict:
         out: dict = {"kind": self._kind} if self._kind else {}
@@ -244,9 +241,9 @@ class Lens(_Model):
     """Camera optics. ``None`` fields leave Studio's current value untouched."""
 
     focal_length: float = 50.0
-    depth_of_field: Optional[bool] = None
-    focal_distance: Optional[float] = None
-    f_stop: Optional[float] = None
+    depth_of_field: bool | None = None
+    focal_distance: float | None = None
+    f_stop: float | None = None
 
     def __post_init__(self) -> None:
         if self.focal_length <= 0:
@@ -276,14 +273,14 @@ class Framing(_Model):
 
     _kind: ClassVar[str] = "framing"
 
-    subjects: Tuple[Target, ...]
+    subjects: tuple[Target, ...]
     size: str = "medium"
     angle: str = "eye_level"
     azimuth_deg: float = 0.0
-    elevation_deg: Optional[float] = None
+    elevation_deg: float | None = None
     composition: str = "center"
-    distance_cm: Optional[float] = None
-    anchor_cm: Optional[float] = None
+    distance_cm: float | None = None
+    anchor_cm: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.subjects, tuple):
@@ -315,9 +312,9 @@ class Placement(_Model):
     _kind: ClassVar[str] = "placement"
 
     position: Vec3
-    look_at: Optional[Target] = None
+    look_at: Target | None = None
     look_at_offset_cm: float = 0.0
-    rotation: Optional[Tuple[float, float, float]] = None
+    rotation: tuple[float, float, float] | None = None
 
 
 Placement._codec = {"position": _vec, "look_at": _opt_target, "rotation": _floats(3)}
@@ -345,10 +342,10 @@ class CameraKeyframe(_Model):
 
     frame: int
     position: Vec3
-    look_at: Optional[Target] = None
+    look_at: Target | None = None
     look_at_offset_cm: float = 0.0
-    rotation: Optional[Tuple[float, float, float]] = None
-    interpolation: Optional[KeyInterpolation] = None
+    rotation: tuple[float, float, float] | None = None
+    interpolation: KeyInterpolation | None = None
 
     def __post_init__(self) -> None:
         if self.interpolation is not None:
@@ -408,8 +405,8 @@ class Keyframed(_Model):
 
     _kind: ClassVar[str] = "keyframed"
 
-    keyframes: Tuple[CameraKeyframe, ...]
-    easing: Optional[CameraEasing] = None
+    keyframes: tuple[CameraKeyframe, ...]
+    easing: CameraEasing | None = None
 
     def __post_init__(self) -> None:
         if self.easing is not None:
@@ -429,7 +426,7 @@ class Keyframed(_Model):
     def has_orientation(self) -> bool:
         return self.keyframes[0].look_at is not None or self.keyframes[0].rotation is not None
 
-    def key_interpolation(self) -> Optional[Tuple[Tuple[Optional[str], ...], bool, bool]]:
+    def key_interpolation(self) -> tuple[tuple[str | None, ...], bool, bool] | None:
         """``(kinds, fast_start, fast_end)`` for
         :meth:`~dazpy.DazNode.set_transform_key_interpolation`, one kind per
         waypoint; ``None`` when neither *easing* nor any waypoint asks for one.
@@ -459,7 +456,7 @@ class FocusKey(_Model):
 class FocusPull(_Model):
     """Keyed focal distance (a rack focus): at least two strictly ascending keys."""
 
-    keys: Tuple[FocusKey, ...]
+    keys: tuple[FocusKey, ...]
 
     def __post_init__(self) -> None:
         _require_frames([k.frame for k in self.keys], "FocusPull.keys")
@@ -489,8 +486,8 @@ class BlockingBeat(_Model):
     frame: int
     actor: str
     position: Vec3
-    facing: Optional[Target] = None
-    note: Optional[str] = None
+    facing: Target | None = None
+    note: str | None = None
 
 
 BlockingBeat._codec = {"position": _vec, "facing": _opt_target}
@@ -500,10 +497,10 @@ BlockingBeat._codec = {"position": _vec, "facing": _opt_target}
 class Storyboard(_Model):
     """Free-text storyboard metadata."""
 
-    description: Optional[str] = None
-    dialogue: Optional[str] = None
-    beat: Optional[str] = None
-    notes: Optional[str] = None
+    description: str | None = None
+    dialogue: str | None = None
+    beat: str | None = None
+    notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -511,9 +508,9 @@ class RenderOutput(_Model):
     """Where a shot renders, and per-shot render overrides (see :func:`dazpy.render_api.render`)."""
 
     path: str
-    engine: Optional[str] = None
-    resolution: Optional[Tuple[int, int]] = None
-    iray_samples: Optional[int] = None
+    engine: str | None = None
+    resolution: tuple[int, int] | None = None
+    iray_samples: int | None = None
 
     def __post_init__(self) -> None:
         if not self.path:
@@ -529,10 +526,10 @@ RenderOutput._codec = {"resolution": lambda v, p: None if v is None else tuple(i
 class AspectSettings(_Model):
     """Camera aspect/pixel settings; ``None`` leaves Studio's value untouched."""
 
-    aspect_width: Optional[float] = None
-    aspect_height: Optional[float] = None
-    pixels_width: Optional[int] = None
-    pixels_height: Optional[int] = None
+    aspect_width: float | None = None
+    aspect_height: float | None = None
+    pixels_width: int | None = None
+    pixels_height: int | None = None
 
 
 # ---- Shot / Sequence / CoveragePlan --------------------------------------
@@ -562,17 +559,17 @@ class Shot(_Model):
     """
 
     id: str
-    camera: Union[Framing, Placement]
+    camera: Framing | Placement
     lens: Lens = field(default_factory=Lens)
-    movement: Optional[Union[Orbit, Keyframed]] = None
-    focus: Optional[FocusPull] = None
-    frame_range: Optional[Tuple[int, int]] = None
-    aspect: Optional[AspectSettings] = None
-    blocking: Tuple[BlockingBeat, ...] = ()
-    gaze: Tuple[GazeBeat, ...] = ()
-    lighting: Optional[str] = None
-    storyboard: Optional[Storyboard] = None
-    output: Optional[RenderOutput] = None
+    movement: Orbit | Keyframed | None = None
+    focus: FocusPull | None = None
+    frame_range: tuple[int, int] | None = None
+    aspect: AspectSettings | None = None
+    blocking: tuple[BlockingBeat, ...] = ()
+    gaze: tuple[GazeBeat, ...] = ()
+    lighting: str | None = None
+    storyboard: Storyboard | None = None
+    output: RenderOutput | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -589,7 +586,7 @@ class Shot(_Model):
     def is_static(self) -> bool:
         return self.movement is None and self.focus is None
 
-    def to_recipe(self) -> Tuple[dict, Optional[dict]]:
+    def to_recipe(self) -> tuple[dict, dict | None]:
         """Scene-recipe ``(cameras[id] entry, shots[] entry or None)``.
 
         Only static shots convert (``shots[].movement`` is reserved in
@@ -675,9 +672,9 @@ class Sequence(_Model):
     """An ordered run of shots that cut together."""
 
     id: str
-    shots: Tuple[Shot, ...] = ()
-    lighting: Optional[str] = None
-    storyboard: Optional[Storyboard] = None
+    shots: tuple[Shot, ...] = ()
+    lighting: str | None = None
+    storyboard: Storyboard | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -709,11 +706,11 @@ class CoveragePlan(_Model):
     """
 
     id: str
-    subjects: Tuple[str, ...] = ()
-    axis: Optional[Tuple[str, str]] = None
-    sequences: Tuple[Sequence, ...] = ()
-    lighting: Optional[str] = None
-    storyboard: Optional[Storyboard] = None
+    subjects: tuple[str, ...] = ()
+    axis: tuple[str, str] | None = None
+    sequences: tuple[Sequence, ...] = ()
+    lighting: str | None = None
+    storyboard: Storyboard | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -729,10 +726,10 @@ class CoveragePlan(_Model):
             raise ValueError("duplicate sequence id")
         _unique_ids(self.all_shots(), f"coverage plan {self.id!r}")
 
-    def all_shots(self) -> Tuple[Shot, ...]:
+    def all_shots(self) -> tuple[Shot, ...]:
         return tuple(s for seq in self.sequences for s in seq.shots)
 
-    def lighting_for(self, shot: Shot) -> Optional[str]:
+    def lighting_for(self, shot: Shot) -> str | None:
         """The shot's lighting continuity key: its own, its sequence's, else the plan's."""
         if shot.lighting is not None:
             return shot.lighting
@@ -783,7 +780,7 @@ CoveragePlan._codec = {
 
 
 def shot_from_recipe_camera(key: str, camera: Mapping[str, Any],
-                            shot: Optional[Mapping[str, Any]] = None) -> Shot:
+                            shot: Mapping[str, Any] | None = None) -> Shot:
     """Build a :class:`Shot` from a scene-recipe ``cameras[key]`` entry (and optional ``shots[]`` entry).
 
     Recipe framing cameras without ``angle`` keep the recipe's 10 degree
@@ -794,7 +791,7 @@ def shot_from_recipe_camera(key: str, camera: Mapping[str, Any],
                 focal_distance=c.get("focal_distance"))
     if "frame" in c:
         frame = c["frame"]
-        cam: Union[Framing, Placement] = Framing(
+        cam: Framing | Placement = Framing(
             subjects=(frame,) if isinstance(frame, str) else tuple(frame),
             size=c.get("shot_type", "medium"), angle=c.get("angle", "eye_level"),
             azimuth_deg=c.get("azimuth_deg", 0.0),
@@ -827,9 +824,9 @@ def framing_distance(size: str, focal_length: float, *, frame_width_mm: float = 
     return SHOT_SIZES[size][0] * focal_length / frame_width_mm
 
 
-def framing_transform(points: "Iterable[Tuple[Vec3, bool]]", framing: Framing, focal_length: float, *,
+def framing_transform(points: Iterable[tuple[Vec3, bool]], framing: Framing, focal_length: float, *,
                       frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
-                      aspect: float = DEFAULT_ASPECT) -> Tuple[Vec3, Vec3]:
+                      aspect: float = DEFAULT_ASPECT) -> tuple[Vec3, Vec3]:
     """Camera ``(position, aim)`` for *framing* of already-resolved subject points.
 
     Args:
@@ -865,7 +862,7 @@ def framing_transform(points: "Iterable[Tuple[Vec3, bool]]", framing: Framing, f
     return position, center + right.normalize() * (shift * sign)
 
 
-def _resolve_point(t: Any, subjects: Optional[Mapping[str, Any]]) -> Tuple[Vec3, bool]:
+def _resolve_point(t: Any, subjects: Mapping[str, Any] | None) -> tuple[Vec3, bool]:
     if isinstance(t, str):
         if subjects is None or t not in subjects:
             raise ValueError(f"subject {t!r} is a key but no 'subjects' mapping resolves it")
@@ -878,7 +875,7 @@ def _resolve_point(t: Any, subjects: Optional[Mapping[str, Any]]) -> Tuple[Vec3,
     return resolve_target(t), True
 
 
-def _resolve_aim(t: Any, subjects: Optional[Mapping[str, Any]], offset: float) -> Vec3:
+def _resolve_aim(t: Any, subjects: Mapping[str, Any] | None, offset: float) -> Vec3:
     if isinstance(t, str):
         p, _ = _resolve_point(t, subjects)
         return Vec3(p.x, p.y + offset, p.z) if offset else p
@@ -887,7 +884,7 @@ def _resolve_aim(t: Any, subjects: Optional[Mapping[str, Any]], offset: float) -
 
 # ---- apply ----------------------------------------------------------------
 
-def _apply_lens(cam: "DazCamera", lens: Lens) -> None:
+def _apply_lens(cam: DazCamera, lens: Lens) -> None:
     cam.focal_length = lens.focal_length
     if lens.depth_of_field is not None:
         cam.depth_of_field = lens.depth_of_field
@@ -897,7 +894,7 @@ def _apply_lens(cam: "DazCamera", lens: Lens) -> None:
         cam.f_stop = lens.f_stop
 
 
-def _apply_aspect(cam: "DazCamera", aspect: Optional[AspectSettings]) -> None:
+def _apply_aspect(cam: DazCamera, aspect: AspectSettings | None) -> None:
     if aspect is None:
         return
     for name in ("aspect_width", "aspect_height", "pixels_width", "pixels_height"):
@@ -916,16 +913,16 @@ def _orbit_target(shot: Shot) -> Any:
 
 
 def apply_shot(
-    scene: "DazScene",
+    scene: DazScene,
     shot: Shot,
     *,
-    camera: "DazCamera | None" = None,
+    camera: DazCamera | None = None,
     name: str | None = None,
-    subjects: Optional[Mapping[str, Any]] = None,
+    subjects: Mapping[str, Any] | None = None,
     frame_width_mm: float = DEFAULT_FRAME_WIDTH_MM,
     aspect: float = DEFAULT_ASPECT,
     clear_keys: bool = True,
-) -> "DazCamera":
+) -> DazCamera:
     """Put *shot* into the scene on a camera and return the camera.
 
     Planning data (blocking, gaze, lighting continuity, storyboard, output)

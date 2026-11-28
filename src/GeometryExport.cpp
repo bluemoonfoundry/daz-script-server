@@ -2,6 +2,7 @@
 #include "GeometryExport.h"
 #include "JsonStd.h"
 #include "ErrorResponse.h"
+#include "MainThreadCall.h"
 
 #include <cstring>
 #include <vector>
@@ -26,7 +27,7 @@ namespace {
 HttpResult jsonError(ErrorCode code, const QString& detail)
 {
 	const std::string body = ErrorResponse::build(code, detail.toUtf8().constData());
-	return HttpResult(ErrorResponse::httpStatus(code), QByteArray(body.c_str(), (int)body.size()));
+	return HttpResult(ErrorResponse::httpStatus(code), stdToQBA(body));
 }
 
 DzSkeleton* findFigure(const QString& nameOrLabel)
@@ -57,6 +58,9 @@ struct SceneStateGuard {
 	}
 };
 
+// magic + version + numFrames + numVerts + numBones + flags + reserved[2]
+const quint64 HEADER_BYTES = 32;
+
 template <typename T>
 void append(QByteArray& out, const T& value)
 {
@@ -78,6 +82,9 @@ HttpResult GeometryExporter::exportFrames(const QByteArray& jsonBody)
 	const QVariantList frameList = body.value("frames").toList();
 	if (frameList.isEmpty())
 		return jsonError(ErrorCode::MISSING_FIELD, "frames");
+	if (frameList.size() > GeometryExporter::MAX_FRAMES)
+		return jsonError(ErrorCode::INVALID_FIELD,
+			QString("too many frames: %1 (max %2)").arg(frameList.size()).arg(GeometryExporter::MAX_FRAMES));
 	std::vector<qint32> frames;
 	frames.reserve(frameList.size());
 	for (const QVariant& f : frameList) frames.push_back((qint32)f.toInt());
@@ -176,7 +183,19 @@ HttpResult GeometryExporter::exportFrames(const QByteArray& jsonBody)
 				return jsonError(ErrorCode::INTERNAL_ERROR, "cached mesh smaller than base mesh");
 			frameVerts = n;
 			numVerts   = hasSubset ? (quint32)subset.size() : (quint32)n;
-			vertData.reserve((int)(frames.size() * numVerts * sizeof(DzPnt3)));
+			// Size the whole payload in 64-bit math before allocating anything:
+			// this runs on the main thread, and an oversized request must not
+			// exhaust memory or overflow the int sizes QByteArray takes (W12).
+			const quint64 vertBytes = (quint64)frames.size() * numVerts * sizeof(DzPnt3);
+			const quint64 boneBytes = (quint64)frames.size() * bones.size() * 3 * sizeof(DzVec3::m_x);
+			const quint64 total = HEADER_BYTES + (quint64)frames.size() * sizeof(qint32)
+				+ (quint64)subset.size() * sizeof(quint32) + vertBytes + boneBytes;
+			if (total > GeometryExporter::MAX_OUTPUT_BYTES)
+				return jsonError(ErrorCode::INVALID_FIELD,
+					QString("output would be %1 bytes (max %2); request fewer frames or a vertex subset")
+						.arg(total).arg(GeometryExporter::MAX_OUTPUT_BYTES));
+			vertData.reserve((int)vertBytes);
+			boneData.reserve((int)boneBytes);
 		} else if (n != frameVerts) {
 			return jsonError(ErrorCode::INTERNAL_ERROR, "vertex count changed between frames");
 		}
@@ -194,7 +213,8 @@ HttpResult GeometryExporter::exportFrames(const QByteArray& jsonBody)
 
 	// ── Assemble payload ─────────────────────────────────────────────────────
 	QByteArray out;
-	out.reserve(32 + (int)frames.size() * 4 + (int)subset.size() * 4 + vertData.size() + boneData.size());
+	out.reserve((int)(HEADER_BYTES + frames.size() * sizeof(qint32) + subset.size() * sizeof(quint32))
+		+ vertData.size() + boneData.size());
 	out.append("DZGF", 4);
 	append(out, (quint32)1);
 	append(out, (quint32)frames.size());
@@ -213,7 +233,8 @@ HttpResult GeometryExporter::exportFrames(const QByteArray& jsonBody)
 
 // ─── HTTP handler (worker thread) ────────────────────────────────────────────
 
-GeometryFramesHandler::GeometryFramesHandler() : m_pExporter(new GeometryExporter()) {}
+GeometryFramesHandler::GeometryFramesHandler(DzScriptServerPane* pane)
+	: m_pPane(pane), m_pExporter(new GeometryExporter()) {}
 
 GeometryFramesHandler::~GeometryFramesHandler()
 {
@@ -222,14 +243,11 @@ GeometryFramesHandler::~GeometryFramesHandler()
 
 void GeometryFramesHandler::handle(HttpContext& ctx)
 {
-	QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
-	HttpResult result;
-	QMetaObject::invokeMethod(m_pExporter, "exportFrames",
-		Qt::BlockingQueuedConnection,
-		Q_RETURN_ARG(HttpResult, result),
-		Q_ARG(QByteArray, bodyBytes));
-	ctx.respond(result.first, std::string(result.second.constData(), result.second.size()));
-	if (result.first == 200)
+	const QByteArray bodyBytes(ctx.body.c_str(), (int)ctx.body.size());
+	GeometryExporter* exporter = m_pExporter;
+	callOnMainThread(m_pPane, ctx, m_pPane->mainThreadQueueTimeoutSec(),
+		[exporter, bodyBytes](DzScriptServerPane*) { return exporter->exportFrames(bodyBytes); });
+	if (ctx.responseStatus == 200)
 		ctx.responseContentType = "application/octet-stream";
 }
 

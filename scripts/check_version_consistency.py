@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Fail if the release version is not the same everywhere it is written.
 
-pyproject.toml is the source of truth. Every other place that names the
+dazpy/__init__.py __version__ is the source of truth (pyproject.toml reads it
+through [tool.setuptools.dynamic]). Every other place that names the
 current version must agree with it, the README must have a "What's New"
 section for it (the README is the PyPI project description, and PyPI
 can't update an already-published version's page), and CHANGELOG.md's newest
@@ -24,23 +25,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def read(rel: str) -> str:
-    return (ROOT / rel).read_text(encoding="utf-8")
-
-
-def find(rel: str, pattern: str) -> str | None:
-    m = re.search(pattern, read(rel), re.MULTILINE)
-    return m.group(1) if m else None
-
-
-def main() -> int:
+def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tag", help="release tag to check, e.g. v2.10.1")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    version = find("pyproject.toml", r'^version\s*=\s*"([^"]+)"')
+    def read(rel: str) -> str:
+        return (root / rel).read_text(encoding="utf-8")
+
+    def find(rel: str, pattern: str) -> str | None:
+        m = re.search(pattern, read(rel), re.MULTILINE)
+        return m.group(1) if m else None
+
+    version = find("dazpy/__init__.py", r'^__version__\s*=\s*"([^"]+)"')
     if not version:
-        print("pyproject.toml: no [project] version found")
+        print("dazpy/__init__.py: no __version__ found")
+        return 1
+    pyproject = read("pyproject.toml")
+    if (re.search(r'^version\s*=\s*"', pyproject, re.MULTILINE)
+            or not re.search(r'^version\s*=\s*\{\s*attr\s*=\s*"dazpy\.__version__"', pyproject, re.MULTILINE)):
+        print('pyproject.toml: must not hard-code a version; use dynamic = ["version"] '
+              'with [tool.setuptools.dynamic] version = {attr = "dazpy.__version__"}')
         return 1
 
     header = read("include/common_version.h")
@@ -51,8 +56,6 @@ def main() -> int:
     header_triplet = ".".join(m.group(1) for m in parts) if all(parts) else None
 
     found = {
-        "dazpy/__init__.py __version__":
-            find("dazpy/__init__.py", r'^__version__\s*=\s*"([^"]+)"'),
         "docs/conf.py release": find("docs/conf.py", r'^release\s*=\s*"([^"]+)"'),
         "include/common_version.h DZSRV_VERSION_STR":
             find("include/common_version.h", r'DZSRV_VERSION_STR\s+"([^"]+)"'),
@@ -80,11 +83,11 @@ def main() -> int:
         )
 
     if errors:
-        print(f"Version {version} (pyproject.toml) is inconsistent:")
+        print(f"Version {version} (dazpy/__init__.py) is inconsistent:")
         for e in errors:
             print(f"  - {e}")
         return 1
-    print(f"Version {version} is consistent across {len(found) + 2} locations.")
+    print(f"Version {version} is consistent across {len(found) + 3} locations.")
     return 0
 
 

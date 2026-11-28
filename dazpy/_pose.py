@@ -61,7 +61,7 @@ class DazPose:
     # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
-    def capture(cls, skeleton: "DazSkeleton") -> "DazPose":
+    def capture(cls, skeleton: DazSkeleton) -> DazPose:
         """Capture the current pose of *skeleton* in a single HTTP call.
 
         Records all non-zero bone rotations, morph values, and node-level
@@ -149,7 +149,7 @@ class DazPose:
         )
 
     @classmethod
-    def load(cls, path: str | Path) -> "DazPose":
+    def load(cls, path: str | Path) -> DazPose:
         """Load a pose from a JSON file.
 
         Accepts files produced by :meth:`save` and by the ``character_state.py``
@@ -192,7 +192,7 @@ class DazPose:
 
     # ── interpolation ─────────────────────────────────────────────────────────
 
-    def lerp(self, other: "DazPose", t: float) -> "DazPose":
+    def lerp(self, other: DazPose, t: float) -> DazPose:
         """Linearly interpolate between this pose and *other*.
 
         Missing keys in either pose are treated as zero.  The result uses the
@@ -231,7 +231,7 @@ class DazPose:
     # ── apply ─────────────────────────────────────────────────────────────────
 
     def apply(
-        self, skeleton: "DazSkeleton", *, retry_on_busy: bool = True, max_wait: float = 30.0
+        self, skeleton: DazSkeleton, *, retry_on_busy: bool = True, max_wait: float = 30.0
     ) -> None:
         """Apply this pose to *skeleton* in a single HTTP call.
 
@@ -253,9 +253,9 @@ class DazPose:
                 ``True``.
         """
         lookup = ScriptBuilder.skeleton_lookup(skeleton._identifier)
-        bones_json  = json.dumps({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
-        morphs_json = json.dumps({k: round(v, 6) for k, v in self.morphs.items()})
-        props_json  = json.dumps({k: round(v, 6) for k, v in self.props.items()})
+        bones_json  = ScriptBuilder.to_js({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
+        morphs_json = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.morphs.items()})
+        props_json  = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.props.items()})
 
         script = f"""(function(){{
             {lookup}
@@ -312,7 +312,7 @@ class DazPose:
         skeleton._client.execute(script, retry_on_busy=retry_on_busy, max_wait=max_wait)
 
     def apply_full(
-        self, skeleton: "DazSkeleton", *, retry_on_busy: bool = True, max_wait: float = 30.0
+        self, skeleton: DazSkeleton, *, retry_on_busy: bool = True, max_wait: float = 30.0
     ) -> None:
         """Apply this pose and zero every channel not present in the pose.
 
@@ -337,9 +337,9 @@ class DazPose:
                 ``True``.
         """
         lookup = ScriptBuilder.skeleton_lookup(skeleton._identifier)
-        bones_json  = json.dumps({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
-        morphs_json = json.dumps({k: round(v, 6) for k, v in self.morphs.items()})
-        props_json  = json.dumps({k: round(v, 6) for k, v in self.props.items()})
+        bones_json  = ScriptBuilder.to_js({k: [round(v, 6) for v in xyz] for k, xyz in self.bones.items()})
+        morphs_json = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.morphs.items()})
+        props_json  = ScriptBuilder.to_js({k: round(v, 6) for k, v in self.props.items()})
 
         script = f"""(function(){{
             {lookup}

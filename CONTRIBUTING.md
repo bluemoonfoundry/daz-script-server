@@ -84,7 +84,7 @@ Read it before touching any code that runs on an HTTP thread.
 - [ ] All existing tests pass (`python tests.py`)
 - [ ] New behaviour has test coverage
 - [ ] Threading model respected (no Qt calls from HTTP threads)
-- [ ] No new magic numbers — add constants to `ServerConfig`
+- [ ] No new magic numbers — add constants to `ServerConfig` (`include/ServerConfig.h`)
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`
 - [ ] README updated if API surface changed
 - [ ] `openapi.yaml` updated if API surface changed
@@ -98,7 +98,8 @@ Key classes:
 
 | Class | File | Responsibility |
 |-------|------|---------------|
-| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` | GUI + server lifecycle + request dispatch |
+| `DzScriptServerPane` | `src/DzScriptServerPane.cpp` (+ `PaneUi`, `HttpJobRoute`, `PaneRoutes`, `PluginRouteBridge`, `ScriptJobs`, `RenderJobs`) | GUI + server lifecycle + request dispatch; file map at the top of `DzScriptServerPane.cpp` |
+| `RenderScriptBuilder` | `src/RenderScriptBuilder.cpp` | DazScript generated for render jobs |
 | `AuthenticationService` | `src/AuthenticationService.cpp` | Token generation, storage, validation |
 | `RateLimiterService` | `src/RateLimiterService.cpp` | Per-IP sliding-window rate limiting |
 | `IPWhitelistService` | `src/IPWhitelistService.cpp` | IP access control |

@@ -32,12 +32,12 @@ class ExpressionPreset:
     morphs: dict[str, float] = field(default_factory=dict)
 
     @classmethod
-    def capture(cls, skeleton: "DazSkeleton") -> "ExpressionPreset":
+    def capture(cls, skeleton: DazSkeleton) -> ExpressionPreset:
         pose = DazPose.capture(skeleton)
         return cls(figure=pose.figure, morphs=pose.morphs)
 
     @classmethod
-    def load(cls, path: str | Path) -> "ExpressionPreset":
+    def load(cls, path: str | Path) -> ExpressionPreset:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return cls(figure=data.get("figure", ""), morphs=data.get("morphs", {}))
@@ -49,7 +49,7 @@ class ExpressionPreset:
     def to_dict(self) -> dict:
         return {"figure": self.figure, "morphs": self.morphs}
 
-    def apply(self, skeleton: "DazSkeleton") -> None:
+    def apply(self, skeleton: DazSkeleton) -> None:
         # bones={} / props={} -> DazPose.apply() only touches morph channels,
         # leaving whatever body pose was applied earlier untouched.
         DazPose(figure=self.figure, bones={}, morphs=self.morphs, props={}).apply(skeleton)
@@ -83,11 +83,11 @@ def build_override_pose(figure: str, overrides: dict) -> DazPose:
 
 
 def apply_combo(
-    skeleton: "DazSkeleton",
+    skeleton: DazSkeleton,
     figure: str,
     pose_library_dir: str,
     expression_library_dir: str,
-    combo: "ComboEntry",
+    combo: ComboEntry,
 ) -> None:
     """Apply a combo's pose, expression, then overrides (in that order) to *skeleton*.
 
