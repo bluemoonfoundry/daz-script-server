@@ -4,6 +4,8 @@ All notable changes to DazScript Server are documented here.
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-11-27
+
 ### Added
 
 - **dazpy scene recipe v2: asset references, compatibility and fitting**

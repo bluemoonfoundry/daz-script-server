@@ -1,6 +1,6 @@
 # DazScript Server
 
-**Version 2.16.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
+**Version 2.17.0** | DAZ Studio 4.5+ | Daz Studio 6.26 | Windows & macOS
 
 [![Docs](https://img.shields.io/badge/docs-dazpy%20SDK-blue)](https://bluemoonfoundry.github.io/daz-script-server/)
 [![HTTP API](https://img.shields.io/badge/docs-HTTP%20API%20reference-blue)](https://bluemoonfoundry.github.io/daz-script-server/api-reference/)
@@ -160,63 +160,45 @@ DAZ Studio is powerful for 3D content creation, but automation is limited to man
 
 ---
 
-## What's New in v2.16.0
+## What's New in v2.17.0
 
-### 🧪 Pre-render scene checks, artifact trust boundary, daz-ts 0.2.0
+### 🧥 Scene recipes v2: find content, check it fits, dress actors in layers
 
-**Catch a bad shot before you render it.** `DazScene.check()` reports
-figures that are cut off by the frame or missing from it, and a scene with
-no light. Each finding has a severity and, for framing, the frame edges a
-figure crosses. Scene recipes can enforce the checks:
+**Name content the way you think about it.** A recipe asset can be a file
+path, a product name, a SKU, or a `find` search, answered by Studio's content
+database or by daz-content-browser (`DAZ_BROWSER_URL`). Anything ambiguous
+stops with the candidates listed; `recipe.pin()` records the answers so later
+applies reuse them.
 
-```python
-from dazpy import DazScene, recipe
+**Compatibility is checked before anything loads.** Hair or clothing made for
+another figure (a Genesis 8 hair on a Genesis 9 actor) is rejected from asset
+metadata, so it can't pop Studio's version dialog.
 
-report = DazScene().check(engine="iray")
-for f in report.findings:
-    print(f.severity, f.code, f.subject, f.message)
+**Actors in layers.** Take over a figure you built by hand (`node`), apply
+shape and material presets in order, then `add`, `replace` or `remove` what
+they wear, by label or by type (`"replace": {"type": "hair"}`). Multi-node
+hair and outfit presets are one entry. A recipe changes only what it
+mentions, never deletes content you added, and rolls back on failure.
 
-recipe.apply(my_recipe, DazScene(), require_clean=True)  # rolls back on check errors
+```json
+{"recipe_version": 2, "id": "abby",
+ "actors": {"abby": {"node": "Abby", "asset": "/People/Genesis 9/Genesis 9.duf",
+   "wearing": [{"key": "hair", "replace": {"type": "hair"},
+                "with": {"find": "Flirty Casual Ponytail", "type": "hair"}}]}}}
 ```
 
-`recipe.render(..., require_clean=True)` raises `SceneCheckError` instead of
-rendering, and a recipe shot's `allow_crop` silences the framing warnings
-for a deliberate crop. See [Scene recipes → Pre-render checks](docs/scene_recipes.rst).
+Every recipe-loaded node records where it came from, and `observe` reports
+items swapped by hand. Verified live on DS4 4.24 and DS6 6.26. See
+[Scene recipes](docs/scene_recipes.rst).
 
-**Artifact downloads are confined to allowed folders.** The server serves a
-job's declared output only when its real path (symlinks resolved) is inside
-an [allowed artifact folder](#-artifact-folders): by default the system temp
-folder plus your Documents, Pictures, Desktop and Downloads. **If your jobs
-write outputs elsewhere (e.g. `D:/renders`), add that folder** in the server
-pane, or downloads answer HTTP 403 `ARTIFACT_OUTSIDE_ROOTS`.
-
-**daz-ts 0.2.0** (`npm install @bluemoonfoundry/daz-ts`) adds multi-figure
-interaction posing (rig profiles, the IK solver and the hug/kiss/handshake/
-fight/sit/touch recipes via `DazScene.applyInteractionRecipe()`) and ports
-of `dazpy.shots` and `dazpy.shot_library`. Shot plans serialise to the same
-JSON in both SDKs.
-
-Also in this release:
-
-- `DazScene.create_group()` creates an empty group node, e.g. a camera-rig
-  parent.
-- Shot framing matches Studio's vertical frame. Shots used to stand
-  1/aspect too far back.
-- `Quat.from_dz()` / `to_dz()` convert Studio's `DzQuat`.
-- Server fixes: a crash when an SSE client disconnected as a render
-  finished, and sync executes stuck behind a long script no longer use up
-  the concurrent-request limit.
-- Studio 4: the environment node is found, and the first recipe `apply`
-  after Studio starts no longer times out.
-
-Plugin, dazpy 2.16.0 and daz-ts 0.2.0 release together; upgrade the plugin.
-Full list: [`CHANGELOG.md`](CHANGELOG.md#2160---2026-11-23).
+Plugin and dazpy 2.17.0 release together. daz-mcp-server's recipe tools need
+dazpy 2.17.0. Full list: [`CHANGELOG.md`](CHANGELOG.md#2170---2026-11-27).
 
 ---
 
 ## Earlier Releases
 
-Notes for v2.15.0 and earlier are in [`CHANGELOG.md`](CHANGELOG.md).
+Notes for v2.16.0 and earlier are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
