@@ -47,7 +47,11 @@ v2 steps (spec 6.2-6.6, 8):
   (every surviving group node); a group delete is one exact-selection delete.
 
 Item replace detection compares ``asset_path`` / ``fit_to`` only (``source``
-metadata such as the answering finder never triggers a replace).  A taken-over
+metadata such as the answering finder never triggers a replace).  For a v2
+desired create the asset is compared by identity (:func:`_same_create`): the
+recorded requested reference (pin ignored), else a v1 record's raw path against
+the new reference or absolute path, so a v1-to-v2 upgrade or a moved content
+library replaces nothing.  A taken-over
 actor (record ``adopted_from_scene``) is never replaced or deleted: removing it
 from the recipe releases it and the records of its fitted items.  A missing
 member of an owned group is ``deleted_in_scene`` for the item path.
@@ -130,6 +134,67 @@ def _create_identity(create: Any) -> Any:
     if isinstance(create, dict):
         return {k: v for k, v in create.items() if k != "source"}
     return create
+
+
+def _norm_file(path: Any) -> str:
+    return str(path or "").replace("\\", "/").strip().casefold()
+
+
+def _unpinned(requested: Any) -> Any:
+    """A recorded/desired ``requested`` reference without its ``resolved`` pin
+    (a path-only object collapses to its string, as ``AssetRef.to_dict`` does)."""
+    if not isinstance(requested, dict):
+        return requested
+    d = {k: v for k, v in requested.items() if k != "resolved"}
+    return d["path"] if list(d) == ["path"] else d
+
+
+def _requested_path(source: Mapping) -> str | None:
+    req = _unpinned(source.get("requested"))
+    if isinstance(req, str):
+        return req
+    return req.get("path") if isinstance(req, dict) else None
+
+
+def _same_file(a: Any, b: Any) -> bool:
+    """Same file: equal after normalising separators and case, or one is the
+    content-relative (leading ``/``) tail of the other, absolute, path."""
+    na, nb = _norm_file(a), _norm_file(b)
+    if not na or not nb:
+        return False
+    return (na == nb or (na.startswith("/") and nb.endswith(na))
+            or (nb.startswith("/") and na.endswith(nb)))
+
+
+def _same_asset(old: Mapping, new: Mapping) -> bool:
+    """Does a v2 desired create (*new*, with ``source``) name the file *old* was made from?
+
+    A recorded ``source.requested`` decides when present (the reference, not the
+    machine-specific absolute path: a moved content library is the same asset;
+    a pin is ignored).  A v1 record (no source) holds the raw reference as
+    ``asset_path``: it matches the new reference or resolved absolute path."""
+    new_src = new.get("source") or {}
+    old_src = old.get("source")
+    if isinstance(old_src, dict) and "requested" in old_src:
+        return _unpinned(old_src["requested"]) == _unpinned(new_src.get("requested"))
+    was = old.get("asset_path")
+    return any(_same_file(was, now) for now in (new.get("asset_path"), _requested_path(new_src))
+               if now)
+
+
+def _same_create(old: Any, new: Any, tol: float) -> bool:
+    """Is the recorded create-info *old* the same as the desired *new* (no replace)?
+
+    Exact comparison without ``source``, as v1; for a v2 desired create (it
+    carries ``source``) the asset is compared by identity, not path text
+    (final review I4: a v1-to-v2 upgrade or a moved library re-creates nothing)."""
+    if _equal(_create_identity(old), _create_identity(new), tol):
+        return True
+    if not (isinstance(old, dict) and isinstance(new, dict) and isinstance(new.get("source"), dict)):
+        return False
+    rest_old = {k: v for k, v in _create_identity(old).items() if k != "asset_path"}
+    rest_new = {k: v for k, v in _create_identity(new).items() if k != "asset_path"}
+    return _equal(rest_old, rest_new, tol) and _same_asset(old, new)
 
 
 def _group(entity: LiveEntity) -> dict:
@@ -373,8 +438,7 @@ class _Planner:
             old_create = r.desired.get(CREATE_KEY)
             # A taken-over actor's base figure is never replaced (spec 6.2).
             if (not r.adopted_from_scene and old_create is not None
-                    and not _equal(_create_identity(old_create), _create_identity(d.create),
-                                   self.tol)):
+                    and not _same_create(old_create, d.create, self.tol)):
                 self.replace(d, entity)
                 return
             self.compare(d, path, r.desired, r.observed, entity.observed, entity.node_name, "modify")
@@ -418,8 +482,7 @@ class _Planner:
             return
         old = entity.record.desired.get(CREATE_KEY)
         actor = d.create.get("fit_to") or item_actor(path)
-        changed = old is not None and not _equal(_create_identity(old),
-                                                 _create_identity(d.create), self.tol)
+        changed = old is not None and not _same_create(old, d.create, self.tol)
         if not changed and actor not in self.rebuilt:
             return
         if not self.can_fit(d):

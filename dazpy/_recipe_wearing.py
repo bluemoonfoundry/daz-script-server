@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 
 from ._content_types import type_matches
-from ._recipe_diff import Conflict
+from ._recipe_diff import Conflict, _unpinned
 from ._recipe_issue import RecipeIssue, _closest
 from ._recipe_fitted import FigureInfo, FittedItem, is_data_file
 from ._recipe_model import SceneRecipe, TypeSelector, WearingEntry, actor_ref
@@ -84,8 +84,10 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
             skip_entries = figure is None  # gone/relabelled: the diff reports deleted_in_scene
             requested = (record.source or {}).get("requested") if record else None
             ref = actor_ref(recipe, key)
+            # compared without the 'resolved' pin: pin() then apply() is no change (I3)
             if (record is not None and record.adopted_from_scene and requested is not None
-                    and ref is not None and requested != ref.to_dict()):
+                    and ref is not None
+                    and _unpinned(requested) != _unpinned(ref.to_dict())):
                 errors.append(RecipeIssue(
                     f"{path}.node", "take_over_asset_changed",
                     f"Actor {key!r} was taken over from the scene, but its asset reference "

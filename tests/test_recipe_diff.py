@@ -707,5 +707,68 @@ class V2DiffTests(unittest.TestCase):
             diff(ds(ABBY), _abby_live(), wearing=w)
 
 
+class AssetIdentityTests(unittest.TestCase):
+    """Final review I4: the same file named differently is not a replace."""
+
+    G9_REL = "/People/Genesis 9/Genesis 9.duf"
+    G9_ABS = "X:/Daz Libraries/Project/People/Genesis 9/Genesis 9.duf"
+
+    def _v2(self, asset_path, requested, path="actors.anna", kind="actor", **extra):
+        create = {"asset_path": asset_path, **extra,
+                  "source": {"requested": requested, "path": asset_path, "finder": "path"}}
+        return DesiredEntity(path, kind, "r1:anna", create, ANNA.channels if kind == "actor" else {})
+
+    def _live_with_create(self, create, path="actors.anna", kind="actor", desired=None):
+        d = desired or DesiredEntity(path, kind, "r1:anna", create,
+                                     ANNA.channels if kind == "actor" else {})
+        return live_matching(ds(d))
+
+    def test_v1_recorded_scene_upgraded_to_v2_is_unchanged(self):
+        L = self._live_with_create({"asset_path": self.G9_REL})
+        p = diff(ds(self._v2(self.G9_ABS, self.G9_REL)), L)
+        self.assertEqual(ops(p), [])
+
+    def test_v1_recorded_absolute_path_upgraded_to_v2_is_unchanged(self):
+        L = self._live_with_create({"asset_path": self.G9_ABS.lower().replace("/", "\\")})
+        p = diff(ds(self._v2(self.G9_ABS, self.G9_ABS)), L)
+        self.assertEqual(ops(p), [])
+
+    def test_moved_library_is_unchanged(self):
+        old = self._v2("X:/Old Lib/People/Genesis 9/Genesis 9.duf", self.G9_REL)
+        p = diff(ds(self._v2("Y:/New Lib/People/Genesis 9/Genesis 9.duf", self.G9_REL)),
+                 live_matching(ds(old)))
+        self.assertEqual(ops(p), [])
+
+    def test_pin_added_is_unchanged(self):
+        old = self._v2(self.G9_ABS, {"product": "G9"})
+        new = self._v2(self.G9_ABS, {"product": "G9", "resolved": {"path": self.G9_ABS}})
+        self.assertEqual(ops(diff(ds(new), live_matching(ds(old)))), [])
+
+    def test_different_requested_asset_still_replaces(self):
+        old = self._v2(self.G9_ABS, self.G9_REL)
+        new = self._v2("X:/Daz Libraries/Project/People/Genesis 8/G8.duf", "/People/Genesis 8/G8.duf")
+        self.assertEqual(ops(diff(ds(new), live_matching(ds(old)))),
+                         [("create", "actors.anna"), ("delete", "actors.anna")])
+        L = self._live_with_create({"asset_path": "/People/Genesis 8/G8.duf"})
+        self.assertEqual(ops(diff(ds(self._v2(self.G9_ABS, self.G9_REL)), L)),
+                         [("create", "actors.anna"), ("delete", "actors.anna")])
+
+    def test_item_moved_library_is_unchanged(self):
+        path = "actors.anna.wearing.hair"
+        old = self._v2("X:/Old/People/G9/Hair/Bob.duf", "/People/G9/Hair/Bob.duf", path, "item",
+                       fit_to="actors.anna")
+        new = self._v2("Y:/New/People/G9/Hair/Bob.duf", "/People/G9/Hair/Bob.duf", path, "item",
+                       fit_to="actors.anna")
+        L = live_matching(ds(ANNA, old))
+        self.assertEqual(ops(diff(ds(ANNA, new), L)), [])
+
+    def test_v1_desired_keeps_exact_comparison(self):
+        # v1 behaviour is unchanged: a different path string is a replace
+        L = self._live_with_create({"asset_path": self.G9_REL})
+        d = DesiredEntity("actors.anna", "actor", "r1:anna", {"asset_path": self.G9_ABS},
+                          ANNA.channels)
+        self.assertEqual(ops(diff(ds(d), L)), [("create", "actors.anna"), ("delete", "actors.anna")])
+
+
 if __name__ == "__main__":
     unittest.main()

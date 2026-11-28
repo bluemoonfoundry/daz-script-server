@@ -201,6 +201,26 @@ class WearingTests(unittest.TestCase):
             p = plan_wearing(recipe(), {"Abby": [fig("Abby")]}, live(**{"actors.abby": owned(r)}))
             self.assertEqual(p.errors, ())
 
+    def test_pinned_ref_is_not_a_changed_take_over_asset(self):
+        # final review I3: pin() adds 'resolved'; the next apply must not refuse
+        from dazpy._asset_ref import ResolvedPin
+        pinned = dataclasses.replace(BASE, resolved=ResolvedPin("X:/Lib/People/Genesis 9/Genesis 9.duf"))
+        prod = AssetRef(product="Genesis 9 Starter Essentials", type="Actor")
+        for requested, ref in ((BASE.to_dict(), pinned),
+                               (prod.to_dict(), dataclasses.replace(prod, resolved=ResolvedPin("X:/g9.duf"))),
+                               (pinned.to_dict(), BASE)):
+            r = dataclasses.replace(rec("r1", "actors.abby"), adopted_from_scene=True,
+                                    source={"requested": requested})
+            p = plan_wearing(recipe(asset=ref), {"Abby": [fig("Abby")]},
+                             live(**{"actors.abby": owned(r)}))
+            self.assertEqual(p.errors, (), requested)
+        # a real change still refuses, pinned or not
+        r = dataclasses.replace(rec("r1", "actors.abby"), adopted_from_scene=True,
+                                source={"requested": {"product": "Genesis 8 Starter Essentials"}})
+        p = plan_wearing(recipe(asset=dataclasses.replace(prod, resolved=ResolvedPin("X:/g9.duf"))),
+                         {"Abby": [fig("Abby")]}, live(**{"actors.abby": owned(r)}))
+        self.assertEqual([e.code for e in p.errors], ["take_over_asset_changed"])
+
     def test_ignore_and_add_fallback_mark_done(self):
         r = recipe(remove(HAIR, if_missing="ignore"), replace(HAIR, key="k2", if_missing="add"))
         p = plan_wearing(r, {"Abby": [fig("Abby")]}, live())
