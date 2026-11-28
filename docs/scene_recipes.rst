@@ -874,3 +874,30 @@ Results
 
 .. autoclass:: dazpy._recipe_model.SceneRecipe
    :members: from_dict, from_json, to_dict
+
+Asset references and finders
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``AssetRef``, ``AssetFinder``, ``StudioFinder`` and ``ContentBrowserFinder``
+are importable from ``dazpy``. Pass a finder as ``finder=`` to ``validate``,
+``plan``, ``apply``, ``observe``, ``render`` or ``pin``; without one, dazpy
+uses daz-content-browser when ``DAZ_BROWSER_URL`` answers and Studio's
+content database otherwise (``finder_fallback`` warning).
+
+.. autoclass:: dazpy._asset_ref.AssetRef
+   :members:
+
+.. autoclass:: dazpy._asset_ref.ResolvedPin
+   :members:
+
+.. autoclass:: dazpy._asset_finder.AssetFinder
+   :members:
+
+.. autoclass:: dazpy._asset_finder.AssetCandidate
+   :members:
+
+.. autoclass:: dazpy._asset_finder.StudioFinder
+   :members: search, product_files
+
+.. autoclass:: dazpy._asset_finder.ContentBrowserFinder
+   :members: search, product_files

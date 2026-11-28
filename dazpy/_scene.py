@@ -399,7 +399,7 @@ class DazScene:
                 for (var j = 0; j < files.length; j++) {{
                     if (seen[files[j]]) continue;
                     seen[files[j]] = true;
-                    out.push({{name: files[j].replace(/\.duf$/i, ""), filename: files[j],
+                    out.push({{name: files[j].replace(/\\.duf$/i, ""), filename: files[j],
                               full_path: path + "/" + files[j]}});
                 }}
             }}

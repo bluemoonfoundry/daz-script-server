@@ -375,6 +375,12 @@ domain-helper modules, which apply typed configuration objects to the Phase
   from scene-recipe cameras (`Shot.toRecipe`, `CoveragePlan.mergeIntoRecipe`).
   Namespaced as `shots` (`shots.CameraKeyframe` is the model class; the flat
   `CameraKeyframe` stays cinematics' interface); core types are also flat.
+  Camera moves can be eased: `new shots.Keyframed({ keyframes, easing:
+  "ease_in" })` takes `"linear"`, `"smooth"`, `"ease_in"` or `"ease_out"`,
+  and each `shots.CameraKeyframe` can set `interpolation` (`"linear"`,
+  `"constant"`, `"smooth"`) for the segment after it. `applyAnimatedShot`
+  takes `easing` too, and `DazNode.setTransformKeyInterpolation()` sets the
+  interpolation of chosen keys directly (since 0.3.0).
 - `shotLibrary.ts` (from `shot_library.py`), namespaced as `shotLibrary` —
   pure shot builders (`establishing`, `master`, `twoShot`, `single`,
   `overTheShoulder`, `shotReverseShot`, `pov`, `insert`), the 180-degree
