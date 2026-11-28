@@ -1,10 +1,13 @@
 """Live readback of figures and the items fitted to them (read-only).
 
 A *fitted item* is a node whose follow target is the figure (clothing, hair,
-shoes).  Its ``foreign_children`` are every descendant not fitted by Studio
-(followers are the item's own sub-parts), other than bones and the
-``DzPushModifierWeightNode`` helper an outfit garment loads with: props the user
-parented to it, recorded or not (spec 6.4, final review C2).
+shoes).  Its ``foreign_children`` are every descendant other than bones, the
+``DzPushModifierWeightNode`` helper an outfit garment loads with, and followers
+from the item's own product (same ``/data/<vendor>/<product>/`` prefix of
+``getAssetUriForNode``, e.g. Kara Ponytail's pieces following its scalp): props
+the user parented to it, recorded or not, and items fitted to it (spec 6.4,
+final review C2 and re-review).  The script reports a follower as
+``{"name", "uri", "follower": true}``; :func:`read_figures` decides.
 
 The script returns this JSON shape, the only thing the Python side depends on::
 
@@ -12,7 +15,8 @@ The script returns this JSON shape, the only thing the Python side depends on::
                   "compat_base": str | null,
                   "items": [{"name": str, "label": str, "element_id": str,
                              "type": str | null, "source_path": str | null,
-                             "record": str | null, "foreign": [str]}]}]}
+                             "record": str | null,
+                             "foreign": [str | {"name", "uri", "follower"}]}]}]}
 
 Figures are every ``DzFigure`` whose label equals one of the requested labels
 (exact, case-sensitive) plus the nodes named in ``owned_names`` (names or
@@ -111,9 +115,11 @@ function _foreign(n, out) {{
     var kids = n.getNodeChildren(false);
     for (var k = 0; k < kids.length; k++) {{
         var c = kids[k];
-        if (_follow(c)) continue;  // fitted by Studio: the item's own sub-parts
+        // a follower is the item's own sub-part only when it comes from the item's
+        // product (decided in Python from its data URI); report it with the URI
+        if (_follow(c)) out.push({{name: c.getName(), uri: _source(c), follower: true}});
         // bones and the outfit's "Clothing Expander" helper are the asset's own (spec 15.4)
-        if (!c.inherits("DzBone") && !c.inherits("DzPushModifierWeightNode"))
+        else if (!c.inherits("DzBone") && !c.inherits("DzPushModifierWeightNode"))
             out.push(c.getName());
         _foreign(c, out);
     }}
@@ -124,8 +130,8 @@ function _type(n) {{
     return p ? p.type : null;
 }}
 function _source(n) {{
-    var mgr = App.getAssetMgr();
-    var uri = mgr ? String(mgr.getAssetUriForNode(n)) : "";
+    var mgr = App.getAssetMgr(), uri = "";
+    try {{ uri = mgr ? String(mgr.getAssetUriForNode(n) || "") : ""; }} catch (e) {{ uri = ""; }}
     var i = uri.indexOf("#");
     if (i >= 0) uri = uri.substring(0, i);
     return uri ? uri : null;
@@ -194,7 +200,7 @@ def read_figures(client: DazClient, labels: list[str],
         items=tuple(FittedItem(
             name=i["name"], label=i.get("label") or i["name"], type=i.get("type"),
             source_path=i.get("source_path") or None, record=_record(i.get("record")),
-            foreign_children=tuple(i.get("foreign") or ()),
+            foreign_children=_foreign_names(i.get("source_path"), i.get("foreign") or ()),
             element_id=_eid(i.get("element_id"))) for i in f.get("items") or []),
         element_id=_eid(f.get("element_id")))
         for f in payload.get("figures") or []]
@@ -206,6 +212,37 @@ def read_figures(client: DazClient, labels: list[str],
         out.setdefault(name, [])
         out[name] += [i for i in infos if i.is_node(name) and i not in out[name]]
     return out
+
+
+def _product_key(uri: str | None) -> tuple[str, str, str] | None:
+    """``("data", vendor, product)`` of a ``getAssetUriForNode`` data URI
+    (URL-decoded, case-insensitive), or None when it has no such prefix."""
+    if not uri:
+        return None
+    path = unquote(str(uri).split("#", 1)[0]).replace("\\", "/").strip().casefold()
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 4 or parts[0] != "data":  # data / vendor / product / ... file
+        return None
+    return parts[0], parts[1], parts[2]
+
+
+def _foreign_names(item_uri: str | None, reported) -> tuple[str, ...]:
+    """The item's foreign children from the script's report: plain names, plus
+    followers (``{name, uri, follower}``) unless they come from the item's own
+    product (same ``/data/<vendor>/<product>/`` prefix).  A follower whose URI,
+    or the item's, cannot be read is foreign: a hat the user fitted to hand
+    hair must not go silently with the hair."""
+    own = _product_key(item_uri)
+    out: list[str] = []
+    for entry in reported:
+        if isinstance(entry, dict):
+            key = _product_key(entry.get("uri"))
+            if own is not None and key == own:
+                continue
+            out.append(str(entry.get("name")))
+        else:
+            out.append(str(entry))
+    return tuple(out)
 
 
 def _eid(value: object) -> str | None:

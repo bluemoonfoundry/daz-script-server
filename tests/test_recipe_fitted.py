@@ -72,10 +72,38 @@ class FittedTests(unittest.TestCase):
         s = figures_script(["Abby"], [])
         body = re.search(r"function _foreign\(n, out\) \{(.*?)\n\}", s, re.S).group(1)
         self.assertNotIn("_rec(c)", body)
-        self.assertIn("if (_follow(c)) continue;", body)
+        self.assertNotIn("if (_follow(c)) continue;", body)  # followers are reported, not skipped
+        self.assertIn("follower: true", body)
         self.assertIn('c.inherits("DzBone")', body)
         self.assertIn('c.inherits("DzPushModifierWeightNode")', body)
         self.assertIn("out.push(c.getName());", body)
+
+    def _item_with_followers(self, item_uri, followers):
+        item = {"name": "Scalp_1085", "label": "Kara Ponytail", "type": "Follower/Hair",
+                "source_path": item_uri, "record": None,
+                "foreign": ["Bow"] + [{"name": n, "uri": u, "follower": True} for n, u in followers]}
+        fig = read_figures(_client([_fig("Genesis9", "Abby", [item])]), ["Abby"], [])["Abby"][0]
+        return fig.items[0].foreign_children
+
+    KARA = "/data/DAZ%203D/Kara%20Ponytail/Kara%20Ponytail%20Scalp/Scalp_1085.dsf"
+
+    def test_same_product_follower_is_native(self):
+        got = self._item_with_followers(self.KARA, [
+            ("KP_Band", "/data/daz 3d/KARA PONYTAIL/KP Band/KP_Band.dsf")])
+        self.assertEqual(got, ("Bow",))
+
+    def test_other_product_follower_is_foreign(self):
+        got = self._item_with_followers(self.KARA, [
+            ("Hat", "/data/Barbara_Brundon/Detective%20Outfit/Detective%20Hat/WD_Hat_1022.dsf"),
+            ("Near", "/data/DAZ%203D/Kara%20Ponytail%20Extra/X/X.dsf")])  # segment boundary
+        self.assertEqual(got, ("Bow", "Hat", "Near"))
+
+    def test_unreadable_follower_uri_is_foreign(self):
+        self.assertEqual(self._item_with_followers(self.KARA, [("P", None), ("Q", "")]),
+                         ("Bow", "P", "Q"))
+        # the item's own URI unreadable: no follower can be shown to be native
+        self.assertEqual(self._item_with_followers(None, [
+            ("KP_Band", "/data/DAZ%203D/Kara%20Ponytail/KP%20Band/KP_Band.dsf")]), ("Bow", "KP_Band"))
 
     def test_read_figures_returns_fitted_items(self):
         items = [{"name": n, "label": l, "type": t, "source_path": u, "record": None, "foreign": []}
