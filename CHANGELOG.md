@@ -42,7 +42,7 @@ All notable changes to DazScript Server are documented here.
   v1 recipes behave exactly as before. Documented in `docs/scene_recipes.rst`
   (worked "Abby" example). Live acceptance tests:
   `tests/test_recipe_live.py -k AssetFitting`, with content paths from
-  `DAZ_LIVE_*` env vars. Live acceptance: DS4 4.24 passed; DS6 pending.
+  `DAZ_LIVE_*` env vars. Live acceptance: 9/9 on DS4 4.24 and DS6 6.26.
   Do not mix dazpy < 2.17 with a scene a v2 recipe was applied to: older
   dazpy reads fitted-item records as actors and ignores `adopted_from_scene`,
   so applying the same recipe id as v1 could delete a taken-over figure.

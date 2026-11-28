@@ -247,7 +247,7 @@ matches as a prefix:
 | `wardrobe` | `Follower/Wardrobe` |
 
 Strings confirmed on DS4 4.24 against Studio's own type list
-(`DzAssetMgr.getType`) and real Genesis 9 content (§15.3; DS6 pending). Studio
+(`DzAssetMgr.getType`) and real Genesis 9 content (§15.3; DS6 6.26 lists the same types, §15.7). Studio
 has no `Follower/Wardrobe/Top`, `.../Pants`, `.../Shoe` or `.../Hat`. `hat` no
 longer includes `Follower/Accessory/Head`, which covers ear, eye (glasses), nose
 and mouth accessories, not hats. `outerwear` also covers `Outerwear/Top` and
@@ -492,7 +492,7 @@ never loaded).
 | Studio | Status |
 |---|---|
 | DS4 4.24.0.4, CMS connected | probed 2026-11-27 (below) |
-| DS6 | **pending**: re-run the probe after Studio is switched |
+| DS6 6.26.2026.30901, CMS connected | probed 2026-11-27, read-only phase (§15.7); live acceptance 9/9 |
 
 ### 15.1 Loading and paths
 
@@ -644,3 +644,19 @@ added nodes, and cleanup deletes it with that subtree. As a guard, any anchor
 descendant whose key is in the pre-load snapshot (which should never happen) is
 first moved back to scene root.
 
+
+### 15.7 DS6 6.26 (2026-11-27)
+
+DS6 6.26.2026.30901 with the CMS connected, same content. The read-only probe
+phase gave the same answers as DS4 for everything dazpy uses: `StudioFinder`
+text search with type filtering (found *Flirty Casual Ponytail Hair*), product
+files by SKU, `read_compat` (`/Genesis 9/Base` for the figure and Kara
+Ponytail), `base_of_asset`, `read_figures` and `read_figure_labels`. Studio
+lists 148 content types; the `Follower/Wardrobe/*` strings used in §6.3 are all
+present. Two raw sections of the probe script itself (not dazpy code) fail on
+DS6: its `files` section (`charAt` on a native function) and its direct
+`searchForAssets` call (DS6 rejects the argument types); dazpy's finder is
+unaffected. The probe's load phase was not run on DS6: its method (b) loads with
+the figure selected onto a figure already wearing hair, the known replace-dialog
+trigger (§15.6). The `AssetFitting` live class covers the real load path
+(anchor selection, fit, delete, rollback) and passed 9/9 on DS6 with no dialog.
