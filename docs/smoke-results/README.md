@@ -11,3 +11,5 @@ One row per release x SDK. See [../LIVE_SMOKE.md](../LIVE_SMOKE.md).
 | 2.12.0 | DS6 6.26 | pass | pass | pass | skip | pass | skip | 29/0/2 | [v2.12.0-ds6.json](v2.12.0-ds6.json) |
 | 2.16.0 | DS4 4.24 | pass | pass | pass | - | pass | pass | 33/0/0 | [v2.16.0-ds4.json](v2.16.0-ds4.json) |
 | 2.16.0 | DS6 6.26 | pass | pass | pass | skip | pass | pass | 33/0/1 | [v2.16.0-ds6.json](v2.16.0-ds6.json) |
+| 2.17.0 | DS4 4.24 | pass | pass | pass | - | pass | pass | 33/0/0 | [v2.17.0-ds4.json](v2.17.0-ds4.json) |
+| 2.17.0 | DS6 6.26 | pass | pass | pass | skip | pass | pass | 33/0/1 | [v2.17.0-ds6.json](v2.17.0-ds6.json) |
