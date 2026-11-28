@@ -18,6 +18,7 @@ live suite is the opt-in. The scene-clear guard applies in every case.
 """
 from __future__ import annotations
 
+import json
 import os
 import unittest
 
@@ -32,7 +33,7 @@ NOT_ENABLED_REASON = (
 _SETTINGS_CLASSES = ("DzTonemapperNode", "DzEnvironmentNode")
 
 _COUNT_USER_ROOTS = """(function(){
-  var skip = %s, out = [];
+  var skip = SKIP_CLASSES, out = [];
   for (var i = 0; i < Scene.getNumNodes(); i++) {
     var n = Scene.getNode(i);
     if (n.getNodeParent()) continue;
@@ -41,7 +42,7 @@ _COUNT_USER_ROOTS = """(function(){
     if (!settings) out.push(n.getLabel());
   }
   return out;
-})()""" % (list(_SETTINGS_CLASSES),)
+})()""".replace("SKIP_CLASSES", json.dumps(list(_SETTINGS_CLASSES)))
 
 _CLEAR = "(function(){ Scene.clear(); return true; })()"
 
