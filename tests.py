@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -81,6 +82,10 @@ def main():
             sys.exit(int(rc))
         if not ({"api", "integration"} & set(args.suites)):
             sys.exit(0)
+
+    if {"api", "integration"} & set(args.suites):
+        # Naming a live suite is the opt-in that tests/live_gate.py asks for.
+        os.environ["DAZ_LIVE_TESTS"] = "1"
 
     if "api" in args.suites:
         from tests import test_api as _api

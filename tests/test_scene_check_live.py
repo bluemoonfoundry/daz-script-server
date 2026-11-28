@@ -1,10 +1,19 @@
 """
 Live tests for pre-render scene checks (DazScene.check, dazpy.recipe.check).
-Skipped when DAZ Studio is not reachable. Run scoped:
-    python -m pytest tests/test_scene_check_live.py -v
+Opt-in: skipped unless DAZ_LIVE_TESTS=1, and when DAZ Studio is not reachable.
+Run scoped:
+    DAZ_LIVE_TESTS=1 python -m pytest tests/test_scene_check_live.py -v
 
-Starts from an empty scene (Scene.clear()) and leaves one behind.
+Starts from an empty scene (Scene.clear()) and leaves one behind. It refuses to
+clear a scene that has content unless DAZ_LIVE_ALLOW_CLEAR=1.
 """
+
+# Opt-in gate (tests/live_gate.py): skip this module unless DAZ_LIVE_TESTS=1
+# (or it is run directly), before anything below contacts DAZ Studio.
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from live_gate import clear_scene, require_live  # noqa: E402
+require_live(__name__)
 
 import os
 import sys
@@ -116,7 +125,7 @@ class TestSceneCheckLive(unittest.TestCase):
         try:
             if cls.env0:
                 _env(*cls.env0)
-            _CLIENT.execute("(function(){ Scene.clear(); return true; })()")
+            clear_scene(_CLIENT)
         finally:
             cls.wait.__exit__(None, None, None)
 

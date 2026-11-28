@@ -1,9 +1,11 @@
 """
-Live tests for scene recipes (dazpy.recipe).  Skipped when DAZ Studio is not
-reachable.  Run scoped:  python -m pytest tests/test_recipe_live.py -v -k recipe
+Live tests for scene recipes (dazpy.recipe).  Opt-in: skipped unless
+DAZ_LIVE_TESTS=1, and when DAZ Studio is not reachable.  Run scoped:
+    DAZ_LIVE_TESTS=1 python -m pytest tests/test_recipe_live.py -v -k recipe
 
 Each TestSceneRecipeLive test uses its own recipe id and output dir under
-C:/temp/recipe_live/<test> and starts from an empty scene (Scene.clear()).
+C:/temp/recipe_live/<test> and starts from an empty scene (Scene.clear()). It
+refuses to clear a scene that has content unless DAZ_LIVE_ALLOW_CLEAR=1.
 AssetFittingLiveTests (scene recipe v2 asset refs and fitting) never clears the
 scene; run it on its own: python -m pytest tests/test_recipe_live.py -v -k AssetFitting
 Its tests skip unless the DAZ_LIVE_* content paths they need are set (see the
@@ -18,6 +20,13 @@ as do test_fit_failure_keeps_hand_hair,
 test_multi_node_hair_and_outfit_add_swap_remove and test_records_have_source (none
 of these ran live yet), and the whole class on DS6.
 """
+
+# Opt-in gate (tests/live_gate.py): skip this module unless DAZ_LIVE_TESTS=1
+# (or it is run directly), before anything below contacts DAZ Studio.
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from live_gate import clear_scene, require_live  # noqa: E402
+require_live(__name__)
 
 import copy
 import json
@@ -91,9 +100,13 @@ _BUSY_WAIT_S = 120.0
 
 
 def _new_scene() -> DazScene:
-    """File > New equivalent: an empty scene (no save prompt)."""
+    """File > New equivalent: an empty scene (no save prompt).
+
+    Skips the test instead when the open scene has content the tests didn't
+    make (live_gate.clear_scene; DAZ_LIVE_ALLOW_CLEAR=1 overrides).
+    """
     scene = DazScene(_CLIENT)
-    scene._client.execute("(function(){ Scene.clear(); return true; })()")
+    clear_scene(_CLIENT)
     return scene
 
 
@@ -106,9 +119,10 @@ class TestSceneRecipeLive(unittest.TestCase):
         self.addCleanup(wait.__exit__, None, None, None)
 
     def tearDown(self):
-        # Leave Studio with an empty scene, whatever the test did.
+        # Leave Studio with an empty scene, whatever the test did (never the
+        # user's scene: clear_scene refuses until the tests have cleared once).
         try:
-            _CLIENT.execute("(function(){ Scene.clear(); return true; })()")
+            clear_scene(_CLIENT)
         except Exception:
             pass
 
