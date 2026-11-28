@@ -51,7 +51,9 @@ reuses a stale CMake cache from the other SDK.
 
 **Tests:** `python tests.py unit|api|integration` (unit needs no server),
 `python tests/test_performance.py [--quick]`. Example clients: `test-client.js`,
-`test-client.ps1`
+`test-client.ps1`. Live test files are opt-in: under pytest they skip unless
+`DAZ_LIVE_TESTS=1`, and scene-clearing tests refuse a scene with content unless
+`DAZ_LIVE_ALLOW_CLEAR=1` (`tests/live_gate.py`).
 
 **Live smoke matrix:** `python tests/smoke_live.py` (DS4/DS6 × Iray/Filament/viewport,
 engine readback after every change, `--record` per release). Use it instead of

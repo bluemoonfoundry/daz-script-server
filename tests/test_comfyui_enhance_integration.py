@@ -7,6 +7,13 @@ Via runner:      python tests.py integration
 """
 from __future__ import annotations
 
+# Opt-in gate (tests/live_gate.py): skip this module unless DAZ_LIVE_TESTS=1
+# (or it is run directly), before anything below contacts DAZ Studio.
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from live_gate import require_live  # noqa: E402
+require_live(__name__)
+
 import os
 import sys
 import tempfile
