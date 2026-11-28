@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal
+from collections.abc import Mapping
 
 from ._recipe_issue import RecipeIssue, _closest, _join
 

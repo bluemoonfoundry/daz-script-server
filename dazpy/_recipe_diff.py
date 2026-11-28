@@ -563,14 +563,15 @@ class _Planner:
         blocked: set[str] = set()
         for c in w.conflicts:
             res = self.conflict(c)
-            owner = c.base.get("node") if isinstance(c.base, dict) else None
+            base = c.base if isinstance(c.base, dict) else {}
+            owner = base.get("node")
             if owner is None:
                 raise ValueError(f"wearing conflict {c.path} names no matched node")
             if res == "scene":
                 kept.add(owner)
             elif res == "recipe":
                 names = list(c.live) if isinstance(c.live, (list, tuple)) else []
-                epath = c.base.get("entry") or (
+                epath = base.get("entry") or (
                     c.path[:-len(f"[{owner}]")] if c.path.endswith(f"[{owner}]") else c.path)
                 self.step("unparent", epath, {"children": {"names": names}}, None, owner)
             else:

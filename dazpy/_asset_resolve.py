@@ -118,6 +118,7 @@ def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: As
     for p, ref in refs:
         rec = prior.get(p)
         if ok(p, "record"):
+            assert rec is not None  # ok(p, "record") implies a prior record
             # keep the finder that originally answered (spec 9); "record" only for
             # records written before the finder was recorded
             resolved[p] = ResolvedAsset(ref, ok(p, "record"), rec.get("sku"), rec.get("product"),
@@ -130,6 +131,7 @@ def resolve_refs(client: DazClient, refs: list[tuple[str, AssetRef]], finder: As
                 errors.append(RecipeIssue(p, "asset_not_found", f"file not found: {ref.path}"))
         elif ok(p, "pin"):
             pin = ref.resolved
+            assert pin is not None  # ok(p, "pin") implies a resolved pin
             if (ref.sku and pin.sku and ref.sku != pin.sku) or \
                (ref.product and pin.product and not _same(ref.product, pin.product)):
                 warnings.append(RecipeIssue(p, "pin_mismatch",

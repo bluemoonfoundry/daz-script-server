@@ -233,7 +233,7 @@ def compute_desired(recipe: SceneRecipe,
             add(e)
     for name, p in recipe.props.items():
         rp = f"props.{name}.asset"
-        create = {"asset_path": _path_for(prop_ref(recipe, name), rp, resolved)}
+        create: dict[str, Any] = {"asset_path": _path_for(prop_ref(recipe, name), rp, resolved)}
         if resolved is not None:
             create["source"] = resolved[rp].to_dict()  # provenance, as for actors
         add(DesiredEntity(
@@ -260,10 +260,10 @@ def compute_desired(recipe: SceneRecipe,
             add(_light(f"lighting.rigs.{name}.{role}", f"{recipe.id}:{name}.{role}", rig.light_type,
                        pos, _t(look_at_euler(pos, target)), spec.intensity, spec.color))
     if recipe.environment is not None:
-        e = recipe.environment
+        env = recipe.environment
         add(DesiredEntity("lighting.environment", "environment", f"{recipe.id}:environment", {},
-                          {"environment": {"type": e.type, "image_path": e.image_path,
-                                           "intensity": float(e.intensity),
-                                           "rotation_deg": float(e.rotation_deg),
-                                           "mode": e.mode, "draw_dome": bool(e.draw_dome)}}))
+                          {"environment": {"type": env.type, "image_path": env.image_path,
+                                           "intensity": float(env.intensity),
+                                           "rotation_deg": float(env.rotation_deg),
+                                           "mode": env.mode, "draw_dome": bool(env.draw_dome)}}))
     return out

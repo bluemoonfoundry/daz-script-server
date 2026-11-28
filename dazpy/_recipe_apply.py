@@ -250,13 +250,13 @@ class _Run:
             self.unfits_run.append((step, lost))
             sources = [r["source_path"] for r in restorable]
             if sources:
-                def restore(sources=sources, figure=figure, restorable=restorable, lost=lost):
+                def restore_removed(sources=sources, figure=figure, restorable=restorable, lost=lost):
                     try:
                         ops.restore(sources, figure)
                     except Exception:
                         lost.extend(restorable)
                         raise
-                self.undo(f"restore removed items {sources} onto {figure!r}", restore)
+                self.undo(f"restore removed items {sources} onto {figure!r}", restore_removed)
         elif step.op == "release":
             entity = self.live.entities[step.path]
             node = step.node

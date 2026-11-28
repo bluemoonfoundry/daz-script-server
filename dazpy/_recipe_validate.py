@@ -211,7 +211,7 @@ class _Validator:
 
     def actor(self, v, p) -> None:
         extra = ("facing", "pose") + (("node", "presets", "wearing") if self.version >= 2 else ())
-        required = ("asset",)
+        required: tuple[str, ...] = ("asset",)
         if self.version >= 2:
             required = ()
             if isinstance(v, dict) and "asset" not in v and "node" not in v:
@@ -278,7 +278,7 @@ class _Validator:
                       "replace": ("replace", "with", "key", "if_missing"),
                       "remove": ("remove", "if_missing"),
                       None: ("add", "replace", "remove", "with", "key", "if_missing")}[op]
-            required = {"add": ("key",), "replace": ("with", "key")}.get(op, ())
+            required = {"add": ("key",), "replace": ("with", "key")}.get(op or "", ())
             self.obj(e, ep, fields, required)
             if "add" in e:
                 self.errors.extend(ref_issues(e["add"], f"{ep}.add"))

@@ -111,7 +111,8 @@ class FinderUnavailable(DazError):
 
 
 class AssetFinder(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def search(self, phrase: str, *, type: str | None, limit: int = 10) -> list[AssetCandidate]: ...
 
@@ -126,7 +127,7 @@ def _opt(value: Any) -> str | None:
 class StudioFinder:
     name = "studio"
 
-    def __init__(self, client: "DazClient") -> None:
+    def __init__(self, client: DazClient) -> None:
         self._client = client
         # True when the last query hit the search time bound (partial result).
         self.timed_out = False
@@ -239,7 +240,7 @@ class ContentBrowserFinder:
         return out[:limit]
 
 
-def select_finder(client: "DazClient", finder: AssetFinder | None = None,
+def select_finder(client: DazClient, finder: AssetFinder | None = None,
                   env: Mapping[str, str] = os.environ) -> tuple[AssetFinder, list[RecipeIssue]]:
     if finder is not None:
         return finder, []

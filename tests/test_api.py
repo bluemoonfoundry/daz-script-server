@@ -2000,7 +2000,7 @@ class TestPluginRoutes(unittest.TestCase):
         try:
             enabled = _set_plugin_route_self_test(True)
         except requests.exceptions.RequestException as e:
-            raise unittest.SkipTest(f"server unreachable: {e}")
+            raise unittest.SkipTest(f"server unreachable: {e}") from e
         if enabled is None:
             raise unittest.SkipTest("plugin predates setPluginRouteSelfTest()")
         if enabled is not True:

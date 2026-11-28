@@ -6,9 +6,9 @@ Studio's own type list and real Genesis 9 content (spec 15.3).  DS6 pending.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from collections.abc import Mapping
 
-FRIENDLY_TYPES: Mapping[str, "tuple[str, ...]"] = {
+FRIENDLY_TYPES: Mapping[str, tuple[str, ...]] = {
     "hair": ("Follower/Hair",),
     "top": ("Follower/Wardrobe/Shirt", "Follower/Wardrobe/Outerwear/Top"),
     "bottom": ("Follower/Wardrobe/Pant", "Follower/Wardrobe/Skirt",
@@ -27,7 +27,7 @@ WEARABLES_PRESET_TYPE = "Preset/Wearables"
 _WARDROBE = "Follower/Wardrobe"
 
 
-def type_prefixes(t: str) -> "tuple[str, ...]":
+def type_prefixes(t: str) -> tuple[str, ...]:
     """Friendly name -> its prefixes; anything else is a raw prefix."""
     return tuple(FRIENDLY_TYPES.get(t, (t,)))
 
@@ -36,7 +36,7 @@ def _under(prefix: str, root: str) -> bool:
     return prefix == root or prefix.startswith(root + "/")
 
 
-def type_matches(t: str, presentation_type: Optional[str]) -> bool:
+def type_matches(t: str, presentation_type: str | None) -> bool:
     """True if presentation_type equals or lies under a prefix of t ("/" boundary).
 
     For scene nodes (``getPresentation().type``)."""
@@ -45,7 +45,7 @@ def type_matches(t: str, presentation_type: Optional[str]) -> bool:
     return any(_under(presentation_type, p) for p in type_prefixes(t))
 
 
-def file_type_matches(t: str, content_type: Optional[str]) -> bool:
+def file_type_matches(t: str, content_type: str | None) -> bool:
     """:func:`type_matches` for a content *file*'s CMS ``contentType``.
 
     A wearables preset file is ``Preset/Wearables`` whatever garments it loads

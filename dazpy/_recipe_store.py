@@ -483,6 +483,7 @@ def read_live(client: DazClient, recipe_id: str) -> LiveState:
     duplicates: list[DuplicateRecord] = []
     for path, found in members.items():
         kind = _kind_from_path(path)
+        assert kind is not None  # members only holds paths with a kind
         is_group = all(r.group == path for _, r in found)
         if is_group:  # primary first, otherwise scene order
             found = sorted(found, key=lambda m: not m[1].primary)

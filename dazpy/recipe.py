@@ -784,9 +784,9 @@ def render(recipe: SceneRecipe | dict, scene: DazScene, *, shots: Sequence[str] 
     if not chosen:
         return []
     if require_clean:
-        report = _check_shots(model, live, scene._client, chosen)
-        if not report.ok:
-            raise SceneCheckError(report)
+        check = _check_shots(model, live, scene._client, chosen)
+        if not check.ok:
+            raise SceneCheckError(check)
     dirs = list(dict.fromkeys(d for d in (_parent_dir(s.output) for s in chosen) if d))
     if dirs:
         scene._client.execute(_mkdir_script(dirs))
