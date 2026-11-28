@@ -3,11 +3,12 @@
 ``compat_script`` reads asset-database metadata only and returns this JSON
 shape, the only thing the Python side depends on::
 
-    {path: {"bases": [str], "known": bool, "provides": str | null}}
+    {path: {"bases": [str], "known": bool, "provides": str | null, "type": str | null}}
 
 ``bases`` are the figure bases the file is made for; ``provides`` is the base a
 figure file itself defines (its ``compatibilityBase``). ``known`` is false when
-the asset database has no record for the file.
+the asset database has no record for the file.  ``type`` is the file's CMS
+``contentType`` (spec 15.2), used to refuse presets that are not presets.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ class CompatInfo:
     known: bool
     # the figure base the file itself defines (a figure's compatibilityBase), if any
     provides: str | None = None
+    # the file's CMS contentType (e.g. "Actor/Character", "Preset/Character")
+    type: str | None = None
 
 
 def compat_script(paths: list[str]) -> str:
@@ -56,15 +59,16 @@ for (var _i = 0; _i < _paths.length; _i++) {{
         if (r) rel = String(r);
     }}
     var found = _mgr ? _mgr.findAssetsForFile(rel, true, true) : [];
-    var bases = [], provides = null;
+    var bases = [], provides = null, ctype = null;
     for (var _j = 0; found && _j < found.length; _j++) {{
         var a = found[_j];
         _add(a.compatibilities, bases);
         _add(a.vendorCompatibilities, bases);
         _add(a.userCompatibilities, bases);
         if (!provides && a.compatibilityBase) provides = String(a.compatibilityBase);
+        if (!ctype && a.contentType) ctype = String(a.contentType);
     }}
-    _out[p] = {{bases: bases, known: !!(found && found.length), provides: provides}};
+    _out[p] = {{bases: bases, known: !!(found && found.length), provides: provides, type: ctype}};
 }}
 return _out;""")
 
@@ -86,7 +90,8 @@ def read_compat(client: DazClient, paths: list[str]) -> dict[str, CompatInfo]:
         e = raw.get(p) or {}
         bases = tuple(str(b) for b in e.get("bases") or ())
         out[p] = CompatInfo(p, bases, bool(e.get("known")) and bool(bases),
-                            str(e["provides"]) if e.get("provides") else None)
+                            str(e["provides"]) if e.get("provides") else None,
+                            str(e["type"]) if e.get("type") else None)
     return out
 
 
@@ -133,4 +138,49 @@ def check_compat(target_base: str | None, items: Mapping[str, ResolvedAsset],
                 rpath, "incompatible_asset",
                 f"{name} is made for {', '.join(ci.bases)}; "
                 f"actor '{_actor_key(rpath)}' is {target_base}"))
+    return errors, warnings
+
+
+# Content types a preset file must not have: figures (``Actor`` / the figure
+# file's ``Actor/Character``, spec 15.2), fitted items, wearables presets and
+# props are loaded as content, and opening one with the figure selected can pop
+# Studio's modal "replace the selected figure" dialog.  Other ``Actor/...``
+# types (e.g. a shape) stay allowed.
+_NOT_PRESET_TYPES = ("Actor/Character", "Follower", "Prop", "Preset/Wearables")
+
+
+def _type_is(ctype: str, prefix: str) -> bool:
+    c, p = ctype.strip().casefold(), prefix.casefold()
+    return c == p or c.startswith(p + "/")
+
+
+def _not_a_preset(ctype: str) -> bool:
+    return ctype.strip().casefold() == "actor" or any(_type_is(ctype, t) for t in _NOT_PRESET_TYPES)
+
+
+def check_preset_types(presets: Mapping[str, ResolvedAsset], info: Mapping[str, CompatInfo]
+                       ) -> tuple[list[RecipeIssue], list[RecipeIssue]]:
+    """(errors ``invalid_asset_ref``, warnings ``compatibility_unknown``) for presets
+    by their content type (final review I7), before anything is opened.
+
+    The CMS ``contentType`` decides, else the type the finder reported.  A file
+    the database knows but gives no type warns; an unknown file already warns
+    from :func:`check_compat`."""
+    errors: list[RecipeIssue] = []
+    warnings: list[RecipeIssue] = []
+    for rpath, asset in presets.items():
+        ci = info.get(asset.path)
+        ctype = (ci.type if ci is not None else None) or asset.type
+        name = asset.product or asset.path
+        if not ctype:
+            if ci is not None and ci.known:
+                warnings.append(RecipeIssue(rpath, "compatibility_unknown",
+                                            f"cannot verify {name} is a preset: the asset "
+                                            "database gives it no content type"))
+            continue
+        if _not_a_preset(ctype):
+            errors.append(RecipeIssue(
+                rpath, "invalid_asset_ref",
+                f"{name} is {ctype} content, not a preset; figures belong in 'asset', "
+                "hair, clothing and outfits in 'wearing', props in 'props'"))
     return errors, warnings

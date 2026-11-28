@@ -958,5 +958,25 @@ class TestFinalReviewFinder(FacadeCase):
         self.assertNotIn("search_incomplete", {w.code for w in rep.warnings})
 
 
+class TestFinalReviewPresetTypes(FacadeCase):
+    """Final review I7: a figure file in presets is refused before any load."""
+
+    def test_figure_preset_is_invalid_and_apply_touches_nothing(self):
+        fig_file = "/People/Genesis 9/Genesis 9 Other.duf"
+        compat = {**COMPAT, fig_file: {"bases": ["/Genesis 9/Base"], "known": True,
+                                       "provides": "/Genesis 9/Base", "type": "Actor/Character"}}
+        r = v2_recipe(presets=[fig_file])
+        rep = validate(r, fake_scene(compat=compat))
+        self.assertIn(("actors.abby.presets[0]", "invalid_asset_ref"), codes(rep.errors))
+        scene = fake_scene(compat=compat)
+        with self.assertRaises(RecipeValidationError):
+            apply(r, scene)
+        self.assertEqual(scene.ops.calls, [])
+
+    def test_shape_preset_still_applies(self):
+        compat = {**COMPAT, SHAPE: dict(COMPAT[SHAPE], type="Preset/Character")}
+        self.assertTrue(validate(v2_recipe(presets=[SHAPE]), fake_scene(compat=compat)).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -56,5 +56,37 @@ class CompatTests(unittest.TestCase):
         self.assertIsNone(base_of_asset(client, "/b.duf"))
 
 
+class PresetTypeTests(unittest.TestCase):
+    """Final review I7: presets that are figures, wearables or props are refused."""
+
+    def test_script_reports_content_type(self):
+        self.assertIn("contentType", compat_script(["/a.duf"]))
+        c = scripted_client(("recipe:compat", {"/a.duf": {"bases": ["/Genesis 9"], "known": True,
+                                                          "provides": None, "type": "Actor/Character"}}))
+        self.assertEqual(read_compat(c, ["/a.duf"])["/a.duf"].type, "Actor/Character")
+
+    def test_refused_and_allowed_types(self):
+        from dazpy._asset_compat import check_preset_types
+        types = {"/fig.duf": "Actor/Character", "/actor.duf": "Actor", "/hair.duf": "Follower/Hair",
+                 "/outfit.duf": "Preset/Wearables", "/prop.duf": "Prop/Furniture",
+                 "/shape.duf": "Preset/Character", "/mat.duf": "Preset/Materials/MDL",
+                 "/none.duf": ""}
+        items = {f"actors.abby.presets[{i}]": asset(p) for i, p in enumerate(types)}
+        info = {p: CompatInfo(p, ("/Genesis 9",), True, None, t or None) for p, t in types.items()}
+        errors, warnings = check_preset_types(items, info)
+        self.assertEqual([(e.path, e.code) for e in errors],
+                         [(f"actors.abby.presets[{i}]", "invalid_asset_ref") for i in range(5)])
+        self.assertIn("wearing", errors[2].message)
+        self.assertEqual([(w.path, w.code) for w in warnings],
+                         [("actors.abby.presets[7]", "compatibility_unknown")])
+
+    def test_finder_type_used_when_database_has_none(self):
+        from dazpy._asset_compat import check_preset_types
+        a = ResolvedAsset(AssetRef(find="x"), "/f.duf", None, None, None, "Actor/Character", "studio")
+        errors, _ = check_preset_types({"actors.abby.presets[0]": a},
+                                       {"/f.duf": CompatInfo("/f.duf", (), False)})
+        self.assertEqual([e.code for e in errors], ["invalid_asset_ref"])
+
+
 if __name__ == "__main__":
     unittest.main()

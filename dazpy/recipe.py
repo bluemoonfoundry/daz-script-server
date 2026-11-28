@@ -38,7 +38,7 @@ from collections.abc import Mapping, Sequence
 
 from urllib.parse import unquote
 
-from ._asset_compat import check_compat, is_compatible, read_compat
+from ._asset_compat import check_compat, check_preset_types, is_compatible, read_compat
 from ._asset_finder import AssetCandidate, AssetFinder, select_finder
 from ._asset_ref import AssetRef, ResolvedPin
 from ._asset_resolve import ResolvedAsset, recipe_refs, resolve_refs
@@ -346,6 +346,10 @@ def _resolve_and_check(client: DazClient, model: SceneRecipe, live: LiveState,
         figure_base[key] = info[path].provides
     for key, its in items.items():
         errors, warnings = check_compat(figure_base[key], its, info)
+        chk.errors += errors
+        chk.warnings += warnings
+        errors, warnings = check_preset_types(
+            {p: r for p, r in its.items() if ".presets[" in p}, info)
         chk.errors += errors
         chk.warnings += warnings
     return chk
