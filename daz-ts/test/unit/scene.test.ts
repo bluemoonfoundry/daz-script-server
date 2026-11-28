@@ -754,11 +754,21 @@ describe("DazScene I/O, playback, undo, dForce", () => {
     expect(scriptOf(fetchMock)).toBe(iife("return App.getSimulationMgr().isSimulating();"));
   });
 
-  it("clearDforceSimulation() calls App.getSimulationMgr().clearSimulation()", async () => {
-    const fetchMock = stubSeq(null);
+  it("clearDforceSimulation() clears and returns true when a node has dForce", async () => {
+    const fetchMock = stubSeq(true);
     const scene = new DazScene(new DazClient({ token: "" }));
-    await scene.clearDforceSimulation();
-    expect(scriptOf(fetchMock)).toBe(iife("App.getSimulationMgr().clearSimulation();"));
+    expect(await scene.clearDforceSimulation()).toBe(true);
+    const script = scriptOf(fetchMock);
+    expect(script).toContain("clearSimulation()");
+    expect(script).toContain("DForce");
+  });
+
+  it("clearDforceSimulation() checks for dForce before clearSimulation() (which pops a modal on an empty scene)", async () => {
+    const fetchMock = stubSeq(false);
+    const scene = new DazScene(new DazClient({ token: "" }));
+    expect(await scene.clearDforceSimulation()).toBe(false);
+    const script = scriptOf(fetchMock);
+    expect(script.indexOf("return false")).toBeLessThan(script.indexOf("clearSimulation()"));
   });
 
   it("frame() calls Scene.getFrame(), falling back to 0 when the server returns null", async () => {
@@ -802,56 +812,50 @@ describe("DazScene I/O, playback, undo, dForce", () => {
     expect(scriptOf(fetchMock, 1)).toBe(iife("cancelUndo();"));
   });
 
-  it("runDforceSimulation() with no nodes calls DzSimulationMgr.simulate() and resolves null on success", async () => {
+  function dforceJob(result: unknown) {
     const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "job-1" }));
-    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "completed", success: true, result: { error: null }, output: [], duration_ms: 0 }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "completed", success: true, result, output: [], duration_ms: 0 }));
     vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("runDforceSimulation() with no nodes guards for dForce nodes, then calls simulate(); null on success", async () => {
+    const fetchMock = dforceJob({ error: null, code: 0 });
     const scene = new DazScene(new DazClient({ token: "" }));
-    const result = await scene.runDforceSimulation();
-    expect(result).toBeNull();
-    const submitScript = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(submitScript).toBe(
-      iife(`
-                var mgr = App.getSimulationMgr();
-                var err = mgr.simulate();
-                return {"error": err ? String(err) : null};
-            `),
-    );
+    expect(await scene.runDforceSimulation()).toBeNull();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script as string;
+    expect(script.indexOf("no dForce-enabled nodes")).toBeLessThan(script.indexOf("mgr.simulate()"));
+    expect(script).toContain("return dzErrorResult(mgr.simulate());");
+  });
+
+  it("runDforceSimulation() reads the DzError code instead of its truthiness (always '[object Object]' before)", async () => {
+    const fetchMock = dforceJob({ error: null, code: 0 });
+    const scene = new DazScene(new DazClient({ token: "" }));
+    await scene.runDforceSimulation();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script as string;
+    expect(script).toContain("valueOf");
+    expect(script).toContain("getErrorMessage");
+    expect(script).not.toContain("err ? String(err)");
   });
 
   it("runDforceSimulation(nodes) calls customSimulate() on the active engine with the resolved node expressions", async () => {
-    const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "job-2" }));
-    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "completed", success: true, result: { error: null }, output: [], duration_ms: 0 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = dforceJob({ error: null, code: 0 });
     const client = new DazClient({ token: "" });
     const scene = new DazScene(client);
     const node1 = new DazNode(client, { value: "Genesis9", kind: "name" });
     const node2 = new DazNode(client, { value: "Genesis9 2", kind: "label" });
-    const result = await scene.runDforceSimulation([node1, node2]);
-    expect(result).toBeNull();
-    const submitScript = JSON.parse(fetchMock.mock.calls[0][1].body as string).script;
-    expect(submitScript).toBe(
-      iife(`
-                var mgr = App.getSimulationMgr();
-                var engine = mgr.getActiveSimulationEngine();
-                if (!engine) return {"error": "no_active_engine"};
-                var err = engine.customSimulate([Scene.findNode("Genesis9"),Scene.findNodeByLabel("Genesis9 2")]);
-                return {"error": err ? String(err) : null};
-            `),
+    expect(await scene.runDforceSimulation([node1, node2])).toBeNull();
+    const script = JSON.parse(fetchMock.mock.calls[0][1].body as string).script as string;
+    expect(script).toContain(
+      'return dzErrorResult(engine.customSimulate([Scene.findNode("Genesis9"),Scene.findNodeByLabel("Genesis9 2")]));',
     );
   });
 
-  it("runDforceSimulation() throws ScriptRuntimeError when the simulation engine reports an error", async () => {
-    const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse({ request_id: "job-3" }));
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({ status: "completed", success: true, result: { error: "cloth collision failure" }, output: [], duration_ms: 0 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("runDforceSimulation() throws ScriptRuntimeError with Studio's message and code", async () => {
+    dforceJob({ error: "Operation failed (code 98)", code: 98 });
     const scene = new DazScene(new DazClient({ token: "" }));
-    await expect(scene.runDforceSimulation()).rejects.toThrow(ScriptRuntimeError);
+    await expect(scene.runDforceSimulation()).rejects.toThrow("dForce simulation failed: Operation failed (code 98)");
   });
 
   it("runDforceSimulation(wait: false) submits async and returns the requestId without polling", async () => {
@@ -863,13 +867,6 @@ describe("DazScene I/O, playback, undo, dForce", () => {
     expect(fetchMock.mock.calls.length).toBe(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:18811/execute/async");
-    const submitScript = JSON.parse(init.body as string).script;
-    expect(submitScript).toBe(
-      iife(`
-                var mgr = App.getSimulationMgr();
-                var err = mgr.simulate();
-                return {"error": err ? String(err) : null};
-            `),
-    );
+    expect(JSON.parse(init.body as string).script).toContain("mgr.simulate()");
   });
 });

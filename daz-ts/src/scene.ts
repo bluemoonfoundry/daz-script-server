@@ -24,6 +24,34 @@ const LIGHT_TYPE_CLASSES: Record<string, string> = {
  * (Phase 2 Task 12); later tasks (13-14) add bulk scene snapshots and
  * I/O/playback/undo/dForce methods to this same class.
  */
+// simulate()/customSimulate() return a DzError object: truthy even on success
+// (code 0, "No error"), and String() of it is "[object Object]". Read the code.
+// Same scripts as dazpy/_scene.py (keep them in step).
+const DZ_ERROR_RESULT_JS = `
+    function dzErrorResult(e) {
+        var code = (e && typeof e.valueOf === "function") ? e.valueOf() : (e || 0);
+        if (!code) return {"error": null, "code": 0};
+        var msg = (typeof getErrorMessage === "function") ? getErrorMessage(e) : "error";
+        return {"error": msg + " (code " + code + ")", "code": code};
+    }
+`;
+
+// True when any node carries a dForce modifier (cloth, or strand-hair
+// generation/follow). Guards calls that pop a modal on an empty simulation.
+const HAS_DFORCE_JS = `
+    function hasDForceNodes() {
+        for (var i = 0; i < Scene.getNumNodes(); i++) {
+            var o = Scene.getNode(i).getObject();
+            if (!o || typeof o.getNumModifiers !== "function") continue;
+            for (var m = 0; m < o.getNumModifiers(); m++) {
+                var md = o.getModifier(m);
+                if (md && /DForce/.test(md.className())) return true;
+            }
+        }
+        return false;
+    }
+`;
+
 export class DazScene {
   private readonly client: DazClient;
 
@@ -629,8 +657,22 @@ export class DazScene {
     return Boolean((await this.client.execute(ScriptBuilder.iife("return App.getSimulationMgr().isSimulating();"))).value);
   }
 
-  async clearDforceSimulation(): Promise<void> {
-    await this.client.execute(ScriptBuilder.iife("App.getSimulationMgr().clearSimulation();"));
+  /**
+   * Discard all cached dForce simulation data for the active engine.
+   * Returns `false` without touching the engine when no node has a dForce
+   * modifier: `clearSimulation()` then pops a modal "No objects to clear"
+   * dialog that blocks DAZ Studio until someone clicks OK. `true` after clearing.
+   */
+  async clearDforceSimulation(): Promise<boolean> {
+    const script = ScriptBuilder.iife(
+      HAS_DFORCE_JS +
+        `
+            if (!hasDForceNodes()) return false;
+            App.getSimulationMgr().clearSimulation();
+            return true;
+        `,
+    );
+    return Boolean((await this.client.execute(script)).value);
   }
 
   /**
@@ -639,7 +681,8 @@ export class DazScene {
    * Settings frame range); `nodes` provided runs `customSimulate()` on
    * that subset via the active engine.
    * @param wait When `true` (default), block (via the async execute-and-poll endpoint, since dForce runs can take minutes) until finished, returning `null`. When `false`, submit and return the `requestId` immediately.
-   * @throws ScriptRuntimeError if the simulation engine reports an error (only when `wait` is `true`).
+   * @throws ScriptRuntimeError if the simulation engine reports an error (only when `wait` is `true`):
+   *   Studio's message and code, or "no dForce-enabled nodes in the scene" for a whole-scene run with none.
    */
   async runDforceSimulation(nodes?: DazNode[], opts: { wait?: boolean; timeout?: number } = {}): Promise<string | null> {
     const { wait = true, timeout = 300.0 } = opts;
@@ -650,17 +693,16 @@ export class DazScene {
                 var mgr = App.getSimulationMgr();
                 var engine = mgr.getActiveSimulationEngine();
                 if (!engine) return {"error": "no_active_engine"};
-                var err = engine.customSimulate([${nodeExprs}]);
-                return {"error": err ? String(err) : null};
+                return dzErrorResult(engine.customSimulate([${nodeExprs}]));
             `;
     } else {
       body = `
                 var mgr = App.getSimulationMgr();
-                var err = mgr.simulate();
-                return {"error": err ? String(err) : null};
+                if (!hasDForceNodes()) return {"error": "no dForce-enabled nodes in the scene", "code": -1};
+                return dzErrorResult(mgr.simulate());
             `;
     }
-    const script = ScriptBuilder.iife(body);
+    const script = ScriptBuilder.iife(HAS_DFORCE_JS + DZ_ERROR_RESULT_JS + body);
 
     if (!wait) {
       return this.client.executeAsyncSubmit(script);
