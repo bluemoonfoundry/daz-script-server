@@ -29,8 +29,10 @@ has already been deleted (a refused unparent moved nothing and is not undone).
 v2 compensations: take_over → write the figure's prior channel values back
 and remove the record written on it (the figure itself is never deleted);
 fit → delete the whole fitted group in one ``unfit``; unfit → ``restore`` the
-removed items from their source files onto the figure (items with no known
-source are reported in ``rollback_errors``); preset on a node not created by
+removed items from their source files onto the figure (a failed reload is in
+``rollback_errors``; after a rollback every removed item not restored, no
+source or failed reload, is an ``unrestorable_removal`` warning and its unfit
+step stays in ``ApplyResult.steps``); preset on a node not created by
 this apply → cannot be undone, reported in ``rollback_errors``.  A failure
 before the removal phase leaves the one-shot unfit targets untouched (they
 have not run).  Children a wearing ``unparent`` moved out of an item stay at
@@ -104,7 +106,8 @@ class ApplyResult:
     """Outcome of :func:`execute`.
 
     ``steps`` are the steps in effect afterwards: every plan step on success;
-    after a rollback, only the deletes that ran (they cannot be undone), and
+    after a rollback, only the deletes that ran (they cannot be undone) and the
+    one-shot unfits whose removed items were not all restored, and
     ``overwritten`` / ``kept`` are empty.
     ``failed_step`` is None when the failure happened while writing records or
     the manifest (``error`` then says which).
@@ -151,6 +154,8 @@ class _Run:
         for actor, entry in plan.done_log:
             self.done_for.setdefault(actor, []).append(entry)
         self.deleted_steps: list[Step] = []
+        # executed one-shot unfits with the removed items not (yet) restorable
+        self.unfits_run: list[tuple[Step, list[dict]]] = []
         self.deleted_nodes: set[str] = set()
         self.released: set[str] = set()
         self.current: Step | None = None
@@ -236,11 +241,20 @@ class _Run:
             # Items with no known .duf were warned about at plan time
             # (unrestorable_removal) and are skipped on rollback; a .dsf data URI is
             # never a restore source (spec 8.7, 15.2).
-            sources = [r["source_path"] for r in u["removed"]
-                       if r.get("source_path") and not is_data_file(r["source_path"])]
+            restorable = [r for r in u["removed"]
+                          if r.get("source_path") and not is_data_file(r["source_path"])]
+            # reported after a rollback unless restored (final review I8)
+            lost = [r for r in u["removed"] if r not in restorable]
+            self.unfits_run.append((step, lost))
+            sources = [r["source_path"] for r in restorable]
             if sources:
-                self.undo(f"restore removed items {sources} onto {figure!r}",
-                          partial(ops.restore, sources, figure))
+                def restore(sources=sources, figure=figure, restorable=restorable, lost=lost):
+                    try:
+                        ops.restore(sources, figure)
+                    except Exception:
+                        lost.extend(restorable)
+                        raise
+                self.undo(f"restore removed items {sources} onto {figure!r}", restore)
         elif step.op == "release":
             entity = self.live.entities[step.path]
             node = step.node
@@ -456,7 +470,15 @@ class _Run:
             path=s.path, code="deleted_not_restored",
             message=f"{s.path} (node {s.node_name!r}) was deleted before the apply failed; "
                     "deletions cannot be rolled back.") for s in self.deleted_steps)
-        return ApplyResult(False, tuple(self.deleted_steps), self.plan.conflicts,
+        lost = [(s, items) for s, items in self.unfits_run if items]
+        partial += tuple(RecipeIssue(
+            path=s.path, code="unrestorable_removal",
+            message=f"{', '.join(repr(r.get('label')) for r in items)} removed by {s.path} "
+                    "before the apply failed could not be restored (no source file, or "
+                    "the reload failed).") for s, items in lost)
+        steps = tuple(s for s in self.plan.steps
+                      if s in self.deleted_steps or any(s is u for u, _ in lost))
+        return ApplyResult(False, steps, self.plan.conflicts,
                            self.plan.warnings + partial, (), (), rolled_back=True,
                            failed_step=self.current, error=error, rollback_errors=tuple(errors),
                            check=self.check)

@@ -1183,5 +1183,40 @@ class FinalReviewNativeTests(unittest.TestCase):
         self.assertEqual(ops.methods().count("native_descendants"), 1)
 
 
+class FinalReviewRollbackTests(unittest.TestCase):
+    """Final review I8: hand items removed and not restored are reported."""
+
+    def _run(self, fail_on):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "remove.type=hat", ("Hat", "Cap"), HAND2),))
+        ops = FakeOps(fail_on=fail_on)
+        return run_v2(ds(d_taken("abby")), L, ops, wearing=w)
+
+    def test_unrestorable_item_reported_after_rollback(self):
+        _, r = self._run(("write_manifest", 1))
+        self.assertTrue(r.rolled_back)
+        self.assertEqual([s.op for s in r.steps], ["unfit"])
+        gone = [w for w in r.warnings if w.code == "unrestorable_removal"]
+        self.assertEqual(len(gone), 1)
+        self.assertEqual(gone[0].path, "actors.abby.wearing.remove.type=hat")
+        self.assertIn("Hand Cap", gone[0].message)
+        self.assertNotIn("Hand Hat", gone[0].message)
+
+    def test_failed_restore_is_reported_too(self):
+        _, r = self._run([("write_manifest", 1), ("restore", 1)])
+        gone = " ".join(w.message for w in r.warnings if w.code == "unrestorable_removal")
+        self.assertIn("Hand Hat", gone)
+        self.assertIn("Hand Cap", gone)
+        self.assertTrue(any("restore" in e for e in r.rollback_errors), r.rollback_errors)
+
+    def test_fully_restored_unfit_is_not_reported(self):
+        L = live_of(live_entity_for(d_taken("abby"), node_name="Abby", adopted=True))
+        w = WearingPlan(unfits=(Unfit("actors.abby", "hair", ("HandHair",), HAND),))
+        _, r = run_v2(ds(d_taken("abby")), L, FakeOps(fail_on=("write_manifest", 1)), wearing=w)
+        self.assertTrue(r.rolled_back)
+        self.assertEqual(r.steps, ())
+        self.assertNotIn("unrestorable_removal", {x.code for x in r.warnings})
+
+
 if __name__ == "__main__":
     unittest.main()
