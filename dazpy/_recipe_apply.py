@@ -236,7 +236,9 @@ class _Run:
         elif step.op == "unfit":
             u = step.channels["unfit"]
             figure, names = self.node_for(u["actor"]), list(u["names"])
-            ops.unfit(names)
+            # hand items are addressed by elementID: ref and must still follow the
+            # actor's figure (final review C1)
+            ops.unfit(names, figure=figure)
             self.deleted_nodes.update(names)
             # Items with no known .duf were warned about at plan time
             # (unrestorable_removal) and are skipped on rollback; a .dsf data URI is

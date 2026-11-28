@@ -302,7 +302,7 @@ def _actor_figures(model: SceneRecipe, key: str, live: LiveState,
                    figures: Mapping[str, list[FigureInfo]]) -> list[FigureInfo]:
     entity = live.entities.get(f"actors.{key}")
     if entity is not None:
-        return [f for f in figures.get(entity.node_name, []) if f.name == entity.node_name]
+        return [f for f in figures.get(entity.node_name, []) if f.is_node(entity.node_name)]
     node = model.actors[key].node
     return list(figures.get(node, [])) if node is not None else []
 
@@ -573,7 +573,7 @@ def _source_drift(live: LiveState, figures: Mapping[str, list[FigureInfo]]
         if actor is None:
             continue
         # the item under its own actor's figure: item node names repeat across figures
-        item = next((it for f in figures.get(actor.node_name, []) if f.name == actor.node_name
+        item = next((it for f in figures.get(actor.node_name, []) if f.is_node(actor.node_name)
                      for it in f.items if it.name == entity.node_name), None)
         want = entity.record.asset_uri
         if not want or item is None or item.source_path is None:

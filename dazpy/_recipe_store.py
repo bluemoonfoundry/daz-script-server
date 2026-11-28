@@ -8,7 +8,12 @@ last-observed (``observed``) channel values.  A scene-level data item
 
 This is the data-item backend.  Another backend only has to provide the same
 three script builders and a ``read_live`` returning :class:`LiveState`.
-Nodes are addressed by Daz node name (``getName()``), assumed unique per scene.
+Nodes the recipe created are addressed by Daz node name (``getName()``, made
+unique when they were created).  Nodes it did not create (taken-over figures,
+hand-loaded items) share names whenever a file is loaded twice, so they are
+addressed by a *node ref* ``"elementID:<id>"`` (:func:`eid_ref`), the element ID
+read from the scene; every recipe script resolves a ref by element ID
+(:func:`find_node_js`), never by name (final review C1).
 
 Observed-channel conventions (controller ruling): ``transform.position`` is
 world (``getWSPos``); ``transform.rotation`` is the node's LOCAL X/Y/Z rotation
@@ -181,13 +186,65 @@ class LiveState:
     duplicates: tuple[DuplicateRecord, ...] = ()
 
 
+# ── node refs ─────────────────────────────────────────────────────────────────
+
+EID_PREFIX = "elementID:"
+
+# The element ID of a node: getElementID() where it exists, else the numeric
+# elementID property (DS4 has no getElementID(), spec 15.2); "" if neither.
+_EID_OF_JS = ('((typeof {n}.getElementID === "function") ? String({n}.getElementID()) : '
+              '(typeof {n}.elementID === "number" ? String({n}.elementID) : ""))')
+
+
+def eid_ref(element_id: object) -> str | None:
+    """The node ref for *element_id* (``"elementID:<id>"``), None when it is not
+    a numeric id (e.g. a name that ``_key`` fell back to)."""
+    text = str(element_id).strip() if element_id is not None else ""
+    return f"{EID_PREFIX}{text}" if text.isdigit() else None
+
+
+def is_eid_ref(ref: str) -> bool:
+    return ref.startswith(EID_PREFIX) and ref[len(EID_PREFIX):].isdigit()
+
+
+def node_ident(ref: str) -> NodeIdentifier:
+    """The dazpy :class:`NodeIdentifier` for a node name or node ref."""
+    if is_eid_ref(ref):
+        return NodeIdentifier(ref[len(EID_PREFIX):], kind="element_id")
+    return NodeIdentifier(ref)
+
+
+def find_node_js(ref: str) -> str:
+    """JS expression finding the node *ref* names: ``Scene.findNode(name)`` for a
+    name (unchanged), a scan comparing element IDs for an ``elementID:`` ref."""
+    if not is_eid_ref(ref):
+        return f"Scene.findNode({ScriptBuilder.escape_string(ref)})"
+    eid = ScriptBuilder.escape_string(ref[len(EID_PREFIX):])
+    return ("(function(_id) { var _l = Scene.getNodeList(); "
+            "for (var _q = 0; _q < _l.length; _q++) "
+            f"if ({_EID_OF_JS.format(n='_l[_q]')} === _id) return _l[_q]; "
+            f"return null; }})({eid})")
+
+
+# JS ``_findRef(ref)``: find_node_js for refs held in a script variable.
+FIND_REF_JS = f"""
+function _findRef(_r) {{
+    var _p = {ScriptBuilder.escape_string(EID_PREFIX)};
+    if (_r.indexOf(_p) !== 0) return Scene.findNode(_r);
+    var _id = _r.substring(_p.length), _l = Scene.getNodeList();
+    for (var _q = 0; _q < _l.length; _q++)
+        if ({_EID_OF_JS.format(n='_l[_q]')} === _id) return _l[_q];
+    return null;
+}}"""
+
+
 # ── script builders ───────────────────────────────────────────────────────────
 
 def write_record_script(node_name: str, record: EntityRecord) -> str:
     """Script attaching *record* to the node, replacing any existing record."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 var _old = _node.findDataItem({esc(DATA_ITEM_NAME)});
 if (_old) _node.removeDataItem(_old);
@@ -201,7 +258,7 @@ def remove_record_script(node_name: str) -> str:
     """Script removing the ownership record from the node (no-op if absent)."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 var _old = _node.findDataItem({esc(DATA_ITEM_NAME)});
 if (!_old) return false;
@@ -270,7 +327,7 @@ function _environment() {{
 def observe_node_script(node_name: str) -> str:
     """Script returning one node's observable channel values (null if missing)."""
     return ScriptBuilder.iife(f"""{_OBSERVE_JS}
-var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _n = {find_node_js(node_name)};
 return _n ? _observe(_n) : null;""")
 
 
@@ -300,7 +357,7 @@ def subtree_script(node_name: str) -> str:
     """Script returning ``{record, children}`` for the node: its own record JSON and
     its descendant tree (null if the node is missing)."""
     return ScriptBuilder.iife(f"""// recipe:subtree{_TREE_JS}
-var _n = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _n = {find_node_js(node_name)};
 return _n ? {{record: _rec(_n), children: _tree(_n)}} : null;""")
 
 
@@ -322,6 +379,7 @@ for (var _i = 0; _i < _nodes.length; _i++) {{
     info.label = n.getLabel();
     info.record = record;
     info.element_id = (typeof n.getElementID === "function") ? n.getElementID() : null;
+    info.key = {_EID_OF_JS.format(n="n")};
     info.children = _tree(n);
     _out.nodes.push(info);
 }}
@@ -340,7 +398,7 @@ def observed_channels(client: DazClient, node_name: str, kind: str, info: dict) 
     if info.get("output") is not None:
         observed["output"] = info["output"]
     if kind == "actor":
-        pose = DazPose.capture(DazSkeleton(client, NodeIdentifier(node_name)))
+        pose = DazPose.capture(DazSkeleton(client, node_ident(node_name)))
         observed["pose"] = {"snapshot": strip_node_transform(pose.to_dict())}
     return observed
 
@@ -430,14 +488,16 @@ def read_live(client: DazClient, recipe_id: str) -> LiveState:
             found = sorted(found, key=lambda m: not m[1].primary)
         n, rec = found[0]
         live_names = tuple(m["name"] for m, _ in found)
-        observed = observed_channels(client, n["name"], kind, n)
+        # a taken-over figure was not named by the recipe: address it by element ID (C1)
+        node_name = (eid_ref(n.get("key")) or n["name"]) if rec.adopted_from_scene else n["name"]
+        observed = observed_channels(client, node_name, kind, n)
         # A group's foreign children are those of every member (one delete takes them all).
         by_node = tuple((m["name"], tuple(foreign_descendants(m.get("children") or [], recipe_id,
                                                               r.native)))
                         for m, r in (found if is_group else found[:1]))
         foreign = tuple(c for _, cs in by_node for c in cs)
         entities[path] = LiveEntity(
-            path=path, node_name=n["name"], kind=kind, record=rec,
+            path=path, node_name=node_name, kind=kind, record=rec,
             observed=observed, foreign_children=foreign, element_id=n.get("element_id"),
             label=n.get("label"),
             group_nodes=live_names if is_group else (),

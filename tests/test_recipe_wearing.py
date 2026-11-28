@@ -171,7 +171,7 @@ class WearingTests(unittest.TestCase):
         c = p.conflicts[0]
         self.assertEqual((c.path, c.kind), ("actors.abby.wearing.k[H1]", "has_foreign_children"))
         self.assertEqual(c.live, ["Cap"])
-        self.assertEqual(c.base, {"node": "H1"})  # the item to unparent from
+        self.assertEqual(c.base, {"node": "H1", "entry": "actors.abby.wearing.k"})  # unparent from
 
     def test_recipe_owned_node_under_a_matched_item_is_foreign(self):
         # final review C2: only the item's own asset parts are not foreign; a node

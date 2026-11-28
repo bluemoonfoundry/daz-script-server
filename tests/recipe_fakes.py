@@ -272,6 +272,7 @@ class FakeOps:
         self.restore_names = restore_names or {}  # source path -> names restore returns
         self.calls: list[tuple] = []
         self.calls_with_args: list[tuple] = []
+        self.unfit_figures: list[tuple] = []
         self._counts: dict[str, int] = {}
 
     def _call(self, method: str, *args):
@@ -339,9 +340,11 @@ class FakeOps:
         self._call("fit", entity.path, figure_name)
         return list(self.fit_names.get(entity.path, [entity.label]))
 
-    def unfit(self, node_names, owner_recipe=None):
+    def unfit(self, node_names, owner_recipe=None, figure=None):
         # calls_with_args carries owner_recipe only when given (checked group deletes)
         self._call("unfit", *((node_names,) if owner_recipe is None else (node_names, owner_recipe)))
+        if figure is not None:  # one-shot removals: the figure the items must follow
+            self.unfit_figures.append((list(node_names), figure))
 
     def restore(self, source_paths, figure_name):
         self._call("restore", source_paths, figure_name)

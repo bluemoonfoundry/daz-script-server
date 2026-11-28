@@ -570,7 +570,8 @@ class _Planner:
                 kept.add(owner)
             elif res == "recipe":
                 names = list(c.live) if isinstance(c.live, (list, tuple)) else []
-                epath = c.path[:-len(f"[{owner}]")] if c.path.endswith(f"[{owner}]") else c.path
+                epath = c.base.get("entry") or (
+                    c.path[:-len(f"[{owner}]")] if c.path.endswith(f"[{owner}]") else c.path)
                 self.step("unparent", epath, {"children": {"names": names}}, None, owner)
             else:
                 blocked.add(owner)  # unresolved: the plan is blocked anyway

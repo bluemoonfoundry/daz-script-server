@@ -44,8 +44,8 @@ from ._light import DazLight
 from ._node import DazNode, NodeIdentifier
 from ._pose import DazPose
 from ._recipe_desired import DesiredEntity, EntityKind
-from ._recipe_store import (NODE_TRANSFORM_PROPS, EntityRecord, Manifest, owned_by,
-                            foreign_descendants,
+from ._recipe_store import (FIND_REF_JS, NODE_TRANSFORM_PROPS, EntityRecord, Manifest, owned_by,
+                            find_node_js, foreign_descendants, node_ident,
                             observe_environment_script, observe_node_script, observed_channels,
                             remove_record_script, subtree_script, write_manifest_script,
                             write_record_script)
@@ -123,11 +123,14 @@ class SceneOps(Protocol):
         figure; return all added root names, the primary first.  Raises, with
         everything it added removed, when an added root cannot be fitted."""
 
-    def unfit(self, node_names: list[str], owner_recipe: str | None = None) -> None:
+    def unfit(self, node_names: list[str], owner_recipe: str | None = None,
+              figure: str | None = None) -> None:
         """Delete the named nodes (and their subtrees) in one exact-selection delete.
 
         With *owner_recipe*, first verify that no node has a descendant foreign to
         that recipe (raise, deleting nothing, instead of deleting a user's node).
+        With *figure*, every node must still follow that figure (hand items are
+        addressed by ``elementID:`` ref; raise, deleting nothing, otherwise).
         """
 
     def restore(self, source_paths: list[str], figure_name: str) -> list[str]:
@@ -299,7 +302,7 @@ def _pose_preset_script(node_name: str, path: str) -> str:
     then restore the previous primary selection (or deselect the figure)."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return "node_not_found";
 var _prev = Scene.getPrimarySelection();
 Scene.setPrimarySelection(_node);
@@ -320,7 +323,7 @@ def _preset_script(node_name: str, path: str) -> str:
     with another figure selected can reach it too."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""// recipe:preset
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return "node_not_found";
 var _prev = Scene.getPrimarySelection(), _sel = Scene.getSelectedNodeList();
 Scene.selectAllNodes(false);
@@ -342,7 +345,7 @@ _NODE_XFORM_CONTROLS = ("XPos", "YPos", "ZPos", "XRot", "YRot", "ZRot",
 def _read_node_xform_script(node_name: str) -> str:
     """``{control: value}`` for the node's ten transform controls, or null."""
     return ScriptBuilder.iife(f"""// recipe:read-xform
-var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return null;
 var _c = {ScriptBuilder.to_js(list(_NODE_XFORM_CONTROLS))}, _out = {{}};
 for (var _i = 0; _i < _c.length; _i++) _out[_c[_i]] = _node["get" + _c[_i] + "Control"]().getValue();
@@ -352,7 +355,7 @@ return _out;""")
 def _write_node_xform_script(node_name: str, values: dict) -> str:
     """Set the node's transform controls from ``{control: value}``; false if no node."""
     return ScriptBuilder.iife(f"""// recipe:write-xform
-var _node = Scene.findNode({ScriptBuilder.escape_string(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 // An array, not for-in over an object: Studio 6's script engine enumerates
 // inherits/className/deleteLater/name on plain objects too.
@@ -431,7 +434,7 @@ def _fit_script(names: list[str], figure_name: str) -> str:
     """
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""// recipe:fit
-var _fig = Scene.findNode({esc(figure_name)});
+var _fig = {find_node_js(figure_name)};
 if (!_fig) return {{error: {esc(figure_name)} + ": figure not found", fitted: [], unfitted: []}};
 var _names = {ScriptBuilder.to_js(names)}, _fitted = [], _unfitted = [];
 for (var _i = 0; _i < _names.length; _i++) {{
@@ -445,13 +448,29 @@ for (var _i = 0; _i < _names.length; _i++) {{
 return {{error: "", fitted: _fitted, unfitted: _unfitted}};""")
 
 
-def _unfit_script(names: list[str]) -> str:
-    """Delete the named nodes with one exact-selection DzDeleteAction; returns the missing names."""
-    return ScriptBuilder.iife(f"""// recipe:unfit{_DELETE_SELECTED_JS}
+def _unfit_script(names: list[str], figure: str | None = None) -> str:
+    """Delete the named nodes (names or ``elementID:`` refs) with one
+    exact-selection DzDeleteAction; returns the problems (missing nodes), and
+    deletes nothing unless there are none.
+
+    With *figure* (one-shot removals of hand items, final review C1), each node
+    must still follow that figure, else nothing is deleted."""
+    fig_js = (f"var _fig = {find_node_js(figure)};\n"
+              f"if (!_fig) return [{ScriptBuilder.escape_string(figure)} + \": figure not found\"];"
+              if figure is not None else "var _fig = null;")
+    return ScriptBuilder.iife(f"""// recipe:unfit{_DELETE_SELECTED_JS}{FIND_REF_JS}
+{fig_js}
 var _names = {ScriptBuilder.to_js(names)}, _nodes = [], _missing = [];
 for (var _i = 0; _i < _names.length; _i++) {{
-    var _n = Scene.findNode(_names[_i]);
-    if (_n) _nodes.push(_n); else _missing.push(_names[_i]);
+    var _n = _findRef(_names[_i]);
+    if (!_n) {{ _missing.push(_names[_i]); continue; }}
+    var _f = (typeof _n.getFollowTarget === "function") ? _n.getFollowTarget() : null;
+    // ==, not ===: two wrappers of one node are never === (DS4, spec 15.2)
+    if (_fig && (!_f || _f != _fig)) {{
+        _missing.push(_names[_i] + ": not fitted to " + {ScriptBuilder.escape_string(figure or "")});
+        continue;
+    }}
+    _nodes.push(_n);
 }}
 if (!_missing.length) _deleteSelected(_nodes);
 return _missing;""")
@@ -480,7 +499,7 @@ return _out;""")
 
 def _exists_script(node_name: str) -> str:
     return ScriptBuilder.iife(f"""// recipe:exists
-return !!Scene.findNode({ScriptBuilder.escape_string(node_name)});""")
+return !!{find_node_js(node_name)};""")
 
 
 def is_local_pose_file(path: str) -> bool:
@@ -541,7 +560,7 @@ def _unparent_script(owner_name: str, child_names: list[str]) -> str:
     """
     owner = ScriptBuilder.escape_string(owner_name)
     return ScriptBuilder.iife(f"""// recipe:unparent{_KEY_JS}
-var _owner = Scene.findNode({owner});
+var _owner = {find_node_js(owner_name)};
 if (!_owner) return {{errors: [{owner} + ": owner not found"], moved: []}};
 var _names = {ScriptBuilder.to_js(child_names)}, _all = _owner.getNodeChildren(true);
 var _picked = {{}}, _nodes = [], _errs = [];
@@ -575,7 +594,7 @@ def _reparent_script(child_keys: list[str], parent_name: str) -> str:
     """
     parent = ScriptBuilder.escape_string(parent_name)
     return ScriptBuilder.iife(f"""// recipe:reparent{_KEY_JS}
-var _parent = Scene.findNode({parent});
+var _parent = {find_node_js(parent_name)};
 if (!_parent) return [{parent} + ": parent not found"];
 var _keys = {ScriptBuilder.to_js(child_keys)}, _nodes = Scene.getNodeList(), _found = {{}}, _errs = [];
 for (var _i = 0; _i < _nodes.length; _i++) {{
@@ -592,7 +611,7 @@ def _relabel_script(node_name: str, from_label: str, to_label: str) -> str:
     """Relabel the node only while its label is still *from_label*; false if no node."""
     esc = ScriptBuilder.escape_string
     return ScriptBuilder.iife(f"""// recipe:relabel
-var _node = Scene.findNode({esc(node_name)});
+var _node = {find_node_js(node_name)};
 if (!_node) return false;
 if (_node.getLabel() === {esc(from_label)}) _node.setLabel({esc(to_label)});
 return true;""")
@@ -707,7 +726,7 @@ class DazSceneOps:
     # ── channels ──────────────────────────────────────────────────────────────
 
     def set_channels(self, node_name: str, kind: EntityKind, channels: dict[str, dict]) -> None:
-        ident = NodeIdentifier(node_name)
+        ident = node_ident(node_name)
         # Pose first: a pose preset can carry a root transform, which the
         # recipe's transform must then override.
         for name in sorted(channels, key=lambda ch: ch != "pose"):
@@ -881,7 +900,8 @@ class DazSceneOps:
         out = self._busy_execute(_asset_uris_script(list(node_names))) or {}
         return {str(k): str(v) for k, v in out.items() if v}
 
-    def unfit(self, node_names: list[str], owner_recipe: str | None = None) -> None:
+    def unfit(self, node_names: list[str], owner_recipe: str | None = None,
+              figure: str | None = None) -> None:
         if owner_recipe is not None:
             for name in node_names:
                 sub = self._client.execute(subtree_script(name)).value
@@ -893,7 +913,7 @@ class DazSceneOps:
                 if foreign:
                     raise DazError(f"Refusing to remove {name!r}: it still has descendants the "
                                    f"recipe does not own ({', '.join(foreign)})")
-        missing = self._client.execute(_unfit_script(list(node_names))).value
+        missing = self._client.execute(_unfit_script(list(node_names), figure)).value
         if missing:
             raise DazError(f"Cannot remove, node(s) not found: {', '.join(map(str, missing))}")
 

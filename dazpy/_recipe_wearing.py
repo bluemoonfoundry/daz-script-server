@@ -20,14 +20,14 @@ from ._recipe_store import LiveState
 @dataclass(frozen=True)
 class TakeOver:
     actor_path: str
-    node_name: str  # figure to adopt (no record yet)
+    node_name: str  # figure to adopt (no record yet): its elementID: ref (C1), else its name
 
 
 @dataclass(frozen=True)
 class Unfit:
     actor_path: str
     entry: str
-    node_names: tuple[str, ...]
+    node_names: tuple[str, ...]  # matched items: their elementID: refs (C1), else names
     removed: tuple[dict, ...]  # {"label", "type", "source_path"} for the done-log and restore
 
 
@@ -82,7 +82,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
         skip_entries = False
 
         if entity is not None:
-            figure = next((f for f in all_figures if f.name == entity.node_name), None)
+            figure = next((f for f in all_figures if f.is_node(entity.node_name)), None)
             skip_entries = figure is None  # gone/relabelled: the diff reports deleted_in_scene
             requested = (record.source or {}).get("requested") if record else None
             ref = actor_ref(recipe, key)
@@ -98,7 +98,7 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
             matches = figures.get(actor.node, [])
             if len(matches) == 1:
                 figure = matches[0]
-                take_overs.append(TakeOver(path, figure.name))
+                take_overs.append(TakeOver(path, figure.ref))
             elif len(matches) > 1:
                 errors.append(RecipeIssue(
                     f"{path}.node", "ambiguous_node",
@@ -145,10 +145,10 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                         f"Nothing on {key!r} matches {_describe(entry.target)}.",
                         allowed=tuple(it.label for it in items) or None))
                 continue
-            hit_names = {it.name for it in hit}
-            items = [it for it in items if it.name not in hit_names]
+            hit_refs = {it.ref for it in hit}
+            items = [it for it in items if it.ref not in hit_refs]
             unfits.append(Unfit(
-                path, eid, tuple(it.name for it in hit),
+                path, eid, tuple(it.ref for it in hit),
                 tuple({"label": it.label, "type": it.type, "source_path": restore_source(it)}
                       for it in hit)))
             for it in hit:
@@ -157,9 +157,12 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                 foreign = tuple(it.foreign_children)
                 if foreign:
                     # one conflict (and resolution key) per matched item; base names the
-                    # item, so a "recipe" resolution can unparent from it
-                    conflicts.append(Conflict(f"{epath}[{it.name}]", "has_foreign_children",
-                                              _describe(entry.target), {"node": it.name},
+                    # item (by ref), so a "recipe" resolution can unparent from it.  The
+                    # key shows the name unless another match shares it.
+                    shared = sum(1 for x in hit if x.name == it.name) > 1
+                    key = it.ref if shared else it.name
+                    conflicts.append(Conflict(f"{epath}[{key}]", "has_foreign_children",
+                                              _describe(entry.target), {"node": it.ref, "entry": epath},
                                               list(foreign)))
                 if restore_source(it) is None:
                     warnings.append(RecipeIssue(
