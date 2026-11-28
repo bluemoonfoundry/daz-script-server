@@ -1,8 +1,10 @@
 """Live readback of figures and the items fitted to them (read-only).
 
 A *fitted item* is a node whose follow target is the figure (clothing, hair,
-shoes); the item's non-fitted, non-bone descendants are part of it unless they
-carry a record of their own (those are reported as ``foreign_children``).
+shoes).  Its ``foreign_children`` are every descendant not fitted by Studio
+(followers are the item's own sub-parts), other than bones and the
+``DzPushModifierWeightNode`` helper an outfit garment loads with: props the user
+parented to it, recorded or not (spec 6.4, final review C2).
 
 The script returns this JSON shape, the only thing the Python side depends on::
 
@@ -79,8 +81,10 @@ function _foreign(n, out) {{
     var kids = n.getNodeChildren(false);
     for (var k = 0; k < kids.length; k++) {{
         var c = kids[k];
-        if (_follow(c)) continue;
-        if (!c.inherits("DzBone") && _rec(c)) out.push(c.getName());
+        if (_follow(c)) continue;  // fitted by Studio: the item's own sub-parts
+        // bones and the outfit's "Clothing Expander" helper are the asset's own (spec 15.4)
+        if (!c.inherits("DzBone") && !c.inherits("DzPushModifierWeightNode"))
+            out.push(c.getName());
         _foreign(c, out);
     }}
     return out;

@@ -64,6 +64,19 @@ class FittedTests(unittest.TestCase):
             self.assertNotIn(strict, s)
         self.assertNotIn("Provisional", s)
 
+    def test_foreign_reports_record_less_children(self):
+        # final review C2: a prop the user parented to a hand item has no record
+        # and must still be foreign; bones, followers (the item's own fitted
+        # sub-parts) and the outfit's DzPushModifierWeightNode helper are not
+        import re
+        s = figures_script(["Abby"], [])
+        body = re.search(r"function _foreign\(n, out\) \{(.*?)\n\}", s, re.S).group(1)
+        self.assertNotIn("_rec(c)", body)
+        self.assertIn("if (_follow(c)) continue;", body)
+        self.assertIn('c.inherits("DzBone")', body)
+        self.assertIn('c.inherits("DzPushModifierWeightNode")', body)
+        self.assertIn("out.push(c.getName());", body)
+
     def test_read_figures_returns_fitted_items(self):
         items = [{"name": n, "label": l, "type": t, "source_path": u, "record": None, "foreign": []}
                  for n, l, t, u in (

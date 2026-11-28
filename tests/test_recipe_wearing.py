@@ -173,12 +173,14 @@ class WearingTests(unittest.TestCase):
         self.assertEqual(c.live, ["Cap"])
         self.assertEqual(c.base, {"node": "H1"})  # the item to unparent from
 
-    def test_own_group_members_are_not_foreign(self):
+    def test_recipe_owned_node_under_a_matched_item_is_foreign(self):
+        # final review C2: only the item's own asset parts are not foreign; a node
+        # of this recipe parented under a hand item would go with its delete
         r = rec("r1", "actors.abby")
         f = fig("Abby", [item("H1", foreign=("Mine",))])
         lv = live(**{"actors.abby": owned(r, group_nodes=("Abby", "Mine"))})
         p = plan_wearing(recipe(replace(HAIR)), {"Abby": [f]}, lv)
-        self.assertEqual(p.conflicts, ())
+        self.assertEqual([(c.kind, c.live) for c in p.conflicts], [("has_foreign_children", ["Mine"])])
 
     def test_removed_item_with_a_record_restores_from_its_source_duf(self):
         other = dataclasses.replace(rec("r2", "actors.x.wearing.hair"), source={

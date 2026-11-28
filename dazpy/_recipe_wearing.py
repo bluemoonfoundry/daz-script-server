@@ -74,12 +74,6 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
 
     all_figures = [f for fs in figures.values() for f in fs]
     all_labels = sorted(set(scene_labels) or {f.label for f in all_figures})
-    # Nodes belonging to this recipe's own entities (group members are not foreign).
-    owned_nodes: set[str] = set()
-    for ent in live.entities.values():
-        owned_nodes.add(ent.node_name)
-        owned_nodes.update(ent.group_nodes)
-
     for key, actor in recipe.actors.items():
         path = f"actors.{key}"
         entity = live.entities.get(path)
@@ -158,7 +152,9 @@ def plan_wearing(recipe: SceneRecipe, figures: Mapping[str, list[FigureInfo]],
                 tuple({"label": it.label, "type": it.type, "source_path": restore_source(it)}
                       for it in hit)))
             for it in hit:
-                foreign = tuple(c for c in it.foreign_children if c not in owned_nodes)
+                # every non-asset descendant goes with the delete: a matched item is
+                # never recipe-owned, so nothing below it is part of an owned entity (C2)
+                foreign = tuple(it.foreign_children)
                 if foreign:
                     # one conflict (and resolution key) per matched item; base names the
                     # item, so a "recipe" resolution can unparent from it
