@@ -6,6 +6,13 @@ All notable changes to DazScript Server are documented here.
 
 ## [2.17.0] - 2026-11-27
 
+Plugin, dazpy and daz-ts release: plugin and dazpy 2.17.0, daz-ts 0.3.0.
+Upgrade the plugin. It carries the server fixes from the 2026-11-25 repo
+review (start/stop teardown, one bounded main-thread crossing per request,
+Package Runner hardening). dazpy 2.17.0 adds scene recipe v2 (asset
+references, compatibility checks, fitting); daz-ts 0.3.0 adds camera-move
+easing and per-key interpolation and rejects non-finite numbers.
+
 ### Added
 
 - **dazpy scene recipe v2: asset references, compatibility and fitting**

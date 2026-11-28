@@ -191,7 +191,7 @@ Every recipe-loaded node records where it came from, and `observe` reports
 items swapped by hand. Verified live on DS4 4.24 and DS6 6.26. See
 [Scene recipes](docs/scene_recipes.rst).
 
-Plugin and dazpy 2.17.0 release together. daz-mcp-server's recipe tools need
+Plugin and dazpy 2.17.0 release with daz-ts 0.3.0 (camera-move easing). daz-mcp-server's recipe tools need
 dazpy 2.17.0. Full list: [`CHANGELOG.md`](CHANGELOG.md#2170---2026-11-27).
 
 ---
