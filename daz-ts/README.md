@@ -21,7 +21,7 @@ For offline installs, each `daz-ts-v*` [GitHub release](https://github.com/bluem
 also carries the `bluemoonfoundry-daz-ts-*.tgz` tarball:
 
 ```bash
-npm install ./bluemoonfoundry-daz-ts-0.3.0.tgz
+npm install ./bluemoonfoundry-daz-ts-0.3.1.tgz
 ```
 
 Requires Node.js >= 18 (for built-in `fetch`/`AbortController`).
